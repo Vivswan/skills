@@ -1,6 +1,5 @@
 {
   "name": "rubber-duck-review",
-  "version": "1.0.0",
   "description": "Cross-model code review using a second agent, tool, or read-only CLI fallback.",
   "author": {
     "name": "Vivswan Shah",

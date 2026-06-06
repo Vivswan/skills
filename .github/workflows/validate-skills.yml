@@ -21,3 +21,6 @@ jobs:
 
       - name: Run skill validation
         run: uv run python scripts/validate-skills.py
+
+      - name: Run smoke test
+        run: uv run python scripts/smoke-test.py
