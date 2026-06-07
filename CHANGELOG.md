@@ -6,6 +6,13 @@ edit released sections by hand. The catalog version lives in
 `.claude-plugin/marketplace.json` (`metadata.version`); consumers pin a release
 with `npx skills add Vivswan/skills#vX.Y.Z`.
 
+## [1.1.1](https://github.com/Vivswan/skills/compare/v1.1.0...v1.1.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* trim AGENTS.md to project conventions and ban commit attribution lines ([c70dae8](https://github.com/Vivswan/skills/commit/c70dae81baea727d2d0fb52dbfc743b73fc06897))
+
 ## [1.1.0] - 2026-06-06
 
 Baseline release (pre-automation).
