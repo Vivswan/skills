@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents working in this repository.
 
 ## Repository Overview
 
-A collection of installable skills for coding agents. Skills are packaged instructions and resources that extend agent capabilities.
+A collection of installable skills, plugins, and MCP-ready integrations for coding agents. Skills are packaged instructions and resources that extend agent capabilities.
 
 ## Repository Layout
 
@@ -56,6 +56,9 @@ template/
   the `npx skills` CLI ignores per-skill versions, so duplicates only drift.
 - **Releases follow Conventional Commits**, driven by release-please. Consumers
   pin a release with `npx skills add Vivswan/skills#vX.Y.Z`.
+- Changes to skill behavior, plugin manifests, MCP configuration, or agent-facing
+  instructions are product changes in this repo. Use `fix:` for those updates,
+  not `docs:`, even when the changed file is Markdown.
 
 ## Publishing Notes
 
