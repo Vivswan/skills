@@ -30,7 +30,7 @@ Use this skill when someone asks for:
     1. `codex exec --json --sandbox read-only "[prompt]"`
     2. `copilot -p --deny-tool='write' --deny-tool='shell' "[prompt]"`
   - If you are currently using Codex or GitHub Copilot:
-    1. `claude -p --permission-mode plan "[prompt]"`
+    1. `claude -p --permission-mode plan --verbose --output-format stream-json "[prompt]"`
     2. `copilot -p --deny-tool='write' --deny-tool='shell' "[prompt]"`
 - Never let the reviewer write files, edit code, or run unrestricted shell commands. `--sandbox read-only` lets it run read-only commands (grep, `git diff`, typecheck) but blocks writes — that self-checking makes findings concrete. (Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.)
 
@@ -59,6 +59,14 @@ For a reusable prompt template, see `references/reviewer-prompt.md`.
   codex exec --json --sandbox read-only "$(cat prompt.txt)" > review.jsonl 2>review.err &   # full stream -> a file you can poll
   ```
 
+- For `claude -p`, prefer **streaming JSON** too:
+
+  ```bash
+  claude -p --permission-mode plan --verbose --output-format stream-json "$(cat prompt.txt)" > review.jsonl 2>review.err &
+  ```
+
+  Claude also supports `--output-format json` for a single final JSON object, but that gives no liveness signal during a long review. In current Claude Code, `--output-format stream-json` requires `--verbose`; without it, Claude exits with an error. Do not treat an empty text output file after only a few seconds as failure: a real review can produce no text until it finishes.
+
 - **Capture the FULL stream — never `tail`/`head`/`grep`-subset codex's output.** Redirect all of stdout straight to a file and poll that whole file. Piping codex through `tail`/`head` defeats liveness detection (the pipe buffers, so you can't tell if events are still arriving) and can truncate the final verdict. Subset only when *reading* a finished file, never on the live pipe.
 - **Don't let the shell touch the prompt.** Backticks and `$(...)` inside a double-quoted shell argument are run as command substitution *before* codex starts — so a prompt that mentions `` `tar` `` or `` `git diff` `` silently executes them, mangling the prompt (you'll see stray errors like `tar: Must specify one of -c, -r, -t...` and **zero JSON events**). Write the prompt to a file and pass it as `"$(cat prompt.txt)"` — substitution results are not re-evaluated, so backticks in the file stay literal.
 - A lightweight progress watch (event count over the whole file) tells you at a glance which reviews are alive vs frozen.
@@ -74,9 +82,11 @@ For a reusable prompt template, see `references/reviewer-prompt.md`.
   ```
 
 
-### 4. Extract the verdict from the `--json` stream
+### 4. Extract the verdict from JSON streams
 
-- The final answer is the **last** `item.completed` event whose `item.type` is `agent_message`. Codex emits *intermediate* `agent_message` narration as it works, so take the **last** one — not the first match.
+- For Codex JSONL, the final answer is the **last** `item.completed` event whose `item.type` is `agent_message`. Codex emits *intermediate* `agent_message` narration as it works, so take the **last** one — not the first match.
+- For Claude `--output-format stream-json`, the final answer is the `result` string on the final `{"type":"result", ...}` event. If the stream ended before a result event, use the last `{"type":"assistant", "message": ...}` text only as a partial/incomplete clue and relaunch if needed.
+- For Claude `--output-format json`, parse the single JSON object and read its `result` field.
 - Watch for `error` events (e.g. `stream disconnected before completion`). If the last `agent_message` is narration rather than a findings list, the stream was cut mid-thought — relaunch that review.
 - jq-free extraction:
 
@@ -85,6 +95,7 @@ For a reusable prompt template, see `references/reviewer-prompt.md`.
   for (const l of read(file).split("\n").filter(Boolean)) {
     try { const o = JSON.parse(l);
       if (o.type === "item.completed" && o.item?.type === "agent_message") msg = o.item.text;
+      if (o.type === "result" && typeof o.result === "string") msg = o.result;
     } catch {}
   }
   // msg = the final review; also scan for {"type":"error"} events.
