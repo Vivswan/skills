@@ -62,6 +62,17 @@ For a reusable prompt template, see `references/reviewer-prompt.md`.
 - **Capture the FULL stream — never `tail`/`head`/`grep`-subset codex's output.** Redirect all of stdout straight to a file and poll that whole file. Piping codex through `tail`/`head` defeats liveness detection (the pipe buffers, so you can't tell if events are still arriving) and can truncate the final verdict. Subset only when *reading* a finished file, never on the live pipe.
 - **Don't let the shell touch the prompt.** Backticks and `$(...)` inside a double-quoted shell argument are run as command substitution *before* codex starts — so a prompt that mentions `` `tar` `` or `` `git diff` `` silently executes them, mangling the prompt (you'll see stray errors like `tar: Must specify one of -c, -r, -t...` and **zero JSON events**). Write the prompt to a file and pass it as `"$(cat prompt.txt)"` — substitution results are not re-evaluated, so backticks in the file stay literal.
 - A lightweight progress watch (event count over the whole file) tells you at a glance which reviews are alive vs frozen.
+- **A progress watch must emit only TWO notifications, not one per tick.** A monitor that prints a status line every few seconds buries the conversation in noise. Emit exactly: (1) **once** when the streams first show life (event count > 1), and (2) **once** when every reviewer process has exited (the final verdict is ready). Stay silent in between — poll internally on a sleep loop, but only `echo` on those two transitions. Example monitor body:
+
+  ```bash
+  # Event 1: first sign of life.
+  until [ "$(cat review*.jsonl 2>/dev/null | wc -l)" -gt 1 ]; do sleep 2; done
+  echo "reviews alive"
+  # Event 2: all reviewer processes have exited.
+  while pgrep -f "codex exec --json --sandbox read-only" >/dev/null 2>&1; do sleep 5; done
+  echo "reviews complete"
+  ```
+
 
 ### 4. Extract the verdict from the `--json` stream
 
