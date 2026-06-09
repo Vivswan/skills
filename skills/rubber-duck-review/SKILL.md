@@ -53,32 +53,45 @@ For a reusable prompt template, see `references/reviewer-prompt.md`.
 ### 3. Run it in the background, with streaming progress
 
 - Launch the review in the **background** and capture output to a file; keep working while it runs. Read findings only when you need them to decide the next step.
+- **Keep the launching shell alive until every reviewer exits.** In short-lived tool shells, a backgrounded `claude`, `codex`, or `copilot` process can be reaped when the shell exits, leaving **zero-byte stdout/stderr files** and no error. Start the reviewer, store its PID, run the progress watch, and `wait` for that PID in the same shell invocation. Do not launch the process in one tool call and poll it from another unless the process has been detached with a mechanism you have verified in this environment.
 - For `codex exec`, **always pass `--json`**. It streams JSONL events to stdout, which is the difference between a *live* review and a *silent hang*: a steadily growing event count means it's reading/reasoning; a file that stays flat for minutes means it's stuck.
-
-  ```bash
-  codex exec --json --sandbox read-only "$(cat prompt.txt)" > review.jsonl 2>review.err &   # full stream -> a file you can poll
-  ```
-
-- For `claude -p`, prefer **streaming JSON** too:
-
-  ```bash
-  claude -p --permission-mode plan --verbose --output-format stream-json "$(cat prompt.txt)" > review.jsonl 2>review.err &
-  ```
-
-  Claude also supports `--output-format json` for a single final JSON object, but that gives no liveness signal during a long review. In current Claude Code, `--output-format stream-json` requires `--verbose`; without it, Claude exits with an error. Do not treat an empty text output file after only a few seconds as failure: a real review can produce no text until it finishes.
+- For `claude -p`, prefer **streaming JSON** too. Claude also supports `--output-format json` for a single final JSON object, but that gives no liveness signal during a long review. In current Claude Code, `--output-format stream-json` requires `--verbose`; without it, Claude exits with an error in stderr and stdout may stay empty. Do not treat an empty text output file after only a few seconds as failure: a real review can produce no text until it finishes.
 
 - **Capture the FULL stream — never `tail`/`head`/`grep`-subset codex's output.** Redirect all of stdout straight to a file and poll that whole file. Piping codex through `tail`/`head` defeats liveness detection (the pipe buffers, so you can't tell if events are still arriving) and can truncate the final verdict. Subset only when *reading* a finished file, never on the live pipe.
 - **Don't let the shell touch the prompt.** Backticks and `$(...)` inside a double-quoted shell argument are run as command substitution *before* codex starts — so a prompt that mentions `` `tar` `` or `` `git diff` `` silently executes them, mangling the prompt (you'll see stray errors like `tar: Must specify one of -c, -r, -t...` and **zero JSON events**). Write the prompt to a file and pass it as `"$(cat prompt.txt)"` — substitution results are not re-evaluated, so backticks in the file stay literal.
 - A lightweight progress watch (event count over the whole file) tells you at a glance which reviews are alive vs frozen.
-- **A progress watch must emit only TWO notifications, not one per tick.** A monitor that prints a status line every few seconds buries the conversation in noise. Emit exactly: (1) **once** when the streams first show life (event count > 1), and (2) **once** when every reviewer process has exited (the final verdict is ready). Stay silent in between — poll internally on a sleep loop, but only `echo` on those two transitions. Example monitor body:
+- **A progress watch must emit only TWO notifications, not one per tick.** A monitor that prints a status line every few seconds buries the conversation in noise. Emit exactly: (1) **once** when the streams first show life (event count > 1), and (2) **once** when every reviewer process has exited (the final verdict is ready). Stay silent in between; poll internally on a sleep loop, but only `echo` on those two transitions.
+- Use this complete pattern so the background reviewer cannot be killed by a short-lived shell:
 
   ```bash
-  # Event 1: first sign of life.
-  until [ "$(cat review*.jsonl 2>/dev/null | wc -l)" -gt 1 ]; do sleep 2; done
-  echo "reviews alive"
-  # Event 2: all reviewer processes have exited.
-  while pgrep -f "codex exec --json --sandbox read-only" >/dev/null 2>&1; do sleep 5; done
-  echo "reviews complete"
+  prompt_file="prompt.txt"
+  out_file="review.jsonl"
+  err_file="review.err"
+
+  # Pick exactly one reviewer command.
+  claude -p --permission-mode plan --verbose --output-format stream-json "$(cat "$prompt_file")" >"$out_file" 2>"$err_file" &
+  # codex exec --json --sandbox read-only "$(cat "$prompt_file")" >"$out_file" 2>"$err_file" &
+  reviewer_pid=$!
+
+  # Event 1: first sign of life. Stay quiet until then.
+  alive_reported=0
+  while kill -0 "$reviewer_pid" 2>/dev/null; do
+    line_count="$(wc -l < "$out_file" 2>/dev/null || echo 0)"
+    if [ "$alive_reported" -eq 0 ] && [ "$line_count" -gt 1 ]; then
+      echo "review alive"
+      alive_reported=1
+    fi
+    sleep 2
+  done
+
+  # Event 2: reviewer process has exited. Keep this wait in the launching shell.
+  wait "$reviewer_pid"
+  review_status=$?
+  if [ "$alive_reported" -eq 0 ] && [ "$(wc -l < "$out_file" 2>/dev/null || echo 0)" -gt 1 ]; then
+    echo "review alive"
+  fi
+  echo "review complete"
+  exit "$review_status"
   ```
 
 
