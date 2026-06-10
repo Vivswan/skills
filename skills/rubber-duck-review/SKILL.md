@@ -25,14 +25,11 @@ Use this skill when someone asks for:
 
 - Prefer a dedicated review tool when one is available.
 - Use a reviewer that is different from the current model when possible.
-- If no dedicated tool exists, fall back to a read-only CLI invocation and try the first one that exists:
-  - If you are currently using Claude:
-    1. `codex exec --json --sandbox read-only "[prompt]"`
-    2. `copilot -p --deny-tool='write' --deny-tool='shell' "[prompt]"`
-  - If you are currently using Codex or GitHub Copilot:
-    1. `claude -p --permission-mode plan --verbose --output-format stream-json "[prompt]"`
-    2. `copilot -p --deny-tool='write' --deny-tool='shell' "[prompt]"`
-- Never let the reviewer write files, edit code, or run unrestricted shell commands. `--sandbox read-only` lets it run read-only commands (grep, `git diff`, typecheck) but blocks writes — that self-checking makes findings concrete. (Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.)
+- If no dedicated tool exists, fall back to a read-only CLI invocation. Pick by which model *you* are, then use the matching full pattern in step 3:
+  - If you are currently using **Claude** → **Codex reviewer** (§3a): `codex exec --json --sandbox read-only`, fallback `copilot -p --deny-tool='write' --deny-tool='shell'`.
+  - If you are currently using **Codex or GitHub Copilot** → **Claude reviewer** (§3b): `claude -p --permission-mode plan --verbose --output-format stream-json`, fallback `copilot -p ...`.
+  - Always pass the prompt as `"$(cat "$prompt_file")"` (a file inside the scratch tmp dir, see §3) and append `< /dev/null` — the copy-paste blocks in §3a/§3b already do both.
+- Never let the reviewer write files, edit code, or run unrestricted shell commands. `--sandbox read-only` (codex) / `--permission-mode plan` (claude) lets it run read-only commands (grep, `git diff`, typecheck) but blocks writes — that self-checking makes findings concrete. (Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.)
 
 ### 2. Craft the prompt
 
@@ -50,50 +47,109 @@ Use this skill when someone asks for:
 
 For a reusable prompt template, see `references/reviewer-prompt.md`.
 
-### 3. Run it in the background, with streaming progress
+### 3. Run the reviewer, with streaming progress
 
-- Launch the review in the **background** and capture output to a file; keep working while it runs. Read findings only when you need them to decide the next step.
-- **Keep the launching shell alive until every reviewer exits.** In short-lived tool shells, a backgrounded `claude`, `codex`, or `copilot` process can be reaped when the shell exits, leaving **zero-byte stdout/stderr files** and no error. Start the reviewer, store its PID, run the progress watch, and `wait` for that PID in the same shell invocation. Do not launch the process in one tool call and poll it from another unless the process has been detached with a mechanism you have verified in this environment.
-- For `codex exec`, **always pass `--json`**. It streams JSONL events to stdout, which is the difference between a *live* review and a *silent hang*: a steadily growing event count means it's reading/reasoning; a file that stays flat for minutes means it's stuck.
-- For `claude -p`, prefer **streaming JSON** too. Claude also supports `--output-format json` for a single final JSON object, but that gives no liveness signal during a long review. In current Claude Code, `--output-format stream-json` requires `--verbose`; without it, Claude exits with an error in stderr and stdout may stay empty. Do not treat an empty text output file after only a few seconds as failure: a real review can produce no text until it finishes.
+General principles (apply to **both** reviewers in 3a/3b below):
 
-- **Capture the FULL stream — never `tail`/`head`/`grep`-subset codex's output.** Redirect all of stdout straight to a file and poll that whole file. Piping codex through `tail`/`head` defeats liveness detection (the pipe buffers, so you can't tell if events are still arriving) and can truncate the final verdict. Subset only when *reading* a finished file, never on the live pipe.
-- **Don't let the shell touch the prompt.** Backticks and `$(...)` inside a double-quoted shell argument are run as command substitution *before* codex starts — so a prompt that mentions `` `tar` `` or `` `git diff` `` silently executes them, mangling the prompt (you'll see stray errors like `tar: Must specify one of -c, -r, -t...` and **zero JSON events**). Write the prompt to a file and pass it as `"$(cat prompt.txt)"` — substitution results are not re-evaluated, so backticks in the file stay literal.
-- A lightweight progress watch (event count over the whole file) tells you at a glance which reviews are alive vs frozen.
-- **A progress watch must emit only TWO notifications, not one per tick.** A monitor that prints a status line every few seconds buries the conversation in noise. Emit exactly: (1) **once** when the streams first show life (event count > 1), and (2) **once** when every reviewer process has exited (the final verdict is ready). Stay silent in between; poll internally on a sleep loop, but only `echo` on those two transitions.
-- Use this complete pattern so the background reviewer cannot be killed by a short-lived shell:
+- **Put every artifact in a throwaway scratch tmp dir — never the working tree.** Create one per review and derive all paths from it:
 
   ```bash
-  prompt_file="prompt.txt"
-  out_file="review.jsonl"
-  err_file="review.err"
-
-  # Pick exactly one reviewer command.
-  claude -p --permission-mode plan --verbose --output-format stream-json "$(cat "$prompt_file")" >"$out_file" 2>"$err_file" &
-  # codex exec --json --sandbox read-only "$(cat "$prompt_file")" >"$out_file" 2>"$err_file" &
-  reviewer_pid=$!
-
-  # Event 1: first sign of life. Stay quiet until then.
-  alive_reported=0
-  while kill -0 "$reviewer_pid" 2>/dev/null; do
-    line_count="$(wc -l < "$out_file" 2>/dev/null || echo 0)"
-    if [ "$alive_reported" -eq 0 ] && [ "$line_count" -gt 1 ]; then
-      echo "review alive"
-      alive_reported=1
-    fi
-    sleep 2
-  done
-
-  # Event 2: reviewer process has exited. Keep this wait in the launching shell.
-  wait "$reviewer_pid"
-  review_status=$?
-  if [ "$alive_reported" -eq 0 ] && [ "$(wc -l < "$out_file" 2>/dev/null || echo 0)" -gt 1 ]; then
-    echo "review alive"
-  fi
-  echo "review complete"
-  exit "$review_status"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rubber-duck.XXXXXX")"
+  prompt_file="$tmp_dir/prompt.txt"; out_file="$tmp_dir/review.jsonl"; err_file="$tmp_dir/review.err"
   ```
 
+  Write the crafted prompt into `$prompt_file` (heredoc with a quoted delimiter, or your Write tool). Keeping `prompt.txt` / `review.jsonl` / `review.err` in a tmp dir means they can't be staged or committed by accident, and cleanup is a single `rm -rf "$tmp_dir"` once you've extracted the verdict. Run the launch + watch + wait sequence in **one shell invocation** so `$tmp_dir` stays in scope — shell variables don't survive across separate tool calls. For fan-out (step 5), give each section its own file names inside the dir (e.g. `$tmp_dir/review.api.jsonl`).
+- Launch the review in the **background** and capture output to a file; keep working while it runs. Read findings only when you need them to decide the next step.
+- **Redirect stdin from `/dev/null` (`< /dev/null`).** Both `codex exec` and `claude -p` read stdin for *additional* input on top of the prompt arg. When backgrounded — or run in a non-interactive tool shell with no TTY — they block waiting on stdin that never closes: codex prints `Reading additional input from stdin...` and emits **zero JSON events** (a silent hang that looks identical to "still thinking"). Always append `< /dev/null` so the prompt argument is the only input. This is the single most common cause of a review that never starts.
+- **Keep the launching shell alive until every reviewer exits.** In short-lived tool shells, a backgrounded `claude`, `codex`, or `copilot` process can be reaped when the shell exits, leaving **zero-byte stdout/stderr files** and no error. Start the reviewer, store its PID, run the progress watch, and `wait` for that PID in the same shell invocation. Do not launch the process in one tool call and poll it from another unless the process has been detached with a mechanism you have verified in this environment. **If your tool shell can't reliably keep a backgrounded process alive, run the reviewer *foreground* with a timeout instead** (same command, drop the `&`/`wait`) — a clean blocking run beats a reaped background one.
+- **Always stream JSON** (`--json` for codex, `--output-format stream-json --verbose` for claude). A steadily growing event count means it's reading/reasoning; a file flat for minutes means it's stuck. A single final-object format gives no liveness signal during a long review.
+- **Capture the FULL stream — never `tail`/`head`/`grep`-subset the live pipe.** Redirect all of stdout straight to a file and poll that whole file. Piping through `tail`/`head` defeats liveness detection (the pipe buffers, so you can't tell if events are still arriving) and can truncate the final verdict. Subset only when *reading* a finished file.
+- **Don't let the shell touch the prompt.** Backticks and `$(...)` inside a double-quoted shell argument run as command substitution *before* the reviewer starts — so a prompt that mentions `` `tar` `` or `` `git diff` `` silently executes them, mangling the prompt (stray errors like `tar: Must specify one of -c, -r, -t...` and **zero JSON events**). Write the prompt to a file in the scratch tmp dir and pass it as `"$(cat "$prompt_file")"` — substitution results are not re-evaluated, so backticks in the file stay literal.
+- **A progress watch must emit only TWO notifications, not one per tick.** Emit exactly: (1) **once** when the streams first show life (event count > 1), and (2) **once** when every reviewer process has exited. Stay silent in between; poll on a sleep loop but only `echo` on those two transitions.
+
+#### 3a. Codex reviewer (use when you are **Claude**)
+
+Read-only via `--sandbox read-only` (allows grep / `git diff` / typecheck, blocks writes). Note `< /dev/null`.
+
+```bash
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rubber-duck.XXXXXX")"
+prompt_file="$tmp_dir/prompt.txt"; out_file="$tmp_dir/review.jsonl"; err_file="$tmp_dir/review.err"
+cat > "$prompt_file" <<'PROMPT'
+# ... your review prompt — see step 2 / references/reviewer-prompt.md ...
+PROMPT
+
+touch "$out_file"  # pre-create so the progress loop never reads a missing file
+codex exec --json --sandbox read-only "$(cat "$prompt_file")" < /dev/null >"$out_file" 2>"$err_file" &
+reviewer_pid=$!
+
+# Event 1: first sign of life. Stay quiet until then.
+alive_reported=0
+while kill -0 "$reviewer_pid" 2>/dev/null; do
+  line_count="$(wc -l < "$out_file" 2>/dev/null || echo 0)"
+  if [ "$alive_reported" -eq 0 ] && [ "$line_count" -gt 1 ]; then
+    echo "review alive"; alive_reported=1
+  fi
+  sleep 2
+done
+
+# Event 2: reviewer exited. Keep this wait in the launching shell.
+wait "$reviewer_pid"; review_status=$?
+echo "review complete (status=$review_status)"  # verdict in $out_file; rm -rf "$tmp_dir" when done
+exit "$review_status"
+```
+
+Foreground fallback (no background management; blocks until done — give the tool a generous timeout):
+
+```bash
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rubber-duck.XXXXXX")"; prompt_file="$tmp_dir/prompt.txt"
+cat > "$prompt_file" <<'PROMPT'
+# ... your review prompt ...
+PROMPT
+codex exec --json --sandbox read-only "$(cat "$prompt_file")" < /dev/null > "$tmp_dir/review.jsonl" 2> "$tmp_dir/review.err"
+```
+
+#### 3b. Claude reviewer (use when you are **Codex** or **GitHub Copilot**)
+
+Read-only via `--permission-mode plan` (no edits/writes). `--output-format stream-json` **requires `--verbose`** — without it Claude errors to stderr and stdout stays empty. Note `< /dev/null`.
+
+```bash
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rubber-duck.XXXXXX")"
+prompt_file="$tmp_dir/prompt.txt"; out_file="$tmp_dir/review.jsonl"; err_file="$tmp_dir/review.err"
+cat > "$prompt_file" <<'PROMPT'
+# ... your review prompt — see step 2 / references/reviewer-prompt.md ...
+PROMPT
+
+touch "$out_file"  # pre-create so the progress loop never reads a missing file
+claude -p --permission-mode plan --verbose --output-format stream-json "$(cat "$prompt_file")" < /dev/null >"$out_file" 2>"$err_file" &
+reviewer_pid=$!
+
+# Event 1: first sign of life. Stay quiet until then.
+alive_reported=0
+while kill -0 "$reviewer_pid" 2>/dev/null; do
+  line_count="$(wc -l < "$out_file" 2>/dev/null || echo 0)"
+  if [ "$alive_reported" -eq 0 ] && [ "$line_count" -gt 1 ]; then
+    echo "review alive"; alive_reported=1
+  fi
+  sleep 2
+done
+
+# Event 2: reviewer exited. Keep this wait in the launching shell.
+wait "$reviewer_pid"; review_status=$?
+echo "review complete (status=$review_status)"  # verdict in $out_file; rm -rf "$tmp_dir" when done
+exit "$review_status"
+```
+
+Foreground fallback:
+
+```bash
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rubber-duck.XXXXXX")"; prompt_file="$tmp_dir/prompt.txt"
+cat > "$prompt_file" <<'PROMPT'
+# ... your review prompt ...
+PROMPT
+claude -p --permission-mode plan --verbose --output-format stream-json "$(cat "$prompt_file")" < /dev/null > "$tmp_dir/review.jsonl" 2> "$tmp_dir/review.err"
+```
+
+> `copilot -p --deny-tool='write' --deny-tool='shell' "$(cat "$prompt_file")" < /dev/null` is the secondary fallback for either side; it does not stream JSON, so you lose the liveness signal — prefer codex/claude above.
 
 ### 4. Extract the verdict from JSON streams
 
@@ -113,6 +169,7 @@ For a reusable prompt template, see `references/reviewer-prompt.md`.
   }
   // msg = the final review; also scan for {"type":"error"} events.
   ```
+- Once you've extracted the verdict, remove the scratch dir: `rm -rf "$tmp_dir"`. On a re-review (step 7), start a fresh `mktemp -d` rather than reusing the old dir.
 
 ### 5. Large change sets: fan out one review per section
 
