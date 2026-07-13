@@ -29,6 +29,24 @@ Compatibility rules for every skill in this repo:
 
 ## Available Skills
 
+### natural-writing
+
+Write and edit prose that avoids the documented signs of AI writing from
+[Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing).
+
+**Use when:**
+
+- Drafting human-facing prose: docs, READMEs, articles, blog posts, emails, PR descriptions
+- Rewriting text to remove AI tells ("humanize this")
+- Checking whether text reads as AI-generated
+
+**Categories covered:**
+
+- Inflated significance, promotional tone, weasel attributions
+- AI vocabulary clusters and copula avoidance
+- Formatting tells: bold-label lists, Title Case headings, emoji, dash punctuation (banned outright)
+- Chat artifacts, placeholders, tool residue, fabricated citations
+
 ### rubber-duck-review
 
 Cross-model code review using a second agent, tool, or read-only CLI fallback.

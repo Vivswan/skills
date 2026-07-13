@@ -10,6 +10,15 @@
   },
   "plugins": [
     {
+      "name": "natural-writing",
+      "description": "Write and edit prose that avoids the documented signs of AI writing from Wikipedia's field guide",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/natural-writing"
+      ]
+    },
+    {
       "name": "rubber-duck-review",
       "description": "Cross-model code review using a second agent, tool, or read-only CLI fallback",
       "source": "./",
