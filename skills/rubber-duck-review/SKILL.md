@@ -179,7 +179,8 @@ claude -p --permission-mode plan --verbose --output-format stream-json "$(cat "$
 
 ### 6. Apply findings thoughtfully
 
-- Treat valid "non-blocking" feedback as real work, especially when it highlights design traps or future maintenance issues.
+- Treat valid "non-blocking" feedback as real work, especially when it points at design traps or future maintenance issues.
+- Fix valid non-blocking findings, including ones that improve maintainability (clearer naming, removed duplication, simpler structure), not just the blocking ones. A valid one may be skipped only when the fix would conflict with the design, reach outside the change under review, or go against an explicit user decision; record why. A finding you judge incorrect or inapplicable is not skipped but rejected, per the next bullet.
 - Do not blindly accept every finding. If you disagree, explain why, and watch for fixes that would conflict with the design (e.g. a suggested guard that breaks a legitimate path).
 - If a finding conflicts with an explicit user decision, follow the user and record that the issue was intentionally skipped.
 - Re-validate after each batch of fixes (typecheck / lint / tests) before re-reviewing.
@@ -187,7 +188,7 @@ claude -p --permission-mode plan --verbose --output-format stream-json "$(cat "$
 ### 7. Re-review until it converges, before committing
 
 - After applying fixes, **re-run the review on the updated state**, one review per section, not a single overall pass.
-- Repeat until every section returns **no blocking findings**. Treat that convergence as the gate.
+- Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable. Treat that convergence as the gate.
 - **Review before you commit, not after.** Run the review on the working-tree changes, apply/triage findings, *then* commit, so a flaw can't land (or push) before anyone looks at it. This matters most where commits go straight to the main branch.
 
 ### 8. If these instructions don't work, fix the skill
