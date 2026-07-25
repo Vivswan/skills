@@ -4,11 +4,12 @@
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",
-    "url": "https://github.com/Vivswan"
+    "url": "https://vivswan.github.io/"
   },
-  "homepage": "https://github.com/Vivswan/skills",
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/natural-writing",
   "repository": "https://github.com/Vivswan/skills",
   "license": "MIT",
+  "keywords": ["agent-skills", "writing", "natural-writing", "plugin-ready"],
   "skills": "./",
   "interface": {
     "displayName": "Natural Writing",
@@ -16,13 +17,9 @@
     "longDescription": "Drafts, rewrites, and audits prose against the full catalog of AI writing signs from Wikipedia:Signs of AI writing: inflated significance, AI vocabulary, negative parallelisms, bold-label lists, chat artifacts, fabricated citations, and more. Prefers the live Wikipedia page as source of truth with a bundled offline snapshot. House rule: no dashes as punctuation.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
-    "capabilities": [
-      "Read"
-    ],
-    "websiteURL": "https://github.com/Vivswan/skills",
-    "defaultPrompt": [
-      "Humanize this text and remove the AI tells."
-    ],
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/natural-writing",
+    "defaultPrompt": ["Humanize this text and remove the AI tells."],
     "brandColor": "#0F766E"
   }
 }
