@@ -1,35 +1,58 @@
-name: release-please
+# This file is managed by Vivswan/repo-platform.
+# Local edits may be replaced during template updates.
+#
+# The release-please machinery: cuts releases by accumulating conventional
+# commits on main into a release PR; merging that PR tags and publishes the
+# release. Called from the repo-owned release.yml pipeline, downstream of
+# the all-green gate, so releases and release-PR refreshes only happen on a
+# green main. Repo-specific jobs before/after the release belong in
+# release.yml, wired to the outputs below.
+#
+# Without the REPO_PLATFORM_TOKEN secret the release PR is created by the
+# default GITHUB_TOKEN and needs a close/reopen to run its checks.
 
-# Versioned GitHub releases from Conventional Commits. On every push to main,
-# release-please opens/updates ONE rolling "release PR" that bumps the version
-# (semver derived from feat:/fix:/feat!: prefixes) and regenerates CHANGELOG.md.
-# Merging that PR is what tags vX.Y.Z + publishes the GitHub Release -- a plain
-# push to main releases nothing.
+name: Release Please
+
 on:
-  push:
-    branches: [main]
+  workflow_call:
+    outputs:
+      release_created:
+        description: "'true' when this run just published a release"
+        value: ${{ jobs.release-please.outputs.release_created }}
+      tag_name:
+        description: The tag of the release that was just published
+        value: ${{ jobs.release-please.outputs.tag_name }}
 
+# The effective token comes from the calling job; declaring the needs here
+# documents them and caps a caller that grants more.
 permissions:
-  contents: write       # create the tag + release, push the changelog/version bump
-  pull-requests: write  # open/update the release PR
-  issues: write         # release-please's `autorelease:` labels (label = issues API)
-
-# Two concurrent passes would race on the release PR; serialize them.
-concurrency:
-  group: release-please
-  cancel-in-progress: false
+  contents: write
+  pull-requests: write
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      # release-please opens/updates the rolling release PR. It is created with
-      # RELEASE_PLEASE_TOKEN (a PAT or GitHub App token) when that secret is set, so
-      # GitHub runs CI on the release PR like a normal PR. PRs opened by the built-in
-      # GITHUB_TOKEN never trigger workflows (a recursion guard) -- that is why the
-      # required `all-green` check used to sit unmet on the release PR. Falls back to
-      # GITHUB_TOKEN when the secret is absent: the release PR still opens, but CI
-      # won't run on it (admin-merge) until you add the token. See AGENTS.md > Releases.
-      - uses: googleapis/release-please-action@v4
+      # A green run releases only the head it tested: if main moved on, skip
+      # and let the newer push's own run release (after its CI passes).
+      # gh api (not anonymous ls-remote) so private repositories work too.
+      - name: Check this run tested the current head
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::main moved to ${head:0:7} since this run started; the newer run releases"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: googleapis/release-please-action@v5
+        id: release
+        if: steps.head.outputs.current == 'true'
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.REPO_PLATFORM_TOKEN || github.token }}

@@ -1,0 +1,10 @@
+# Repo-owned typography exemptions, read alongside the managed
+# .typography-allow. Path prefixes, one per line, relative to the repo root.
+#
+# natural-writing documents and detects the look-alike characters themselves
+# (em dashes, curly quotes, ellipses appear as quoted examples and inside
+# grep patterns), so its files must contain them literally.
+skills/natural-writing/
+# Local dogfood installs of this repo's own skills (gitignored, never in CI
+# checkouts, but local runs of the check scan them).
+.agents/

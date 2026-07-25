@@ -1,0 +1,40 @@
+# Repo-owned CI checks, called by the managed ci.yml inside the all-green
+# gate: every job here must pass before all-green goes green. Generated once
+# by Vivswan/repo-platform and never overwritten by template
+# sync, so edit freely: multiple jobs, matrices, and further local reusable
+# workflows all work.
+#
+# Two limits from running inside the `checks` caller: jobs here get no
+# secrets and are capped at the caller's permissions (contents: read), and
+# all-green only sees the aggregate result, so a job skipped by its own
+# `if:` does not fail the gate. A check that needs secrets, more
+# permissions, or must never be skippable, belongs in its own workflow wired
+# into the ruleset via .github/settings.yml.
+
+name: Checks
+
+on:
+  workflow_call:
+
+jobs:
+  # Typecheck, Biome lint, structural validation, and cross-file consistency
+  # checks (see the "check" script in package.json). uv provides the uvx
+  # runner behind lint:yaml and lint:json.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - uses: astral-sh/setup-uv@v7
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+
+  # End-to-end: the real `npx skills` CLI must discover and group the skills
+  # exactly as consumers see them. Needs network; no install step because
+  # scripts/lib.ts is dependency-free.
+  cli-discovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun scripts/cli-discovery-test.ts
