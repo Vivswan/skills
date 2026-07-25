@@ -34,7 +34,8 @@ This keeps the repo compatible with:
 4. Fill in `SKILL.md` with activation criteria, workflow steps, and fallback behavior.
 5. Add a human-facing `README.md`.
 6. Update the root [`README.md`](../README.md) catalog.
-7. Run `uv run python scripts/validate-skills.py`.
+7. List the new skill in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json).
+8. Run `bun run check`.
 
 ## Compatibility Rules
 
@@ -71,7 +72,7 @@ skills/my-skill/
 - folder name matches the public skill name
 - `README.md` exists for each public skill
 - `.codex-plugin/plugin.json` exists and parses as JSON
-- `.claude-plugin/marketplace.json` parses as JSON and points to real skill paths
+- `.claude-plugin/plugin.json` lists the skill directory, and `.claude-plugin/marketplace.json` stays consistent with it
 - optional MCP files parse as JSON when present
 
 ## Template Notes

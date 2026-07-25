@@ -1,12 +1,12 @@
 # Skills
 
-[![Validate Skills](https://github.com/Vivswan/skills/actions/workflows/validate-skills.yml/badge.svg)](https://github.com/Vivswan/skills/actions/workflows/validate-skills.yml)
+[![CI](https://github.com/Vivswan/skills/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/skills/actions/workflows/ci.yml)
 
 A collection of skills for AI coding agents. Skills are packaged instructions and resources that extend agent capabilities.
 
 ## About This Repository
 
-This repo keeps the collection-style catalog and install flow from `vercel-labs/agent-skills`, while also keeping each skill folder plugin-ready so MCP servers, hooks, or app integrations can be added later without changing the layout. The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) is there for future marketplace-style installs, but the main experience stays centered on `npx skills add ...`.
+This repo keeps the collection-style catalog and install flow from `vercel-labs/agent-skills`, while also keeping each skill folder plugin-ready so MCP servers, hooks, or app integrations can be added later without changing the layout. The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes the whole catalog as a single `vivswan-skills` plugin for Claude Code marketplace installs, with [`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) as the plugin manifest, but the main experience stays centered on `npx skills add ...`.
 
 ## Compatibility
 
@@ -90,6 +90,19 @@ Install directly from the skill folder:
 npx skills add https://github.com/Vivswan/skills/tree/main/skills/rubber-duck-review -g
 ```
 
+Pin a release (see [releases](https://github.com/Vivswan/skills/releases) for the current tag):
+
+```bash
+npx skills add Vivswan/skills#vX.Y.Z -g
+```
+
+Or install everything as a Claude Code plugin:
+
+```text
+/plugin marketplace add Vivswan/skills
+/plugin install vivswan-skills@vivswan-skills
+```
+
 ## Usage
 
 Skills are automatically available once installed. The agent will use them when relevant tasks are detected.
@@ -131,13 +144,13 @@ Each skill can contain:
 
 ## Validation
 
-Run the local validator before publishing changes:
+Run the repo checks before publishing changes:
 
 ```bash
-uv run python scripts/validate-skills.py
+bun run check
 ```
 
-The same checks also run in GitHub Actions through [`.github/workflows/validate-skills.yml`](./.github/workflows/validate-skills.yml).
+That runs the TypeScript typecheck, the Biome lint, YAML and JSON schema lints, the unit tests, structural validation ([`scripts/validate-skills.ts`](./scripts/validate-skills.ts)), and cross-file consistency checks ([`scripts/smoke-test.ts`](./scripts/smoke-test.ts)). CI runs the same script through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery-test.ts`](./scripts/cli-discovery-test.ts)).
 
 ## License
 
