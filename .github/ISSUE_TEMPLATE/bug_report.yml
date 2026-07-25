@@ -1,0 +1,63 @@
+name: Bug report
+description: A skill misbehaves, fails to install, or breaks inside an agent
+labels: [bug]
+body:
+  - type: dropdown
+    id: skill
+    attributes:
+      label: Skill
+      description: Which skill is affected?
+      options:
+        - natural-writing
+        - rubber-duck-review
+        - Not skill-specific (catalog, install, or tooling)
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      description: Where were you running the skill?
+      multiple: true
+      options:
+        - Claude Code
+        - Codex
+        - GitHub Copilot
+        - Other
+    validations:
+      required: false
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - npx skills add Vivswan/skills (collection)
+        - npx skills add with --skill (single skill)
+        - Claude Code plugin marketplace
+        - Manual copy
+    validations:
+      required: false
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. ...
+        2. Expected ..., got ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Agent version, skills CLI version, OS, and anything else relevant.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots (optional)
+      description: Redact anything that looks like a credential or key.
+    validations:
+      required: false

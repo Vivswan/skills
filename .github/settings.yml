@@ -1,12 +1,13 @@
-# Repository settings managed by the Probot "Settings" GitHub App
-# (https://github.com/apps/settings). This file is inert unless that app is
-# installed on the repo. The `rulesets` block below is an experimental upstream
-# feature (repository-settings/app) -- its schema may still change.
+# Repository settings, applied remotely by Vivswan/repo-platform's central
+# settings-repos run; the file's presence in this repo is the opt-in.
+# Undeclared labels are deleted; undeclared rulesets are left alone. This
+# file is repo-owned (the settings-sync module is not selected); a central
+# settings/repos/skills.yml in repo-platform would win over it if added.
 
 repository:
-  description: A collection of skills for AI coding agents
-  homepage: https://github.com/Vivswan/skills
-  topics: skills, ai, agents, claude, claude-code, codex, copilot, llm
+  description: Installable agent skills and plugin-ready workflows for coding agents
+  homepage: https://vivswan.github.io/
+  topics: agent-skills, skills, ai, agents, claude-code, codex, github-copilot, llm, plugins, mcp
   has_issues: true
   has_wiki: false
   has_projects: false
@@ -15,6 +16,12 @@ repository:
   allow_squash_merge: true
   allow_merge_commit: false
   allow_rebase_merge: false
+  # The squash subject must ALWAYS be the PR title (the pr-title check and
+  # release-please rely on it); GitHub only defaults to that for
+  # single-commit PRs.
+  squash_merge_commit_title: PR_TITLE
+  squash_merge_commit_message: PR_BODY
+  allow_update_branch: true
   delete_branch_on_merge: true
   allow_auto_merge: true
   enable_vulnerability_alerts: true
@@ -39,10 +46,19 @@ labels:
   - name: fix-lint
     color: "fbca04"
     description: Lint / formatting fixes
+  # release-please manages these two; listing them here keeps the settings
+  # sync from deleting them (it removes any label not declared in this file).
+  - name: "autorelease: pending"
+    color: "ededed"
+    description: release-please release PR awaiting merge/tag
+  - name: "autorelease: tagged"
+    color: "ededed"
+    description: release-please release PR has been tagged
 
-# Branch ruleset for the default branch. Admins (RepositoryRole id 5) are in the
-# bypass list, so direct pushes to main still work. "Automatically request Copilot
-# code review" is the `copilot_code_review` rule below.
+# Branch ruleset for the default branch. Admins (RepositoryRole id 5) are in
+# the bypass list, so direct pushes to main still work. The single required
+# status check is `all-green` (ci.yml), which `needs:` every gating CI job - the
+# list stays stable when jobs are added or renamed.
 rulesets:
   - name: main
     target: branch
@@ -61,18 +77,19 @@ rulesets:
           strict_required_status_checks_policy: false
           do_not_enforce_on_create: true
           required_status_checks:
-            # `validate` is the job id in .github/workflows/validate-skills.yml.
-            - context: validate
-            # `conventional-title` is the job id in .github/workflows/pr-title.yml.
-            # Required so a non-Conventional-Commit PR title (which becomes the
-            # squash commit subject) can't merge and break release-please.
-            - context: conventional-title
+            - context: all-green
+      - type: code_scanning
+        parameters:
+          code_scanning_tools:
+            - tool: CodeQL
+              security_alerts_threshold: high_or_higher
+              alerts_threshold: errors
       - type: pull_request
         parameters:
-          # Require an approving review from a CODEOWNER (.github/CODEOWNERS) before
-          # merge. Admins in bypass_actors can still merge without one.
-          required_approving_review_count: 1
+          required_approving_review_count: 0
           dismiss_stale_reviews_on_push: false
+          # Require an approving review from a CODEOWNER before merge.
+          # Admins in bypass_actors can still merge without one.
           require_code_owner_review: true
           require_last_push_approval: false
           required_review_thread_resolution: false
@@ -89,3 +106,19 @@ rulesets:
       - actor_id: 5
         actor_type: RepositoryRole
         bypass_mode: always
+
+  # vX.Y.Z release tags are immutable: repo-platform's push sync pins
+  # against them, and consumers pin installs with
+  # `npx skills add Vivswan/skills#vX.Y.Z`.
+  - name: release-tags
+    target: tag
+    enforcement: active
+    conditions:
+      ref_name:
+        include:
+          - v*
+        exclude: []
+    rules:
+      - type: deletion
+      - type: non_fast_forward
+      - type: update

@@ -1,0 +1,7 @@
+# Repo-owned: the issue-templates module generates a starter for this path
+# once, and _skip_if_exists keeps this tailored version on every sync.
+blank_issues_enabled: false
+contact_links:
+  - name: Install and usage docs
+    url: https://github.com/Vivswan/skills#readme
+    about: How to install the skills and what each one does.

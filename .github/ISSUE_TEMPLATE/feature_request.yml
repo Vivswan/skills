@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest a new skill or an improvement to an existing one
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - New skill idea
+        - Improvement to an existing skill
+        - Catalog, install, or tooling
+        - Docs
+    validations:
+      required: true
+  - type: input
+    id: skill
+    attributes:
+      label: Which skill, if any?
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: What would you like?
+      description: What problem does it solve for you?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you've tried (optional)
+    validations:
+      required: false
