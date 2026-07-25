@@ -174,8 +174,8 @@ claude -p --permission-mode plan --verbose --output-format stream-json "$(cat "$
 ### 5. Large change sets: fan out one review per section
 
 - A single broad review of a big diff is shallower than several focused ones. Split the change into logical **sections** (each new command/module, each script, the CI/release config, a parity pair) and run **one review per section in parallel**, each scoped to its files.
-- **Don't over-parallelize.** Many simultaneous `codex exec` processes can saturate the backend and hang. If reviews stall, run them in **smaller batches** (2–3 at a time).
-- **Detect & recover from hangs.** With JSON streaming, compare each review's event count over ~30–60s. If one is flat while its siblings climb, it's hung: stop it (the task runner's stop, or `pkill -f "<unique substring of that prompt>"`) and relaunch **just that one**.
+- **Don't over-parallelize.** Many simultaneous `codex exec` processes can saturate the backend and hang. If reviews stall, run them in **smaller batches** (2-3 at a time).
+- **Detect & recover from hangs.** With JSON streaming, compare each review's event count over ~30-60s. If one is flat while its siblings climb, it's hung: stop it (the task runner's stop, or `pkill -f "<unique substring of that prompt>"`) and relaunch **just that one**.
 
 ### 6. Apply findings thoughtfully
 

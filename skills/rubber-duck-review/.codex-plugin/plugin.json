@@ -4,17 +4,12 @@
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",
-    "url": "https://github.com/Vivswan"
+    "url": "https://vivswan.github.io/"
   },
   "homepage": "https://github.com/Vivswan/skills/tree/main/skills/rubber-duck-review",
   "repository": "https://github.com/Vivswan/skills",
   "license": "MIT",
-  "keywords": [
-    "agent-skills",
-    "code-review",
-    "rubber-duck",
-    "plugin-ready"
-  ],
+  "keywords": ["agent-skills", "code-review", "rubber-duck", "plugin-ready"],
   "skills": "./",
   "interface": {
     "displayName": "Rubber Duck Review",
@@ -22,10 +17,7 @@
     "longDescription": "Launches a read-only review pass with another model or tool and folds the findings back into the main task.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
-    "capabilities": [
-      "Read",
-      "Review"
-    ],
+    "capabilities": ["Read", "Review"],
     "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/rubber-duck-review",
     "defaultPrompt": [
       "Rubber duck this change before we merge it.",
