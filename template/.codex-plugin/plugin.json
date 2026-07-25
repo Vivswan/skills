@@ -4,11 +4,12 @@
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",
-    "url": "https://github.com/Vivswan"
+    "url": "https://vivswan.github.io/"
   },
-  "homepage": "https://github.com/Vivswan/skills",
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/template-skill",
   "repository": "https://github.com/Vivswan/skills",
   "license": "MIT",
+  "keywords": ["agent-skills", "template-skill", "plugin-ready"],
   "skills": "./",
   "interface": {
     "displayName": "Template Skill",
@@ -16,13 +17,9 @@
     "longDescription": "Replace with a longer description for the skill details view.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
-    "capabilities": [
-      "Read"
-    ],
-    "websiteURL": "https://github.com/Vivswan/skills",
-    "defaultPrompt": [
-      "Replace this prompt example."
-    ],
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/template-skill",
+    "defaultPrompt": ["Replace this prompt example."],
     "brandColor": "#0F766E"
   }
 }
