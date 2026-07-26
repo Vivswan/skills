@@ -48,6 +48,16 @@ body:
         2. Expected ..., got ...
     validations:
       required: true
+  - type: input
+    id: version
+    attributes:
+      label: Skills version / release
+      description: >-
+        Release tag or commit of this collection. Pinned installs record it
+        in your skills lockfile; write "unknown" for an unpinned, manual
+        copy, or marketplace install.
+    validations:
+      required: true
   - type: textarea
     id: environment
     attributes:
