@@ -1,0 +1,36 @@
+{
+  "name": "no-invalid-states",
+  "description": "Refactor invariants out of runtime checks and into the type system: parse at boundaries, then make invalid internal states impossible to construct.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/no-invalid-states",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "MIT",
+  "keywords": [
+    "agent-skills",
+    "type-safety",
+    "refactoring",
+    "parse-dont-validate",
+    "typestate",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "No Invalid States",
+    "shortDescription": "Encode invariants in types instead of runtime checks.",
+    "longDescription": "Finds invariants hiding behind lifecycle flags, co-dependent optionals, and repeated validation, then refactors them into sum types, newtypes, typestate, and smart constructors while keeping genuinely dynamic checks at the boundaries.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Edit", "Refactor"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/no-invalid-states",
+    "defaultPrompt": [
+      "Make invalid states unrepresentable in this module.",
+      "Refactor these lifecycle flags into proper state types.",
+      "Apply parse, don't validate to this codebase."
+    ],
+    "brandColor": "#7C3AED"
+  }
+}

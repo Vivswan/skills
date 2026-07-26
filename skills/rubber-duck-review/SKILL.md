@@ -42,6 +42,8 @@ Use this skill when someone asks for:
   - Naming or design choices that will become awkward as the codebase grows
   - Hardcoded assumptions that may become misleading later
   - Workarounds propped up by long justification comments: if it takes a paragraph-long comment to argue the workaround is OK, the code is wrong. Flag both the comment and the code for fixing.
+- Fold in criteria from companion skills. For each skill in the list below that is installed, expand its `## Review Criteria` section into the reviewer prompt and triage the resulting findings with that skill's own workflow. To make another skill part of the review later, add its name here:
+  - `no-invalid-states`
 - Ask it to report **prioritized** findings (blocking vs non-blocking) and to **say so plainly if the code is correct**; this keeps re-reviews terminable.
 - If the user has already declined or reverted something in this thread, add a short `Already decided / out of scope` section so the reviewer does not keep re-raising it.
 - On a re-review, state which fixes were already applied so it focuses on what remains.

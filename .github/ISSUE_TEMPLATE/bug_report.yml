@@ -8,6 +8,7 @@ body:
       label: Skill
       description: Which skill is affected?
       options:
+        - no-invalid-states
         - natural-writing
         - rubber-duck-review
         - Not skill-specific (catalog, install, or tooling)

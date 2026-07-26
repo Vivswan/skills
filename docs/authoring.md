@@ -37,6 +37,20 @@ This keeps the repo compatible with:
 7. List the new skill in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json).
 8. Run `bun run check`.
 
+## Contributing Criteria to Reviews
+
+A skill can contribute to `rubber-duck-review` second-opinion passes. Two
+steps:
+
+1. Declare a `## Review Criteria` section in the skill's `SKILL.md`. Keep it
+   short: a few bullets the reviewer can act on, plus a pointer to the
+   skill's own workflow for triaging findings.
+2. Add the skill's name to the companion-skill list in
+   `skills/rubber-duck-review/SKILL.md` (step 2, "Craft the prompt").
+
+When both skills are installed, the review skill expands the section into
+the reviewer prompt.
+
 ## Compatibility Rules
 
 - `npx skills add Vivswan/skills` is the primary install path.

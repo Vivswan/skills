@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "vivswan-skills",
-      "description": "Agent skills for natural prose and cross-model code review",
+      "description": "Agent skills for natural prose, cross-model code review, and type-driven refactoring",
       "homepage": "https://vivswan.github.io/",
       "source": "./"
     }

@@ -29,6 +29,29 @@ Compatibility rules for every skill in this repo:
 
 ## Available Skills
 
+### no-invalid-states
+
+Review and refactor code so invariants live in the type system instead of
+scattered runtime checks: parse at boundaries, then make invalid internal
+states impossible to construct.
+
+**Use when:**
+
+- Repeated defensive checks guard the same condition throughout a codebase
+- Booleans encode lifecycle states, or optional fields must appear together
+- Comments say "must call X before Y" and wrong ordering only fails at runtime
+- You want "parse, don't validate" applied with the language's strongest
+  idiomatic mechanism
+
+**Categories covered:**
+
+- Sum types: enums, discriminated unions, sealed classes
+- Newtypes and branded types behind smart constructors
+- Typestate and state-specific types for lifecycle APIs
+- Boundary parsing with retained runtime checks for external data
+- Per-language guidance: Rust, TypeScript, Python, and a survey of Go,
+  JVM languages, C#, Swift, functional and dynamic languages, and schemas
+
 ### natural-writing
 
 Write and edit prose that avoids the documented signs of AI writing from

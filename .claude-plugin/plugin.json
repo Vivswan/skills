@@ -1,7 +1,7 @@
 {
   "name": "vivswan-skills",
   "displayName": "Vivswan Skills",
-  "description": "Agent skills for natural prose and cross-model code review",
+  "description": "Agent skills for natural prose, cross-model code review, and type-driven refactoring",
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com"
@@ -9,6 +9,10 @@
   "homepage": "https://vivswan.github.io/",
   "repository": "https://github.com/Vivswan/skills",
   "license": "MIT",
-  "keywords": ["agent-skills", "natural-writing", "code-review"],
-  "skills": ["./skills/natural-writing", "./skills/rubber-duck-review"]
+  "keywords": ["agent-skills", "natural-writing", "code-review", "type-safety"],
+  "skills": [
+    "./skills/no-invalid-states",
+    "./skills/natural-writing",
+    "./skills/rubber-duck-review"
+  ]
 }
