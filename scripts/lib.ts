@@ -51,7 +51,7 @@ export function isUnknownArray(value: unknown): value is unknown[] {
   return Array.isArray(value);
 }
 
-function errorMessage(error: unknown): string {
+export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 

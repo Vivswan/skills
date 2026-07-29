@@ -95,7 +95,7 @@ model, I'm sorry, I cannot
 ## Tool residue (grep patterns)
 
 turn0, oaicite, oai_citation, contentReference, attributableIndex,
-attached_file, grok_card, grok_render_citation_card_json, 【, [cite:,
+attached_file, grok_card, grok_render_citation_card_json, 【, [cite:, [web:,
 :::writing, utm_source=chatgpt.com, utm_source=openai, utm_source=copilot.com,
 referrer=grok.com, ↩
 
