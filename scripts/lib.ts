@@ -47,24 +47,90 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function loadJson(path: string): unknown {
   let text: string;
   try {
     text = readFileSync(path, "utf-8");
   } catch (error) {
-    fail(`${rel(path)}: cannot read file (${(error as Error).message})`);
+    fail(`${rel(path)}: cannot read file (${errorMessage(error)})`);
   }
   try {
     return JSON.parse(text);
   } catch (error) {
-    fail(`${rel(path)}: invalid JSON (${(error as Error).message})`);
+    fail(`${rel(path)}: invalid JSON (${errorMessage(error)})`);
   }
+}
+
+export function loadJsonObject(path: string): Record<string, unknown> {
+  const data = loadJson(path);
+  if (!isRecord(data)) fail(`${rel(path)}: root must be an object`);
+  return data;
+}
+
+export interface RootManifest {
+  readonly path: string;
+  readonly name: string;
+  readonly skills: readonly string[];
+  readonly raw: Record<string, unknown>;
+}
+
+export function loadRootManifest(path = join(ROOT, ".claude-plugin", "plugin.json")): RootManifest {
+  const raw = loadJsonObject(path);
+  const name = raw.name;
+  if (typeof name !== "string" || !KEBAB_CASE.test(name)) {
+    fail(`${rel(path)}: name ${JSON.stringify(name)} must be kebab-case`);
+  }
+  const skills = raw.skills;
+  if (!isUnknownArray(skills) || skills.length === 0) {
+    fail(`${rel(path)}: skills must be a non-empty array of skill directory paths`);
+  }
+  const skillPaths: string[] = [];
+  for (const skillPath of skills) {
+    if (typeof skillPath !== "string") fail(`${rel(path)}: skill paths must be strings`);
+    skillPaths.push(skillPath);
+  }
+  return { path, name, skills: skillPaths, raw };
+}
+
+export interface Marketplace {
+  readonly path: string;
+  readonly plugins: readonly Record<string, unknown>[];
+  readonly raw: Record<string, unknown>;
+}
+
+export function loadMarketplace(
+  path = join(ROOT, ".claude-plugin", "marketplace.json"),
+): Marketplace {
+  const raw = loadJsonObject(path);
+  const rawPlugins = raw.plugins;
+  if (!isUnknownArray(rawPlugins) || rawPlugins.length === 0) {
+    fail(`${rel(path)}: missing plugins array`);
+  }
+  const plugins: Record<string, unknown>[] = [];
+  for (const plugin of rawPlugins) {
+    if (!isRecord(plugin)) fail(`${rel(path)}: each plugin entry must be an object`);
+    plugins.push(plugin);
+  }
+  return { path, plugins, raw };
 }
 
 export type Frontmatter = Record<string, unknown>;
 
 export function parseFrontmatter(path: string): Frontmatter {
-  const text = readFileSync(path, "utf-8");
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch (error) {
+    fail(`${rel(path)}: cannot read file (${errorMessage(error)})`);
+  }
   if (!text.startsWith("---\n")) fail(`${rel(path)}: missing YAML frontmatter start`);
   const end = text.indexOf("\n---\n", 4);
   if (end === -1) fail(`${rel(path)}: missing YAML frontmatter end`);
@@ -73,7 +139,7 @@ export function parseFrontmatter(path: string): Frontmatter {
   try {
     data = Bun.YAML.parse(text.slice(4, end));
   } catch (error) {
-    fail(`${rel(path)}: invalid YAML frontmatter (${(error as Error).message})`);
+    fail(`${rel(path)}: invalid YAML frontmatter (${errorMessage(error)})`);
   }
   if (!isRecord(data)) fail(`${rel(path)}: frontmatter must be a YAML mapping`);
   return data;

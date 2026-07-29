@@ -10,8 +10,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { basename, join } from "node:path";
-import { fail, isRecord, loadJson, ROOT, runChecks, skillDirs } from "./lib";
+import { basename } from "node:path";
+import { fail, loadRootManifest, ROOT, runChecks, skillDirs } from "./lib";
 
 const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
@@ -31,10 +31,7 @@ function kebabToTitle(name: string): string {
 }
 
 function main(): void {
-  const manifest = loadJson(join(ROOT, ".claude-plugin", "plugin.json"));
-  if (!isRecord(manifest) || typeof manifest.name !== "string") {
-    fail(".claude-plugin/plugin.json: missing plugin name");
-  }
+  const manifest = loadRootManifest();
   const groupTitle = kebabToTitle(manifest.name);
   const expected = skillDirs().map((dir) => basename(dir));
 

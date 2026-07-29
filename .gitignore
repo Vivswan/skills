@@ -6,6 +6,9 @@
 skills-lock.json
 .agents/
 
+# Claude Code session state and in-repo worktrees.
+.claude/
+
 # END REPOSITORY LOCAL
 
 # BEGIN REPO-PLATFORM MANAGED

@@ -17,10 +17,13 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { Marketplace, RootManifest } from "./lib";
 import {
   fail,
   isRecord,
-  loadJson,
+  loadJsonObject,
+  loadMarketplace,
+  loadRootManifest,
   parseFrontmatter,
   ROOT,
   rel,
@@ -75,12 +78,20 @@ function checkNoInstallDroppedFiles(skillDir: string): void {
   }
 }
 
-function checkSingleSourceVersion(skillDir: string): void {
-  const pluginJson = join(skillDir, ".codex-plugin", "plugin.json");
-  const plugin = loadJson(pluginJson);
-  if (isRecord(plugin) && "version" in plugin) {
+interface CodexManifest {
+  readonly path: string;
+  readonly plugin: Record<string, unknown>;
+}
+
+function loadCodexManifest(skillDir: string): CodexManifest {
+  const path = join(skillDir, ".codex-plugin", "plugin.json");
+  return { path, plugin: loadJsonObject(path) };
+}
+
+function checkSingleSourceVersion(skillDir: string, codex: CodexManifest): void {
+  if ("version" in codex.plugin) {
     fail(
-      `${rel(pluginJson)}: unexpected 'version' field -- the single source of truth is` +
+      `${rel(codex.path)}: unexpected 'version' field -- the single source of truth is` +
         " marketplace.json metadata.version (see AGENTS.md > Releases)",
     );
   }
@@ -99,15 +110,13 @@ function checkSingleSourceVersion(skillDir: string): void {
 // Every published skill's codex manifest points its homepage at the skill's
 // own folder and carries discovery keywords; skills copied from template/
 // tend to miss both, so enforce the convention here.
-function checkManifestConventions(skillDir: string): void {
-  const pluginJson = join(skillDir, ".codex-plugin", "plugin.json");
-  const plugin = loadJson(pluginJson);
-  if (!isRecord(plugin)) fail(`${rel(pluginJson)}: root must be an object`);
+function checkManifestConventions(skillDir: string, codex: CodexManifest): void {
+  const { path, plugin } = codex;
   const folder = basename(skillDir);
-  if (typeof plugin.repository !== "string") fail(`${rel(pluginJson)}: missing repository URL`);
+  if (typeof plugin.repository !== "string") fail(`${rel(path)}: missing repository URL`);
   const expectedHomepage = `${plugin.repository}/tree/main/skills/${folder}`;
   if (plugin.homepage !== expectedHomepage) {
-    fail(`${rel(pluginJson)}: homepage must be ${expectedHomepage}`);
+    fail(`${rel(path)}: homepage must be ${expectedHomepage}`);
   }
   const keywords = plugin.keywords;
   if (
@@ -115,26 +124,12 @@ function checkManifestConventions(skillDir: string): void {
     keywords.length === 0 ||
     !keywords.every((keyword) => typeof keyword === "string" && keyword.trim() !== "")
   ) {
-    fail(`${rel(pluginJson)}: keywords must be a non-empty array of non-empty strings`);
+    fail(`${rel(path)}: keywords must be a non-empty array of non-empty strings`);
   }
 }
 
-function loadMarketplace(): Record<string, unknown> {
-  const path = join(ROOT, ".claude-plugin", "marketplace.json");
-  const marketplace = loadJson(path);
-  if (!isRecord(marketplace)) fail(`${rel(path)}: root must be an object`);
-  return marketplace;
-}
-
-function loadRootManifest(): Record<string, unknown> {
-  const path = join(ROOT, ".claude-plugin", "plugin.json");
-  const manifest = loadJson(path);
-  if (!isRecord(manifest)) fail(`${rel(path)}: root must be an object`);
-  return manifest;
-}
-
-function checkCatalogVersion(marketplace: Record<string, unknown>): void {
-  const metadata = marketplace.metadata;
+function checkCatalogVersion(marketplace: Marketplace): void {
+  const metadata = marketplace.raw.metadata;
   const version = isRecord(metadata) ? metadata.version : undefined;
   if (typeof version !== "string" || !SEMVER.test(version)) {
     fail(
@@ -142,8 +137,8 @@ function checkCatalogVersion(marketplace: Record<string, unknown>): void {
     );
   }
 
-  const releaseManifest = loadJson(join(ROOT, ".release-please-manifest.json"));
-  const released = isRecord(releaseManifest) ? releaseManifest["."] : undefined;
+  const releaseManifest = loadJsonObject(join(ROOT, ".release-please-manifest.json"));
+  const released = releaseManifest["."];
   if (released !== version) {
     fail(
       `.release-please-manifest.json version ${JSON.stringify(released)} does not match` +
@@ -153,8 +148,8 @@ function checkCatalogVersion(marketplace: Record<string, unknown>): void {
 
   // release-please only keeps metadata.version current because the config
   // lists marketplace.json as an extra-file; fail loudly if that wiring is lost.
-  const config = loadJson(join(ROOT, "release-please-config.json"));
-  const packages = isRecord(config) ? config.packages : undefined;
+  const config = loadJsonObject(join(ROOT, "release-please-config.json"));
+  const packages = config.packages;
   const rootPackage = isRecord(packages) ? packages["."] : undefined;
   const extraFiles = isRecord(rootPackage) ? rootPackage["extra-files"] : undefined;
   const wired =
@@ -174,8 +169,8 @@ function checkCatalogVersion(marketplace: Record<string, unknown>): void {
   }
 }
 
-function checkRootManifestVersion(manifest: Record<string, unknown>): void {
-  if ("version" in manifest) {
+function checkRootManifestVersion(manifest: RootManifest): void {
+  if ("version" in manifest.raw) {
     fail(
       ".claude-plugin/plugin.json: unexpected 'version' field -- the single source of truth is" +
         " marketplace.json metadata.version (see AGENTS.md > Releases)",
@@ -183,14 +178,8 @@ function checkRootManifestVersion(manifest: Record<string, unknown>): void {
   }
 }
 
-function checkCatalogCoverage(manifest: Record<string, unknown>): void {
-  const listed = new Set<string>();
-  const skills = manifest.skills;
-  if (Array.isArray(skills)) {
-    for (const skillPath of skills) {
-      if (typeof skillPath === "string") listed.add(join(ROOT, skillPath));
-    }
-  }
+function checkCatalogCoverage(manifest: RootManifest): void {
+  const listed = new Set(manifest.skills.map((skillPath) => join(ROOT, skillPath)));
   for (const skillDir of skillDirs()) {
     if (!listed.has(skillDir)) {
       fail(
@@ -201,19 +190,11 @@ function checkCatalogCoverage(manifest: Record<string, unknown>): void {
   }
 }
 
-function checkMarketplaceAgainstManifest(
-  marketplace: Record<string, unknown>,
-  manifest: Record<string, unknown>,
-): void {
-  const plugins = marketplace.plugins;
-  if (!Array.isArray(plugins)) fail(".claude-plugin/marketplace.json: missing plugins array");
-
-  for (const plugin of plugins) {
-    if (!isRecord(plugin)) continue;
-
+function checkMarketplaceAgainstManifest(marketplace: Marketplace, manifest: RootManifest): void {
+  for (const plugin of marketplace.plugins) {
     // strict defaults to true (plugin.json is the authority). strict:false
     // alongside a component-declaring plugin.json is a load-time conflict.
-    if (plugin.strict === false && COMPONENT_FIELDS.some((field) => field in manifest)) {
+    if (plugin.strict === false && COMPONENT_FIELDS.some((field) => field in manifest.raw)) {
       fail(
         `.claude-plugin/marketplace.json: plugin '${plugin.name}' sets strict:false while` +
           " .claude-plugin/plugin.json declares components -- Claude Code refuses to load this",
@@ -223,8 +204,8 @@ function checkMarketplaceAgainstManifest(
     // Any manifest field repeated on the marketplace entry must agree with the
     // manifest, otherwise the two files drift apart silently.
     for (const [key, value] of Object.entries(plugin)) {
-      if (MARKETPLACE_ONLY_FIELDS.has(key) || !(key in manifest)) continue;
-      if (JSON.stringify(value) !== JSON.stringify(manifest[key])) {
+      if (MARKETPLACE_ONLY_FIELDS.has(key) || !(key in manifest.raw)) continue;
+      if (JSON.stringify(value) !== JSON.stringify(manifest.raw[key])) {
         fail(
           `.claude-plugin/marketplace.json: plugin '${plugin.name}' field '${key}' disagrees` +
             " with .claude-plugin/plugin.json -- keep them identical or drop the duplicate",
@@ -275,8 +256,9 @@ function main(): void {
   for (const skillDir of dirs) {
     checkNoPlaceholders(skillDir);
     checkNoInstallDroppedFiles(skillDir);
-    checkSingleSourceVersion(skillDir);
-    checkManifestConventions(skillDir);
+    const codex = loadCodexManifest(skillDir);
+    checkSingleSourceVersion(skillDir, codex);
+    checkManifestConventions(skillDir, codex);
   }
 
   console.log(`Smoke test passed (${dirs.length} skill(s) checked).`);

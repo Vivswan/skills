@@ -13,8 +13,12 @@ import { basename, dirname, join, resolve } from "node:path";
 import {
   fail,
   isRecord,
+  isUnknownArray,
   KEBAB_CASE,
   loadJson,
+  loadJsonObject,
+  loadMarketplace,
+  loadRootManifest,
   parseFrontmatter,
   ROOT,
   rel,
@@ -29,16 +33,8 @@ const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
 
 function validateMarketplace(): void {
-  const path = join(ROOT, ".claude-plugin", "marketplace.json");
-  const marketplace = loadJson(path);
-  if (!isRecord(marketplace)) fail(`${rel(path)}: root must be an object`);
-
-  const plugins = marketplace.plugins;
-  if (!Array.isArray(plugins) || plugins.length === 0) {
-    fail(`${rel(path)}: missing plugins array`);
-  }
+  const { path, plugins } = loadMarketplace();
   for (const plugin of plugins) {
-    if (!isRecord(plugin)) fail(`${rel(path)}: each plugin entry must be an object`);
     const name = plugin.name;
     if (typeof name !== "string" || !KEBAB_CASE.test(name)) {
       fail(`${rel(path)}: plugin name ${JSON.stringify(name)} must be kebab-case`);
@@ -50,7 +46,7 @@ function validateMarketplace(): void {
     }
     const skills = plugin.skills;
     if (skills !== undefined) {
-      if (!Array.isArray(skills)) fail(`${rel(path)}: plugin '${name}' skills must be a list`);
+      if (!isUnknownArray(skills)) fail(`${rel(path)}: plugin '${name}' skills must be a list`);
       for (const skillPath of skills) {
         if (typeof skillPath !== "string") {
           fail(`${rel(path)}: skill paths must be strings`);
@@ -64,21 +60,8 @@ function validateMarketplace(): void {
 }
 
 function validateRootPluginManifest(): void {
-  const path = join(ROOT, ".claude-plugin", "plugin.json");
-  const manifest = loadJson(path);
-  if (!isRecord(manifest)) fail(`${rel(path)}: root must be an object`);
-
-  const name = manifest.name;
-  if (typeof name !== "string" || !KEBAB_CASE.test(name)) {
-    fail(`${rel(path)}: name ${JSON.stringify(name)} must be kebab-case`);
-  }
-
-  const skills = manifest.skills;
-  if (!Array.isArray(skills) || skills.length === 0) {
-    fail(`${rel(path)}: skills must be a non-empty array of skill directory paths`);
-  }
+  const { path, skills } = loadRootManifest();
   for (const skillPath of skills) {
-    if (typeof skillPath !== "string") fail(`${rel(path)}: skill paths must be strings`);
     // Keep every published skill a direct child of skills/ so the per-folder
     // validation below cannot be bypassed by an out-of-tree or traversing
     // path (resolve() collapses any ../ segments before the containment check).
@@ -122,8 +105,7 @@ function validateSkillDir(skillDir: string): void {
     fail(`${rel(skillMd)}: description exceeds ${MAX_DESCRIPTION_LENGTH} characters`);
   }
 
-  const plugin = loadJson(pluginJson);
-  if (!isRecord(plugin)) fail(`${rel(pluginJson)}: root must be an object`);
+  const plugin = loadJsonObject(pluginJson);
   if (plugin.name !== folder) {
     fail(`${rel(pluginJson)}: name does not match folder '${folder}'`);
   }
@@ -147,7 +129,7 @@ function validateTemplate(): void {
     fail("template/SKILL.md: metadata.internal must be true");
   }
 
-  loadJson(join(templateDir, ".codex-plugin", "plugin.json"));
+  loadJsonObject(join(templateDir, ".codex-plugin", "plugin.json"));
   loadJson(join(templateDir, ".mcp.json.example"));
 }
 
