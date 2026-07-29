@@ -55,6 +55,18 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Read a text file. A missing or unreadable file is a CheckFailure naming
+ * the file, like loadJson.
+ */
+export function readTextFile(path: string): string {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (error) {
+    fail(`${rel(path)}: cannot read file (${errorMessage(error)})`);
+  }
+}
+
 export function loadJson(path: string): unknown {
   let text: string;
   try {

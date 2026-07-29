@@ -11,7 +11,6 @@
  *   - catalog drift: a skill folder missing from the root plugin manifest, a
  *     marketplace entry disagreeing with the plugin manifest, or a strict:false
  *     entry that would make Claude Code refuse to load the plugin
- *   - README.md missing a section for a published skill
  *   - files named metadata.json inside a skill (npx skills drops them at install)
  *   - listing drift: plugin.json skills[] entries without a skill folder, and
  *     README skill sections and bug-form dropdown options kept in exact
@@ -37,6 +36,7 @@ import {
   loadRootManifest,
   parseFrontmatter,
   ROOT,
+  readTextFile,
   rel,
   requireFile,
   runChecks,
@@ -113,14 +113,20 @@ function loadSkillFrontmatter(skillDir: string): SkillFrontmatter {
   return { path, frontmatter: parseFrontmatter(path) };
 }
 
-function checkSingleSourceVersion(codex: CodexManifest, skillMd: SkillFrontmatter): void {
+// No codex manifest (published or template) may carry a version field; the
+// single source of truth is marketplace.json metadata.version.
+function checkCodexManifestVersionBan(codex: CodexManifest): void {
   if ("version" in codex.plugin) {
     fail(
       `${rel(codex.path)}: unexpected 'version' field -- the single source of truth is` +
         " marketplace.json metadata.version (see AGENTS.md > Releases)",
     );
   }
+}
 
+// No SKILL.md frontmatter (published or template) may carry a version field
+// either, top-level or under metadata.
+function checkFrontmatterVersionBan(skillMd: SkillFrontmatter): void {
   const { frontmatter } = skillMd;
   const metadata = frontmatter.metadata;
   if ("version" in frontmatter || (isRecord(metadata) && "version" in metadata)) {
@@ -129,6 +135,11 @@ function checkSingleSourceVersion(codex: CodexManifest, skillMd: SkillFrontmatte
         " marketplace.json metadata.version",
     );
   }
+}
+
+function checkSingleSourceVersion(codex: CodexManifest, skillMd: SkillFrontmatter): void {
+  checkCodexManifestVersionBan(codex);
+  checkFrontmatterVersionBan(skillMd);
 }
 
 // Every published skill's codex manifest points its homepage at the skill's
@@ -144,7 +155,7 @@ function checkManifestConventions(skillDir: string, codex: CodexManifest): void 
   }
   const keywords = plugin.keywords;
   if (
-    !Array.isArray(keywords) ||
+    !isUnknownArray(keywords) ||
     keywords.length === 0 ||
     !keywords.every((keyword) => typeof keyword === "string" && keyword.trim() !== "")
   ) {
@@ -177,7 +188,7 @@ function checkCatalogVersion(marketplace: Marketplace): void {
   const rootPackage = isRecord(packages) ? packages["."] : undefined;
   const extraFiles = isRecord(rootPackage) ? rootPackage["extra-files"] : undefined;
   const wired =
-    Array.isArray(extraFiles) &&
+    isUnknownArray(extraFiles) &&
     extraFiles.some(
       (entry) =>
         isRecord(entry) &&
@@ -202,9 +213,9 @@ function checkRootManifestVersion(manifest: RootManifest): void {
   }
 }
 
-function checkCatalogCoverage(manifest: RootManifest): void {
+function checkCatalogCoverage(manifest: RootManifest, dirs: readonly string[]): void {
   const listed = new Set(manifest.skills.map((skillPath) => join(ROOT, skillPath)));
-  for (const skillDir of skillDirs()) {
+  for (const skillDir of dirs) {
     if (!listed.has(skillDir)) {
       fail(
         `${rel(skillDir)}: skill folder is not listed in .claude-plugin/plugin.json skills --` +
@@ -239,20 +250,18 @@ function checkMarketplaceAgainstManifest(marketplace: Marketplace, manifest: Roo
   }
 }
 
-function publishedSkillNames(): Set<string> {
-  return new Set(skillDirs().map((dir) => basename(dir)));
-}
-
 // Reverse of checkCatalogCoverage: a skills[] entry whose folder is gone
 // would otherwise sit in the manifest forever.
-function checkManifestEntriesHaveFolders(manifest: RootManifest): void {
-  const names = publishedSkillNames();
+function checkManifestEntriesHaveFolders(
+  manifest: RootManifest,
+  skillNames: ReadonlySet<string>,
+): void {
   for (const entry of manifest.skills) {
     const name = basename(entry);
     if (entry !== `./skills/${name}`) {
       fail(`${rel(manifest.path)}: skills entry '${entry}' must be written as './skills/${name}'`);
     }
-    if (!names.has(name)) {
+    if (!skillNames.has(name)) {
       fail(
         `${rel(manifest.path)}: skills entry '${entry}' has no matching skills/${name}/` +
           " folder -- remove the stale entry or restore the folder",
@@ -266,8 +275,8 @@ function checkManifestEntriesHaveFolders(manifest: RootManifest): void {
 // missing section (or an emptied skills area) fails just as loudly. Only
 // kebab-case headings count as skill sections, mirroring the dropdown
 // guard's filter, so prose subheadings are left alone.
-function checkReadmeSectionsMatchFolders(): void {
-  const readme = readFileSync(join(ROOT, "README.md"), "utf-8");
+function checkReadmeSectionsMatchFolders(skillNames: ReadonlySet<string>): void {
+  const readme = readTextFile(join(ROOT, "README.md"));
   const heading = "\n## Available Skills\n";
   const start = readme.indexOf(heading);
   if (start === -1) fail("README.md: missing the '## Available Skills' section");
@@ -279,16 +288,15 @@ function checkReadmeSectionsMatchFolders(): void {
     const name = (match[1] ?? "").trim();
     if (KEBAB_CASE.test(name)) sections.add(name);
   }
-  const names = publishedSkillNames();
   for (const name of sections) {
-    if (!names.has(name)) {
+    if (!skillNames.has(name)) {
       fail(
         `README.md: '### ${name}' in the Available Skills section has no matching` +
           ` skills/${name}/ folder -- remove the stale section or restore the folder`,
       );
     }
   }
-  for (const name of names) {
+  for (const name of skillNames) {
     if (!sections.has(name)) {
       fail(`README.md: the Available Skills section is missing a '### ${name}' section`);
     }
@@ -299,7 +307,7 @@ function checkReadmeSectionsMatchFolders(): void {
 // published skill must be offered, a skill-name-shaped option whose folder is
 // gone is stale, and the dropdown itself must exist. Free-form options such
 // as "Not skill-specific (...)" are not kebab-case and are left alone.
-function checkIssueTemplateOptionsMatchFolders(): void {
+function checkIssueTemplateOptionsMatchFolders(skillNames: ReadonlySet<string>): void {
   const bugForm = join(ROOT, ".github", "ISSUE_TEMPLATE", "bug_report.yml");
   requireFile(bugForm);
   let form: unknown;
@@ -322,16 +330,15 @@ function checkIssueTemplateOptionsMatchFolders(): void {
   for (const option of options) {
     if (typeof option === "string" && KEBAB_CASE.test(option)) offered.add(option);
   }
-  const names = publishedSkillNames();
   for (const option of offered) {
-    if (!names.has(option)) {
+    if (!skillNames.has(option)) {
       fail(
         `${rel(bugForm)}: skill dropdown option '${option}' has no matching` +
           ` skills/${option}/ folder -- remove the stale option or restore the folder`,
       );
     }
   }
-  for (const name of names) {
+  for (const name of skillNames) {
     if (!offered.has(name)) {
       fail(`${rel(bugForm)}: the skill dropdown is missing an option for '${name}'`);
     }
@@ -389,13 +396,13 @@ function checkAuthorIdentity(
     }
   }
 
-  const licenseText = readFileSync(join(ROOT, "LICENSE"), "utf-8");
+  const licenseText = readTextFile(join(ROOT, "LICENSE"));
   const copyright = licenseText.split("\n").find((line) => line.startsWith("Copyright"));
   if (copyright === undefined || !copyright.includes(authorName)) {
     fail(`LICENSE: copyright line must name '${authorName}'`);
   }
 
-  const agents = readFileSync(join(ROOT, "AGENTS.md"), "utf-8");
+  const agents = readTextFile(join(ROOT, "AGENTS.md"));
   const commitRulesHeading = "### Commit rules";
   const headingIndex = agents.indexOf(commitRulesHeading);
   if (headingIndex === -1) fail("AGENTS.md: missing the '### Commit rules' section");
@@ -428,7 +435,7 @@ function checkLicenseIdentity(
     }
   }
 
-  const readme = readFileSync(join(ROOT, "README.md"), "utf-8");
+  const readme = readTextFile(join(ROOT, "README.md"));
   const licenseHeading = "\n## License\n";
   const headingIndex = readme.indexOf(licenseHeading);
   if (headingIndex === -1) fail("README.md: missing the '## License' section");
@@ -437,7 +444,7 @@ function checkLicenseIdentity(
   const section = nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
   if (!section.includes(license)) fail(`README.md: License section must mention ${license}`);
 
-  if (!readFileSync(join(ROOT, "LICENSE"), "utf-8").includes("MIT License")) {
+  if (!readTextFile(join(ROOT, "LICENSE")).includes("MIT License")) {
     fail("LICENSE: text must contain the literal 'MIT License'");
   }
 }
@@ -627,7 +634,8 @@ function expandClass(content: string): string[] {
 
 // Expand one alternation term into the literal strings it can match,
 // resolving '\x' escapes, one level of '(a|b)' groups, and '[x-y]' classes.
-function expandTermCandidates(term: string): string[] {
+// sourceRel names the file the pattern came from in failure messages.
+function expandTermCandidates(term: string, sourceRel: string): string[] {
   let results = [""];
   let i = 0;
   while (i < term.length) {
@@ -640,7 +648,7 @@ function expandTermCandidates(term: string): string[] {
     }
     if (char === "[") {
       const end = term.indexOf("]", i + 1);
-      if (end === -1) fail(`unbalanced character class in grep term '${term}'`);
+      if (end === -1) fail(`${sourceRel}: unbalanced character class in grep term '${term}'`);
       // The word list documents tokens like '[web:' without spelling out every
       // class member, so a class also counts as matched when its surrounding
       // literals appear ("" member).
@@ -651,15 +659,17 @@ function expandTermCandidates(term: string): string[] {
     }
     if (char === "(") {
       const end = term.indexOf(")", i + 1);
-      if (end === -1) fail(`unbalanced group in grep term '${term}'`);
+      if (end === -1) fail(`${sourceRel}: unbalanced group in grep term '${term}'`);
       const branches = term.slice(i + 1, end).split("|");
       for (const branch of branches) {
         if (branch.trim() === "") {
-          fail(`empty alternation branch inside a group in grep term '${term}'`);
+          fail(`${sourceRel}: empty alternation branch inside a group in grep term '${term}'`);
         }
       }
       results = results.flatMap((prefix) =>
-        branches.flatMap((branch) => expandTermCandidates(branch).map((tail) => prefix + tail)),
+        branches.flatMap((branch) =>
+          expandTermCandidates(branch, sourceRel).map((tail) => prefix + tail),
+        ),
       );
       i = end + 1;
       continue;
@@ -699,7 +709,9 @@ function checkGrepTermsCoveredByWordList(): void {
       // A bare character class expands to its member characters here (the ""
       // expansion is filtered out), so a term must always contribute some
       // literal text we can look up in the word list.
-      const candidates = expandTermCandidates(term).filter((candidate) => candidate.trim() !== "");
+      const candidates = expandTermCandidates(term, rel(skillMd)).filter(
+        (candidate) => candidate.trim() !== "",
+      );
       if (candidates.length === 0) {
         fail(
           `${rel(skillMd)}: grep term '${term}' expands to no literal text -- it cannot` +
@@ -747,13 +759,14 @@ function checkReviewerPreamble(): void {
 function main(): void {
   const marketplace = loadMarketplace();
   const manifest = loadRootManifest();
+  const dirs = skillDirs();
+  const skillNames: ReadonlySet<string> = new Set(dirs.map((dir) => basename(dir)));
 
   checkCatalogVersion(marketplace);
   checkRootManifestVersion(manifest);
-  checkCatalogCoverage(manifest);
+  checkCatalogCoverage(manifest, dirs);
   checkMarketplaceAgainstManifest(marketplace, manifest);
 
-  const dirs = skillDirs();
   const codexManifests: CodexManifest[] = [];
   const skillFrontmatters: SkillFrontmatter[] = [];
   for (const skillDir of dirs) {
@@ -766,13 +779,18 @@ function main(): void {
     codexManifests.push(codex);
     skillFrontmatters.push(skillMd);
   }
-  // template/ keeps a codex manifest too; the identity guards cover it even
-  // though it is not a published skill.
-  codexManifests.push(loadCodexManifest(join(ROOT, "template")));
+  // template/ keeps a codex manifest and a SKILL.md too; the identity guards
+  // and both halves of the version ban cover the template, even though it is
+  // not a published skill (its frontmatter legitimately lacks the identity
+  // and license fields, so it stays out of skillFrontmatters).
+  const templateCodex = loadCodexManifest(join(ROOT, "template"));
+  checkCodexManifestVersionBan(templateCodex);
+  checkFrontmatterVersionBan(loadSkillFrontmatter(join(ROOT, "template")));
+  codexManifests.push(templateCodex);
 
-  checkManifestEntriesHaveFolders(manifest);
-  checkReadmeSectionsMatchFolders();
-  checkIssueTemplateOptionsMatchFolders();
+  checkManifestEntriesHaveFolders(manifest, skillNames);
+  checkReadmeSectionsMatchFolders(skillNames);
+  checkIssueTemplateOptionsMatchFolders(skillNames);
   checkAuthorIdentity(marketplace, manifest, codexManifests, skillFrontmatters);
   checkLicenseIdentity(manifest, codexManifests, skillFrontmatters);
   checkHomepageIdentity(marketplace, manifest, codexManifests);

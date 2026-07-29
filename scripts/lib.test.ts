@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import {
   CheckFailure,
+  errorMessage,
+  isUnknownArray,
   KEBAB_CASE,
   loadJson,
   loadJsonObject,
@@ -11,6 +13,7 @@ import {
   loadRootManifest,
   parseFrontmatter,
   ROOT,
+  readTextFile,
   rel,
   skillDirs,
 } from "./lib";
@@ -240,5 +243,51 @@ describe("KEBAB_CASE", () => {
     for (const name of ["Natural-Writing", "a_b", "-leading", "trailing-", "a--b", ""]) {
       expect(KEBAB_CASE.test(name)).toBe(false);
     }
+  });
+});
+
+describe("isUnknownArray", () => {
+  test("accepts arrays, including empty ones", () => {
+    for (const value of [[], [1, 2], ["a"], [null]]) {
+      expect(isUnknownArray(value)).toBe(true);
+    }
+  });
+
+  test("rejects non-arrays", () => {
+    for (const value of [{}, { length: 0 }, "text", 3, null, undefined, true]) {
+      expect(isUnknownArray(value)).toBe(false);
+    }
+  });
+});
+
+describe("errorMessage", () => {
+  test("returns the message of an Error", () => {
+    expect(errorMessage(new Error("boom"))).toBe("boom");
+  });
+
+  test("stringifies non-Error values", () => {
+    expect(errorMessage("plain string")).toBe("plain string");
+    expect(errorMessage(42)).toBe("42");
+    expect(errorMessage(null)).toBe("null");
+  });
+});
+
+describe("readTextFile", () => {
+  test("reads a file's text", () => {
+    const path = tempFile("hello\nworld\n", "notes.txt");
+    expect(readTextFile(path)).toBe("hello\nworld\n");
+  });
+
+  test("reads fresh content on every call (no caching)", () => {
+    const path = tempFile("original", "fresh.txt");
+    expect(readTextFile(path)).toBe("original");
+    writeFileSync(path, "changed on disk");
+    expect(readTextFile(path)).toBe("changed on disk");
+  });
+
+  test("fails with the rel path on a missing file", () => {
+    const run = () => readTextFile("/nonexistent/notes.txt");
+    expect(run).toThrow(CheckFailure);
+    expect(run).toThrow(/nonexistent\/notes\.txt: cannot read file/);
   });
 });
