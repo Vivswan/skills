@@ -55,6 +55,12 @@ labels:
   - name: fix-lint
     color: "fbca04"
     description: Lint / formatting fixes
+  - name: new-skill
+    color: "0e8a16"
+    description: Adds or proposes a new skill
+  - name: documentation
+    color: "0075ca"
+    description: Improvements or additions to documentation
   # release-please manages these two; listing them here keeps the settings
   # sync from deleting them (it removes any label not declared in this file).
   - name: "autorelease: pending"
@@ -118,7 +124,8 @@ rulesets:
         bypass_mode: always
 
   # vX.Y.Z release tags are immutable: repo-platform's push sync pins
-  # against them and release artifacts reference them.
+  # against them, release artifacts reference them, and consumers pin
+  # installs with `npx skills add Vivswan/skills#vX.Y.Z`.
   - name: release-tags
     target: tag
     enforcement: active
