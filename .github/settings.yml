@@ -11,8 +11,12 @@
 
 repository:
   description: "Installable agent skills and plugin-ready workflows for coding agents"
+  # homepage, topics, and private are always declared, even when empty or
+  # public: the apply manages only declared keys, so this keeps it healing
+  # out-of-band edits (an empty value declares-and-clears).
   homepage: "https://vivswan.github.io/"
   topics: "agent-skills,agents,ai,claude-code,codex,github-copilot,llm,mcp,plugins,skills"
+  private: false
   has_issues: true
   has_wiki: false
   has_projects: false
