@@ -177,4 +177,4 @@ That runs the TypeScript typecheck, the Biome lint, YAML and JSON schema lints, 
 
 ## License
 
-Individual and Small Organization License 1.0.0 - see [LICENSE](./LICENSE).
+Individual and Small Organization License 1.0.0 - see [LICENSE.md](./LICENSE.md).

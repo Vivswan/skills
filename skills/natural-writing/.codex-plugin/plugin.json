@@ -8,7 +8,7 @@
   },
   "homepage": "https://github.com/Vivswan/skills/tree/main/skills/natural-writing",
   "repository": "https://github.com/Vivswan/skills",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "SEE LICENSE IN LICENSE.md",
   "keywords": ["agent-skills", "writing", "natural-writing", "plugin-ready"],
   "skills": "./",
   "interface": {

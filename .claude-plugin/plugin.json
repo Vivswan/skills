@@ -8,7 +8,7 @@
   },
   "homepage": "https://vivswan.github.io/",
   "repository": "https://github.com/Vivswan/skills",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "SEE LICENSE IN LICENSE.md",
   "keywords": ["agent-skills", "natural-writing", "code-review", "type-safety"],
   "skills": [
     "./skills/no-invalid-states",

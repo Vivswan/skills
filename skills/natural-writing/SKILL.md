@@ -1,7 +1,7 @@
 ---
 name: natural-writing
 description: Write and edit prose that avoids the documented signs of AI writing from Wikipedia's "Signs of AI writing" field guide. Use when drafting or revising human-facing text (docs, READMEs, articles, blog posts, reports, emails, PR descriptions), or when asked to humanize text, remove AI tells, de-AI writing, or check whether text reads as AI-generated.
-license: SEE LICENSE IN LICENSE
+license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
 ---
