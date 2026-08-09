@@ -66,12 +66,6 @@ labels:
   - name: fix-lint
     color: "fbca04"
     description: Lint / formatting fixes
-  - name: new-skill
-    color: "0e8a16"
-    description: Adds or proposes a new skill
-  - name: documentation
-    color: "0075ca"
-    description: Improvements or additions to documentation
 
 
 # Branch ruleset for the default branch. Admins (RepositoryRole id 5) are in
@@ -121,26 +115,6 @@ rulesets:
         parameters:
           review_on_push: true
           review_draft_pull_requests: true
-    bypass_actors:
-      - actor_id: 5
-        actor_type: RepositoryRole
-        bypass_mode: always
-  # vX.Y.Z tags are immutable. The automated release pipeline is gone and
-  # past release tags were deleted, but any tag pushed in the future stays
-  # protected from accidental deletion or moves. Admins bypass, so
-  # deliberate tag cleanup doesn't require disabling the ruleset.
-  - name: release-tags
-    target: tag
-    enforcement: active
-    conditions:
-      ref_name:
-        include:
-          - v*
-        exclude: []
-    rules:
-      - type: deletion
-      - type: non_fast_forward
-      - type: update
     bypass_actors:
       - actor_id: 5
         actor_type: RepositoryRole

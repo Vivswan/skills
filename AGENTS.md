@@ -17,15 +17,12 @@ Skills: Installable agent skills and plugin-ready workflows for coding agents
 
 - PR titles and commit subjects must be Conventional Commits (`feat:`, `fix:`,
   `feat!:`, `chore:`, ...). PRs are squash-merged, so the PR title becomes the
-  commit subject and drives release-please versioning. CI validates both
+  commit subject. CI validates both
   (the ci.yml pr-title job + validate-commit-names).
 - CI gates on a single required check named `all-green` in the managed
   `.github/workflows/ci.yml`. This repository's own test/lint jobs belong in
   `.github/workflows/checks.yml` (repo-owned, called inside the gate); do not
-  edit ci.yml, template sync overwrites it. The `release` job runs on top
-  of the gate (`needs: all-green`); the release pipeline is repo-owned in
-  `.github/workflows/release.yml` (pre/post-release jobs go there, around the
-  managed release-please machinery).
+  edit ci.yml, template sync overwrites it.
 - No typographic look-alike characters (curly quotes, em-dashes, invisible
   unicode). CI enforces this with the check-typography action; use plain ASCII
   punctuation.
@@ -42,8 +39,7 @@ Skills: Installable agent skills and plugin-ready workflows for coding agents
   exists, otherwise by this repository's own `.github/settings.yml`. Do not
   change settings by hand in the GitHub UI; edit the settings file.
 - Repo-owned escape hatches stay local:
-  `.github/workflows/checks.yml`,
-  `.github/workflows/release.yml`, `.gitleaks.toml`,
+  `.github/workflows/checks.yml`, `.gitleaks.toml`,
   `.gitignore`'s marked LOCAL section, `.typography-allow.local`
   (typography exemptions; the managed `.typography-allow` is overwritten
   by sync), and the repository-specific section below.
