@@ -138,34 +138,6 @@ jobs:
       actions: read
 
 
-  # Fails when the release-please PR head lacks main's tip at CHECK time:
-  # a stale release PR cuts a release whose version and changelog miss
-  # commits already on main. A main push after this run is only caught by
-  # release-please's refresh re-running CI. Other PRs stay mergeable while
-  # behind (required checks are not strict). The skip lives on the STEPS:
-  # all-green treats a skipped needed job as failure.
-  release-freshness:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')
-        with:
-          # Full history: the ancestor check needs origin/main.
-          fetch-depth: 0
-          # PR head, not the default merge ref - the merge ref already
-          # contains main's tip, so it would always pass.
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Require the release PR to contain the tip of main
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')
-        run: |
-          tip="$(git rev-parse "origin/${GITHUB_BASE_REF}")"
-          if git merge-base --is-ancestor "$tip" HEAD; then
-            echo "release PR contains the ${GITHUB_BASE_REF} tip (${tip})"
-          else
-            echo "::error::Release PR is behind ${GITHUB_BASE_REF} (tip ${tip}); its version and changelog would miss commits already on ${GITHUB_BASE_REF}. Do not merge; release-please refreshes the PR after the next green run on ${GITHUB_BASE_REF}."
-            exit 1
-          fi
-
   # Conventional Commit PR title, checked inside the gate so branch
   # protection blocks on it. PRs are squash-merged, so the PR title becomes
   # the commit subject and drives release-please versioning: `feat:` (minor),
@@ -195,7 +167,6 @@ jobs:
       - yamllint
       - dependency-review
       - codeql-javascript
-      - release-freshness
       - pr-title
     runs-on: ubuntu-latest
     steps:
@@ -210,29 +181,3 @@ jobs:
               exit 1
             fi
           done
-
-  # Release from a green main only: the repo-owned release.yml pipeline
-  # (which runs the managed release-please.yml machinery, plus any of this
-  # repository's pre/post-release jobs) runs downstream of all-green, so a
-  # red commit can never cut a release or refresh the release PR.
-  # Deliberately NOT in all-green's needs: it depends on the gate, it is not
-  # gated by it. Only push/dispatch runs release: pull requests must never
-  # reach the publish pipeline, and the weekly scheduled CodeQL re-scan has
-  # no business refreshing release state. Secrets are inherited
-  # deliberately: publish steps need them.
-  release:
-    needs: [all-green]
-    if: >-
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-      && github.ref == 'refs/heads/main'
-    # The publishing ceiling for the repo-owned release.yml jobs (release
-    # assets and their build provenance, ghcr, npm/PyPI trusted publishing);
-    # nested jobs can only narrow it, never raise it.
-    permissions:
-      contents: write
-      pull-requests: write
-      packages: write
-      id-token: write
-      attestations: write
-    uses: ./.github/workflows/release.yml
-    secrets: inherit
