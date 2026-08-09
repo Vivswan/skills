@@ -1,6 +1,7 @@
 {
   "name": "vivswan-skills-repo",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "prepare": "husky",

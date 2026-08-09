@@ -397,8 +397,10 @@ function checkAuthorIdentity(
   }
 
   const licenseText = readTextFile(join(ROOT, "LICENSE"));
-  const copyright = licenseText.split("\n").find((line) => line.startsWith("Copyright"));
-  if (copyright === undefined || !copyright.includes(authorName)) {
+  const copyright = licenseText
+    .split("\n")
+    .find((line) => line.includes("Copyright") && line.includes(authorName));
+  if (copyright === undefined) {
     fail(`LICENSE: copyright line must name '${authorName}'`);
   }
 
@@ -414,15 +416,27 @@ function checkAuthorIdentity(
   }
 }
 
-// The MIT license is declared in every manifest and SKILL.md frontmatter;
-// keep the copies in lockstep with the root plugin manifest.
+// Every manifest and SKILL.md frontmatter defers to the repository LICENSE
+// file (npm's "SEE LICENSE IN <file>" convention); keep the copies in
+// lockstep with the root plugin manifest, and the README and LICENSE
+// naming the same license.
+const LICENSE_DEFERRAL = "SEE LICENSE IN LICENSE";
+const LICENSE_TITLE = "Individual and Small Organization License 1.0.0";
+
 function checkLicenseIdentity(
   manifest: RootManifest,
   codexManifests: readonly CodexManifest[],
   skillFrontmatters: readonly SkillFrontmatter[],
 ): void {
   const license = manifest.raw.license;
-  if (license !== "MIT") fail(`${rel(manifest.path)}: license must be 'MIT'`);
+  if (license !== LICENSE_DEFERRAL) {
+    fail(`${rel(manifest.path)}: license must be '${LICENSE_DEFERRAL}'`);
+  }
+
+  const packageJson = loadJsonObject(join(ROOT, "package.json"));
+  if (packageJson.license !== license) {
+    fail(`package.json: license must be '${license}' like .claude-plugin/plugin.json`);
+  }
 
   for (const codex of codexManifests) {
     if (codex.plugin.license !== license) {
@@ -435,6 +449,26 @@ function checkLicenseIdentity(
     }
   }
 
+  // template/ is excluded from the identity checks above (its author and
+  // placeholders are unfilled), but its license field seeds every future
+  // skill, so pin it here.
+  const templateSkill = join(ROOT, "template", "SKILL.md");
+  if (parseFrontmatter(templateSkill).license !== license) {
+    fail(`${rel(templateSkill)}: frontmatter license must be '${license}'`);
+  }
+
+  const rootLicense = readTextFile(join(ROOT, "LICENSE"));
+
+  // `npx skills add --skill <name>` copies just the skill folder, so the
+  // LICENSE the manifests refer to must travel inside each skill; template/
+  // seeds the next skill with its copy.
+  for (const dir of [...skillDirs(), join(ROOT, "template")]) {
+    const path = join(dir, "LICENSE");
+    if (!existsSync(path) || readTextFile(path) !== rootLicense) {
+      fail(`${rel(path)}: must be a byte-identical copy of the root LICENSE`);
+    }
+  }
+
   const readme = readTextFile(join(ROOT, "README.md"));
   const licenseHeading = "\n## License\n";
   const headingIndex = readme.indexOf(licenseHeading);
@@ -442,10 +476,12 @@ function checkLicenseIdentity(
   const afterHeading = readme.slice(headingIndex + licenseHeading.length);
   const nextHeading = afterHeading.search(/^## /m);
   const section = nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
-  if (!section.includes(license)) fail(`README.md: License section must mention ${license}`);
+  if (!section.includes(LICENSE_TITLE)) {
+    fail(`README.md: License section must mention ${LICENSE_TITLE}`);
+  }
 
-  if (!readTextFile(join(ROOT, "LICENSE")).includes("MIT License")) {
-    fail("LICENSE: text must contain the literal 'MIT License'");
+  if (!rootLicense.includes(LICENSE_TITLE)) {
+    fail(`LICENSE: text must contain the literal '${LICENSE_TITLE}'`);
   }
 }
 
