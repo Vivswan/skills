@@ -1,7 +1,7 @@
 ---
 name: no-invalid-states
 description: Refactor code so invariants are enforced by the type system instead of repeated runtime checks. Parse and validate at trust boundaries, then make invalid internal states impossible to construct. Use when reviewing or refactoring code with boolean lifecycle flags, optional fields that must appear together, "must call X before Y" comments, repeated validation of the same value, or field combinations that should be contradictory. Also triggers on requests like "make illegal states unrepresentable", "parse, don't validate", or "strengthen these types".
-license: SEE LICENSE IN LICENSE
+license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
 ---

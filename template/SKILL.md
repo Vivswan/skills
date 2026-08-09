@@ -1,7 +1,7 @@
 ---
 name: template-skill
 description: Replace with a clear description of what the skill does and when an agent should use it.
-license: SEE LICENSE IN LICENSE
+license: SEE LICENSE IN LICENSE.md
 metadata:
   internal: true
 ---
