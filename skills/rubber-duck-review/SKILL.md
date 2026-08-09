@@ -1,7 +1,7 @@
 ---
 name: rubber-duck-review
 description: Cross-model code review using a second agent, tool, or read-only CLI fallback. This skill should be used when someone asks to rubber duck a change, get a second opinion, or run an independent review focused on correctness, future-proofing, and design quality.
-license: SEE LICENSE IN LICENSE
+license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
 ---

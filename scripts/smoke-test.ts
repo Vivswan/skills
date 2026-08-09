@@ -396,12 +396,12 @@ function checkAuthorIdentity(
     }
   }
 
-  const licenseText = readTextFile(join(ROOT, "LICENSE"));
+  const licenseText = readTextFile(join(ROOT, "LICENSE.md"));
   const copyright = licenseText
     .split("\n")
     .find((line) => line.includes("Copyright") && line.includes(authorName));
   if (copyright === undefined) {
-    fail(`LICENSE: copyright line must name '${authorName}'`);
+    fail(`LICENSE.md: copyright line must name '${authorName}'`);
   }
 
   const agents = readTextFile(join(ROOT, "AGENTS.md"));
@@ -416,11 +416,11 @@ function checkAuthorIdentity(
   }
 }
 
-// Every manifest and SKILL.md frontmatter defers to the repository LICENSE
-// file (npm's "SEE LICENSE IN <file>" convention); keep the copies in
-// lockstep with the root plugin manifest, and the README and LICENSE
-// naming the same license.
-const LICENSE_DEFERRAL = "SEE LICENSE IN LICENSE";
+// Every manifest and SKILL.md frontmatter defers to the repository
+// LICENSE.md file (npm's "SEE LICENSE IN <file>" convention); keep the
+// copies in lockstep with the root plugin manifest, and the README and
+// LICENSE.md naming the same license.
+const LICENSE_DEFERRAL = "SEE LICENSE IN LICENSE.md";
 const LICENSE_TITLE = "Individual and Small Organization License 1.0.0";
 
 function checkLicenseIdentity(
@@ -457,15 +457,24 @@ function checkLicenseIdentity(
     fail(`${rel(templateSkill)}: frontmatter license must be '${license}'`);
   }
 
-  const rootLicense = readTextFile(join(ROOT, "LICENSE"));
+  const rootLicense = readTextFile(join(ROOT, "LICENSE.md"));
 
   // `npx skills add --skill <name>` copies just the skill folder, so the
-  // LICENSE the manifests refer to must travel inside each skill; template/
-  // seeds the next skill with its copy.
+  // LICENSE.md the manifests refer to must travel inside each skill;
+  // template/ seeds the next skill with its copy.
   for (const dir of [...skillDirs(), join(ROOT, "template")]) {
-    const path = join(dir, "LICENSE");
+    const path = join(dir, "LICENSE.md");
     if (!existsSync(path) || readTextFile(path) !== rootLicense) {
-      fail(`${rel(path)}: must be a byte-identical copy of the root LICENSE`);
+      fail(`${rel(path)}: must be a byte-identical copy of the root LICENSE.md`);
+    }
+  }
+
+  // The license file was renamed from LICENSE; a stale extensionless copy
+  // would ship alongside the real one and contradict the manifests.
+  for (const dir of [ROOT, ...skillDirs(), join(ROOT, "template")]) {
+    const stale = join(dir, "LICENSE");
+    if (existsSync(stale)) {
+      fail(`${rel(stale)}: stale extensionless license file; LICENSE.md is the license file`);
     }
   }
 
@@ -481,7 +490,7 @@ function checkLicenseIdentity(
   }
 
   if (!rootLicense.includes(LICENSE_TITLE)) {
-    fail(`LICENSE: text must contain the literal '${LICENSE_TITLE}'`);
+    fail(`LICENSE.md: text must contain the literal '${LICENSE_TITLE}'`);
   }
 }
 
