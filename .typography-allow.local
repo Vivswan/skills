@@ -8,3 +8,8 @@ skills/natural-writing/
 # Local dogfood installs of this repo's own skills (gitignored, never in CI
 # checkouts, but local runs of the check scan them).
 .agents/
+# Historical record written by the removed release-please automation from
+# commit and PR text, which was not ASCII-guaranteed. The managed
+# .typography-allow currently exempts it too, but a release-please-less
+# template may drop that line; this keeps the gate green either way.
+CHANGELOG.md

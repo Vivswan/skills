@@ -113,12 +113,6 @@ Install directly from the skill folder:
 npx skills add https://github.com/Vivswan/skills/tree/main/skills/rubber-duck-review -g
 ```
 
-Pin a release (see [releases](https://github.com/Vivswan/skills/releases) for the current tag):
-
-```bash
-npx skills add Vivswan/skills#vX.Y.Z -g
-```
-
 Or install everything as a Claude Code plugin:
 
 ```text

@@ -1,10 +1,9 @@
 # Changelog
 
-This file is maintained by [release-please](https://github.com/googleapis/release-please).
-New version sections are added automatically when its release PR is merged — don't
-edit released sections by hand. The catalog version lives in
-`.claude-plugin/marketplace.json` (`metadata.version`); consumers pin a release
-with `npx skills add Vivswan/skills#vX.Y.Z`.
+This file is a historical record from when releases were cut by release-please;
+that automation has been removed and no new sections are added. The catalog
+version lives in `.claude-plugin/marketplace.json` (`metadata.version`);
+consumers install from `main` with `npx skills add Vivswan/skills`.
 
 ## [1.1.3](https://github.com/Vivswan/skills/compare/v1.1.2...v1.1.3) (2026-07-25)
 
