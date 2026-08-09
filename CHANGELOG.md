@@ -6,6 +6,21 @@ edit released sections by hand. The catalog version lives in
 `.claude-plugin/marketplace.json` (`metadata.version`); consumers pin a release
 with `npx skills add Vivswan/skills#vX.Y.Z`.
 
+## [1.1.4](https://github.com/Vivswan/skills/compare/v1.1.3...v1.1.4) (2026-08-09)
+
+
+### Features
+
+* add no-invalid-states skill ([41c40e1](https://github.com/Vivswan/skills/commit/41c40e185d908c604e82680984c0c57172e44b29))
+
+
+### Bug Fixes
+
+* add single-source-of-truth guards to the smoke test ([fedb233](https://github.com/Vivswan/skills/commit/fedb233ceff7ad236505fe928af9361409db2621))
+* declare dependabot default labels and refresh issue forms ([16e7080](https://github.com/Vivswan/skills/commit/16e7080b26f3199246f5e7d3ae63c2bb01b61b78))
+* **scripts:** guard remaining file reads and close integration-review gaps ([f270bd1](https://github.com/Vivswan/skills/commit/f270bd1f7fe49570b1413e80d1f6f18b1f550026))
+* **scripts:** parse manifests once at typed boundaries in check scripts ([d4db87d](https://github.com/Vivswan/skills/commit/d4db87d89c6fe85bcffb86771ba41e83ea1743bd))
+
 ## [1.1.3](https://github.com/Vivswan/skills/compare/v1.1.2...v1.1.3) (2026-07-25)
 
 
