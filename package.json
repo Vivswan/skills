@@ -12,7 +12,7 @@
     "test:cli": "bun scripts/cli-discovery-test.ts",
     "lint": "biome ci .",
     "lint:yaml": "uvx yamllint -s .",
-    "lint:json": "uvx check-jsonschema --schemafile https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json release-please-config.json && uvx check-jsonschema --schemafile https://json.schemastore.org/package.json package.json && uvx check-jsonschema --builtin-schema vendor.github-issue-forms .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml && uvx check-jsonschema --schemafile https://json.schemastore.org/github-issue-config.json .github/ISSUE_TEMPLATE/config.yml",
+    "lint:json": "uvx check-jsonschema --schemafile https://json.schemastore.org/package.json package.json && uvx check-jsonschema --builtin-schema vendor.github-issue-forms .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml && uvx check-jsonschema --schemafile https://json.schemastore.org/github-issue-config.json .github/ISSUE_TEMPLATE/config.yml",
     "check:fix": "biome check --write .",
     "check": "bun run typecheck && bun run lint && bun run lint:yaml && bun run lint:json && bun run test && bun run validate && bun run smoke"
   },

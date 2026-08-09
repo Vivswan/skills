@@ -25,8 +25,8 @@ repository:
   allow_squash_merge: true
   allow_merge_commit: false
   allow_rebase_merge: false
-  # The squash subject must ALWAYS be the PR title (the pr-title check and
-  # release-please rely on it); GitHub only defaults to that for
+  # The squash subject must ALWAYS be the PR title (the pr-title check
+  # relies on it); GitHub only defaults to that for
   # single-commit PRs.
   squash_merge_commit_title: PR_TITLE
   squash_merge_commit_message: PR_BODY
@@ -72,14 +72,6 @@ labels:
   - name: documentation
     color: "0075ca"
     description: Improvements or additions to documentation
-  # release-please manages these two; listing them here keeps the settings
-  # sync from deleting them (it removes any label not declared in this file).
-  - name: "autorelease: pending"
-    color: "ededed"
-    description: release-please release PR awaiting merge/tag
-  - name: "autorelease: tagged"
-    color: "ededed"
-    description: release-please release PR has been tagged
 
 
 # Branch ruleset for the default branch. Admins (RepositoryRole id 5) are in
@@ -133,10 +125,10 @@ rulesets:
       - actor_id: 5
         actor_type: RepositoryRole
         bypass_mode: always
-  # vX.Y.Z release tags are immutable: repo-platform's push sync pins
-  # against them, release artifacts reference them, and consumers pin
-  # installs with `npx skills add Vivswan/skills#vX.Y.Z`. Admins bypass,
-  # so deliberate tag cleanup doesn't require disabling the ruleset.
+  # vX.Y.Z tags are immutable. The automated release pipeline is gone and
+  # past release tags were deleted, but any tag pushed in the future stays
+  # protected from accidental deletion or moves. Admins bypass, so
+  # deliberate tag cleanup doesn't require disabling the ruleset.
   - name: release-tags
     target: tag
     enforcement: active

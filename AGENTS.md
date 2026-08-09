@@ -69,7 +69,7 @@ agent capabilities. Consumers install with `npx skills add Vivswan/skills`
 
 ```text
 .claude-plugin/
-  marketplace.json   catalog + version (release-please updates it)
+  marketplace.json   catalog + version (bump by hand when releasing)
   plugin.json        plugin manifest; the authority for the skills list
 skills/
   <skill-name>/
@@ -116,13 +116,13 @@ scripts/             repo check scripts (TypeScript, run with bun)
 ### Releases
 
 - Versioning is single-source. The catalog version lives only in
-  `.claude-plugin/marketplace.json` (`metadata.version`). Don't hand-edit it,
-  and don't add a `version` to any skill's `SKILL.md`, to
+  `.claude-plugin/marketplace.json` (`metadata.version`). Bump it there when
+  cutting a release, and don't add a `version` to any skill's `SKILL.md`, to
   `.codex-plugin/plugin.json`, or to `.claude-plugin/plugin.json`; duplicates
   only drift, and the smoke test rejects them.
-- release-please drives releases from Conventional Commits with
-  `always-bump-patch` versioning: every release bumps the patch number.
-  Consumers pin a release with `npx skills add Vivswan/skills#vX.Y.Z`.
+- There is no automated release pipeline: release-please was removed from
+  this repo (the module is deselected in `.repo-platform.yml`). Consumers
+  install from `main` with `npx skills add Vivswan/skills`.
 - Changes to skill behavior, plugin manifests, MCP configuration, or
   agent-facing instructions are product changes in this repo. Use `fix:` for
   those updates, not `docs:`, even when the changed file is Markdown.

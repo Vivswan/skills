@@ -6,8 +6,8 @@
  * files that still passes structural validation:
  *
  *   - template placeholders left behind in a published skill
- *   - version fields anywhere but marketplace.json metadata.version, and the
- *     release-please wiring that keeps that single source updated
+ *   - version fields anywhere but marketplace.json metadata.version, the
+ *     catalog's single source of truth
  *   - catalog drift: a skill folder missing from the root plugin manifest, a
  *     marketplace entry disagreeing with the plugin manifest, or a strict:false
  *     entry that would make Claude Code refuse to load the plugin
@@ -169,37 +169,6 @@ function checkCatalogVersion(marketplace: Marketplace): void {
   if (typeof version !== "string" || !SEMVER.test(version)) {
     fail(
       `.claude-plugin/marketplace.json: metadata.version ${JSON.stringify(version)} is not valid semver`,
-    );
-  }
-
-  const releaseManifest = loadJsonObject(join(ROOT, ".release-please-manifest.json"));
-  const released = releaseManifest["."];
-  if (released !== version) {
-    fail(
-      `.release-please-manifest.json version ${JSON.stringify(released)} does not match` +
-        ` marketplace.json metadata.version ${JSON.stringify(version)}`,
-    );
-  }
-
-  // release-please only keeps metadata.version current because the config
-  // lists marketplace.json as an extra-file; fail loudly if that wiring is lost.
-  const config = loadJsonObject(join(ROOT, "release-please-config.json"));
-  const packages = config.packages;
-  const rootPackage = isRecord(packages) ? packages["."] : undefined;
-  const extraFiles = isRecord(rootPackage) ? rootPackage["extra-files"] : undefined;
-  const wired =
-    isUnknownArray(extraFiles) &&
-    extraFiles.some(
-      (entry) =>
-        isRecord(entry) &&
-        entry.type === "json" &&
-        entry.path === ".claude-plugin/marketplace.json" &&
-        entry.jsonpath === "$.metadata.version",
-    );
-  if (!wired) {
-    fail(
-      "release-please-config.json: packages['.'].extra-files no longer updates" +
-        " .claude-plugin/marketplace.json $.metadata.version",
     );
   }
 }
