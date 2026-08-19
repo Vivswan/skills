@@ -51,6 +51,12 @@ import {
   skillDirs,
   walkFiles,
 } from "./lib";
+import {
+  checkDescriptionTriggerForm,
+  checkExplicitInvocationPairing,
+  checkReadmeInvocationGrouping,
+  checkReadmeSkillList,
+} from "./smoke-checks";
 
 // Strings that should only ever appear in template/, never in a published skill.
 const PLACEHOLDER_MARKERS = ["Replace with", "Replace this", "template-skill", "Template Skill"];
@@ -242,49 +248,6 @@ function checkManifestEntriesHaveFolders(
         `${rel(manifest.path)}: skills entry '${entry}' has no matching skills/${name}/` +
           " folder -- remove the stale entry or restore the folder",
       );
-    }
-  }
-}
-
-// Bijection between README's Available Skills list and skill folders: every
-// published skill appears as a linked bullet '- [/name](./skills/name/)', an
-// entry whose folder is gone is stale documentation, and each link must
-// point at the skill's own folder. Only kebab-case names count as skill
-// entries, so prose bullets are left alone.
-function checkReadmeSectionsMatchFolders(skillNames: ReadonlySet<string>): void {
-  const readme = readTextFile(join(ROOT, "README.md"));
-  const heading = "\n## Available Skills\n";
-  const start = readme.indexOf(heading);
-  if (start === -1) fail("README.md: missing the '## Available Skills' section");
-  const body = readme.slice(start + heading.length);
-  const end = body.search(/^## /m);
-  const skillsArea = end === -1 ? body : body.slice(0, end);
-  // Fenced blocks (the mermaid graph) and HTML comments cannot contribute
-  // entries, and a duplicate entry is drift, not a harmless overwrite.
-  const scannable = skillsArea.replace(/```[\s\S]*?```/g, "").replace(/<!--[\s\S]*?-->/g, "");
-  const listed = new Map<string, string>();
-  for (const match of scannable.matchAll(/^- \[\/?([^\]]+)\]\(([^)]+)\)/gm)) {
-    const name = (match[1] ?? "").trim();
-    if (!KEBAB_CASE.test(name)) continue;
-    if (listed.has(name)) {
-      fail(`README.md: duplicate Available Skills entry for '${name}'`);
-    }
-    listed.set(name, match[2] ?? "");
-  }
-  for (const [name, target] of listed) {
-    if (!skillNames.has(name)) {
-      fail(
-        `README.md: '[${name}]' in the Available Skills list has no matching` +
-          ` skills/${name}/ folder -- remove the stale entry or restore the folder`,
-      );
-    }
-    if (target !== `./skills/${name}/` && target !== `./skills/${name}`) {
-      fail(`README.md: the '[${name}]' entry must link to ./skills/${name}/`);
-    }
-  }
-  for (const name of skillNames) {
-    if (!listed.has(name)) {
-      fail(`README.md: the Available Skills list is missing an entry for '${name}'`);
     }
   }
 }
@@ -563,88 +526,6 @@ function checkInterfaceIdentity(skillDir: string, codex: CodexManifest): void {
   const short = iface.short_description;
   if (typeof short !== "string" || short.length < 25 || short.length > 64) {
     fail(`${rel(openaiYaml)}: interface.short_description must be 25-64 characters`);
-  }
-}
-
-// "Explicit-invocation-only" spans two files: disable-model-invocation in
-// SKILL.md frontmatter (Claude Code) and policy.allow_implicit_invocation in
-// agents/openai.yaml (Codex). Either alone drifts silently, so require both
-// or neither.
-function checkExplicitInvocationPairing(skillDir: string, skillMd: SkillFrontmatter): void {
-  const frontmatterValue = skillMd.frontmatter["disable-model-invocation"];
-  if (frontmatterValue !== undefined && typeof frontmatterValue !== "boolean") {
-    fail(
-      `${rel(skillMd.path)}: disable-model-invocation must be a plain YAML boolean,` +
-        ` got ${JSON.stringify(frontmatterValue)} (a quoted "true"/"false" is a string)`,
-    );
-  }
-  const frontmatterDisabled = frontmatterValue === true;
-  const openaiYaml = join(skillDir, "agents", "openai.yaml");
-  let policyDisabled = false;
-  if (existsSync(openaiYaml)) {
-    let doc: unknown;
-    try {
-      doc = Bun.YAML.parse(readTextFile(openaiYaml));
-    } catch (error) {
-      fail(`${rel(openaiYaml)}: invalid YAML (${errorMessage(error)})`);
-    }
-    const policy = isRecord(doc) && isRecord(doc.policy) ? doc.policy : undefined;
-    const policyValue = policy === undefined ? undefined : policy.allow_implicit_invocation;
-    if (policyValue !== undefined && typeof policyValue !== "boolean") {
-      fail(
-        `${rel(openaiYaml)}: policy.allow_implicit_invocation must be a plain YAML boolean,` +
-          ` got ${JSON.stringify(policyValue)}`,
-      );
-    }
-    policyDisabled = policyValue === false;
-  }
-  if (frontmatterDisabled !== policyDisabled) {
-    fail(
-      `${rel(skillMd.path)}: explicit-invocation-only must be declared for every agent or none:` +
-        " set both 'disable-model-invocation: true' in the frontmatter and" +
-        " 'policy.allow_implicit_invocation: false' in agents/openai.yaml, or neither",
-    );
-  }
-}
-
-// The frontmatter description is a trigger, not a summary (AGENTS.md >
-// "Creating a new skill"); make the convention self-enforcing.
-function checkDescriptionTriggerForm(skillMd: SkillFrontmatter): void {
-  const description = skillMd.frontmatter.description;
-  if (typeof description !== "string" || !/^Use when \S/.test(description)) {
-    fail(
-      `${rel(skillMd.path)}: description must be trigger-form, starting with "Use when ..."` +
-        " followed by the actual trigger (see AGENTS.md > Creating a new skill)",
-    );
-  }
-}
-
-// The README's Automatic vs "Invoked by you" grouping must track the
-// explicit-invocation flag: a skill sits under "Invoked by you" exactly when
-// its frontmatter sets disable-model-invocation. Accurate prose otherwise
-// drifts silently the first time someone flips the flag.
-function checkReadmeInvocationGrouping(skillFrontmatters: readonly SkillFrontmatter[]): void {
-  const readme = readTextFile(join(ROOT, "README.md"));
-  const heading = "\n## Available Skills\n";
-  const start = readme.indexOf(heading);
-  if (start === -1) fail("README.md: missing the '## Available Skills' section");
-  const body = readme.slice(start + heading.length);
-  const end = body.search(/^## /m);
-  const area = end === -1 ? body : body.slice(0, end);
-  const invokedIndex = area.indexOf("### Invoked by you");
-  if (invokedIndex === -1) fail("README.md: missing the '### Invoked by you' subsection");
-  const invokedArea = area.slice(invokedIndex);
-  for (const { path, frontmatter } of skillFrontmatters) {
-    const name = basename(dirname(path));
-    const disabled = frontmatter["disable-model-invocation"] === true;
-    const inInvoked = invokedArea.includes(`- [/${name}](`);
-    if (disabled !== inInvoked) {
-      fail(
-        `README.md: '${name}' must be listed under` +
-          ` '${disabled ? "Invoked by you" : "Automatic"}' to match its` +
-          " disable-model-invocation frontmatter",
-      );
-    }
   }
 }
 
@@ -945,8 +826,14 @@ function main(): void {
     checkSingleSourceVersion(codex, skillMd);
     checkManifestConventions(skillDir, codex);
     checkInterfaceIdentity(skillDir, codex);
-    checkExplicitInvocationPairing(skillDir, skillMd);
-    checkDescriptionTriggerForm(skillMd);
+    const openaiYaml = join(skillDir, "agents", "openai.yaml");
+    checkExplicitInvocationPairing({
+      skillMdPath: rel(skillMd.path),
+      frontmatter: skillMd.frontmatter,
+      openaiYamlPath: rel(openaiYaml),
+      openaiYamlText: existsSync(openaiYaml) ? readTextFile(openaiYaml) : undefined,
+    });
+    checkDescriptionTriggerForm(rel(skillMd.path), skillMd.frontmatter);
     codexManifests.push(codex);
     skillFrontmatters.push(skillMd);
   }
@@ -960,8 +847,15 @@ function main(): void {
   codexManifests.push(templateCodex);
 
   checkManifestEntriesHaveFolders(manifest, skillNames);
-  checkReadmeSectionsMatchFolders(skillNames);
-  checkReadmeInvocationGrouping(skillFrontmatters);
+  const readmeText = readTextFile(join(ROOT, "README.md"));
+  checkReadmeSkillList(readmeText, skillNames);
+  checkReadmeInvocationGrouping(
+    readmeText,
+    skillFrontmatters.map(({ path, frontmatter }) => ({
+      name: basename(dirname(path)),
+      disabled: frontmatter["disable-model-invocation"] === true,
+    })),
+  );
   checkIssueTemplateOptionsMatchFolders(skillNames);
   checkAuthorIdentity(marketplace, manifest, codexManifests, skillFrontmatters);
   checkLicenseIdentity(manifest, codexManifests, skillFrontmatters);
