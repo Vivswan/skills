@@ -20,7 +20,7 @@ A stranded stop with a clean tree DESTROYS an isolation worktree: the harness au
 - Before any removal, run a FRESH `git -C <tree> status --porcelain` and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes distinguish `??`/`M` real work from `D` artifacts and the coordinator's keepalive marker.
 - Also BEFORE removing, check for processes whose cwd is inside the worktree (`lsof -a -p <pid> -d cwd`, or `lsof +D` on the path). A harness agent absent from the running list is not itself writing, but processes it spawned (test chains, installs) can still be; kill them or wait them out first.
 - Removal does not kill survivors either: a landed builder's wedged test chain can outlive its deleted directory for hours. After removing, re-check and kill any process whose cwd names the deleted path.
-- Delete the worktree's branch too once it is no longer needed (its change verified landed on origin/main): `git branch -d <branch>`. A branch that refuses a non-forced delete has unlanded commits; investigate before forcing.
+- Delete the worktree's branch too once it is no longer needed - but verify the landing BY CONTENT first (see fleet-monitor.md, Verifying a Landing), never by what `git branch -d` says. In squash- and rebase-merge workflows `-d` refuses even after every successful landing (the local shas never land verbatim), so a refusal there is normal: verify by content, then `git branch -D`. Only in merge-commit and direct-push workflows does a refused `-d` actually indicate unlanded commits worth investigating.
 
 ## Unique Per-File Ownership Across Fan-Out Rounds
 

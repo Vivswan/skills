@@ -1,6 +1,6 @@
 {
   "name": "orchestrator-mode",
-  "description": "Run a session as an orchestrator: parallel worktree subagents, gated serial landings, fleet monitoring.",
+  "description": "Run a session as an orchestrator: parallel worktree subagents, gated landings (direct or PR-based), fleet monitoring.",
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Orchestrator Mode",
     "shortDescription": "Lead a fleet of parallel worktree subagents.",
-    "longDescription": "Decomposes work into independent tracks, fans them out to parallel subagents in isolated git worktrees with strict file ownership, and gates serial landings with reviews, CI watchers, and a fleet monitor.",
+    "longDescription": "Decomposes work into independent tracks, fans them out to parallel subagents in isolated git worktrees with strict file ownership, and gates every landing - serial pushes onto a mainline or one PR per track - with reviews, CI watchers, and a fleet monitor.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
     "capabilities": ["Read", "Execute"],

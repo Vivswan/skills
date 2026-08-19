@@ -1,6 +1,6 @@
 ---
 name: orchestrator-mode
-description: Use when asked to act as orchestrator, orchestrate with worktrees, or run a fleet of parallel subagents on multi-track work.
+description: Use when asked to act as orchestrator, orchestrate with worktrees, run a fleet of parallel subagents on multi-track work, or build and manage many PRs in parallel.
 license: SEE LICENSE IN LICENSE.md
 disable-model-invocation: true
 metadata:
@@ -17,6 +17,7 @@ This skill is explicit-invocation-only: it loads when the user invokes it (`/orc
 
 - "Act as orchestrator" / "orchestrate this with worktrees"
 - "Run this as a fleet" / "fan this out to subagents"
+- Building or managing several PRs in parallel, one worktree per PR
 - A plan with several independent tracks that should build in parallel
 
 ## Roles
@@ -52,24 +53,36 @@ Every spawn brief inlines the full task contract; subagents may lack the board t
 
 ## Review Loops
 
-- Each worktree agent runs its own review loop before reporting back. The lead's pre-merge review then gates the MERGE on the final rebased state: an integration review, not a first look. Where the `/rubber-duck-review` skill is installed, use it for both loops (`/rubber-duck-review`): a cross-model, read-only reviewer for the builders' passes and the lead's gates.
+- Each worktree agent runs its own review loop before reporting back. The lead's landing-gate review then gates the LANDING on the change's final integrated state (the rebased branch, or the up-to-date PR): an integration review, not a first look. Where the `/rubber-duck-review` skill is installed, use it for both loops (`/rubber-duck-review`): a cross-model, read-only reviewer for the builders' passes and the lead's gates.
 - Route review fixes back to the owning agent to amend in place.
 - The lead never takes over a builder's review loop. When a builder strands "waiting" on a reviewer, the fix is a nudge telling it to read its reviewer's completed output (in harnesses like Claude Code, an idle notification fires only with zero live children, so the reviewer is done; verify your harness behaves the same before relying on it) or to spawn a fresh reviewer itself if the old one is unresumable. Never a lead-run replacement review.
-- The lead's own review passes (landing gate, integration) always run in the background, never blocking the lead inline. Background means non-inline, not non-gating: the lead reads the pass's output before merging, and findings can block the landing. This is also how the lead "personally reviews" maintainability-critical pieces - through its own pass, read before integrating. Fold this skill's Review Criteria section (below) into the prompts of those passes, so reviewers check orchestration hygiene alongside correctness.
+- The lead's own review passes (landing gate, integration) always run in the background, never blocking the lead inline. Background means non-inline, not non-gating: the lead reads the pass's output before landing, and findings can block the landing. This is also how the lead "personally reviews" maintainability-critical pieces - through its own pass, read before integrating. Fold this skill's Review Criteria section (below) into the prompts of those passes, so reviewers check orchestration hygiene alongside correctness.
 
-## Land Serially
+## Landing
 
-Implementation parallelizes; landing does not.
+Implementation parallelizes; integration into a shared base does not. "The mainline" is whatever branch the session integrates changes into - often main, but nothing here requires it: the user may designate any branch (a develop, release, or long-lived feature branch) as the target, and every flow below applies to it unchanged. Two landing modes cover most repos; pick whichever the repo uses (branch protection, CONTRIBUTING docs, and recent history say which - when unsure, a PR per track is the safer guess on a protected repo).
 
-1. One pending change on the main branch at a time, in plan order.
-2. Take the builder's branch (named in its completion signal) and land it per the repo's own conventions: rebase the branch onto main, cherry-pick its commits, or export and apply its diff as a patch. Re-run the gates on the result, run the review pass, then commit and push.
-3. Review before committing, never after: findings must be able to block the landing. Where installed, the `/review-before-commit` skill defines this gate (green tree first, independent background reviews, triage, convergence).
-4. Keep the main tree frozen while a review round is in flight, and serialize resource-exclusive validation (fixed ports, shared stacks).
-5. After every push, spawn a background CI watcher that reports pass/fail with failing-job logs. Never fire-and-forget a push, and never watch CI inline. Where installed, the `/watch-ci-after-push` skill defines the watcher (run discovery, the full-SHA gotcha, the report format).
+**Serial landings (direct-push repos).**
 
-## Post-Merge Integration Review
+1. One pending change on the mainline at a time, in plan order.
+2. Take the builder's branch (named in its completion signal) and prepare it per the repo's conventions: rebase onto the mainline, cherry-pick its commits, or export and apply its diff as a patch.
+3. Re-run the gates on the result, run the review pass, then commit and push.
+4. Keep the mainline tree frozen while a review round is in flight, and serialize resource-exclusive validation (fixed ports, shared stacks).
 
-After each merge to main, and again over the combined delta once all streams land, spawn a review pass looking specifically for integration issues between the merged pieces. Per-stream reviews are blind to cross-stream seams; this pass catches high-severity findings that every per-stream round misses. Never skip it.
+**A PR per track (PR repos).**
+
+1. Each builder's branch becomes its own PR (title and description per the repo's conventions). The spawn brief says who does what: either the builder pushes its branch and opens the PR, reporting the URL in its signal, or the builder stays no-push and the lead pushes from the worktree and opens the PR. Creating and iterating many PRs in parallel is fine: the file whitelists that keep worktrees disjoint keep the PRs disjoint too.
+2. What stays serial is merging into the shared base: merge one at a time in plan order (or hand the ordering to the repo's merge queue), and rebase or update each successor PR after the previous merge.
+3. The landing-gate review runs on each PR's final state before merge; re-run it after any rebase that changes content.
+
+Both modes:
+
+- Review before landing, never after: findings must be able to block the landing. Where installed, the `/review-before-commit` skill defines this gate (green tree first, independent background reviews, triage, convergence).
+- After every push or merge (a direct landing, a PR update, or a PR merge), spawn a background CI watcher that reports pass/fail with failing-job logs. Never fire-and-forget a push, and never watch CI inline. Where installed, the `/watch-ci-after-push` skill defines the watcher (run discovery, the full-SHA gotcha, the report format).
+
+## Post-Landing Integration Review
+
+After each landing on the mainline (a direct push or a merged PR), and again over the combined delta once all streams land, spawn a review pass looking specifically for integration issues between the merged pieces. Per-stream reviews are blind to cross-stream seams; this pass catches high-severity findings that every per-stream round misses. Never skip it.
 
 ## Fleet Monitor
 
@@ -81,7 +94,7 @@ Anything discovered along the way that is broken, stale, or wrong (failing tooli
 
 ## Sweep Continuously
 
-At phase boundaries (a wave finishing, a commit landing), stop subagents whose work is delivered and delete completed tasks, so the visible lists show only live work. Before stopping an agent, check nothing still owes output, and copy handoff facts a later step needs into a still-open task first. Long-lived service agents (CI watchers, the fleet monitor) stay up until their exit condition.
+At phase boundaries (a wave finishing, a landing), stop subagents whose work is delivered and delete completed tasks, so the visible lists show only live work. Before stopping an agent, check nothing still owes output, and copy handoff facts a later step needs into a still-open task first. Long-lived service agents (CI watchers, the fleet monitor) stay up until their exit condition.
 
 Worktree handovers, removals, and fan-out file ownership have destructive failure modes; follow `references/worktree-hygiene.md` for those rules.
 
@@ -97,7 +110,7 @@ When the host agent cannot spawn subagents, keep the structure and drop the para
 
 - Use plain `git worktree add` for isolation and work the tracks one at a time in dependency order.
 - Replace worktree builders with background read-only CLI invocations of another agent where available (e.g. `codex exec` or `claude -p`), or do the work inline.
-- Keep every gate: review before commit, serial landings, CI watch after push, and the post-merge integration review.
+- Keep every gate: review before landing, serialized integration, CI watch after every push or merge, and the post-landing integration review.
 
 ## Review Criteria
 

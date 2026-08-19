@@ -1,6 +1,6 @@
 # Orchestrator Mode
 
-`/orchestrator-mode` runs a session as a lead that fans implementation out to parallel subagents in isolated git worktrees while keeping architecture, reviews, and landings serial and gated.
+`/orchestrator-mode` runs a session as a lead that fans implementation out to parallel subagents in isolated git worktrees while keeping architecture, reviews, and integration gated - serial pushes onto a mainline, or one PR per track with serial merges.
 
 This skill is explicit-invocation-only: agents load it when you invoke it (e.g. `/orchestrator-mode` in Claude Code), not on their own.
 
@@ -22,8 +22,8 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/orchestrator-m
 
 - Decomposes work by dependency graph and parallelizes only the independent tracks
 - Gives every subagent an explicit file whitelist so branches merge cleanly
-- Delegates review loops to builders and gates each merge with an integration review
-- Lands changes serially: rebase, gates, review, commit, push, CI watcher
+- Delegates review loops to builders and gates each landing with an integration review
+- Gates every landing: serial pushes onto a mainline, or one PR per track with serial merges - reviews and CI watchers either way
 - Keeps a fleet monitor watching for stalled or dead agents
 - Sweeps finished agents, tasks, and worktrees so only live work stays visible
 

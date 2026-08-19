@@ -27,7 +27,7 @@ The agent applies these on its own when the task matches:
 Load only when you invoke them (`/skill-name` in Claude Code, `$skill-name` in Codex):
 
 - [/natural-writing](./skills/natural-writing/) - Prose without AI writing tells
-- [/orchestrator-mode](./skills/orchestrator-mode/) - Parallel worktree subagents, gated serial landings
+- [/orchestrator-mode](./skills/orchestrator-mode/) - Parallel worktree subagents with gated landings, direct or PR-based
 
 How the skills reference each other (an arrow means "mentions and hands off to, where installed"):
 

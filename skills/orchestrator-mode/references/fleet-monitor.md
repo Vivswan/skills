@@ -22,5 +22,5 @@ Routine sweeps must be O(cheap): status hash, index mtime, a marker file, commit
 
 ## Verifying a Landing
 
-- Verify by ancestry on `origin/main`, never by inferring from a worktree's disappearance.
-- In a cherry-pick or rebase landing workflow, verify by PATCH CONTENT (subject match + patch diff + files exist at origin HEAD), never by sha: the worktree's sha is never the landed sha, so a sha-identity rule reports every successful landing as lost work.
+- Verify by ancestry on the mainline's remote ref (e.g. `origin/main`), never by inferring from a worktree's disappearance.
+- In a cherry-pick, rebase, or squash-merge landing workflow, verify by PATCH CONTENT (subject match + patch diff + files exist at the mainline's remote tip), never by sha: the worktree's sha is never the landed sha, so a sha-identity rule reports every successful landing as lost work.
