@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Standards"
+  short_description: "House standards for writing and reviewing code."
+  brand_color: "#0F766E"

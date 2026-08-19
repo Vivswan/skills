@@ -1,6 +1,6 @@
 # Rubber Duck Review
 
-`rubber-duck-review` is a portable review skill for getting a second opinion from another model without giving that reviewer write access.
+`/rubber-duck-review` is a portable review skill for getting a second opinion from another model without giving that reviewer write access.
 
 ## Install
 

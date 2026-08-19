@@ -9,6 +9,7 @@ Copy these files into `skills/<your-skill-name>/` and then replace the placehold
 - `SKILL.md`
 - `README.md`
 - `.codex-plugin/plugin.json`
+- `agents/openai.yaml`
 - `references/author-notes.md`
 - `.mcp.json.example` if the skill may grow MCP support later
 

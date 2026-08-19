@@ -1,0 +1,39 @@
+# Orchestrator Mode
+
+`/orchestrator-mode` runs a session as a lead that fans implementation out to parallel subagents in isolated git worktrees while keeping architecture, reviews, and landings serial and gated.
+
+This skill is explicit-invocation-only: agents load it when you invoke it (e.g. `/orchestrator-mode` in Claude Code), not on their own.
+
+## Install
+
+From the collection:
+
+```bash
+npx skills add Vivswan/skills -g --skill orchestrator-mode
+```
+
+Directly from this folder:
+
+```bash
+npx skills add https://github.com/Vivswan/skills/tree/main/skills/orchestrator-mode -g
+```
+
+## What It Does
+
+- Decomposes work by dependency graph and parallelizes only the independent tracks
+- Gives every subagent an explicit file whitelist so branches merge cleanly
+- Delegates review loops to builders and gates each merge with an integration review
+- Lands changes serially: rebase, gates, review, commit, push, CI watcher
+- Keeps a fleet monitor watching for stalled or dead agents
+- Sweeps finished agents, tasks, and worktrees so only live work stays visible
+
+## Layout
+
+- [`SKILL.md`](./SKILL.md): the orchestration workflow
+- [`references/spawn-briefs.md`](./references/spawn-briefs.md): what every spawn brief must contain
+- [`references/fleet-monitor.md`](./references/fleet-monitor.md): liveness probing without false alarms
+- [`references/worktree-hygiene.md`](./references/worktree-hygiene.md): handovers, removals, and file ownership
+
+## Plugin-Ready Layout
+
+This skill directory already includes plugin metadata in [`.codex-plugin/plugin.json`](./.codex-plugin/plugin.json) so MCP servers, hooks, or app manifests can be added later without moving the skill.

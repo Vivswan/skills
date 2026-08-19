@@ -10,7 +10,7 @@
 # central settings/repos/<name>.yml in repo-platform wins over it.
 
 repository:
-  description: "Installable agent skills and plugin-ready workflows for coding agents"
+  description: "Installable, plugin-ready skills that give coding agents disciplined workflows, from code standards and review gates to multi-agent orchestration"
   # homepage, topics, and private are always declared, even when empty or
   # public: the apply manages only declared keys, so this keeps it healing
   # out-of-band edits (an empty value declares-and-clears).

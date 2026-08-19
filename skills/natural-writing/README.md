@@ -3,6 +3,9 @@
 Write and edit prose that avoids the documented signs of AI writing, based on
 [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing).
 
+This skill is explicit-invocation-only: agents load it when you invoke it
+(e.g. `/natural-writing` in Claude Code), not on their own.
+
 ## What it does
 
 - Drafts new text (docs, articles, READMEs, emails, PR descriptions) that

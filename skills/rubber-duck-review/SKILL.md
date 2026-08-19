@@ -1,6 +1,6 @@
 ---
 name: rubber-duck-review
-description: Cross-model code review using a second agent, tool, or read-only CLI fallback. This skill should be used when someone asks to rubber duck a change, get a second opinion, or run an independent review focused on correctness, future-proofing, and design quality.
+description: Use when asked to rubber duck a change, get a second opinion, or run an independent cross-model review of code changes.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -26,7 +26,7 @@ Use this skill when someone asks for:
 - Prefer a dedicated review tool when one is available.
 - Use a reviewer that is different from the current model when possible.
 - If no dedicated tool exists, fall back to a read-only CLI invocation. Pick by which model *you* are, then use the matching full pattern in step 3:
-  - If you are currently using **Claude** → **Codex reviewer** (§3a): `codex exec --json --sandbox read-only`, fallback `copilot -p --deny-tool='write' --deny-tool='shell'`.
+  - If you are currently using **Claude** → **Codex reviewer** (§3a): `codex exec --json --sandbox read-only`, fallback `copilot -p "$(cat "$prompt_file")" --deny-tool='write' --deny-tool='shell'`.
   - If you are currently using **Codex or GitHub Copilot** → **Claude reviewer** (§3b): `claude -p --permission-mode plan --verbose --output-format stream-json`, fallback `copilot -p ...`.
   - Always pass the prompt as `"$(cat "$prompt_file")"` (a file inside the scratch tmp dir, see §3) and append `< /dev/null`; the copy-paste blocks in §3a/§3b already do both.
 - Never let the reviewer write files, edit code, or run unrestricted shell commands. `--sandbox read-only` (codex) / `--permission-mode plan` (claude) lets it run read-only commands (grep, `git diff`, typecheck) but blocks writes. That self-checking makes findings concrete. (Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.)
@@ -43,7 +43,8 @@ Use this skill when someone asks for:
   - Hardcoded assumptions that may become misleading later
   - Workarounds propped up by long justification comments: if it takes a paragraph-long comment to argue the workaround is OK, the code is wrong. Flag both the comment and the code for fixing.
 - Fold in criteria from companion skills. For each skill in the list below that is installed, expand its `## Review Criteria` section into the reviewer prompt and triage the resulting findings with that skill's own workflow. To make another skill part of the review later, add its name here:
-  - `no-invalid-states`
+  - `/no-invalid-states`
+  - `/code-standards`
 - Ask it to report **prioritized** findings (blocking vs non-blocking) and to **say so plainly if the code is correct**; this keeps re-reviews terminable.
 - If the user has already declined or reverted something in this thread, add a short `Already decided / out of scope` section so the reviewer does not keep re-raising it.
 - On a re-review, state which fixes were already applied so it focuses on what remains.
@@ -152,7 +153,7 @@ PROMPT
 claude -p --permission-mode plan --verbose --output-format stream-json "$(cat "$prompt_file")" < /dev/null > "$tmp_dir/review.jsonl" 2> "$tmp_dir/review.err"
 ```
 
-> `copilot -p --deny-tool='write' --deny-tool='shell' "$(cat "$prompt_file")" < /dev/null` is the secondary fallback for either side; it does not stream JSON, so you lose the liveness signal. Prefer codex/claude above.
+> `copilot -p "$(cat "$prompt_file")" --deny-tool='write' --deny-tool='shell' < /dev/null` is the secondary fallback for either side; the prompt text must immediately follow `-p` (`-p, --prompt <text>` consumes the next argument, so flags go after it). It does not stream JSON, so you lose the liveness signal. Prefer codex/claude above.
 
 ### 4. Extract the verdict from JSON streams
 

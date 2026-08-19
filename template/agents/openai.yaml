@@ -1,0 +1,10 @@
+# Codex sidecar for this skill. The interface block mirrors
+# .codex-plugin/plugin.json (displayName, shortDescription, brandColor) and
+# the SKILL.md H1; the smoke test keeps them identical. Add
+# `policy: { allow_implicit_invocation: false }` together with
+# `disable-model-invocation: true` in SKILL.md frontmatter for
+# explicit-invocation-only skills.
+interface:
+  display_name: "Template Skill"
+  short_description: "Replace with a short subtitle."
+  brand_color: "#0F766E"

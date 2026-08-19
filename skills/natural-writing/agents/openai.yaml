@@ -1,0 +1,7 @@
+policy:
+  allow_implicit_invocation: false
+
+interface:
+  display_name: "Natural writing"
+  short_description: "Avoid AI writing tells in any prose."
+  brand_color: "#0F766E"

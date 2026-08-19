@@ -6,7 +6,7 @@ symlinks to this file, so edit only here.
 
 ## Project
 
-Skills: Installable agent skills and plugin-ready workflows for coding agents
+Skills: Installable, plugin-ready skills that give coding agents disciplined workflows
 
 ## Toolchain
 
@@ -72,6 +72,7 @@ skills/
     SKILL.md
     README.md
     .codex-plugin/plugin.json
+    agents/openai.yaml (required Codex sidecar: interface; policy for explicit-invocation skills)
     references/
     scripts/
 template/            starter files for the next skill
@@ -84,6 +85,16 @@ scripts/             repo check scripts (TypeScript, run with bun)
   `SKILL.md` uppercase and valid YAML frontmatter.
 - Keep `SKILL.md` focused on activation logic and workflow; put supporting
   detail in `references/` and executable helpers in `scripts/`.
+- The frontmatter `description` is a trigger, not a summary: state briefly
+  when the skill should fire ("Use when ...") and keep it short.
+- Skills are example-, scenario-, or concept-led: show worked examples,
+  concrete commands, or copy-paste blocks a future agent can follow cold,
+  not paragraphs of abstract explanation.
+- Explicit-invocation-only skills set `disable-model-invocation: true` in
+  the SKILL.md frontmatter (Claude Code) AND ship `agents/openai.yaml` with
+  `policy.allow_implicit_invocation: false` (Codex). The smoke test enforces
+  the pairing and keeps openai.yaml's interface block in sync with the codex
+  manifest and the SKILL.md title.
 - Keep each skill folder plugin-ready by maintaining
   `.codex-plugin/plugin.json`. If a skill grows MCP, hooks, or app
   integrations later, add those files inside the same skill folder instead of
@@ -93,8 +104,8 @@ scripts/             repo check scripts (TypeScript, run with bun)
 - Treat `npx skills add ...` and the plain skill content as the compatibility
   baseline for Claude Code, Codex, and GitHub Copilot.
 - List the new skill in `.claude-plugin/plugin.json` (`skills`) and add a
-  `### <skill-name>` section to the root `README.md`. The smoke test fails
-  the build if either is missing.
+  linked entry to the root `README.md` Available Skills list. The smoke test
+  fails the build if either is missing.
 - Follow `docs/authoring.md` for the shared skill-core plus plugin-layer
   model.
 

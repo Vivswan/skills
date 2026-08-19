@@ -1,0 +1,4 @@
+interface:
+  display_name: "Watch CI After Push"
+  short_description: "Background CI watcher after every push."
+  brand_color: "#0F766E"

@@ -13,17 +13,24 @@
  *     entry that would make Claude Code refuse to load the plugin
  *   - files named metadata.json inside a skill (npx skills drops them at install)
  *   - listing drift: plugin.json skills[] entries without a skill folder, and
- *     README skill sections and bug-form dropdown options kept in exact
+ *     README skill-list entries and bug-form dropdown options kept in exact
  *     correspondence with the skill folders (stale and missing both fail)
  *   - author, license, and homepage copies disagreeing with their canonical
  *     .claude-plugin/plugin.json fields
+ *   - interface drift: the SKILL.md H1 title, the codex manifest's
+ *     interface.displayName, and agents/openai.yaml (when present)
+ *     disagreeing on display name, short description, or brand color
+ *   - explicit-invocation drift: disable-model-invocation in SKILL.md
+ *     frontmatter set without agents/openai.yaml's
+ *     policy.allow_implicit_invocation:false, or vice versa
+ *   - descriptions that are summaries instead of "Use when ..." triggers
  *   - self-guarding of the placeholder markers against template/ rewording
  *   - skill-content cross-references: companion review criteria, the pinned
  *     Wikipedia revision, grep terms vs the word list, the reviewer preamble
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Frontmatter, Marketplace, RootManifest } from "./lib";
 import {
   errorMessage,
@@ -68,7 +75,7 @@ const MARKETPLACE_ONLY_FIELDS = new Set([
 
 function checkNoPlaceholders(skillDir: string): void {
   for (const path of walkFiles(skillDir)) {
-    if (!path.endsWith(".md") && !path.endsWith(".json")) continue;
+    if (!/\.(md|json|ya?ml)$/.test(path)) continue;
     const text = readFileSync(path, "utf-8");
     for (const marker of PLACEHOLDER_MARKERS) {
       if (text.includes(marker)) {
@@ -239,11 +246,11 @@ function checkManifestEntriesHaveFolders(
   }
 }
 
-// Bijection between README's Available Skills sections and skill folders:
-// a '### <name>' section whose folder is gone is stale documentation, and a
-// missing section (or an emptied skills area) fails just as loudly. Only
-// kebab-case headings count as skill sections, mirroring the dropdown
-// guard's filter, so prose subheadings are left alone.
+// Bijection between README's Available Skills list and skill folders: every
+// published skill appears as a linked bullet '- [/name](./skills/name/)', an
+// entry whose folder is gone is stale documentation, and each link must
+// point at the skill's own folder. Only kebab-case names count as skill
+// entries, so prose bullets are left alone.
 function checkReadmeSectionsMatchFolders(skillNames: ReadonlySet<string>): void {
   const readme = readTextFile(join(ROOT, "README.md"));
   const heading = "\n## Available Skills\n";
@@ -252,22 +259,32 @@ function checkReadmeSectionsMatchFolders(skillNames: ReadonlySet<string>): void 
   const body = readme.slice(start + heading.length);
   const end = body.search(/^## /m);
   const skillsArea = end === -1 ? body : body.slice(0, end);
-  const sections = new Set<string>();
-  for (const match of skillsArea.matchAll(/^### (.*)$/gm)) {
+  // Fenced blocks (the mermaid graph) and HTML comments cannot contribute
+  // entries, and a duplicate entry is drift, not a harmless overwrite.
+  const scannable = skillsArea.replace(/```[\s\S]*?```/g, "").replace(/<!--[\s\S]*?-->/g, "");
+  const listed = new Map<string, string>();
+  for (const match of scannable.matchAll(/^- \[\/?([^\]]+)\]\(([^)]+)\)/gm)) {
     const name = (match[1] ?? "").trim();
-    if (KEBAB_CASE.test(name)) sections.add(name);
+    if (!KEBAB_CASE.test(name)) continue;
+    if (listed.has(name)) {
+      fail(`README.md: duplicate Available Skills entry for '${name}'`);
+    }
+    listed.set(name, match[2] ?? "");
   }
-  for (const name of sections) {
+  for (const [name, target] of listed) {
     if (!skillNames.has(name)) {
       fail(
-        `README.md: '### ${name}' in the Available Skills section has no matching` +
-          ` skills/${name}/ folder -- remove the stale section or restore the folder`,
+        `README.md: '[${name}]' in the Available Skills list has no matching` +
+          ` skills/${name}/ folder -- remove the stale entry or restore the folder`,
       );
+    }
+    if (target !== `./skills/${name}/` && target !== `./skills/${name}`) {
+      fail(`README.md: the '[${name}]' entry must link to ./skills/${name}/`);
     }
   }
   for (const name of skillNames) {
-    if (!sections.has(name)) {
-      fail(`README.md: the Available Skills section is missing a '### ${name}' section`);
+    if (!listed.has(name)) {
+      fail(`README.md: the Available Skills list is missing an entry for '${name}'`);
     }
   }
 }
@@ -494,6 +511,143 @@ function checkHomepageIdentity(
   }
 }
 
+// The SKILL.md H1 is the display-name authority; the codex manifest's
+// interface.displayName must equal it, and agents/openai.yaml (required in
+// every published skill) must repeat the codex manifest's display name, short
+// description, and brand color exactly. openai.yaml's short_description is
+// additionally held to the documented 25-64 character UI limit.
+function checkInterfaceIdentity(skillDir: string, codex: CodexManifest): void {
+  const codexIface = isRecord(codex.plugin.interface) ? codex.plugin.interface : undefined;
+  if (codexIface === undefined) fail(`${rel(codex.path)}: missing the interface block`);
+
+  const skillMd = join(skillDir, "SKILL.md");
+  const title = /^# (.+)$/m.exec(readTextFile(skillMd))?.[1]?.trim();
+  if (title === undefined || title === "") {
+    fail(`${rel(skillMd)}: cannot find the '# <title>' heading`);
+  }
+  if (codexIface.displayName !== title) {
+    fail(
+      `${rel(codex.path)}: interface.displayName ${JSON.stringify(codexIface.displayName)}` +
+        ` must equal the ${rel(skillMd)} H1 title ${JSON.stringify(title)}`,
+    );
+  }
+
+  const openaiYaml = join(skillDir, "agents", "openai.yaml");
+  if (!existsSync(openaiYaml)) {
+    fail(
+      `${rel(openaiYaml)}: missing -- every published skill ships agents/openai.yaml with an` +
+        " interface block mirroring the codex manifest",
+    );
+  }
+  let doc: unknown;
+  try {
+    doc = Bun.YAML.parse(readTextFile(openaiYaml));
+  } catch (error) {
+    fail(`${rel(openaiYaml)}: invalid YAML (${errorMessage(error)})`);
+  }
+  const iface = isRecord(doc) && isRecord(doc.interface) ? doc.interface : undefined;
+  if (iface === undefined) fail(`${rel(openaiYaml)}: missing the interface section`);
+  const pairs: ReadonlyArray<[string, string]> = [
+    ["display_name", "displayName"],
+    ["short_description", "shortDescription"],
+    ["brand_color", "brandColor"],
+  ];
+  for (const [yamlKey, jsonKey] of pairs) {
+    if (iface[yamlKey] !== codexIface[jsonKey]) {
+      fail(
+        `${rel(openaiYaml)}: interface.${yamlKey} must equal interface.${jsonKey}` +
+          ` in ${rel(codex.path)}`,
+      );
+    }
+  }
+  const short = iface.short_description;
+  if (typeof short !== "string" || short.length < 25 || short.length > 64) {
+    fail(`${rel(openaiYaml)}: interface.short_description must be 25-64 characters`);
+  }
+}
+
+// "Explicit-invocation-only" spans two files: disable-model-invocation in
+// SKILL.md frontmatter (Claude Code) and policy.allow_implicit_invocation in
+// agents/openai.yaml (Codex). Either alone drifts silently, so require both
+// or neither.
+function checkExplicitInvocationPairing(skillDir: string, skillMd: SkillFrontmatter): void {
+  const frontmatterValue = skillMd.frontmatter["disable-model-invocation"];
+  if (frontmatterValue !== undefined && typeof frontmatterValue !== "boolean") {
+    fail(
+      `${rel(skillMd.path)}: disable-model-invocation must be a plain YAML boolean,` +
+        ` got ${JSON.stringify(frontmatterValue)} (a quoted "true"/"false" is a string)`,
+    );
+  }
+  const frontmatterDisabled = frontmatterValue === true;
+  const openaiYaml = join(skillDir, "agents", "openai.yaml");
+  let policyDisabled = false;
+  if (existsSync(openaiYaml)) {
+    let doc: unknown;
+    try {
+      doc = Bun.YAML.parse(readTextFile(openaiYaml));
+    } catch (error) {
+      fail(`${rel(openaiYaml)}: invalid YAML (${errorMessage(error)})`);
+    }
+    const policy = isRecord(doc) && isRecord(doc.policy) ? doc.policy : undefined;
+    const policyValue = policy === undefined ? undefined : policy.allow_implicit_invocation;
+    if (policyValue !== undefined && typeof policyValue !== "boolean") {
+      fail(
+        `${rel(openaiYaml)}: policy.allow_implicit_invocation must be a plain YAML boolean,` +
+          ` got ${JSON.stringify(policyValue)}`,
+      );
+    }
+    policyDisabled = policyValue === false;
+  }
+  if (frontmatterDisabled !== policyDisabled) {
+    fail(
+      `${rel(skillMd.path)}: explicit-invocation-only must be declared for every agent or none:` +
+        " set both 'disable-model-invocation: true' in the frontmatter and" +
+        " 'policy.allow_implicit_invocation: false' in agents/openai.yaml, or neither",
+    );
+  }
+}
+
+// The frontmatter description is a trigger, not a summary (AGENTS.md >
+// "Creating a new skill"); make the convention self-enforcing.
+function checkDescriptionTriggerForm(skillMd: SkillFrontmatter): void {
+  const description = skillMd.frontmatter.description;
+  if (typeof description !== "string" || !/^Use when \S/.test(description)) {
+    fail(
+      `${rel(skillMd.path)}: description must be trigger-form, starting with "Use when ..."` +
+        " followed by the actual trigger (see AGENTS.md > Creating a new skill)",
+    );
+  }
+}
+
+// The README's Automatic vs "Invoked by you" grouping must track the
+// explicit-invocation flag: a skill sits under "Invoked by you" exactly when
+// its frontmatter sets disable-model-invocation. Accurate prose otherwise
+// drifts silently the first time someone flips the flag.
+function checkReadmeInvocationGrouping(skillFrontmatters: readonly SkillFrontmatter[]): void {
+  const readme = readTextFile(join(ROOT, "README.md"));
+  const heading = "\n## Available Skills\n";
+  const start = readme.indexOf(heading);
+  if (start === -1) fail("README.md: missing the '## Available Skills' section");
+  const body = readme.slice(start + heading.length);
+  const end = body.search(/^## /m);
+  const area = end === -1 ? body : body.slice(0, end);
+  const invokedIndex = area.indexOf("### Invoked by you");
+  if (invokedIndex === -1) fail("README.md: missing the '### Invoked by you' subsection");
+  const invokedArea = area.slice(invokedIndex);
+  for (const { path, frontmatter } of skillFrontmatters) {
+    const name = basename(dirname(path));
+    const disabled = frontmatter["disable-model-invocation"] === true;
+    const inInvoked = invokedArea.includes(`- [/${name}](`);
+    if (disabled !== inInvoked) {
+      fail(
+        `README.md: '${name}' must be listed under` +
+          ` '${disabled ? "Invoked by you" : "Automatic"}' to match its` +
+          " disable-model-invocation frontmatter",
+      );
+    }
+  }
+}
+
 // Guard the placeholder-leak detector itself: if template/ stops containing
 // one of the marker strings (or the marker list is emptied), the leak
 // detector for published skills has silently gone stale.
@@ -540,11 +694,11 @@ function checkCompanionReviewCriteria(): void {
     // not a backticked skill name is a malformed entry, not a terminator.
     if (line.trim() === "") continue;
     if (!/^\s+-/.test(line)) break;
-    const item = /^\s*-\s*`([a-z0-9-]+)`\s*$/.exec(line);
+    const item = /^\s*-\s*`\/?([a-z0-9-]+)`\s*$/.exec(line);
     if (item === null) {
       fail(
         `${rel(skillMd)}: malformed companion-skill list item ${JSON.stringify(line.trim())}` +
-          " -- expected a backticked skill name",
+          " -- expected a backticked skill name (a leading '/' is allowed)",
       );
     }
     companions.push(item[1] ?? "");
@@ -790,6 +944,9 @@ function main(): void {
     const skillMd = loadSkillFrontmatter(skillDir);
     checkSingleSourceVersion(codex, skillMd);
     checkManifestConventions(skillDir, codex);
+    checkInterfaceIdentity(skillDir, codex);
+    checkExplicitInvocationPairing(skillDir, skillMd);
+    checkDescriptionTriggerForm(skillMd);
     codexManifests.push(codex);
     skillFrontmatters.push(skillMd);
   }
@@ -804,6 +961,7 @@ function main(): void {
 
   checkManifestEntriesHaveFolders(manifest, skillNames);
   checkReadmeSectionsMatchFolders(skillNames);
+  checkReadmeInvocationGrouping(skillFrontmatters);
   checkIssueTemplateOptionsMatchFolders(skillNames);
   checkAuthorIdentity(marketplace, manifest, codexManifests, skillFrontmatters);
   checkLicenseIdentity(manifest, codexManifests, skillFrontmatters);

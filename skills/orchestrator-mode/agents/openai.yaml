@@ -1,0 +1,7 @@
+policy:
+  allow_implicit_invocation: false
+
+interface:
+  display_name: "Orchestrator Mode"
+  short_description: "Lead a fleet of parallel worktree subagents."
+  brand_color: "#0F766E"

@@ -1,0 +1,29 @@
+{
+  "name": "code-standards",
+  "description": "House standards for maintainable code, applied while writing and folded into reviews.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/code-standards",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": ["agent-skills", "code-standards", "code-review", "maintainability", "plugin-ready"],
+  "skills": "./",
+  "interface": {
+    "displayName": "Code Standards",
+    "shortDescription": "House standards for writing and reviewing code.",
+    "longDescription": "House standards with concrete specimens: fix the class not the instance, guard tests for recurring problems, general-purpose over special-case, maintainability over effort, comments only for what code cannot show, no barrel files or pass-through functions, no planning references in code, lean AGENTS.md files, content-only commit messages, and scannable structure instead of text blobs. Contributes its Review Criteria to rubber-duck-review passes when both are installed.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Review"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/code-standards",
+    "defaultPrompt": [
+      "Apply the house code standards to this change.",
+      "Review this diff against our code standards.",
+      "Does this fix the class or just the instance?"
+    ],
+    "brandColor": "#0F766E"
+  }
+}

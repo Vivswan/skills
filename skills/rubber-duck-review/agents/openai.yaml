@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rubber Duck Review"
+  short_description: "Get a second opinion from another model."
+  brand_color: "#0F766E"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "No Invalid States"
+  short_description: "Encode invariants in types instead of runtime checks."
+  brand_color: "#7C3AED"

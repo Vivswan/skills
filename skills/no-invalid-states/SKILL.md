@@ -1,6 +1,6 @@
 ---
 name: no-invalid-states
-description: Refactor code so invariants are enforced by the type system instead of repeated runtime checks. Parse and validate at trust boundaries, then make invalid internal states impossible to construct. Use when reviewing or refactoring code with boolean lifecycle flags, optional fields that must appear together, "must call X before Y" comments, repeated validation of the same value, or field combinations that should be contradictory. Also triggers on requests like "make illegal states unrepresentable", "parse, don't validate", or "strengthen these types".
+description: Use when code guards invariants with repeated runtime checks, boolean lifecycle flags, or "must call X before Y" comments, or when asked to make invalid states unrepresentable, parse-don't-validate, or strengthen types.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -181,7 +181,7 @@ them. At completion, report:
 
 ## Review Criteria
 
-Skills that run code reviews (such as `rubber-duck-review`) expand this
+Skills that run code reviews (such as `/rubber-duck-review`) expand this
 section into their reviewer prompt when this skill is installed. Ask the
 reviewer to flag:
 

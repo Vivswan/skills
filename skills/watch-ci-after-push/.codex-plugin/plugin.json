@@ -1,0 +1,29 @@
+{
+  "name": "watch-ci-after-push",
+  "description": "Background CI watcher after every push, reporting pass/fail with failing-job logs.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/watch-ci-after-push",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": ["agent-skills", "ci", "github-actions", "push", "plugin-ready"],
+  "skills": "./",
+  "interface": {
+    "displayName": "Watch CI After Push",
+    "shortDescription": "Background CI watcher after every push.",
+    "longDescription": "After a git push, finds the workflow runs it triggered, watches them in the background while work continues, and reports pass/fail with failing job names and the relevant log excerpt. Never fire-and-forget, never watch inline.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/watch-ci-after-push",
+    "defaultPrompt": [
+      "Push this and watch CI.",
+      "Did the pipeline pass for my last push?",
+      "Watch the workflow runs for this commit."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

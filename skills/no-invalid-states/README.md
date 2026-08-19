@@ -1,6 +1,6 @@
 # No Invalid States
 
-`no-invalid-states` is a review-and-refactor skill that
+`/no-invalid-states` is a review-and-refactor skill that
 moves correctness invariants out of scattered runtime checks and into the
 type system: parse at boundaries, then make invalid internal states
 impossible to construct.
@@ -29,7 +29,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/no-invalid-sta
   typestate, smart constructors, immutability, or schema constraints
 - Verifies with the repository's own formatter, type checker, lint, and
   test tooling, then reports what was strengthened and what stayed dynamic
-- Pairs with `rubber-duck-review`: when both skills are installed, the
+- Pairs with [`/rubber-duck-review`](../rubber-duck-review/): when both skills are installed, the
   review skill folds these criteria into its second-opinion passes
 
 ## Language Coverage

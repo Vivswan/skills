@@ -8,9 +8,15 @@ body:
       label: Skill
       description: Which skill is affected?
       options:
+        - code-standards
+        - craft-skills-and-memories
         - no-invalid-states
+        - no-sleep-waiting-on-subagents
         - natural-writing
+        - orchestrator-mode
+        - review-before-commit
         - rubber-duck-review
+        - watch-ci-after-push
         - Not skill-specific (catalog, install, or tooling)
     validations:
       required: true

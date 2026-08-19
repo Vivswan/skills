@@ -15,6 +15,7 @@ skills/<skill-name>/
   SKILL.md
   README.md
   .codex-plugin/plugin.json
+  agents/openai.yaml     # required Codex sidecar: interface; policy when explicit-invocation-only
   .mcp.json              # optional
   references/            # optional
   scripts/               # optional
@@ -32,14 +33,19 @@ This keeps the repo compatible with:
 2. Create `skills/<skill-name>/`.
 3. Rename placeholders so the skill name, folder name, and plugin manifest name match.
 4. Fill in `SKILL.md` with activation criteria, workflow steps, and fallback behavior.
-5. Add a human-facing `README.md`.
-6. Update the root [`README.md`](../README.md) catalog.
-7. List the new skill in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json).
-8. Run `bun run check`.
+   Keep the frontmatter `description` a short trigger ("Use when ..."), and lead
+   with worked examples, scenarios, or concrete commands rather than abstract prose.
+5. Create `agents/openai.yaml` with an `interface` block mirroring the codex
+   manifest (required; add `policy.allow_implicit_invocation: false` for
+   explicit-invocation-only skills).
+6. Add a human-facing `README.md`.
+7. Update the root [`README.md`](../README.md) catalog.
+8. List the new skill in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json).
+9. Run `bun run check`.
 
 ## Contributing Criteria to Reviews
 
-A skill can contribute to `rubber-duck-review` second-opinion passes. Two
+A skill can contribute to `/rubber-duck-review` second-opinion passes. Two
 steps:
 
 1. Declare a `## Review Criteria` section in the skill's `SKILL.md`. Keep it
@@ -86,6 +92,7 @@ skills/my-skill/
 - folder name matches the public skill name
 - `README.md` exists for each public skill
 - `.codex-plugin/plugin.json` exists and parses as JSON
+- `agents/openai.yaml` exists and its interface mirrors the codex manifest
 - `.claude-plugin/plugin.json` lists the skill directory, and `.claude-plugin/marketplace.json` stays consistent with it
 - optional MCP files parse as JSON when present
 

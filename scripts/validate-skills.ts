@@ -119,6 +119,7 @@ function validateTemplate(): void {
   requireFile(join(templateDir, "SKILL.md"));
   requireFile(join(templateDir, "README.md"));
   requireFile(join(templateDir, ".codex-plugin", "plugin.json"));
+  requireFile(join(templateDir, "agents", "openai.yaml"));
   requireFile(join(templateDir, ".mcp.json.example"));
 
   // metadata.internal keeps template/ out of `npx skills add` listings; if it

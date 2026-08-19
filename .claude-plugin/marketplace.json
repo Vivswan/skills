@@ -6,12 +6,12 @@
   },
   "metadata": {
     "description": "Public repository for agent skills and plugin-ready workflows",
-    "version": "1.1.3"
+    "version": "1.1.4"
   },
   "plugins": [
     {
       "name": "vivswan-skills",
-      "description": "Agent skills for natural prose, cross-model code review, and type-driven refactoring",
+      "description": "Installable, plugin-ready skills that give coding agents disciplined workflows, from code standards and review gates to multi-agent orchestration",
       "homepage": "https://vivswan.github.io/",
       "source": "./"
     }

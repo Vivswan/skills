@@ -1,6 +1,6 @@
 ---
 name: template-skill
-description: Replace with a clear description of what the skill does and when an agent should use it.
+description: Replace with a short trigger stating when the skill should fire, starting with "Use when ...".
 license: SEE LICENSE IN LICENSE.md
 metadata:
   internal: true

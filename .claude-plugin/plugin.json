@@ -1,7 +1,7 @@
 {
   "name": "vivswan-skills",
   "displayName": "Vivswan Skills",
-  "description": "Agent skills for natural prose, cross-model code review, and type-driven refactoring",
+  "description": "Installable, plugin-ready skills that give coding agents disciplined workflows, from code standards and review gates to multi-agent orchestration",
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com"
@@ -9,10 +9,16 @@
   "homepage": "https://vivswan.github.io/",
   "repository": "https://github.com/Vivswan/skills",
   "license": "SEE LICENSE IN LICENSE.md",
-  "keywords": ["agent-skills", "natural-writing", "code-review", "type-safety"],
+  "keywords": ["agent-skills", "natural-writing", "code-review", "type-safety", "orchestration"],
   "skills": [
+    "./skills/code-standards",
+    "./skills/craft-skills-and-memories",
     "./skills/no-invalid-states",
+    "./skills/no-sleep-waiting-on-subagents",
     "./skills/natural-writing",
-    "./skills/rubber-duck-review"
+    "./skills/orchestrator-mode",
+    "./skills/review-before-commit",
+    "./skills/rubber-duck-review",
+    "./skills/watch-ci-after-push"
   ]
 }

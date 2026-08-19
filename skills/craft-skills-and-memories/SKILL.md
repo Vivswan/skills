@@ -1,0 +1,100 @@
+---
+name: craft-skills-and-memories
+description: Use when creating a skill or memory, when one fails in practice, or when the user reports one misbehaving or stale.
+license: SEE LICENSE IN LICENSE.md
+metadata:
+  author: Vivswan
+---
+
+# Craft Skills and Memories
+
+One skill for both ends of the lifecycle of an agent's instruction sources: creating skills and memories worth keeping, and repairing them when they fail in practice. A broken skill or a stale memory is a bug; working around it and moving on just re-breaks the next session.
+
+Scope:
+
+- **Skills are general-purpose.** Nothing in a skill should be project-specific; a fact that only holds for one project belongs in that project's own docs or memories, not in the skill.
+- **Memories may be project-specific or common.** Create and fix a memory at the scope it belongs to: a project memory in that project's store, a common memory in the shared store.
+
+## The Quality Bar (creating and fixing alike)
+
+- **Example-, scenario-, or concept-led, never quote-led.** The concrete specimen (the failing command, the corrected block, a worked scenario) recalls far better in a future session than abstract explanation or the user's verbatim words. Structure each entry specimen-first: what happened and where, then the rule it taught, then the boundary or exceptions. Keep a short verbatim phrase only when the exact wording IS the directive (a ban, a naming rule); otherwise paraphrase into the rule. When touching an old quote-led entry, retrofit it.
+- **Descriptions are triggers**: short, "Use when ...", stating when the thing should fire.
+- **Skills** carry runnable copy-paste blocks and worked examples a cold agent can follow.
+- **Memories** hold one fact per file, record the why, convert relative dates to absolute, and link related memories. A wrong memory gets deleted, not patched around.
+- When rewriting prose, apply the `/natural-writing` skill if it is present and invocable; if your harness lets only the user invoke it, suggest they run `/natural-writing` rather than silently skipping the step.
+
+## When to Apply
+
+Creating:
+
+- "Save this as a memory" / "make this a skill" / "remember this"
+- A lesson, correction, or workflow emerges that future sessions will need
+
+Fixing:
+
+- A documented flag, command, or file in a skill no longer exists
+- A skill's copy-paste block breaks in a reproducible way
+- A skill's extraction or verification rule misses what it is supposed to catch
+- A recalled memory names a file, flag, or workflow that no longer exists or was superseded
+- The user says a skill or memory is not working properly
+
+## Creating
+
+1. **Check for an existing home first.** A skill or memory that already covers the topic gets updated; duplicates drift apart.
+2. **Pick skill vs memory.** General-purpose behavior any user could install: skill. Personal or project fact, policy, or preference: memory, at the right scope. A skill that encodes a personal workflow rather than an auto-detectable task should be explicit-invocation-only (`disable-model-invocation: true` in the frontmatter, and `policy.allow_implicit_invocation: false` in `agents/openai.yaml` for Codex).
+3. **Write it to the quality bar above**, with the triggering incident as the specimen.
+4. **Wire it in**: a skill follows its repository's authoring checklist (manifests, catalog, checks); a memory gets its index line.
+5. **Run the gates** where they exist (repo checks, review); for a memory, re-read it asking "will a cold session act correctly from this?"
+
+## Fixing
+
+### 1. Rule out transient causes
+
+Backend outages, sandbox restrictions, and local tool configuration are not skill defects. Only a failure whose root cause is the instructions themselves qualifies.
+
+### 2. Finish the current task first
+
+Work around the broken step to complete what the user actually asked for. The fix comes after, not instead.
+
+### 3. Fix it at its canonical source
+
+- Skill in its authoring repository: edit the affected sources directly (`SKILL.md`, `references/`, `scripts/`).
+- Installed or vendored skill copy you are authorized to edit (e.g. a personal skills directory): edit that copy, and tell the user the upstream source still carries the defect if one exists.
+- Memory: edit the memory file where it lives and keep its index line in sync. A memory that is simply wrong (not just stale) gets deleted, not patched around.
+- Not authorized to write: report the defect and your proposed fix to the user instead.
+
+### 4. Fold the fix in, don't append a note
+
+Rewrite the affected step so it is correct as written and meets the quality bar; keep copy-paste blocks runnable. A one-off warning bolted to the end leaves the broken instructions in place.
+
+### 5. Put the edit through the normal gates
+
+A skill or memory edit is a change like any other: run whatever checks and review process govern the place it lives. Where none exist (e.g. a plain installed copy), at least re-run the failing scenario to confirm the rewritten instructions work.
+
+## Worked Examples
+
+**A creation.** The user corrects the agent twice for hard-wrapping commit messages at 72 columns. That is a memory, not a skill (personal policy, applies across repos, nothing installable): write `commit-message-rules.md` in the common store with the correction as the specimen and the why, then add its index line. Example-led, not quote-led: it records the rule and a concrete before/after, not the user's exact words.
+
+**A skill defect.** While following a review skill, `claude -p --output-format stream-json` exits with an error and an empty output file.
+
+1. Transient? No: it reproduces every run, and `claude --help` shows `--output-format stream-json` requires `--verbose`. The root cause is the skill's documented command.
+2. Finish the review by re-running with `--verbose` added.
+3. The skill's canonical source is a local checkout of its authoring repo: edit the copy-paste block in its `SKILL.md` to include `--verbose`.
+4. The fix goes into the block itself, so it stays runnable as written; no footnote saying "note: also pass --verbose".
+5. Run that repo's checks and include the edit in the same change set for review.
+
+**A stale memory.** A recalled project memory says deploys go through `make release`, but the Makefile renamed the target to `make publish` months ago.
+
+1. Verify against the current repo: the memory is stale, not the build.
+2. Finish the deploy with the real target.
+3. Update the memory file in that project's store (and its index line) to name `make publish`, keeping the rename as the concrete example.
+
+**Not a defect.** The same command fails once with a backend overload error and succeeds on retry. That is transient; finish the task and leave the skill alone.
+
+## Using Skills
+
+Fit is judged per invocation: when an invoked skill's guidance does not fit the task at hand, skip it - wholly or a specific rule - and tell the user why at the point of the decision. Never follow a skill mechanically against the task's needs, and never ignore one silently. Standing rules the user has set (e.g. a commit gate) still hold; this covers guidance that genuinely conflicts with the work.
+
+## Reporting
+
+Tell the user what you created or what failed, the root cause, and what changed in the skill or memory, separately from the outcome of their original task.

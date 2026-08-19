@@ -1,0 +1,29 @@
+{
+  "name": "orchestrator-mode",
+  "description": "Run a session as an orchestrator: parallel worktree subagents, gated serial landings, fleet monitoring.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/orchestrator-mode",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": ["agent-skills", "orchestration", "worktrees", "subagents", "plugin-ready"],
+  "skills": "./",
+  "interface": {
+    "displayName": "Orchestrator Mode",
+    "shortDescription": "Lead a fleet of parallel worktree subagents.",
+    "longDescription": "Decomposes work into independent tracks, fans them out to parallel subagents in isolated git worktrees with strict file ownership, and gates serial landings with reviews, CI watchers, and a fleet monitor.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/orchestrator-mode",
+    "defaultPrompt": [
+      "Act as orchestrator and parallelize this plan with worktrees.",
+      "Run this multi-track refactor as a subagent fleet.",
+      "Orchestrate these independent features in parallel worktrees."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

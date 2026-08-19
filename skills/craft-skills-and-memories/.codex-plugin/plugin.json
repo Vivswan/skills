@@ -1,0 +1,35 @@
+{
+  "name": "craft-skills-and-memories",
+  "description": "Create skills and memories to a quality bar, and repair them at their source when they fail.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/craft-skills-and-memories",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "skill-maintenance",
+    "memory-maintenance",
+    "self-repair",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Craft Skills and Memories",
+    "shortDescription": "Create and repair skills and memories.",
+    "longDescription": "One skill for both ends of the lifecycle: creating skills and memories to a shared quality bar (example-led, trigger descriptions, right scope), and repairing them at their canonical source when instructions fail in practice, so defects are fixed once instead of rediscovered every session.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Edit"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/craft-skills-and-memories",
+    "defaultPrompt": [
+      "Save this lesson as a memory or skill, whichever fits.",
+      "This skill's command no longer works; fix the skill.",
+      "This memory is stale; update it at its source."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

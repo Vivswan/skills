@@ -1,0 +1,4 @@
+interface:
+  display_name: "Craft Skills and Memories"
+  short_description: "Create and repair skills and memories."
+  brand_color: "#0F766E"
