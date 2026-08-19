@@ -43,6 +43,7 @@ graph LR
   rbc --> nis["/no-invalid-states"]
   rdr --> cs
   rdr --> nis
+  nis --> rdr
   cs --> nis
   om --> nsw["/no-sleep-waiting-on-subagents"]
   nsw --> wca

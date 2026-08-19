@@ -56,7 +56,7 @@ Every spawn brief inlines the full task contract; subagents may lack the board t
 - Each worktree agent runs its own review loop before reporting back. The lead's landing-gate review then gates the LANDING on the change's final integrated state (the rebased branch, or the up-to-date PR): an integration review, not a first look. Where the `/rubber-duck-review` skill is installed, use it for both loops (`/rubber-duck-review`): a cross-model, read-only reviewer for the builders' passes and the lead's gates.
 - Route review fixes back to the owning agent to amend in place.
 - The lead never takes over a builder's review loop. When a builder strands "waiting" on a reviewer, the fix is a nudge telling it to read its reviewer's completed output (in harnesses like Claude Code, an idle notification fires only with zero live children, so the reviewer is done; verify your harness behaves the same before relying on it) or to spawn a fresh reviewer itself if the old one is unresumable. Never a lead-run replacement review.
-- The lead's own review passes (landing gate, integration) always run in the background, never blocking the lead inline. Background means non-inline, not non-gating: the lead reads the pass's output before landing, and findings can block the landing. This is also how the lead "personally reviews" maintainability-critical pieces - through its own pass, read before integrating. Fold this skill's Review Criteria section (below) into the prompts of those passes, so reviewers check orchestration hygiene alongside correctness.
+- The lead's own review passes (landing gate, integration) always run in the background, never blocking the lead inline. Background means non-inline, not non-gating: the lead reads the pass's output before landing, and findings can block the landing. This is also how the lead "personally reviews" maintainability-critical pieces - through its own pass, read before integrating. Fold this skill's Orchestration Review Criteria section (below) into the prompts of those passes, so reviewers check orchestration hygiene alongside correctness. (The heading is deliberately not `## Review Criteria`: these checks are folded into the lead's own passes here, not auto-discovered into every `/rubber-duck-review` run.)
 
 ## Landing
 
@@ -112,7 +112,7 @@ When the host agent cannot spawn subagents, keep the structure and drop the para
 - Replace worktree builders with background read-only CLI invocations of another agent where available (e.g. `codex exec` or `claude -p`), or do the work inline.
 - Keep every gate: review before landing, serialized integration, CI watch after every push or merge, and the post-landing integration review.
 
-## Review Criteria
+## Orchestration Review Criteria
 
 - TODO, FIXME, XXX, or HACK markers anywhere in the diff: spawn briefs ban them - the work happens in the change or is escalated, never parked in a comment.
 - Edits outside the owning builder's declared territory (file whitelist violations that slipped past the brief).

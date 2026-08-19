@@ -42,8 +42,10 @@ for id in $run_ids; do
     success)
       echo "pass: $name ($id)"
       ;;
-    "")
+    "" | null)
       # Watch returned but the run has no conclusion: the watch was cut short.
+      # gh normalizes a null conclusion to "" in --json output; "null" guards
+      # any path where jq renders the raw JSON null instead.
       echo "run $id ($name) is not concluded; the watch aborted early (gh or network?)" >&2
       gherr=1
       ;;

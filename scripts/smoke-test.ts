@@ -25,8 +25,9 @@
  *     policy.allow_implicit_invocation:false, or vice versa
  *   - descriptions that are summaries instead of "Use when ..." triggers
  *   - self-guarding of the placeholder markers against template/ rewording
- *   - skill-content cross-references: companion review criteria, the pinned
- *     Wikipedia revision, grep terms vs the word list, the reviewer preamble
+ *   - skill-content cross-references: review-criteria auto-discovery (the rule
+ *     stated, declared sections non-empty), the pinned Wikipedia revision,
+ *     grep terms vs the word list, the reviewer preamble
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -552,51 +553,46 @@ function checkPlaceholderMarkersStillInTemplate(): void {
   }
 }
 
-// rubber-duck-review folds companion skills' '## Review Criteria' sections
-// into its reviewer prompt; every skill it names must still publish that
-// heading, and no-invalid-states must stay wired in both directions.
-function checkCompanionReviewCriteria(): void {
+// rubber-duck-review auto-discovers companions: every installed skill that
+// declares a '## Review Criteria' section joins the reviewer prompt, no
+// registry. Guard both halves: the SKILL.md must still state that rule, and
+// every declared section must actually contain criteria (an empty section
+// silently contributes nothing). Context-scoped criteria use a different
+// heading (e.g. '## Orchestration Review Criteria') and are exempt.
+function checkReviewCriteriaAutoDiscovery(dirs: readonly string[]): void {
   const skillMd = join(SKILLS_DIR, "rubber-duck-review", "SKILL.md");
   requireFile(skillMd);
-  const text = readFileSync(skillMd, "utf-8");
-  const anchor = "add its name here:";
-  const anchorIndex = text.indexOf(anchor);
-  if (anchorIndex === -1) {
-    fail(`${rel(skillMd)}: missing the companion-skill list anchor '${anchor}'`);
+  const anchor = "for EVERY installed skill that declares a `## Review Criteria` section";
+  if (!readFileSync(skillMd, "utf-8").includes(anchor)) {
+    fail(
+      `${rel(skillMd)}: missing the companion auto-discovery rule` +
+        ` (expected the phrase ${JSON.stringify(anchor)})`,
+    );
   }
-  const companions: string[] = [];
-  for (const line of text
-    .slice(anchorIndex + anchor.length)
-    .split("\n")
-    .slice(1)) {
-    // The companion names are the indented list nested under the anchor
-    // bullet; the next outer bullet (column 0) or heading ends it, blank
-    // lines within a loose list are skipped, and an indented item that is
-    // not a backticked skill name is a malformed entry, not a terminator.
-    if (line.trim() === "") continue;
-    if (!/^\s+-/.test(line)) break;
-    const item = /^\s*-\s*`\/?([a-z0-9-]+)`\s*$/.exec(line);
-    if (item === null) {
-      fail(
-        `${rel(skillMd)}: malformed companion-skill list item ${JSON.stringify(line.trim())}` +
-          " -- expected a backticked skill name (a leading '/' is allowed)",
-      );
+  const declaring = new Set<string>();
+  for (const dir of dirs) {
+    const path = join(dir, "SKILL.md");
+    const text = readFileSync(path, "utf-8");
+    for (const match of text.matchAll(/^## Review Criteria[^\S\n]*$/gm)) {
+      declaring.add(basename(dir));
+      const body = text.slice((match.index ?? 0) + match[0].length);
+      const nextHeading = body.search(/^## /m);
+      const section = nextHeading === -1 ? body : body.slice(0, nextHeading);
+      if (!/^\s*(?:[-*]|\d+\.) \S/m.test(section)) {
+        fail(
+          `${rel(path)}: '## Review Criteria' declares review participation but contains no` +
+            " criteria bullets -- fill it in or rename the heading to a context-scoped one",
+        );
+      }
     }
-    companions.push(item[1] ?? "");
   }
-  if (companions.length === 0) {
-    fail(`${rel(skillMd)}: companion-skill list under '${anchor}' is empty or unparseable`);
-  }
-  if (!companions.includes("no-invalid-states")) {
-    fail(`${rel(skillMd)}: companion-skill list no longer names 'no-invalid-states'`);
-  }
-  for (const name of companions) {
-    const companionMd = join(SKILLS_DIR, name, "SKILL.md");
-    requireFile(companionMd);
-    if (!/^## Review Criteria\s*$/m.test(readFileSync(companionMd, "utf-8"))) {
+  // The named in-collection participants keep the guard from passing
+  // vacuously: rubber-duck-review's SKILL.md names both as examples.
+  for (const name of ["no-invalid-states", "code-standards"]) {
+    if (!declaring.has(name)) {
       fail(
-        `${rel(companionMd)}: missing the '## Review Criteria' section that` +
-          " rubber-duck-review expands into its reviewer prompt",
+        `skills/${name}/SKILL.md: must declare a '## Review Criteria' section --` +
+          " rubber-duck-review names it as an in-collection participant",
       );
     }
   }
@@ -861,7 +857,7 @@ function main(): void {
   checkLicenseIdentity(manifest, codexManifests, skillFrontmatters);
   checkHomepageIdentity(marketplace, manifest, codexManifests);
   checkPlaceholderMarkersStillInTemplate();
-  checkCompanionReviewCriteria();
+  checkReviewCriteriaAutoDiscovery(dirs);
   checkPinnedSnapshotRevision();
   checkGrepTermsCoveredByWordList();
   checkReviewerPreamble();

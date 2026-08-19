@@ -16,6 +16,6 @@ Already decided / out of scope:
 - <optional bullets>
 ```
 
-Companion skills listed in SKILL.md step 2 contribute extra bullets when
-installed: expand each one's `## Review Criteria` section into the review
-list above.
+Skills that declare a `## Review Criteria` section contribute extra
+bullets when installed (in this collection, `/no-invalid-states` and
+`/code-standards`): expand each one's section into the review list above.

@@ -50,7 +50,7 @@ Full detail, including the TODO ban: `references/comments.md`.
 
 ### No barrel files or pass-through functions
 
-An import-only index file, a "keep old importers compiling" re-export left after a move, or a function whose whole body forwards to another function without adding anything: delete it and repoint the importers or callers at the defining module or real function. A wrapper earns its existence only by adding something real (a default, a conversion, error mapping, an injected dependency, a narrowed type).
+An import-only index file, a "keep old importers compiling" re-export left after a move, or a function whose whole body forwards to another function without adding anything: delete it and repoint the importers or callers at the defining module or real function. A wrapper earns its existence only by adding something real (a default, a conversion, error mapping, an injected dependency, a narrowed type). In Python, `__init__.py` stays EMPTY unless absolutely necessary: re-exports there are the same barrel.
 
 Full detail, including the migration-staging exception and what is not a barrel: `references/structure.md`.
 

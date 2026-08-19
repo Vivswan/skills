@@ -45,17 +45,15 @@ This keeps the repo compatible with:
 
 ## Contributing Criteria to Reviews
 
-A skill can contribute to `/rubber-duck-review` second-opinion passes. Two
-steps:
+A skill contributes to `/rubber-duck-review` second-opinion passes by
+declaring a `## Review Criteria` section in its `SKILL.md` - that alone
+joins it to every review; there is no registry to update. Keep the section
+short: a few bullets the reviewer can act on, plus a pointer to the skill's
+own workflow for triaging findings. The smoke test rejects a section without list items.
 
-1. Declare a `## Review Criteria` section in the skill's `SKILL.md`. Keep it
-   short: a few bullets the reviewer can act on, plus a pointer to the
-   skill's own workflow for triaging findings.
-2. Add the skill's name to the companion-skill list in
-   `skills/rubber-duck-review/SKILL.md` (step 2, "Craft the prompt").
-
-When both skills are installed, the review skill expands the section into
-the reviewer prompt.
+Criteria that only apply in a specific context use a differently named
+heading (e.g. `## Orchestration Review Criteria`) and are folded into
+reviews by the skill that owns that context instead of being auto-discovered.
 
 ## Compatibility Rules
 

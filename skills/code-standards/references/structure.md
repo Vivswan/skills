@@ -12,6 +12,14 @@ Why: barrels and compat re-exports add an indirection layer with no information.
 
 The same rule one level down: a function whose whole body forwards to another function escorts it without adding behavior - a stack frame, a name to keep in sync, and a false seam. Callers call the real function; the escort gets deleted. A wrapper earns its existence only by adding something real: a default, a conversion, error mapping, an injected dependency, a narrowed type.
 
+## The same rule in other languages
+
+- **Python**: `__init__.py` runs at package import; keep it EMPTY unless absolutely necessary. Re-exporting symbols from it builds a barrel: the real dependency graph hides behind the package name and import cycles become easy to mint. Importers name the defining module (`from pkg.user import User`, not `from pkg import User`).
+- **Rust**: an intra-crate `mod.rs` whose `pub use` fan only re-exports names is the same barrel. The exception is the crate root: a `lib.rs` `pub use` that defines the crate's public API is idiomatic - it is the crate's only way to present a public surface distinct from its internal module tree.
+- **Go**: a package that only wraps another package's identifiers adds a hop; callers import the defining package.
+
+The test is identical in every language: does this file or function only forward names?
+
 ## How to apply
 
 - When splitting or moving modules, repoint all importers at the defining files directly (a mechanical find/replace is fine, even across dozens of files); delete any file that ends up import-only.
