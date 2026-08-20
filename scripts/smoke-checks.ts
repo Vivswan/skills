@@ -75,14 +75,22 @@ export function checkExplicitInvocationPairing(input: ExplicitInvocationInput): 
 
 // Extract the Available Skills area of the README, with fenced blocks (the
 // mermaid graph) and HTML comments removed so they cannot contribute entries.
+// Stripping runs to a fixpoint: a single pass can reassemble a new `<!--` or
+// fence from the surrounding fragments (CodeQL js/incomplete-multi-character-
+// sanitization), letting crafted content hide from or leak into the checks.
 function readmeSkillsArea(readmeText: string): string {
   const heading = "\n## Available Skills\n";
   const start = readmeText.indexOf(heading);
   if (start === -1) fail("README.md: missing the '## Available Skills' section");
   const body = readmeText.slice(start + heading.length);
   const end = body.search(/^## /m);
-  const area = end === -1 ? body : body.slice(0, end);
-  return area.replace(/```[\s\S]*?```/g, "").replace(/<!--[\s\S]*?-->/g, "");
+  let area = end === -1 ? body : body.slice(0, end);
+  let previous: string;
+  do {
+    previous = area;
+    area = area.replace(/```[\s\S]*?```/g, "").replace(/<!--[\s\S]*?-->/g, "");
+  } while (area !== previous);
+  return area;
 }
 
 // Bijection between README's Available Skills list and skill folders: every

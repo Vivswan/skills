@@ -143,6 +143,11 @@ describe("checkReadmeSkillList", () => {
     expect(() => checkReadmeSkillList(readme(list), names)).not.toThrow();
   });
 
+  test("strips comment sequences that reassemble after one pass", () => {
+    const list = `${goodList}<!-<!-- x -->-\n- [/gamma-three](./skills/gamma-three/) - hidden\n-->\n`;
+    expect(() => checkReadmeSkillList(readme(list), names)).not.toThrow();
+  });
+
   test("rejects a README without the section", () => {
     expect(() => checkReadmeSkillList("# Skills\n", names)).toThrow(/Available Skills/);
   });

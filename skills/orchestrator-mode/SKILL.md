@@ -26,16 +26,26 @@ The lead owns architecture, overall consistency, integration, and long-term dire
 
 The lead also stays responsive: it never runs a long foreground task itself (a build, a test suite, a review, a watch) - the user may want to talk to the orchestrator at any moment, and a lead blocked inline cannot answer. Anything long-running is delegated to a subagent or run as a background command; the lead's own inline steps stay short.
 
+## Ask Before Fanning Out
+
+On invocation, before creating the board or spawning anything, ask the user these in ONE message - skip any the invocation already answered, propose a default for each so a one-word reply suffices, and confirm what the repo itself answers (branch protection implies the landing mode; CI config implies the gates) instead of asking open-ended:
+
+1. **Landing mode**: direct commits to main, direct commits to a designated branch (which one?), or a PR per track? With PRs: does the lead merge serially in plan order, or does a merge queue own the ordering? Infer the likely answer from branch protection, CONTRIBUTING docs, and recent history; when unsure, propose a PR per track (the safer guess on a protected repo).
+2. **Isolation**: a worktree per builder (default), or everyone in the main checkout? A shared tree forces the unique-ownership rules in `references/worktree-hygiene.md` and caps parallelism to disjoint file sets.
+3. **Boundaries**: anything out of scope or do-not-touch (directories, files, configs) beyond what the plan implies?
+4. **Landing cadence**: land each track as it converges without further asks (the default), or pause for approval before each landing or merge? Either way the gates are unconditional: review-before-landing and the CI watcher run on every landing regardless of cadence.
+
 ## Session Setup
 
-1. Create the task board (task list) from the decomposed plan.
-2. Spawn the fleet monitor first (see `references/fleet-monitor.md`).
-3. Fan out worktree workers for the independent tracks.
-4. Rely on harness notifications for subagent completion; the lead never sleeps or polls while waiting on a subagent - the `/no-sleep-waiting-on-subagents` skill states the rule, and spawn briefs propagate it to workers. (The fleet monitor's periodic sweeps are different: they probe for stalls, not completion.)
+1. Ask the four setup questions above; their answers configure everything below.
+2. Create the task board (task list) from the decomposed plan.
+3. Spawn the fleet monitor first (see `references/fleet-monitor.md`).
+4. Fan out builders for the independent tracks, in the isolation the interview chose: a worktree each by default, or the shared checkout under the unique-ownership rules in `references/worktree-hygiene.md`.
+5. Rely on harness notifications for subagent completion; the lead never sleeps or polls while waiting on a subagent - the `/no-sleep-waiting-on-subagents` skill states the rule, and spawn briefs propagate it to workers. (The fleet monitor's periodic sweeps are different: they probe for stalls, not completion.)
 
 ## Decompose, Then Parallelize
 
-- Map the dependency graph first. Only truly independent tracks run in parallel worktree subagents (`isolation: "worktree"` in Claude Code, or plain `git worktree add` elsewhere).
+- Map the dependency graph first. Only truly independent tracks run in parallel subagents - each in its own worktree by default (`isolation: "worktree"` in Claude Code, or plain `git worktree add` elsewhere); in a shared checkout, parallelism is capped to disjoint file sets under the unique-ownership rules in `references/worktree-hygiene.md`.
 - Give each agent an explicit file whitelist and do-not-touch boundary so branches merge without conflicts. When parts share files, they stay with one agent.
 - Decompose to the smallest independent units, then sweep the backlog (reviewer non-blockings, test gaps, doc halves of blocked tasks) for disjoint work to run alongside. One busy agent while the lead idles is under-delegation.
 - Maximize parallelism continuously and unprompted: whenever the live-stream count drops, re-scan the board and backlog for startable work before holding. Startable work includes:
@@ -45,7 +55,7 @@ The lead also stays responsive: it never runs a long foreground task itself (a b
 
   Idle capacity while unblocked work exists is a defect the user should never have to point out.
 - Prefer a fresh agent per task over reusing one agent for a queue: long-lived multi-task workers accumulate context until they degrade or need handovers. Reuse is justified only when concurrently-open tasks genuinely share files, and even then each task signals and lands separately.
-- Split growing waves into per-surface builders. When a wave's scope grows past roughly 8-10 items spanning disjoint surfaces (per-page or per-file territories), do not keep routing additions to the one running builder: ask it for a done/in-progress/not-started snapshot, let it keep the surfaces it is entangled with, and spawn sibling worktree builders for whole untouched surfaces with region-level grants on shared files. The same applies at wave start: if the item list already spans surfaces, start one builder per surface.
+- Split growing waves into per-surface builders. When a wave's scope grows past roughly 8-10 items spanning disjoint surfaces (per-page or per-file territories), do not keep routing additions to the one running builder: ask it for a done/in-progress/not-started snapshot, let it keep the surfaces it is entangled with, and spawn sibling builders (in the session's chosen isolation) for whole untouched surfaces with region-level grants on shared files. The same applies at wave start: if the item list already spans surfaces, start one builder per surface.
 
 ## Spawn Briefs
 
