@@ -54,6 +54,7 @@ On invocation, before creating the board or spawning anything, ask the user thes
   - prep work for the next phase
 
   Idle capacity while unblocked work exists is a defect the user should never have to point out.
+- No "next cycle" parking: "we'll pick this up next wave / next iteration / after this round" is not a state. Identified work (reviewer non-blockings, test gaps, incidental fixes included) goes on the board immediately and starts as soon as capacity allows; work that cannot start yet carries its named blocking dependency on the board. What is banned is the deferred note and the mental backlog entry - work that exists nowhere but in prose.
 - Prefer a fresh agent per task over reusing one agent for a queue: long-lived multi-task workers accumulate context until they degrade or need handovers. Reuse is justified only when concurrently-open tasks genuinely share files, and even then each task signals and lands separately.
 - Split growing waves into per-surface builders. When a wave's scope grows past roughly 8-10 items spanning disjoint surfaces (per-page or per-file territories), do not keep routing additions to the one running builder: ask it for a done/in-progress/not-started snapshot, let it keep the surfaces it is entangled with, and spawn sibling builders (in the session's chosen isolation) for whole untouched surfaces with region-level grants on shared files. The same applies at wave start: if the item list already spans surfaces, start one builder per surface.
 
@@ -100,7 +101,7 @@ Keep one subagent whose job is monitoring the others: it schedules periodic chec
 
 ## Incidental Findings
 
-Anything discovered along the way that is broken, stale, or wrong (failing tooling, drifted docs, an unrelated bug, a defective skill or memory) is never silently dropped. Either queue it on the board and fix it (incidental findings are prime disjoint work for idle capacity) or surface it to the user in the next report. Builders report out-of-territory findings in their completion signal instead of fixing them, so territories stay clean.
+Anything discovered along the way that is broken, stale, or wrong (failing tooling, drifted docs, an unrelated bug, a defective skill or memory) is never silently dropped - and never parked for a later cycle either. Board it immediately: startable findings are prime disjoint work for idle capacity and start as soon as a slot frees; blocked ones carry their named dependency; only work out of scope for the session goes to the user in the next report instead of the board. Builders report out-of-territory findings in their completion signal instead of fixing them, so territories stay clean.
 
 ## Sweep Continuously
 

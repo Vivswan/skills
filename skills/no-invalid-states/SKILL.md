@@ -1,6 +1,6 @@
 ---
 name: no-invalid-states
-description: Use when code guards invariants with repeated runtime checks, boolean lifecycle flags, or "must call X before Y" comments, or when asked to make invalid states unrepresentable, parse-don't-validate, or strengthen types.
+description: Use when code or a design guards invariants with repeated runtime checks, lifecycle flags, or the same guard at every consumer, or when asked to make invalid states unrepresentable or parse-don't-validate.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -83,7 +83,36 @@ untrusted or raw value
   -> trusted internal APIs (no re-checking)
 ```
 
-### 3. Choose the strongest idiomatic representation
+### 3. Resolve at the ownership level
+
+Before choosing a representation, find who MUTATES the state behind the
+invariant. The resolution belongs at those mutation points, not at the
+consumers. The telltale is N call sites carrying the same guard, or a flag
+that every consumer must remember to honor: validation at N read points
+where prevention at the few write points would do.
+
+Worked example: a stored credential goes stale when its associated endpoint
+URL changes. The consumer-side design makes all six request paths check a
+`staleCredential` flag before using it: six guards, six error surfaces, and
+every future request path must remember the check. The owner-side design
+routes every URL change - settings UI save, config file edit, import -
+through one owning transition that resolves the question at that moment
+("keep this credential for the new endpoint?"). Afterwards no request path
+needs a staleness guard; runtime authentication failures stay handled, as
+the dynamic condition they are.
+
+Two rules make the owner-side fix sound:
+
+- Enumerate ALL mutation points before claiming completeness. A
+  consumer-side check accidentally covers write paths you forgot; an
+  owner-side fix must route each one through the owning transition
+  explicitly (a GUI and the settings file it edits are two paths, not one).
+- The resolution at the mutation point need not be a type: a validating
+  transition, a normalization, or a question put to the user at the moment
+  the intent is expressed all work. The next step covers the cases where a
+  stronger representation is the right mechanism.
+
+### 4. Choose the strongest idiomatic representation
 
 Pick by situation, not by favorite mechanism:
 
@@ -112,7 +141,7 @@ If the language at hand is not covered, map the situation table onto whatever
 the language offers: sealed hierarchies, smart constructors, immutability,
 and module privacy exist almost everywhere in some form.
 
-### 4. Refactor
+### 5. Refactor
 
 For each accepted candidate, work through this checklist:
 
@@ -143,7 +172,7 @@ Rules while refactoring:
   impossible field combinations, or clarifies the API contract. Readability
   beats type-system cleverness.
 
-### 5. Test and verify
+### 6. Test and verify
 
 Update or add tests for valid state transitions, rejected boundary input,
 exhaustive state handling, and behavior preservation. Add compile-fail or
@@ -162,7 +191,7 @@ workflows) rather than assuming command names. Typical gates:
 Do not introduce a new type checker or dependency just for this skill unless
 that is genuinely appropriate for the repository.
 
-### 6. Report
+### 7. Report
 
 When asked to modify code, implement the changes rather than describing
 them. At completion, report:
@@ -190,8 +219,13 @@ reviewer to flag:
   "must call X before Y" ordering enforced at runtime, repeated validation
   of already-validated values, and field combinations that should be
   impossible to represent
+- consumer-side guards that an owner-side resolution would remove: the same
+  check repeated at N call sites, or a flag every consumer must remember to
+  honor, when the state has enumerable mutation points where the question
+  could be resolved once
 - for each finding, the stronger representation (sum type, newtype,
-  typestate, validating constructor) that would remove the invalid state
+  typestate, validating constructor) or owner-side resolution that would
+  remove the invalid state
 
 Triage the resulting findings with the workflow above.
 
