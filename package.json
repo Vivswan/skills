@@ -7,6 +7,8 @@
     "prepare": "husky",
     "typecheck": "tsc -p .",
     "validate": "bun scripts/validate-skills.ts",
+    "link": "bun scripts/link-agents.ts",
+    "add": "bun scripts/link-agents.ts --add",
     "smoke": "bun scripts/smoke-test.ts",
     "test": "bun test scripts",
     "test:cli": "bun scripts/cli-discovery-test.ts",
