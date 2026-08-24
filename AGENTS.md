@@ -2,6 +2,8 @@
 
 This file provides guidance to AI coding agents working in this repository. `CLAUDE.md`, `.github/copilot-instructions.md`, and `.github/agents.md` are symlinks to this file, so edit only here.
 
+Everything above the marker at the bottom of this file is managed by Vivswan/repo-platform and overwritten by template sync; this repository's own guidance belongs below the marker.
+
 ## Project
 
 Skills: Installable, plugin-ready skills that give coding agents disciplined workflows, from code standards and review gates to multi-agent orchestration
@@ -10,6 +12,7 @@ Skills: Installable, plugin-ready skills that give coding agents disciplined wor
 
 - Runtime and package manager: bun (`bun install`, `bun test`, `bun run <script>`)
 - See `package.json` scripts for the available commands.
+- `.bun-version` pins the toolchain and is managed by the template: sync overwrites it, so version overrides belong in the repo-owned workflows' explicit version inputs.
 
 ## Conventions
 
