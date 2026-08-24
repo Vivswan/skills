@@ -1,6 +1,6 @@
-# Managed by Vivswan/repo-platform. Path prefixes exempt from
-# the check-typography action, one per line, relative to the repository root.
-# Template sync overwrites this file; repository-specific exemptions belong
+# This file is managed by Vivswan/repo-platform.
+# Local edits may be replaced during template updates.
+# Path prefixes exempt from the check-typography action, one per line,
+# relative to the repository root; repository-specific exemptions belong
 # in .typography-allow.local (same format, repo-owned, read alongside it).
 
-# END REPO-PLATFORM MANAGED
