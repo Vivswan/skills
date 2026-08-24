@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**"]
+    "includes": ["**", "!.github/repo-platform-manifest.json"]
   },
   "formatter": {
     "enabled": true,
