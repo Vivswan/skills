@@ -1,31 +1,20 @@
 # Natural writing
 
-Write and edit prose that avoids the documented signs of AI writing, based on
-[Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing).
+Write and edit prose that avoids the documented signs of AI writing, based on [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing).
 
-This skill is explicit-invocation-only: agents load it when you invoke it
-(e.g. `/natural-writing` in Claude Code), not on their own.
+This skill is explicit-invocation-only: agents load it when you invoke it (e.g. `/natural-writing` in Claude Code), not on their own.
 
 ## What it does
 
-- Drafts new text (docs, articles, READMEs, emails, PR descriptions) that
-  avoids the cataloged AI tells
+- Drafts new text (docs, articles, READMEs, emails, PR descriptions) that avoids the cataloged AI tells
 - Rewrites existing text to strip the tells while preserving facts and voice
-- Audits text and reports which signs appear, with the false-positive caveats
-  the source page insists on
+- Audits text and reports which signs appear, with the false-positive caveats the source page insists on
 
 ## How it works
 
-The skill keeps a distilled snapshot of the full Wikipedia field guide in
-`references/signs-catalog.md`, pinned to a specific page revision and sync
-date, plus term lists in `references/words-to-avoid.md`. Because the
-Wikipedia page changes as models and community observations change, the
-workflow prefers fetching the live page when network access is available and
-falls back to the snapshot offline. `SKILL.md` records the pinned revision
-and documents how to update the snapshot when the page moves on.
+The skill keeps a distilled snapshot of the full Wikipedia field guide in `references/signs-catalog.md`, pinned to a specific page revision and sync date, plus term lists in `references/words-to-avoid.md`. Because the Wikipedia page changes as models and community observations change, the workflow prefers fetching the live page when network access is available and falls back to the snapshot offline. `SKILL.md` records the pinned revision and documents how to update the snapshot when the page moves on.
 
-House rule on top of the Wikipedia catalog: no dash-as-punctuation at all
-(no em dashes, and no en-dash or spaced-hyphen substitutes).
+House rule on top of the Wikipedia catalog: no dash-as-punctuation at all (no em dashes, and no en-dash or spaced-hyphen substitutes).
 
 ## Install
 

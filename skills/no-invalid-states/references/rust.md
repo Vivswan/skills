@@ -1,7 +1,6 @@
 # Rust Strategies
 
-Rust has the strongest toolkit for this skill: ownership, move semantics,
-and zero-cost type-level state make many invariants free to enforce.
+Rust has the strongest toolkit for this skill: ownership, move semantics, and zero-cost type-level state make many invariants free to enforce.
 
 Prefer, roughly in order of reach:
 
@@ -53,8 +52,7 @@ impl Connection<Connected> {
 }
 ```
 
-Calling `send` on a disconnected connection is now a compile error, and the
-`connected: bool` checks disappear.
+Calling `send` on a disconnected connection is now a compile error, and the `connected: bool` checks disappear.
 
 ## Consuming transitions
 
@@ -72,8 +70,7 @@ fn initialize(&mut self) {
 }
 ```
 
-Consuming `self` makes reuse of the stale state impossible: the old value is
-moved away, so the borrow checker rejects any later use of it.
+Consuming `self` makes reuse of the stale state impossible: the old value is moved away, so the borrow checker rejects any later use of it.
 
 ## Newtypes at the boundary
 
@@ -92,9 +89,7 @@ impl TryFrom<String> for UserId {
 }
 ```
 
-Keep the inner field private so the only way to obtain a `UserId` is through
-validation. Internal APIs then take `UserId`, not `&str`, and never
-re-validate.
+Keep the inner field private so the only way to obtain a `UserId` is through validation. Internal APIs then take `UserId`, not `&str`, and never re-validate.
 
 ## Enums over flag clusters
 
@@ -107,12 +102,8 @@ enum Payment {
 }
 ```
 
-instead of a struct with `card_number: Option<_>`, `expiry: Option<_>`, and
-`po_number: Option<_>` plus a comment about which combinations are legal.
+instead of a struct with `card_number: Option<_>`, `expiry: Option<_>`, and `po_number: Option<_>` plus a comment about which combinations are legal.
 
 ## What to avoid
 
-Do not reach for `Rc<RefCell<_>>`, `Arc<Mutex<_>>`, cloning, heap
-allocation, or `unsafe` merely to dodge designing ownership correctly. If a
-typestate refactor forces one of these in, the refactor is wrong-shaped for
-this code; fall back to an enum or separate types.
+Do not reach for `Rc<RefCell<_>>`, `Arc<Mutex<_>>`, cloning, heap allocation, or `unsafe` merely to dodge designing ownership correctly. If a typestate refactor forces one of these in, the refactor is wrong-shaped for this code; fall back to an enum or separate types.

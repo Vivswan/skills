@@ -32,12 +32,8 @@ This keeps the repo compatible with:
 1. Copy the starter files from [`template/`](../template).
 2. Create `skills/<skill-name>/`.
 3. Rename placeholders so the skill name, folder name, and plugin manifest name match.
-4. Fill in `SKILL.md` with activation criteria, workflow steps, and fallback behavior.
-   Keep the frontmatter `description` a short trigger ("Use when ..."), and lead
-   with worked examples, scenarios, or concrete commands rather than abstract prose.
-5. Create `agents/openai.yaml` with an `interface` block mirroring the codex
-   manifest (required; add `policy.allow_implicit_invocation: false` for
-   explicit-invocation-only skills).
+4. Fill in `SKILL.md` with activation criteria, workflow steps, and fallback behavior. Keep the frontmatter `description` a short trigger ("Use when ..."), and lead with worked examples, scenarios, or concrete commands rather than abstract prose.
+5. Create `agents/openai.yaml` with an `interface` block mirroring the codex manifest (required; add `policy.allow_implicit_invocation: false` for explicit-invocation-only skills).
 6. Add a human-facing `README.md`.
 7. Update the root [`README.md`](../README.md) catalog.
 8. List the new skill in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json).
@@ -45,15 +41,9 @@ This keeps the repo compatible with:
 
 ## Contributing Criteria to Reviews
 
-A skill contributes to `/rubber-duck-review` second-opinion passes by
-declaring a `## Review Criteria` section in its `SKILL.md` - that alone
-joins it to every review; there is no registry to update. Keep the section
-short: a few bullets the reviewer can act on, plus a pointer to the skill's
-own workflow for triaging findings. The smoke test rejects a section without list items.
+A skill contributes to `/rubber-duck-review` second-opinion passes by declaring a `## Review Criteria` section in its `SKILL.md` - that alone joins it to every review; there is no registry to update. Keep the section short: a few bullets the reviewer can act on, plus a pointer to the skill's own workflow for triaging findings. The smoke test rejects a section without list items.
 
-Criteria that only apply in a specific context use a differently named
-heading (e.g. `## Orchestration Review Criteria`) and are folded into
-reviews by the skill that owns that context instead of being auto-discovered.
+Criteria that only apply in a specific context use a differently named heading (e.g. `## Orchestration Review Criteria`) and are folded into reviews by the skill that owns that context instead of being auto-discovered.
 
 ## Compatibility Rules
 

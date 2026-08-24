@@ -1,10 +1,6 @@
 # Python Strategies
 
-Python applies the same architecture, with the caveat that its static
-guarantees are only as strong as the type checker the project runs. Check
-`pyproject.toml` or CI for mypy or pyright before leaning on type-level
-enforcement; without a checker, prefer runtime-enforced constructions
-(frozen dataclasses, validating factories) that fail fast.
+Python applies the same architecture, with the caveat that its static guarantees are only as strong as the type checker the project runs. Check `pyproject.toml` or CI for mypy or pyright before leaning on type-level enforcement; without a checker, prefer runtime-enforced constructions (frozen dataclasses, validating factories) that fail fast.
 
 Prefer:
 
@@ -17,8 +13,7 @@ Prefer:
 - `Protocol` for behavioral contracts
 - `typing.assert_never` for exhaustive `match` handling
 - strict pyright or mypy where the project supports it
-- boundary validation (pydantic, marshmallow, or plain parsing functions,
-  whatever the repo already uses) before constructing domain objects
+- boundary validation (pydantic, marshmallow, or plain parsing functions, whatever the repo already uses) before constructing domain objects
 
 ## State-specific types
 
@@ -61,8 +56,7 @@ def send(
     connection.socket.send(message)
 ```
 
-Under a type checker, `send` on a disconnected connection is now a static
-error, and `socket` is never `None` where it is used.
+Under a type checker, `send` on a disconnected connection is now a static error, and `socket` is never `None` where it is used.
 
 ## Validated values with NewType
 
@@ -79,9 +73,7 @@ def parse_user_id(value: str) -> UserId:
     return UserId(value)
 ```
 
-Internal functions accept `UserId`; only the parser accepts `str`. The
-checker then flags any code path that tries to pass an unvalidated string
-inward.
+Internal functions accept `UserId`; only the parser accepts `str`. The checker then flags any code path that tries to pass an unvalidated string inward.
 
 ## Exhaustive state handling
 
@@ -99,14 +91,8 @@ def handle(state: State) -> None:
             assert_never(state)
 ```
 
-Adding a new state class now produces a type error at every match that does
-not handle it.
+Adding a new state class now produces a type error at every match that does not handle it.
 
 ## What to avoid
 
-Do not imitate Rust typestate mechanically when ordinary classes or unions
-are clearer; Python has no move semantics, so a "consumed" old state object
-still exists and a determined caller can reuse it. Frozen dataclasses,
-factories, and checker-enforced signatures are the idiomatic strength here.
-Avoid `# type: ignore` and `cast()` as pressure valves; each one reopens the
-hole the refactor was meant to close.
+Do not imitate Rust typestate mechanically when ordinary classes or unions are clearer; Python has no move semantics, so a "consumed" old state object still exists and a determined caller can reuse it. Frozen dataclasses, factories, and checker-enforced signatures are the idiomatic strength here. Avoid `# type: ignore` and `cast()` as pressure valves; each one reopens the hole the refactor was meant to close.
