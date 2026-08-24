@@ -90,6 +90,7 @@ Both modes:
 
 - Review before landing, never after: findings must be able to block the landing. Where installed, the `/review-before-commit` skill defines this gate (green tree first, independent background reviews, triage, convergence).
 - After every push or merge (a direct landing, a PR update, or a PR merge), spawn a background CI watcher that reports pass/fail with failing-job logs. Never fire-and-forget a push, and never watch CI inline. Where installed, the `/watch-ci-after-push` skill defines the watcher (run discovery, the full-SHA gotcha, the report format).
+- The landing action itself is exit-conditioned, never chained: read the gate result and STOP, then merge and push in a separate command only after the gate itself reports green - the gate's own exit code AND its verdict, not the exit status of whatever command displayed the log, and a review gate is green only when its findings are triaged, not merely when its process exits 0. A compound `tail gate.log; git merge && push` ships a red-gated commit regardless of what the tail showed, because `&&` chains on the tail's exit status, not the gate's. And every rebase gets the shared-file content check from `references/fleet-monitor.md` ("the rebase is the risk, not the intent"): a clean replay can silently drop a prior landing's lines in files both tracks edit, with no conflict marker to warn anyone.
 
 ## Post-Landing Integration Review
 
