@@ -3,4 +3,3 @@
 # Path prefixes exempt from the check-typography action, one per line,
 # relative to the repository root; repository-specific exemptions belong
 # in .typography-allow.local (same format, repo-owned, read alongside it).
-
