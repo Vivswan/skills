@@ -75,7 +75,7 @@ Before creating the board or spawning anything, ask the user these in ONE messag
 
 ## 5. Babysit Every PR to Comment Convergence
 
-Every open PR in the session runs the babysit loop from the `/pr-and-issue-discipline` skill: draft until converged, every review round triaged the same cycle, thread state read via GraphQL `isResolved`, and the draft flip in both directions (ready on convergence, back to draft on commit-requiring work). Fixes route per Review Loops (4). What the fleet adds on top:
+Every open PR in the session runs the babysit loop from the `/pr-and-issue-discipline` skill: every review round triaged the same cycle, thread state read via GraphQL `isResolved`, and the draft flip in both directions (ready on convergence, back to draft on commit-requiring work). Fixes route per Review Loops (4). What the fleet adds on top:
 
 - **A comment whose fix belongs to another track's territory** is replied-and-resolved with the routing named, and the receiving track's brief carries it.
 
