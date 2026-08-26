@@ -24,7 +24,7 @@
  * create-if-absent, and show reads without the lock.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { linkSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
@@ -185,27 +185,56 @@ function loadLedger(file: string): Ledger {
 }
 
 function tempPath(file: string): string {
-  return join(dirname(file), `.${basename(file)}.${process.pid}.${Date.now().toString(36)}.tmp`);
+  return join(
+    dirname(file),
+    `.${basename(file)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
+  );
 }
 
 /**
- * Atomic write: temp file in the same directory, then rename, so a reader
- * never sees a torn file. Callers mutating an existing ledger must hold the
- * ledger lock; rename alone does not prevent lost updates.
+ * Create and fill a temp file exclusively. wx (O_CREAT|O_EXCL) refuses to
+ * open through anything already at the path - including a symlink planted by
+ * another writer in a co-writable directory - and the random suffix makes
+ * pre-creating the path impractical in the first place. EEXIST retries with
+ * a fresh name; any other failure cleans up and stays loud.
+ */
+function writeTempExclusive(file: string, data: string): string {
+  for (;;) {
+    const temp = tempPath(file);
+    try {
+      writeFileSync(temp, data, { flag: "wx" });
+      return temp;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        continue;
+      }
+      try {
+        unlinkSync(temp);
+      } catch {
+        // The open itself failed; nothing was created.
+      }
+      throw error;
+    }
+  }
+}
+
+/**
+ * Atomic write: exclusive temp file in the same directory, then rename, so a
+ * reader never sees a torn file. Callers mutating an existing ledger must
+ * hold the ledger lock; rename alone does not prevent lost updates.
  */
 function saveLedger(file: string, ledger: Ledger): void {
   if (heldLock !== null) {
     assertLockStillHeld();
   }
-  const temp = tempPath(file);
+  const temp = writeTempExclusive(file, `${JSON.stringify(ledger, null, 2)}\n`);
   try {
-    writeFileSync(temp, `${JSON.stringify(ledger, null, 2)}\n`);
     renameSync(temp, file);
   } finally {
     try {
       unlinkSync(temp);
     } catch {
-      // ENOENT after a successful rename (or a failed write): nothing to clean.
+      // ENOENT after a successful rename: nothing to clean.
     }
   }
 }
@@ -216,8 +245,7 @@ function saveLedger(file: string, ledger: Ledger): void {
  * Returns false when the ledger already existed.
  */
 function createLedgerExclusive(file: string, ledger: Ledger): boolean {
-  const temp = tempPath(file);
-  writeFileSync(temp, `${JSON.stringify(ledger, null, 2)}\n`);
+  const temp = writeTempExclusive(file, `${JSON.stringify(ledger, null, 2)}\n`);
   try {
     linkSync(temp, file);
     return true;

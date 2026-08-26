@@ -1,15 +1,17 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { ROOT } from "./lib";
 
 // Contract tests for the orchestrator-mode session ledger. Each test drives
@@ -375,6 +377,24 @@ describe("atomic writes", () => {
     run(file, "flag", "builder-a", "text");
     const leftovers = readdirSync(dir).filter((name) => name.endsWith(".tmp"));
     expect(leftovers).toEqual([]);
+  });
+
+  test("a planted temp-shaped symlink is neither followed nor fatal", () => {
+    const file = freshFile();
+    run(file, "init");
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "precious");
+    // Shape of the historical predictable temp name: .<basename>.<pid>.<suffix>.tmp
+    const planted = join(dir, `.${basename(file)}.12345.abcdef.tmp`);
+    symlinkSync(victim, planted);
+
+    const r = runJson(file, "flag", "builder-a", "symlink probe");
+    expect(r.code).toBe(0);
+    // The victim was never truncated or overwritten through the symlink,
+    // and the planted link itself is untouched.
+    expect(readFileSync(victim, "utf-8")).toBe("precious");
+    expect(lstatSync(planted).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(1);
   });
 
   test("racing inits create the ledger exactly once and never clobber", async () => {
