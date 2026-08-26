@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 /**
- * Doc-drift gate for three doc-to-script surfaces. What it pins - exactly the
- * map below, nothing broader:
+ * Doc-drift gate for the doc-to-script surfaces in the map below - exactly
+ * those, nothing broader:
  *
  * - skills/orchestrator-mode/references/fleet-monitor.md <-> the four fleet
  *   scripts (sweep.mts, probe.mts, ledger.mts, baseline.mts): every CONTRACT
@@ -22,6 +22,11 @@ import { basename, join } from "node:path";
  *   full-SHA discovery command, the exit-code 0/1/2 semantics at their exit
  *   sites, the failing-log excerpt command, and the superseded/FAIL/skip
  *   reporting literals.
+ * - skills/watch-ci-after-push/SKILL.md <-> its
+ *   scripts/wait-for-pr-event.mts: the invocation shape, the --until event
+ *   set with its default, the interval defaults and floor, the
+ *   baseline-first discipline, and the exit-code 0/1/2/3 semantics at their
+ *   emission sites.
  *
  * Non-contract citations (external commands like pgrep/ps, git idioms, path
  * examples) are deliberately unpinned. Each entry must appear VERBATIM in
@@ -280,6 +285,63 @@ const SURFACES: Record<string, Surface> = {
       {
         doc: "Exit 2: discovery or gh itself failed",
         script: '[ "$gherr" -eq 1 ] && exit 2',
+      },
+    ],
+  },
+  "watch-ci-after-push/SKILL.md <-> wait-for-pr-event.mts": {
+    docPath: join(WATCH_CI, "SKILL.md"),
+    scriptPath: join(WATCH_CI, "scripts", "wait-for-pr-event.mts"),
+    tokens: [
+      {
+        doc: 'bun "<skill-dir>/scripts/wait-for-pr-event.mts" <pr-number> --repo <owner/name>',
+        script:
+          '"usage: wait-for-pr-event.mts <pr-number> [--until <set>] [--interval <sec>] [--timeout <sec>] [--repo <owner/name>]"',
+      },
+      {
+        doc: "`comment,review,checks,merge`",
+        script: 'const WATCHABLE = ["comment", "review", "checks", "merge"] as const;',
+      },
+      {
+        doc: "(default: `comment,review`)",
+        script: 'const DEFAULT_UNTIL = "comment,review";',
+      },
+      {
+        doc: "default 45, minimum 15",
+        script: "const DEFAULT_INTERVAL_SECONDS = 45;",
+      },
+      {
+        doc: "default 45, minimum 15",
+        script: "const MIN_INTERVAL_SECONDS = 15;",
+      },
+      {
+        doc: "via GraphQL `isResolved`",
+        script: "nodes { isResolved }",
+      },
+      {
+        doc: "exits 2 instead of waiting when that read fails",
+        script: "baseline read failed; refusing to wait on a PR it cannot see",
+      },
+      {
+        doc: "0 | a watched event happened",
+        script: "for (const line of deltas) print(line);\n        process.exit(0);",
+      },
+      {
+        doc: "1 | the PR merged or closed while that outcome was not watched; the wait's job ended",
+        script: "but merge is not watched; the wait ended`,\n    );\n    process.exit(1);",
+      },
+      {
+        doc: "1 | the PR merged or closed while that outcome was not watched; the wait's job ended",
+        script: "closed without merging; the wait ended`);\n    process.exit(1);",
+      },
+      {
+        doc: "2 | usage or tooling error (bad args, gh missing or failing)",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "writeFileSync(2, `${message}\\n${USAGE}\\n`);\n  process.exit(2);",
+      },
+      {
+        doc: "3 | timeout with no watched change",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "print(`final:    ${renderSnapshot(last)}`);\n      process.exit(3);",
       },
     ],
   },
