@@ -10,6 +10,15 @@ metadata:
 
 > Categorically eliminate the problem - through better architecture or a better choice of data structures - so the failure class cannot recur, instead of fixing its instances one at a time.
 
+When you intervene to correct an agent, or fix the same failure again, respond at the highest rung you can reach, in order of value:
+
+1. Categorically eliminate the problem - better architecture or a better choice of data structures. The class cannot recur.
+2. Turn it into a lint rule or test so CI catches it. The class recurs but cannot land.
+3. Turn it into a skill or rule. The class recurs but the next agent knows.
+4. Have humans review for it. The weakest rung - a last resort, not a plan.
+
+This skill is itself a rung-3 artifact: it exists so the next agent knows to reach for rung 1.
+
 When the same failure class gets patched twice, or a countermeasure list keeps growing, stop patching pointwise: find the architecture, data-structure, or substrate change that makes the whole class unrepresentable, and prefer it even when it is a big refactor.
 
 A fix that looks finished and a fix that removes the class are different deliverables. The generalization question that tests whether a fix clears the bar above:
@@ -20,6 +29,7 @@ A silent pass means the class is still alive. So does a loud-but-late failure: a
 
 ## When to Apply
 
+- you just intervened to correct an agent, or corrected the same behavior twice
 - the fix being written is the second (or later) patch on the same kind of failure
 - a doc, checklist, or warning-comment list of traps grew again in this change
 - the fix enumerates known-bad cases ("also handle X", "also escape Y") instead of removing what admits them
@@ -46,6 +56,8 @@ New members keep appearing because something weak admits them: two artifacts syn
 | a count or boolean standing in for a set or richer state | the set or the state itself |
 | state living in prose, memory, or scrollback | a persisted structured store |
 
+Every row is a rung-1 move except the trap-doc row, which is rung 2: an executable check stops the class from landing even though it can still recur.
+
 ### 4. Ship the class-retiring change
 
 The class-retiring change - the categorical elimination, not the instance fix - is the deliverable; build it now, even when it is a big refactor. Only when urgency forces it does the pointwise fix ship first - and then the class-retiring change is boarded immediately as its own task on the active plan or board, never parked as a note (a note is state kept in prose: the exact substrate this skill exists to retire), and the work is reported as incomplete until the class is retired.
@@ -71,5 +83,6 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
 - fixes that are the second-or-later patch on the same failure class: the diff handles one more instance of a failure the codebase has been patched for before
 - countermeasure, trap, or known-bad-case lists (docs, checklists, warning comments, enumerated guards) that grew in this diff
 - for each finding, name the substrate change - architecture, data structure, or tooling - that would retire the whole class, and apply the generalization question: if a new member of the class appears tomorrow, is it prevented before shipping, does it fail loudly but late, or does it silently pass? Only prevention - the invalid state cannot be built - retires the class
+- for each fix, name the rung it sits on (1 categorical elimination, 2 caught by CI, 3 skill or rule, 4 human review) and whether a higher rung was reachable
 
 Triage the resulting findings with the workflow above.
