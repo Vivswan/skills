@@ -14,7 +14,8 @@ Every brief includes:
 6. **The comment rules and the TODO ban** (below). Comments only for what code cannot show; where the `/code-standards` skill is installed, the brief points builders at it for the full house standards.
 7. **The out-of-territory rule:** anything broken or wrong found outside the agent's file whitelist is reported in the completion signal, never fixed silently - a silent out-of-territory edit collides with another agent's territory, and a silently dropped finding is lost.
 8. **The inbox-reconciliation rule** (below): the final signal enumerates every lead message received, with one line of evidence per directive.
-9. **Scratch files go to /tmp, never the worktree.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
+9. **For long-running service agents (the fleet monitor, long-horizon watchers): the standing-state channel.** The brief names the session ledger as where standing state arrives - re-read it every sweep - and requires every lead directive received as a message to be acknowledged in the agent's NEXT report. The delivery rule and its lead side live in `references/fleet-monitor.md`, Reporting Discipline.
+10. **Scratch files go to /tmp, never the worktree.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
 
 ## The Stop-and-Wait Ban
 

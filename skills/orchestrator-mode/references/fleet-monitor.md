@@ -99,6 +99,18 @@ Two disaster-shaped non-disasters: **HEAD == the measured default ref (the sweep
 
 ## Reporting Discipline
 
+- **Standing state lives in the ledger, not in messages.** A send that reports success proves QUEUING, not delivery: a monitor mid-turn drains its inbox only at its next tool round. One production session, sketched:
+
+  ```text
+  lead    -> ~10 directives over 6h (adjudications, state corrections,
+             a hold-silent order); every send reported success
+  monitor -> inbox drains hours later in ONE batch; meanwhile it re-raises
+             closed items, quotes a superseded base rate, and sends a
+             mistaken stand-down - hours of reasoning on stale premises
+  ```
+
+  Anything the monitor must honor across sweeps goes into the ledger in the shape it represents - "parked on purpose" is a `state` transition, a scope adjudication is a `grant` with its exact wording, a closed finding is a `retract` - and the monitor re-reads it every sweep; a message is a one-shot exchange, never a standing order. A directive the ledger cannot represent (the hold-silent order above, say) stays a message and is in force only under the next rule.
+- **An unacknowledged directive is undelivered.** A directive sent as a message is in force only once acknowledged; until then the sender treats it as not delivered and re-sends it (or gives it a ledger shape the next sweep must read). The monitor's half: acknowledge every lead directive in its next report.
 - Never re-send an unchanged strict call or an unchanged flag: it is narration, and it trains the lead to skim the next one.
 - Retract the moment a call goes void - **a standing flag that is void is worse than no flag** - and re-measure immediately before sending a call or its retraction alike, because both are equally perishable (a dirty state once lasted under 43 seconds, spanning the two commands of a single sweep).
 - When messages cross, answer "already sent at HH:MM" rather than staying silent; silence reads as an unmet obligation (seven crossings in one shift).
