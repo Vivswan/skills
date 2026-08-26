@@ -10,11 +10,12 @@ import { join } from "node:path";
  * below must appear VERBATIM in both the doc and its script source; a
  * one-sided rename fails this test until doc and script move together.
  *
- * Tokens are kept specific (field names, bracketed CLI placeholders, quoted
- * schema literals) so they cannot self-match on unrelated prose. Where the
- * bare token would self-match trivially (CLI verbs like "count" or "state"),
- * the entry pins a longer distinctive form per side: the doc's usage-line
- * fragment and the script's dispatch literal.
+ * Entries pin a distinctive form PER SIDE: the doc side is a usage-line or
+ * sample-JSON fragment, and the script side is a CODE-SHAPED fragment (an
+ * object-literal key at the emission site, a dispatch literal, a quoted
+ * string) - never a bare word that a stale comment could satisfy. The gate's
+ * job is doc-to-source text pinning only; actually executing the scripts is
+ * the per-script *.test.ts suites' job.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -27,21 +28,26 @@ type CitedToken = string | { doc: string; script: string };
 
 const CITED_TOKENS: Record<string, CitedToken[]> = {
   "sweep.mts": [
-    "--transcripts",
-    "headSha",
-    "aheadBehind",
-    "treeFileCount",
-    "dirtyCount",
-    "untrackedCount",
-    "newestDirtyMtime",
-    "statusHash",
-    "defaultRef",
-    "sizeBytes",
-    "lastEventAgeSeconds",
-    "lastEventType",
+    { doc: "--transcripts", script: '"--transcripts"' },
+    { doc: "headSha", script: "headSha," },
+    { doc: "aheadBehind", script: "aheadBehind," },
+    { doc: "treeFileCount", script: "treeFileCount," },
+    { doc: "dirtyCount", script: "dirtyCount: dirtyPaths.length" },
+    { doc: "untrackedCount", script: "untrackedCount: untrackedPaths.length" },
+    { doc: "newestDirtyMtime", script: "newestDirtyMtime: newestDirtyMtime(" },
+    { doc: "statusHash", script: "statusHash," },
+    { doc: '"defaultRef":{"ok":false', script: "defaultRef: { ok: false" },
+    { doc: '"lsof":{"ok":false', script: "lsof: { ok: false" },
+    { doc: '"control":"FAILED"', script: 'control: "FAILED"' },
+    { doc: "sizeBytes", script: "sizeBytes: stat.size" },
+    { doc: "lastEventAgeSeconds", script: "lastEventAgeSeconds:" },
+    { doc: "lastEventType", script: "lastEventType: lastEventType(" },
+    { doc: "processes", script: "processes," },
+    { doc: '"pid"', script: "pid: entry.pid" },
+    { doc: '"command"', script: "command: entry.command" },
+    { doc: '"state"', script: "state: states.get(" },
   ],
   "probe.mts": [
-    "json-keys",
     "<base-ref>",
     "<table.json>",
     '"expect"',
@@ -52,12 +58,10 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: "probe.mts tokens", script: 'case "tokens":' },
   ],
   "ledger.mts": [
-    "dormant-by-design",
-    "landing-gate",
-    "landed-swept",
-    "retract",
-    "grant",
-    "lockfile",
+    { doc: "dormant-by-design", script: '"dormant-by-design"' },
+    { doc: "landing-gate", script: '"landing-gate"' },
+    { doc: "landed-swept", script: '"landed-swept"' },
+    { doc: "lockfile", script: "${file}.lock" },
     { doc: "ledger.json init", script: 'case "init":' },
     { doc: "state <worker> <state>", script: 'case "state":' },
     { doc: "flag <worker> <text>", script: 'case "flag":' },

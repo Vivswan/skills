@@ -30,6 +30,8 @@ gh stack merge <pr> --yes --squash   # method explicit on the first merge
 gh stack sync --prune                # restack the remainder, drop merged branches
 ```
 
+Read `gh stack sync`'s verdict in its OUTPUT, never its exit code: it can print "Sync aborted" and still exit 0, leaving successors silently stale. On an aborted sync, stop and reconcile before continuing - the same exit-code-vs-verdict rule the skill's Land section states for gates.
+
 Worktree interplay: git refuses to check out a branch already checked out in a worktree, and builders hold their layer branches in theirs. So after `init`/`add` create the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree; and the lead runs `rebase --upstack`/`sync`/`merge` from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live. Layer commits happen only on that layer's branch in its builder's worktree; the lead's stack operations are the only cross-layer writes.
 
 ## A PR per Track (PR repos)
