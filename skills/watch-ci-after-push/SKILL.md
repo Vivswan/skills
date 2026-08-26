@@ -55,8 +55,9 @@ Fallback without subagents: this skill ships `scripts/watch-ci.sh` (the path is 
 ```bash
 bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1
 # exit 0: latest run per workflow green (older re-triggered runs are reported
-# as superseded, not judged); 1: failures (log excerpts in the file); 2: no
-# runs registered or gh failed
+# as superseded, not judged); 1: some latest run ended with a non-success,
+# non-skipped conclusion (log excerpts in the file); 2: no runs registered or
+# gh failed
 ```
 
 ### 3. Report

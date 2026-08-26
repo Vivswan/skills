@@ -8,9 +8,11 @@ import { ROOT } from "./lib";
 // branch of the script, pinning the contract its reviews established - a red
 // run exits 1, a gh operational failure exits 2 (never 1), a green fleet
 // exits 0, and a red run outranks a gh hiccup. The unit of judgment is the
-// workflow: only the latest run per workflow is judged, and older
-// re-triggered runs are reported as superseded without affecting the exit
-// code. A fake `sleep` keeps the discovery-retry scenarios instant.
+// workflow: only the latest run per workflow is judged (re-decided by a
+// single post-watch re-discovery, so mid-watch retriggers supersede rather
+// than FAIL), and older re-triggered runs are reported as superseded without
+// affecting the exit code. A fake `sleep` keeps the discovery-retry
+// scenarios instant.
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.sh");
 
@@ -24,7 +26,7 @@ violate() { echo "$*" >> "\${GH_VIOLATIONS}"; }
 jq_view='"\\(.conclusion)\\t\\(.name)"'
 jq_list='.[] | "\\(.databaseId)\\t=\\(.workflowDatabaseId)\\t\\(.workflowName)"'
 if [ "$1 $2" = "run list" ]; then
-  if [ "$*" != "run list --commit deadbeef --json databaseId,workflowDatabaseId,workflowName --jq $jq_list" ]; then
+  if [ "$*" != "run list --commit deadbeef --limit 100 --json databaseId,workflowDatabaseId,workflowName --jq $jq_list" ]; then
     violate "list: $*"; exit 64
   fi
   [ "\${GH_LIST_EXIT:-0}" -ne 0 ] && exit "\${GH_LIST_EXIT}"
@@ -33,7 +35,13 @@ if [ "$1 $2" = "run list" ]; then
     n=$((n + 1)); printf '%s' "$n" > "\${GH_LIST_COUNTER}"
     [ "$n" -lt "\${GH_LIST_READY_AFTER}" ] && exit 0
   fi
-  for lid in \${GH_LIST_IDS:-}; do
+  ids="\${GH_LIST_IDS:-}"
+  if [ -n "\${GH_LIST_IDS2+x}" ]; then
+    c=0; [ -f "\${GH_LIST_CALLS}" ] && c="$(cat "\${GH_LIST_CALLS}")"
+    c=$((c + 1)); printf '%s' "$c" > "\${GH_LIST_CALLS}"
+    [ "$c" -ge 2 ] && ids="\${GH_LIST_IDS2}"
+  fi
+  for lid in $ids; do
     nvar="GH_NAME_\${lid}"
     wvar="GH_WF_\${lid}"
     printf '%s\\t=%s\\t%s\\n' "$lid" "\${!wvar-wf-$lid}" "\${!nvar:-CI-$lid}"
@@ -119,7 +127,8 @@ describe("watch-ci.sh exit matrix", () => {
     const r = run({ GH_LIST_IDS: "1", GH_LIST_READY_AFTER: "3", GH_LIST_COUNTER: counter });
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("pass: CI-1 (1)");
-    expect(readFileSync(counter, "utf-8")).toBe("3");
+    // 3 polls until runs register, plus the single post-watch re-discovery.
+    expect(readFileSync(counter, "utf-8")).toBe("4");
   });
 
   test("all green exits 0 with a pass line per run", () => {
@@ -207,6 +216,28 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.stdout).toContain("FAIL(cancelled): CI (1)");
     expect(r.stdout).toContain("pass: CI (2)");
     expect(r.stdout).not.toContain("superseded");
+  });
+
+  test("a run cancelled by a mid-watch retrigger is superseded after re-discovery", () => {
+    // The first discovery sees only run 1; the retrigger (run 2, same
+    // workflow) appears while the script waits. The post-watch re-discovery
+    // must re-select run 2 and demote run 1 to superseded instead of
+    // reporting its concurrency cancellation as FAIL.
+    const calls = join(binDir, "list-calls");
+    const r = run({
+      GH_LIST_IDS: "1",
+      GH_LIST_IDS2: "2 1",
+      GH_LIST_CALLS: calls,
+      GH_WF_1: "77",
+      GH_WF_2: "77",
+      GH_NAME_1: "CI",
+      GH_NAME_2: "CI",
+      GH_VIEW_1: "cancelled",
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("superseded: CI (1)");
+    expect(r.stdout).toContain("pass: CI (2)");
+    expect(r.stdout).not.toContain("FAIL");
   });
 
   test("a cancelled latest run with no newer run is a real failure", () => {
