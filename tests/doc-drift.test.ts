@@ -187,7 +187,7 @@ const SURFACES: Record<string, Surface> = {
       {
         doc: "`copilot`: runs `copilot -p <prompt> -s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps`",
         script:
-          '"-s",\n    "--available-tools=view,rg,glob",\n    "--deny-tool=write",\n    "--deny-tool=shell",\n    "--disable-builtin-mcps",',
+          'copilot: (prompt) => [\n    "-p",\n    prompt,\n    "-s",\n    "--available-tools=view,rg,glob",\n    "--deny-tool=write",\n    "--deny-tool=shell",\n    "--disable-builtin-mcps",',
       },
       {
         doc: "`--background` prints the output-file path and the PID of a detached monitor",

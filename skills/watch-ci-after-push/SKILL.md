@@ -61,7 +61,7 @@ bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.o
 # gh failed
 ```
 
-In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations - the invocation shape, the exit semantics, the superseded/FAIL/skip lines - to `scripts/watch-ci.sh`: a rename on either side fails CI until doc and script move together.
+In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the exit semantics, the superseded/FAIL/skip lines) to `scripts/watch-ci.sh`. A rename on either side fails CI until doc and script move together.
 
 ### 3. Report
 

@@ -87,7 +87,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - 0: verdict extracted and printed to stdout, or a `--background` launch started (that run's verdict comes later, via `--extract`).
   - 1: `review FAILED - relaunch`.
   - 2: usage error or reviewer binary not found.
-- In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations - the reviewer invocations, the flags, the exit codes, the failure verdict - to `scripts/run-review.mts`: a rename on either side fails CI until doc and script move together.
+- In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the reviewer invocations, the flags, the exit codes, the failure verdict) to `scripts/run-review.mts`. A rename on either side fails CI until doc and script move together.
 
 ### 4. Act on the printed verdict
 
