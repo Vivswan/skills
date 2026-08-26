@@ -607,6 +607,27 @@ describe("probe tokens", () => {
     expect(code).toBe(0);
     expect(out.ok).toBe(true);
   });
+
+  test("a FIFO at a probed path fails loudly instead of blocking forever", () => {
+    const dir = fixtureDir();
+    const tree = join(dir, "tree");
+    mkdirSync(tree);
+    sh(dir, "mkfifo", join(tree, "pipe.md"));
+    const table = join(dir, "table.json");
+    writeFileSync(table, JSON.stringify({ "pipe.md": [{ "text": "anything", "expect": ">=1" }] }));
+    // A plain readFileSync would hang here with no writer on the FIFO; the
+    // probe must classify and refuse it instead. The same fd-based read
+    // backs count and json-keys, so cover that entry point too.
+    const viaTokens = probe("tokens", table, tree);
+    expect(viaTokens.code).toBe(1);
+    expect(viaTokens.out.ok).toBe(false);
+    expect(viaTokens.out.error).toContain("pipe.md: not a regular file");
+    const viaCount = probe("count", join(tree, "pipe.md"), "anything");
+    expect(viaCount.code).toBe(1);
+    expect(viaCount.out.ok).toBe(false);
+    expect(viaCount.out.error).toContain("not a regular file");
+    expect(viaCount.out.value).toBeUndefined();
+  });
 });
 
 describe("probe usage", () => {

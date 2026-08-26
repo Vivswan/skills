@@ -16,7 +16,16 @@
 //   probe tokens <table.json> <tree-root>
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, join, sep } from "node:path";
 
 const USAGE = [
@@ -59,14 +68,33 @@ function statOrFail(path: string, missingMessage: string): ReturnType<typeof sta
   }
 }
 
-function readRequiredFile(path: string): string {
-  const stats = statOrFail(path, "no such file");
-  if (!stats.isFile()) {
-    fail(`${path}: not a regular file`);
-  }
+// Read a path that must be a regular file without ever blocking: a FIFO at
+// the path would hang readFileSync forever, and a probe that never returns
+// is as silent as one that reads 0. O_NONBLOCK makes the open itself
+// non-blocking, and fstat on the fd classifies what was ACTUALLY opened,
+// closing the stat-then-open race (O_NONBLOCK is a no-op for regular
+// files, so the read is unaffected). Throws on open failure; `label` names
+// the path in the not-a-regular-file report.
+function readRegularFile(path: string, label: string): string {
+  const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
   try {
-    return readFileSync(path, "utf-8");
+    if (!fstatSync(fd).isFile()) {
+      fail(`${label}: not a regular file`);
+    }
+    return readFileSync(fd, "utf-8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readRequiredFile(path: string): string {
+  try {
+    return readRegularFile(path, path);
   } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      fail(`${path}: no such file`);
+    }
     fail(`${path}: unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
@@ -410,7 +438,7 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
       if (real !== rootReal && !real.startsWith(rootReal + sep)) {
         fail(`${file}: resolves outside tree root`);
       }
-      content = readFileSync(real, "utf-8");
+      content = readRegularFile(real, file);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       readError =
