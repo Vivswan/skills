@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -269,6 +270,38 @@ describe("baseline.mts pin/check", () => {
     expect([0, 2]).toContain(pin.code);
     expect(readFileSync(join(fx.tree, "docs", "a.md"), "utf-8")).toBe("alpha\n");
     if (pin.code === 2) expect(pin.stderr).toContain("must not be inside");
+  });
+
+  test("an empty manifest file list is a check failure, never a vacuous pass", () => {
+    const fx = makeFixture({ "docs/a.md": "alpha\n" });
+    mkdirSync(fx.baseline, { recursive: true });
+    writeFileSync(join(fx.baseline, "manifest.json"), '{"files": []}\n');
+
+    const check = runBaseline(["check", fx.baseline, fx.tree]);
+    expect(check.code).toBe(1);
+    expect(check.summary?.ok).toBe(false);
+    expect(check.summary?.error).toContain('"files" is empty');
+  });
+
+  test("a symlinked tree file is checked by content: clean, then drift on retarget", () => {
+    const fx = makeFixture({ "AGENTS.md": "the real guidance\n", "other.md": "different words\n" });
+    symlinkSync("AGENTS.md", join(fx.tree, "CLAUDE.md"));
+    expect(runBaseline(["pin", fx.baseline, fx.tree, "CLAUDE.md"]).code).toBe(0);
+
+    // Unchanged symlink round-trips clean: pin stored the target's content,
+    // so check must compare content too, not the link value (mode 120000).
+    const clean = runBaseline(["check", fx.baseline, fx.tree]);
+    expect(clean.code).toBe(0);
+    expect(fileStatus(clean.summary, "CLAUDE.md").status).toBe("identical");
+
+    rmSync(join(fx.tree, "CLAUDE.md"));
+    symlinkSync("other.md", join(fx.tree, "CLAUDE.md"));
+    const drifted = runBaseline(["check", fx.baseline, fx.tree]);
+    expect(drifted.code).toBe(1);
+    const entry = fileStatus(drifted.summary, "CLAUDE.md");
+    expect(entry.status).toBe("drifted");
+    expect(entry.detail).toContain("-the real guidance");
+    expect(entry.detail).toContain("+different words");
   });
 
   test("bad usage exits 2 and still emits an ok:false JSON summary", () => {

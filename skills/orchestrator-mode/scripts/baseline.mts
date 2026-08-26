@@ -307,6 +307,12 @@ function readManifest(baselineDir: string): string[] | string {
   if (!Array.isArray(files) || !files.every((entry) => typeof entry === "string")) {
     return `invalid manifest at ${manifestPath}: "files" must be an array of strings`;
   }
+  if (files.length === 0) {
+    return (
+      `invalid manifest at ${manifestPath}: "files" is empty; ` +
+      "an empty baseline can never prove a tree clean (pin writes at least one file)"
+    );
+  }
   for (const entry of files) {
     const problem = relPathProblem(entry);
     if (problem) {
@@ -342,7 +348,10 @@ async function check(baselineDir: string, treeRoot: string): Promise<number> {
         detail: `pinned at ${baselineFile} but absent from the tree at ${treeFile}`,
       });
     } else {
-      const result = await gitDiffNoIndex(baselineFile, treeFile);
+      // Dereference both sides: pin snapshots the CONTENT a symlink points
+      // at, but git diff --no-index compares the link value itself (mode
+      // 120000), which would false-drift every symlinked tree file.
+      const result = await gitDiffNoIndex(realpathSync(baselineFile), realpathSync(treeFile));
       findings.push(
         result.identical
           ? { path, status: "identical", detail: `matches pinned copy at ${baselineFile}` }
