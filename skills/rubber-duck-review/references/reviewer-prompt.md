@@ -10,13 +10,10 @@ Please review the relevant changes and surrounding code for:
 - future-proofing risks
 - naming or design choices that may become awkward as the codebase grows
 - hardcoded assumptions that may become misleading later
-- workarounds propped up by long justification comments (if it takes a paragraph-long comment to argue the workaround is OK, the code is wrong; flag both the comment and the code for fixing)
+- workarounds propped up by long justification comments: if it takes a paragraph-long comment to argue the workaround is OK, the code is wrong. Flag both the comment and the code for fixing.
 
 Already decided / out of scope:
 - <optional bullets>
 ```
 
-Skills that declare a `## Review Criteria` section contribute extra
-bullets when installed (in this collection, `/no-invalid-states`,
-`/code-standards`, and `/never-twice`): expand each one's section
-into the review list above.
+Skills that declare a `## Review Criteria` section contribute extra bullets when installed: expand each one's section into the review list above. In this collection: `/no-invalid-states`, `/code-standards`, and `/never-twice`.
