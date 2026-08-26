@@ -94,7 +94,11 @@ case "\${STUB_MODE:-ok}" in
   ok)
     echo '{"type":"system","subtype":"init"}'
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"looking around"}]}}'
-    echo '{"type":"result","subtype":"success","result":"CLAUDE VERDICT: correct, no blocking findings"}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"CLAUDE VERDICT: correct, no blocking findings"}'
+    ;;
+  iserror)
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Execution failed mid-run"}'
     ;;
   cut)
     echo '{"type":"system","subtype":"init"}'
@@ -308,6 +312,13 @@ describe("run-review.mts", () => {
     const r = run(["claude", promptFile], { STUB_MODE: "cut" });
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("review FAILED - relaunch");
+  });
+
+  test("a claude result with is_error true is a failed review, even on CLI exit 0", () => {
+    const r = run(["claude", promptFile], { STUB_MODE: "iserror" });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("error_during_execution");
   });
 
   test("an error event exits 1 even though the reviewer exited 0", () => {

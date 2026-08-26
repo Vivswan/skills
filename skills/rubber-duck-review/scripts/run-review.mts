@@ -179,8 +179,15 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
       awaitingTurnEnd = false;
       turnOpen = false;
     }
-    if (tool === "claude" && event.type === "result" && typeof event.result === "string") {
-      verdict = event.result;
+    if (tool === "claude" && event.type === "result") {
+      // claude reports in-band terminal failures as result records with
+      // is_error: true (the CLI can still exit 0); those carry no verdict.
+      if (event.is_error === true) {
+        const subtype = typeof event.subtype === "string" ? event.subtype : "unknown";
+        errorEvent = `claude result has is_error: true (subtype: ${subtype})`;
+      } else if (typeof event.result === "string") {
+        verdict = event.result;
+      }
     }
   }
   if (errorEvent !== null) return { ok: false, reason: `error event: ${errorEvent}` };
