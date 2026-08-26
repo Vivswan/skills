@@ -21,34 +21,37 @@ metadata:
 
 ## Removing a Worktree
 
-Verify all three before `git worktree remove`, freshly, in this order:
+Verify both before `git worktree remove`, freshly, in this order:
 
-1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain` and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinator's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work.
-2. **Landed, by content.** Confirm the branch's work is pushed or landed before deleting anything.
-   - Check ancestry first, against a ref the fetch just wrote: `git fetch <remote> <mainline>` followed by `git merge-base --is-ancestor <branch> FETCH_HEAD`. Test `FETCH_HEAD`, not `<remote>/<mainline>`: whether the fetch updates the remote-tracking ref depends on the remote's configured fetch mapping, and a stale local ref proves nothing once the remote moved ahead.
-   - A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Whenever ancestry fails, require exact content equivalence at the fetched tip, for every path the branch touched (NUL-safe and with renames split into their delete and add halves, so a missing source deletion cannot hide):
-
-     ```bash
-     set -o pipefail                                # a masked failure must never read as "landed"
-     base=$(git merge-base FETCH_HEAD <branch>) && [ -n "$base" ] || exit 1
-     git diff --no-renames --name-only -z "$base" <branch> \
-       | xargs -0 git diff --no-renames FETCH_HEAD <branch> --
-     ```
-
-     Landed means empty output AND a zero exit status; any output or any failing step blocks the deletion. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
-3. **No live writer.** Check for processes whose cwd is inside the worktree (`lsof -a -p <pid> -d cwd`, or `lsof +D <tree>`). An actor absent from the running list is not itself writing, but processes it spawned (test chains, installs) can still be; kill them or wait them out first. And never remove a LOCKED tree (`git worktree list --porcelain` shows `locked` with its reason) or a tree another actor may be using without knowing whose it is and why.
+1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain` and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinator's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work. (A clean tree loses nothing on removal: the branch survives it.)
+2. **No live writer.** Check for processes whose cwd is inside the worktree (`lsof -a -p <pid> -d cwd`, or `lsof +D <tree>`). An actor absent from the running list is not itself writing, but processes it spawned (test chains, installs) can still be; kill them or wait them out first. And never remove a LOCKED tree (`git worktree list --porcelain` shows `locked` with its reason) or a tree another actor may be using without knowing whose it is and why.
 
 After removing:
 
 - **Remove with `git worktree remove`, never a bare `rm -rf`.** Manual deletion leaves the worktree's administrative entry in the shared git dir, so git keeps treating its branch as checked out (and blocks deleting it) until the entry is pruned (`git worktree prune`; git also expires stale entries on its own per `gc.worktreePruneExpire`, but never count on that timing). After a deletion that already happened manually, prune explicitly.
 - **Removal does not kill survivors.** A finished actor's wedged test chain can outlive its deleted directory for hours. Re-check and kill any process whose cwd names the deleted path.
-- **Delete the branch too once it is no longer needed**, but verify the landing first (rule 2), never by what `git branch -d` says: `-d` only tests merge into the branch's configured upstream (or into HEAD when none is set), and the usual upstream is the branch's own `origin/<topic>`, not your mainline. So it can succeed on unlanded work and refuse on landed work; neither verdict proves anything about landing. Verify by rule 2, then delete with `git branch -D`.
+
+### Deleting the branch too
+
+Removal keeps the branch; delete the branch only once its work has LANDED, and verify that yourself, never through `git branch -d`: `-d` only tests merge into the branch's configured upstream (or into HEAD when none is set), and the usual upstream is the branch's own `origin/<topic>`, not your mainline. It can succeed on unlanded work and refuse on landed work; neither verdict proves anything. Verify landing like this, then delete with `git branch -D`:
+
+- Check ancestry first, against a ref the fetch just wrote: `git fetch <remote> <mainline>` followed by `git merge-base --is-ancestor <branch> FETCH_HEAD`. Test `FETCH_HEAD`, not `<remote>/<mainline>`: whether the fetch updates the remote-tracking ref depends on the remote's configured fetch mapping, and a stale local ref proves nothing once the remote moved ahead.
+- A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Whenever ancestry fails, require exact content equivalence at the fetched tip, for every path the branch touched (NUL-safe; renames split into their delete and add halves so a missing source deletion cannot hide; external diff and textconv disabled so no filter can suppress a difference):
+
+  ```bash
+  set -o pipefail                                # a masked failure must never read as "landed"
+  base=$(git merge-base FETCH_HEAD <branch>) && [ -n "$base" ] || exit 1
+  git diff --no-renames --name-only -z "$base" <branch> \
+    | xargs -0 git diff --no-ext-diff --no-textconv --no-renames FETCH_HEAD <branch> --
+  ```
+
+  Landed means empty output AND a zero exit status; any output or any failing step blocks the deletion. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
 
 ### Auto-removal can destroy a live workspace
 
 Harnesses that auto-clean isolation worktrees remove them when their actor completes with a clean tree. An actor that stops "to wait" before anything is written, while others still work in its tree, leaves them working in a deleted directory.
 
-- An actor coordinating others inside its own isolation worktree dirties the tree IMMEDIATELY on start; one untracked marker file at the worktree root is enough (e.g. `.orchestrator-keepalive`). Verify the marker actually shows as `??` in `git status --porcelain`: an ignore rule can hide it, and a hidden marker protects nothing; pick another name when it does. The marker is never staged or committed; when later status reads judge "real work", a lone `??` for the marker is an artifact, not work. Delete it before the final signal or handoff.
+- An actor coordinating others inside its own isolation worktree dirties the tree IMMEDIATELY on start; one untracked marker file at the worktree root is enough (e.g. `.orchestrator-keepalive`). Verify the marker actually shows as `??` in `git status --porcelain`: an ignore rule can hide it, and a hidden marker protects nothing; pick another name when it does. The marker is never staged or committed (removal rule 1 names it the one disposable `??`), and it is deleted before the final signal or handoff.
 - Before resuming any actor that stopped clean in an isolation worktree, verify the worktree still exists. Respawn fresh when it does not.
 
 ## Handing Over a Worktree
@@ -56,7 +59,7 @@ Harnesses that auto-clean isolation worktrees remove them when their actor compl
 Ownership transfers explicitly, never by inference: at any moment exactly one actor owns a worktree, and a handover is a named event (a stop plus a grant), not a guess from silence.
 
 - **Stop the predecessor first.** A message sent to a completed or idle agent RESUMES it. An acknowledgment or thank-you sent after a handover wakes the predecessor, which resumes writing into the worktree its successor now owns (a live-writer clobber). The order is always: stop the actor first (TaskStop in Claude Code); any farewell after that is unnecessary.
-- **A successor checks for a live writer** before editing. Check for processes with cwd inside the tree first (the same lsof check as removal rule 3), then hash a hot file, wait, hash again (`shasum <file>; sleep 5; shasum <file>`). These checks gather evidence, never proof: a writer can be idle between edits or writing a different file. The ownership invariant stays the explicit stop-and-grant above.
+- **A successor checks for a live writer** before editing. Check for processes with cwd inside the tree first (the same lsof check as removal rule 2), then hash a hot file, wait, hash again (`shasum <file>; sleep 5; shasum <file>`). These checks gather evidence, never proof: a writer can be idle between edits or writing a different file. The ownership invariant stays the explicit stop-and-grant above.
 - **A removed tree's branch goes to whoever collects it.** Stopping an actor and removing its worktree transfers its branch to the collector, and only to the collector. Follow-up fixes on that branch go to a FRESH actor in a NEW worktree.
 - **Never resurrect a released actor.** A message to a stopped actor resumes it into a directory that no longer exists. Once its worktree is removed, that actor is never messaged again.
 
