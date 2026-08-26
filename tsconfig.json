@@ -13,5 +13,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["scripts"]
+  "include": ["scripts", "skills/*/scripts"]
 }
