@@ -42,6 +42,7 @@ gh stack add  track-2            # one layer per track, in dependency order
 git checkout track-1             # stack commands error (ErrNotInStack) from the mainline;
 #                                  the bottom layer is the natural anchor to run them from
 gh stack sync < /dev/null > "$SYNC_OUT" 2>&1
+SYNC_STATUS=$?                       # capture immediately - nothing after the fact recovers $?
 #                                  restack upper layers onto the collected work first: submit
 #                                  only pushes, it does not cascade-rebase, and track-2 was
 #                                  branched before track-1's commits existed. The redirects
@@ -49,6 +50,9 @@ gh stack sync < /dev/null > "$SYNC_OUT" 2>&1
 #                                  on a terminal it opens a divergence wizard that blocks
 #                                  automation instead of printing the "Sync aborted" text
 #                                  the verdict check below reads.
+grep -qiE "sync aborted|push failed|error" "$SYNC_OUT" && SYNC_STATUS=1  # any failure marker fails the gate
+[ "$SYNC_STATUS" -ne 0 ] && exit 1   # STOP and reconcile (verdict rule below); never continue to submit
+# postcondition before submit: each successor's base contains the lower layer's current tip
 gh stack submit --auto           # push all layers, open one draft PR each
 # submit derives titles and bodies automatically (no body flag; a multi-commit
 # layer's TITLE gets humanized from the branch name, which can violate title
@@ -75,7 +79,10 @@ gh pr ready <num> --undo             # FIRST: flip every about-to-be-restacked s
 #                                      Babysit-section both-directions draft rule, applied at
 #                                      the restack site)
 gh stack sync --prune < /dev/null > "$SYNC_OUT" 2>&1   # restack the remainder, drop merged
-#                                      branches (same non-TTY capture as the pre-submit sync)
+SYNC_STATUS=$?                       # same executable gate as the pre-submit sync
+grep -qiE "sync aborted|push failed|error" "$SYNC_OUT" && SYNC_STATUS=1
+[ "$SYNC_STATUS" -ne 0 ] && exit 1   # STOP: reconcile before pushing or re-flipping anything
+# postcondition before continuing: the next layer's merge-base contains the merged mainline commit
 gh stack submit --auto               # push the restacked remainder so successor PRs update:
 #                                      an unpushed restack leaves stale PRs whose CI never
 #                                      covered what will actually merge, and the re-gate rule
