@@ -191,12 +191,19 @@ export function relativeStaysWithin(relPath: string): boolean {
   );
 }
 
-function pin(baselineDir: string, treeRoot: string, files: readonly string[]): number {
-  // A tree root at or under the baseline dir would let the install step
-  // delete the very tree being pinned; refuse before any mutation.
+/**
+ * Refuse a tree root at or under the baseline dir before doing anything:
+ * pin's install step would delete the very tree being pinned, and check
+ * would compare pinned files with themselves and report a false clean.
+ */
+function refuseOverlappingRoots(baselineDir: string, treeRoot: string): void {
   if (relativeStaysWithin(relative(canonicalize(baselineDir), canonicalize(treeRoot)))) {
     usageError(`tree-root ${treeRoot} must not be inside baseline-dir ${baselineDir}`);
   }
+}
+
+function pin(baselineDir: string, treeRoot: string, files: readonly string[]): number {
+  refuseOverlappingRoots(baselineDir, treeRoot);
   const paths = [...new Set(files)].sort();
   for (const path of paths) {
     const problem = relPathProblem(path);
@@ -353,6 +360,7 @@ function readManifest(baselineDir: string): string[] | string {
 }
 
 async function check(baselineDir: string, treeRoot: string): Promise<number> {
+  refuseOverlappingRoots(baselineDir, treeRoot);
   const manifest = readManifest(baselineDir);
   if (typeof manifest === "string") {
     note(`check failed: ${manifest}`);

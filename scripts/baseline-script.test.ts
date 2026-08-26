@@ -362,6 +362,19 @@ describe("baseline.mts pin/check", () => {
     expect(entry.detail).toContain("+alpha gamma");
   });
 
+  test("check with tree-root inside the baseline-dir is refused, never clean", () => {
+    const fx = makeFixture({ "docs/a.md": "alpha\n" });
+    expect(runBaseline(["pin", fx.baseline, fx.tree, "docs/a.md"]).code).toBe(0);
+    fx.write("docs/a.md", "real drift the self-compare would hide\n");
+
+    // Pointing check at the baseline's own content dir would compare every
+    // pinned file with itself and report clean despite the drift above.
+    const selfCheck = runBaseline(["check", fx.baseline, join(fx.baseline, "content")]);
+    expect(selfCheck.code).toBe(2);
+    expect(selfCheck.summary?.ok).toBe(false);
+    expect(selfCheck.stderr).toContain("must not be inside");
+  });
+
   test("bad usage exits 2 and still emits an ok:false JSON summary", () => {
     const empty = runBaseline([]);
     expect(empty.code).toBe(2);
