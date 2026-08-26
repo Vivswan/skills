@@ -1,0 +1,135 @@
+---
+name: pr-and-issue-discipline
+description: Use when opening or updating a pull request, writing an issue, or deciding who merges, when a PR flips draft state, or how review comments get triaged.
+license: SEE LICENSE IN LICENSE.md
+metadata:
+  author: Vivswan
+---
+
+# PR and Issue Discipline
+
+> Show the change before telling it: real captured output first, the fewest words after, drafts that track convergence in both directions, and a human hand on the merge by default.
+
+These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, solo or in a fleet.
+
+## When to Apply
+
+- Opening or updating a pull request (body, title, draft state)
+- Writing a bug report or issue
+- A review round just landed on an open PR
+- Deciding whether a PR merges, and by whose hand
+
+## PR Bodies: Visualization First
+
+The opening section is real captured output, not prose. A reader must get the change from the fenced blocks without reading a paragraph.
+
+````markdown
+## The bug this kills          (or "## What this adds" for a feature)
+
+Before:
+```text
+$ bun run check
+scripts/sweep.mts: probe timed out after 120s; agent marked dead (it was mid-build)
+```
+
+After:
+```text
+$ bun run check
+scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; agent alive
+```
+
+## How
+
+- extend the probe deadline while a build lock exists, instead of a fixed timeout
+- deadline math moved into one function; the sweep and the probe both call it
+
+## Proof
+
+- 34 tests green (2 new), `bun run check` green, CI watched to completion
+- 2 review rounds, every thread resolved
+````
+
+- The opening blocks are actual commands and actual output, complete enough to stand alone.
+- `## How` is a FEW short bullets; the diff carries the detail, so never re-narrate it.
+- `## Proof` is numbers: tests, gates, review rounds. Cut any sentence the blocks already show.
+
+**Redact before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
+
+## Issues: Same Principle
+
+What breaks, shown first; then the minimum around it. Short and skimmable, no walls of text.
+
+````markdown
+## What breaks
+
+```text
+$ npx skills add Vivswan/skills --skill some-skill
+installed: SKILL.md, README.md          (metadata.json silently missing)
+```
+
+## Repro
+
+1. Add a `metadata.json` inside any skill folder.
+2. Install with `npx skills add`.
+
+## Expected vs actual
+
+- Expected: every file in the skill folder installed
+- Actual: `metadata.json` dropped without a warning
+````
+
+Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not.
+
+## Draft Discipline
+
+- Open every PR as a DRAFT, and keep it draft through its review loop.
+- Flip READY the moment it converges: never batched, never held back.
+- Flip BACK TO DRAFT the moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding), before the fix round starts.
+- A PR is out of draft exactly when no commits are pending, so only converged PRs are ever offered for merge.
+
+**Converged** means: CI green, every review thread resolved (fixed or answered), and the latest review round raised nothing new and valid.
+
+## Babysit to Comment Convergence
+
+An open PR is live work until it merges: bot reviewers (e.g. Copilot code review) and humans leave comments on every push. Per PR, loop until quiescent:
+
+1. Every push gets a CI watcher (Companion Gates, below).
+2. When a review lands, triage EVERY comment the same cycle it appears, never batched:
+   - A valid finding is fixed in that same round.
+   - An invalid or not-valid-here comment gets a reply stating why, and its thread resolved.
+3. A fix push restarts the loop: new CI watch, re-gate on the changed content, and the bot may re-review.
+
+Read thread state via GraphQL, never from comment timestamps (a thread with no new comments can still be unresolved):
+
+```text
+reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage endCursor } }
+```
+
+Paginate with `after: <endCursor>` while `hasNextPage` is true; a fixed first page is not the full set.
+
+Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft; prefer balanced or high reasoning where the repo exposes the setting).
+
+Production shape of one round:
+
+- "empty manifest passes vacuously": valid. Fixed with a regression test in the same cycle.
+- "script not wired into the docs": sequencing by design. Replied with the plan (a docs pass wires all scripts post-merge) and resolved.
+- "symlink following": split. The leaf-fidelity half fixed after confirming it empirically; the escape half declined with the recorded design rationale.
+
+## Who Merges
+
+The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges. Two standing exceptions, each only when the user has granted it:
+
+- **A trivial mechanical fix.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) merges directly once its gates are green; the human gate is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
+- **A pipeline blocked on a merge.** When a converged PR gates queued work and the human is not acting, merge it and say so in the next report. Waiting idle on a merge the author could perform is the defect; the notification preserves the human's oversight.
+
+**The landing action is exit-conditioned, never chained**, for a PR merge and a direct push alike. Read the gate's own verdict and STOP; land in a separate command only after the gate itself reports green. Green means the gate's exit code AND its verdict, and a review gate is green only when its findings are triaged, not merely when its process exits 0.
+
+```bash
+tail gate.log; git merge && git push   # WRONG: && chains on tail's exit status,
+                                       # shipping a red-gated commit regardless of the log
+```
+
+## Companion Gates
+
+- After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it.
+- Before anything lands, an independent review that can block the landing; where installed, the `/review-before-commit` skill defines that gate.
