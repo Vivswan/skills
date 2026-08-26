@@ -10,8 +10,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CheckFailure } from "./lib";
-import { linkSkills } from "./link-agents";
+import { CheckFailure } from "../scripts/lib";
+import { linkSkills } from "../scripts/link-agents";
 
 interface Fixture {
   readonly repoSkill: string;

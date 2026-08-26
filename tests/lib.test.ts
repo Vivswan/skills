@@ -16,7 +16,7 @@ import {
   readTextFile,
   rel,
   skillDirs,
-} from "./lib";
+} from "../scripts/lib";
 
 function tempFile(content: string, name = "SKILL.md"): string {
   const dir = mkdtempSync(join(tmpdir(), "skills-lib-test-"));

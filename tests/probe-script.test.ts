@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ROOT } from "./lib";
+import { ROOT } from "../scripts/lib";
 
 // Contract tests for the orchestrator-mode probe tool: every result is
 // either evidence-bearing or a loud error, never a bare number. The tests
