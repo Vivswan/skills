@@ -52,7 +52,7 @@ Before creating the board or spawning anything, ask the user these in ONE messag
    - Its spawn brief names the script paths it runs, so it never hand-rolls a probe: `scripts/sweep.mts` (this skill's directory) for the periodic sweep, `scripts/probe.mts` for content claims, `scripts/ledger.mts` for standing states and flags, and `scripts/baseline.mts` at landings.
    - Liveness probing is full of false-conclusion traps. The scripts retire the mechanical ones by construction; `references/fleet-monitor.md` carries the wiring plus the judgment layer. Follow it exactly.
    - Lead directives the monitor must honor across sweeps go into that ledger (states, grants, standing flags with their retractions), never only into a message. The delivery rule lives in `references/fleet-monitor.md`, Reporting Discipline.
-4. **In the PR gate, read `references/landing.md` BEFORE fanning out.** Dependency-based (stacked) tracks initialize their chain before builders spawn: via gh-stack (`gh stack init`) where that skill is installed, else plain branch-on-branch per landing.md's stacked subsection. Every brief must name who pushes and opens each draft PR.
+4. **In the PR gate, read `references/landing.md` BEFORE fanning out.** Dependency-based (stacked) tracks initialize their chain before builders spawn: each dependent branch is created off its dependency's branch, with the dependency tip it branched from recorded, per landing.md's stacked subsection. Every brief must name who pushes and opens each draft PR.
 5. **Fan out builders** for the independent tracks, in the isolation the interview chose.
    - Every spawn brief is self-contained per `references/spawn-briefs.md`: the full task contract inline, the territory whitelist, the gates, the signal format, the stop-and-wait ban, and the TODO ban. Where the `/code-standards` skill is installed, briefs point builders at it for the comment rules and the rest of the house standards.
    - One-shot watchers and gate reviewers spawn UNNAMED where the harness delivers a completed agent's output automatically: a named watcher must remember to report at exactly the seam where agents strand (details in `references/spawn-briefs.md`).
@@ -88,7 +88,7 @@ A landing is two independent choices:
 - The GATE, chosen once in the interview: direct commits to the mainline, or a PR before it.
 - Each track's BASE, set by the dependency graph: the mainline for independent work, a sibling's unlanded branch for stacked work. Any combination in one session.
 
-The per-mode procedures, including the gh-stack loop and the worktree rules around it, live in `references/landing.md`. What stays constant under either gate:
+The per-mode procedures, including the stacked-chain loop and the worktree rules around it, live in `references/landing.md`. What stays constant under either gate:
 
 - **Who merges (the human by default), the two standing exceptions, visualization-first PR bodies with redaction, and the exit-conditioned landing** are defined in the `/pr-and-issue-discipline` skill. In the PR gate all of them apply; in direct mode there is no PR body or merging hand, so what carries over is the exit-conditioned landing.
 - **Review before landing, never after**: findings must be able to block the landing. Where installed, the `/review-before-commit` skill defines this gate (green tree first, independent background reviews, triage, convergence).
@@ -132,4 +132,4 @@ Triage findings against sections 2 (Decompose, Board, Monitor, Builders) and 7 (
 
 - `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, unnamed one-shot watchers, git-fixture hygiene for test suites)
 - `references/fleet-monitor.md`: the monitor's script wiring (sweep, probe, ledger, baseline) and the judgment rules learned from production false alarms
-- `references/landing.md`: the two landing gates (direct commits; PRs with per-track bases, including the gh-stack flow and the worktree rules around it)
+- `references/landing.md`: the two landing gates (direct commits; PRs with per-track bases, including the stacked-chain flow and the worktree rules around it)
