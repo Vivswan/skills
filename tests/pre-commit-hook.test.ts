@@ -47,6 +47,12 @@ case "\${HOOK_BUN_MODE:-ok}" in
     # original single value, because trailing newlines get stripped.
     git config --add user.name ""
     ;;
+  malform-config)
+    printf '[core\n' > "$(git rev-parse --git-path config)"
+    ;;
+  delete-config)
+    rm "$(git rev-parse --git-path config)"
+    ;;
   branch-append)
     # What a sibling worktree's \`git push -u\` does to the shared config.
     git config branch.feature.remote origin
@@ -183,6 +189,29 @@ describe("pre-commit hook git-env scrub", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("FATAL");
     expect(r.stderr).toContain("user.name");
+  });
+
+  test("making the config file unreadable blocks the commit", () => {
+    // git config exits above 1 for a malformed file; the guard must treat a
+    // read failure as corruption, not as "all keys unset".
+    const hookRepo = makeRepo();
+    mkdirSync(join(hookRepo, "node_modules"));
+    const r = runHook(hookRepo, { HOOK_BUN_MODE: "malform-config" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("FATAL");
+    expect(r.stderr).toContain("could not read");
+  });
+
+  test("deleting the config file blocks the commit", () => {
+    // git config exits 1 for a MISSING file - the same status as an unset
+    // key - so a deleted config with unset guard keys would otherwise
+    // compare equal; the hook must check presence explicitly.
+    const hookRepo = makeRepo();
+    mkdirSync(join(hookRepo, "node_modules"));
+    const r = runHook(hookRepo, { HOOK_BUN_MODE: "delete-config" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("FATAL");
+    expect(r.stderr).toContain("disappeared");
   });
 
   test("a concurrent [branch] append to the shared config does not block the commit", () => {
