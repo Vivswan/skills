@@ -29,23 +29,23 @@ type CitedToken = { doc: string; script: string };
 const CITED_TOKENS: Record<string, CitedToken[]> = {
   "sweep.mts": [
     { doc: "--transcripts", script: '"--transcripts"' },
-    { doc: "headSha", script: "headSha," },
-    { doc: "aheadBehind", script: "aheadBehind," },
-    { doc: "treeFileCount", script: "treeFileCount," },
-    { doc: "dirtyCount", script: "dirtyCount: dirtyPaths.length" },
-    { doc: "untrackedCount", script: "untrackedCount: untrackedPaths.length" },
-    { doc: "newestDirtyMtime", script: "newestDirtyMtime: newestDirtyMtime(" },
-    { doc: "statusHash", script: "statusHash," },
+    { doc: '"headSha":', script: "headSha," },
+    { doc: '"aheadBehind":', script: "aheadBehind," },
+    { doc: '"treeFileCount":', script: "treeFileCount," },
+    { doc: '"dirtyCount":', script: "dirtyCount: dirtyPaths.length" },
+    { doc: '"untrackedCount":', script: "untrackedCount: untrackedPaths.length" },
+    { doc: '"newestDirtyMtime":', script: "newestDirtyMtime: newestDirtyMtime(" },
+    { doc: '"statusHash":', script: "statusHash," },
     { doc: '"defaultRef":{"ok":false', script: "defaultRef: { ok: false" },
     { doc: '"lsof":{"ok":false', script: "lsof: { ok: false" },
     { doc: '"control":"FAILED"', script: 'control: "FAILED"' },
     { doc: "sizeBytes", script: "sizeBytes: stat.size" },
     { doc: "lastEventAgeSeconds", script: "lastEventAgeSeconds:" },
     { doc: "lastEventType", script: "lastEventType: lastEventType(" },
-    { doc: "processes", script: "processes," },
-    { doc: '"pid"', script: "pid: entry.pid" },
-    { doc: '"command"', script: "command: entry.command" },
-    { doc: '"state"', script: "state: states.get(" },
+    { doc: '"processes":', script: "processes," },
+    { doc: '"pid":', script: "pid: entry.pid" },
+    { doc: '"command":', script: "command: entry.command" },
+    { doc: '"state":', script: "state: states.get(" },
   ],
   "probe.mts": [
     { doc: "probe.mts count", script: 'case "count":' },
@@ -76,27 +76,37 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
   ],
 };
 
+/**
+ * The single assertion every check in this file goes through - positive
+ * checks and the negative control alike, so the control exercises the SAME
+ * code path it certifies.
+ */
+function assertContains(haystack: string, fragment: string): void {
+  expect(haystack).toContain(fragment);
+}
+
 for (const [script, tokens] of Object.entries(CITED_TOKENS)) {
   const source = readFileSync(join(SCRIPTS_DIR, script), "utf-8");
   describe(`fleet-monitor.md <-> ${script}`, () => {
     for (const token of tokens) {
       test(`doc still asserts ${JSON.stringify(token.doc)}`, () => {
-        expect(doc).toContain(token.doc);
+        assertContains(doc, token.doc);
       });
       test(`${script} still carries ${JSON.stringify(token.script)}`, () => {
-        expect(source).toContain(token.script);
+        assertContains(source, token.script);
       });
     }
   });
 }
 
-// Negative control: prove the checker can fail. A token that exists nowhere
-// must read as absent on both sides; if this ever passes as present, the
+// Negative control: prove the checker can fail, through the same helper the
+// positive checks use. If the sentinel ever stops throwing here, the
 // containment probe itself is broken and every green above is meaningless.
-test("negative control: an impossible token matches neither side", () => {
+test("negative control: the shared assertion fails on an impossible token", () => {
   const impossible = "zzDocDriftImpossibleToken414";
-  expect(doc.includes(impossible)).toBe(false);
+  expect(() => assertContains(doc, impossible)).toThrow();
   for (const script of Object.keys(CITED_TOKENS)) {
-    expect(readFileSync(join(SCRIPTS_DIR, script), "utf-8").includes(impossible)).toBe(false);
+    const source = readFileSync(join(SCRIPTS_DIR, script), "utf-8");
+    expect(() => assertContains(source, impossible)).toThrow();
   }
 });
