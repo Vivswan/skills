@@ -62,17 +62,21 @@ gh stack merge <pr> --yes --squash   # or --merge / --rebase: the method is a pe
 #                                      landed. WATCH until the PR is actually merged (mergedAt
 #                                      set, the commit on the mainline) before the sync below:
 #                                      same logs-vs-postcondition principle as the sync check.
+gh pr ready <num> --undo             # FIRST: flip every about-to-be-restacked successor to
+#                                      DRAFT before anything rewrites it. sync itself pushes
+#                                      the rewritten branches, so drafting afterward leaves a
+#                                      window where a still-ready successor exposes unverified
+#                                      content to an auto-merge or user merge - close the
+#                                      window before rewriting, not after (the skill's
+#                                      Babysit-section both-directions draft rule, applied at
+#                                      the restack site)
 gh stack sync --prune < /dev/null > /tmp/sync.out 2>&1   # restack the remainder, drop merged
 #                                      branches (same non-TTY capture as the pre-submit sync)
 gh stack submit --auto               # push the restacked remainder so successor PRs update:
 #                                      an unpushed restack leaves stale PRs whose CI never
 #                                      covered what will actually merge, and the re-gate rule
 #                                      (item 2 above) applies to every content-changed link
-gh pr ready <num> --undo             # every content-changed successor flips BACK TO DRAFT until
-#                                      its CI and re-gate reconverge: submit preserves PR state,
-#                                      so a previously-ready successor could otherwise merge
-#                                      before its re-gate - the skill's Babysit-section
-#                                      both-directions draft rule, applied at the restack site
+# re-gate and reconverge each content-changed successor, then flip it ready again
 git checkout <mainline>              # back to the mainline once stack operations are done
 ```
 
