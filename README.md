@@ -44,6 +44,7 @@ graph LR
   rbc --> nis["/no-invalid-states"]
   rdr --> cs
   rdr --> nis
+  rdr --> nt
   nis --> rdr
   cs --> nis
   nt["/never-twice"] --> rdr

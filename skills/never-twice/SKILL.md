@@ -89,7 +89,7 @@ Test whatever ships:
 
 > If a new member of this class appears tomorrow, does the fix hold, or does it silently pass the same way?
 
-Map the answer to the ladder: it cannot be built (rung 1), CI stops it before landing (rung 2), a loaded rule catches it in session (rung 3), or it silently passes - no rung held, the class is alive. A runtime guard that fails loudly but late - after shipping - is an instance fix wearing a fix's clothes, not a rung.
+Three answers. It silently passes: the class is alive. It fails loudly but late - at runtime, after shipping: an instance guard, the class is still alive. Or it cannot recur, at the rung that holds it: impossible to build (1), stopped in CI (2), caught by a loaded rule (3).
 
 ## Review Criteria
 
