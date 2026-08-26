@@ -5,9 +5,9 @@
 # Usage: watch-ci.sh [<full-sha>]   (defaults to HEAD)
 # Exit 0: the latest run of every workflow passed (event-condition skips
 # count as pass; older re-triggered runs are reported as superseded, never
-# judged). 1: at least one workflow's latest run concluded
-# failure/cancelled/timed_out. 2: no runs registered, or gh itself failed
-# (discovery or status checks).
+# judged). 1: at least one workflow's latest run ended with any non-success,
+# non-skipped conclusion (e.g. failure/cancelled/timed_out). 2: no runs
+# registered, or gh itself failed (discovery or status checks).
 set -euo pipefail
 
 # Full SHA required: gh run list --commit silently matches nothing for short SHAs.
@@ -63,6 +63,13 @@ while IFS=$'\t' read -r id wfid name; do
 done <<EOF
 $(printf '%s\n' "$run_lines" | sort -rn)
 EOF
+
+# Discovery found runs, so an empty selection here means the grouping pipe
+# itself broke; that must surface as tooling trouble, never as green.
+if [ -z "$run_ids" ]; then
+  echo "internal: no runs selected from the discovery output for $sha" >&2
+  exit 2
+fi
 
 # Run outcome (fail) and gh health (gherr) are tracked separately so an
 # auth/network failure is never reported as a red pipeline, and vice versa.
