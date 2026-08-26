@@ -8,7 +8,7 @@ Term lists from [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wi
 
 ## AI vocabulary (empirically overused words)
 
-additionally (sentence-initial), align with, boasts, bolstered, causal (Grok), correlate (Grok), crucial, delve, emphasizing, empirical (Grok), enduring, enhance, fostering, garner, highlight (verb), highlighting, interplay, intricate, intricacies, key (adjective), landscape (abstract noun), meticulous, meticulously, pivotal, robust, showcase, showcasing, tapestry (abstract noun), testament, underscore (verb), underscores, valuable, vibrant
+additionally (sentence-initial), align with, boasts, bolstered, causal (Grok), correlate (Grok), crucial, deep dive, delve, emphasizing, empirical (Grok), enduring, enhance, fostering, garner, highlight (verb), highlighting, interplay, intricate, intricacies, key (adjective), landscape (abstract noun), meticulous, meticulously, pivotal, robust, showcase, showcasing, tapestry (abstract noun), testament, underscore (verb), underscores, valuable, vibrant
 
 Era notes: 2023 to mid-2024 output leans on delve, tapestry, testament, intricate, bolstered, garner; mid-2024 to mid-2025 on align with, fostering, showcasing, enduring, vibrant; mid-2025 onward on emphasizing, enhance, highlighting, showcasing.
 
@@ -22,7 +22,7 @@ boasts a, vibrant, rich, profound, enhancing, showcasing, exemplifies, commitmen
 
 ## Coverage and notability boilerplate
 
-independent coverage, media outlets, trade publications, profiled in, featured in, written by a leading expert, active social media presence, strong digital presence, significant coverage, widely-read outlets
+independent coverage, media outlets, trade publications, profiled in, featured in, written by a leading expert, active social media presence, strong digital presence, significant coverage, widely-read outlets, Awards and recognition (section heading), Recognition (section heading)
 
 ## Superficial trailing analysis (sentence-final participles)
 
@@ -38,7 +38,11 @@ despite its, despite these challenges, faces several challenges, future outlook,
 
 ## Copula avoidance
 
-serves as a, stands as a, marks a, represents a, boasts, features a, maintains a, offers a, refers to, holds the distinction of, began his career as, began her career as, ventured into
+serves as a, stands as a, marks a, functions as a, operates as a, represents a, boasts, features a, maintains a, offers a, refers to, holds the distinction of, began his career as, began her career as, ventured into
+
+## Vague connection or association
+
+in connection with, in connection to, connected with, connected to, in association with, associated with, particularly associated, widely associated
 
 ## Negative parallelisms
 
@@ -52,9 +56,13 @@ I hope this helps, of course!, certainly!, you're absolutely right, would you li
 
 [Your Name], [Describe, [link to, XX-XX, INSERT_, PASTE_, TODO, TBD
 
+## Process writing (summaries and self-reports)
+
+ensured that ... adheres to, refined, enhanced, enriched, streamlined, in compliance with, complies with, neutrality, neutral tone, encyclopedic tone, clarity, flow, preserved, preserving, retained, retaining, avoided, avoiding, ensuring, aiming to, added sourced, added verified, improved attribution, with independent sources, per reviewer feedback, addressed reviewer feedback
+
 ## Tool residue (grep patterns)
 
-turn0, oaicite, oai_citation, contentReference, attributableIndex, attached_file, grok_card, grok_render_citation_card_json, 【, [cite:, [web:, :::writing, utm_source=chatgpt.com, utm_source=openai, utm_source=copilot.com, referrer=grok.com, ↩
+turn0, oaicite, oai_citation, contentReference, attributableIndex, attached_file, grok_card, grok_render_citation_card_json, 【, [cite:, [web:, start_span, ppl-ai-file-upload, :::writing, utm_source=chatgpt.com, utm_source=openai, utm_source=copilot.com, referrer=grok.com, ↩
 
 ## Punctuation and formatting (house rules)
 

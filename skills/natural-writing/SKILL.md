@@ -29,7 +29,7 @@ The catalog of signs changes over time (models change; the community adds new te
 1. Live: fetch <https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing> (raw wikitext: `https://en.wikipedia.org/w/index.php?title=Wikipedia:Signs_of_AI_writing&action=raw`). Do this when auditing text for AI tells, when the user asks for a thorough pass, or when the bundled snapshot looks stale for the topic at hand.
 2. Snapshot: [references/signs-catalog.md](references/signs-catalog.md) is a distilled copy of the full page, reorganized as writing rules. Use it as the working checklist for every invocation; it is enough when offline or for routine drafting.
 
-Snapshot last synced: 2026-07-13, from page revision 1363969535 (2026-07-13T16:57:33Z). See "Maintaining the snapshot" below for how to update it.
+Snapshot last synced: 2026-08-26, from page revision 1371415133 (2026-08-26T08:17:42Z). See "Maintaining the snapshot" below for how to update it.
 
 [references/words-to-avoid.md](references/words-to-avoid.md) lists the words and phrases the page flags, organized for scanning, plus ready-made grep commands for the mechanical checks.
 
@@ -68,10 +68,10 @@ Before delivering, reread the output against the checklist above. Scan it agains
 ```bash
 # Dash punctuation and machine artifacts: any hit outside quoted material is a bug.
 # (Unspaced en dashes in numeric ranges like 2024–2025 are allowed and not flagged.)
-grep -nE '—| – | - |turn0|oaicite|oai_citation|contentReference|attributableIndex|attached_file|grok[_-]|【|\[cite:|\[web:[0-9]|:::writing|utm_source=(chatgpt\.com|openai|copilot\.com)|referrer=grok\.com|↩|XX-XX|INSERT_|PASTE_' draft.md
+grep -nE '—| – | - |turn0|oaicite|oai_citation|contentReference|attributableIndex|attached_file|grok[_-]|start_span|ppl-ai-file-upload|【|\[cite:|\[web:[0-9]|:::writing|utm_source=(chatgpt\.com|openai|copilot\.com)|referrer=grok\.com|↩|XX-XX|INSERT_|PASTE_' draft.md
 
 # High-signal AI vocabulary: hits are prompts to reread the sentence, not automatic errors
-grep -inE 'delve|tapestry|testament|pivotal|crucial|underscor|showcas|foster(ing|s)|garner|meticulous|vibrant|intrica|boasts|bolster|interplay|stands as|serves as|not just|not only' draft.md
+grep -inE 'delve|deep dive|tapestry|testament|pivotal|crucial|underscor|showcas|foster(ing|s)|garner|meticulous|vibrant|intrica|boasts|bolster|interplay|stands as|serves as|not just|not only' draft.md
 ```
 
 Fix a hit by rewriting the sentence, never by thesaurus-swapping the flagged word. The underlying pattern (vagueness, puffery, formula) is the problem, not the word itself.
