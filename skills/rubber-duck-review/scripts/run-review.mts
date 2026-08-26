@@ -297,14 +297,16 @@ function runReviewer(
     return null;
   }
   let sawLife = false;
-  child.stdout.on("data", (chunk: Buffer) => {
+  // stdio[1] and stdio[2] are "pipe" in the spawn call above, so both streams
+  // exist; the null in their types only covers other stdio configurations.
+  child.stdout!.on("data", (chunk: Buffer) => {
     if (!sawLife) {
       sawLife = true;
       hooks.onLife?.();
     }
     writeSync(outFd, chunk);
   });
-  child.stderr.on("data", (chunk: Buffer) => {
+  child.stderr!.on("data", (chunk: Buffer) => {
     writeSync(errFd, chunk);
   });
   // A spawn failure emits 'error' and may still emit 'close'; settle once.
