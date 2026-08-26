@@ -28,7 +28,12 @@ type CitedToken = { doc: string; script: string };
 
 const CITED_TOKENS: Record<string, CitedToken[]> = {
   "sweep.mts": [
+    {
+      doc: "sweep.mts <repo-root> [--transcripts <dir>]",
+      script: "sweep.mts <repo-root> [--transcripts <dir>]",
+    },
     { doc: "--transcripts", script: '"--transcripts"' },
+    { doc: "ok:false", script: "ok: false" },
     { doc: '"headSha":', script: "headSha," },
     { doc: '"aheadBehind":', script: "aheadBehind," },
     { doc: '"treeFileCount":', script: "treeFileCount," },
@@ -39,6 +44,8 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: '"defaultRef":{"ok":false', script: "defaultRef: { ok: false" },
     { doc: '"lsof":{"ok":false', script: "lsof: { ok: false" },
     { doc: '"control":"FAILED"', script: 'control: "FAILED"' },
+    { doc: "agent-*.jsonl", script: "agent-(.+)\\.jsonl" },
+    { doc: "`mtime`", script: "mtime: stat.mtime.toISOString()" },
     { doc: "sizeBytes", script: "sizeBytes: stat.size" },
     { doc: "lastEventAgeSeconds", script: "lastEventAgeSeconds:" },
     { doc: "lastEventType", script: "lastEventType: lastEventType(" },
@@ -52,12 +59,17 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: "probe.mts json-keys", script: 'case "json-keys":' },
     { doc: "probe.mts set", script: 'case "set":' },
     { doc: "probe.mts tokens", script: 'case "tokens":' },
+    { doc: "count <file> <literal>", script: "count needs <file> <literal>" },
+    { doc: "json-keys <file> [<file2>]", script: "json-keys needs <file> [<other-file>]" },
     { doc: "set <repo-root> <base-ref>", script: "set needs <repo-root> <base-ref>" },
     { doc: "tokens <table.json>", script: "tokens needs <table.json> <tree-root>" },
+    { doc: '"text":', script: "spec.text" },
     { doc: '"expect"', script: 'needs "expect" of ">=1"' },
+    { doc: '"expect": 0', script: "expect >= 0" },
     { doc: '">=1"', script: 'expect === ">=1"' },
   ],
   "ledger.mts": [
+    { doc: "active | dormant-by-design", script: '"active"' },
     { doc: "dormant-by-design", script: '"dormant-by-design"' },
     { doc: "landing-gate", script: '"landing-gate"' },
     { doc: "landed-swept", script: '"landed-swept"' },
@@ -73,6 +85,10 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: "baseline.mts pin", script: 'command === "pin"' },
     { doc: "baseline.mts check", script: 'command === "check"' },
     { doc: "<tree-root> <file...>", script: '<tree-root> <file...>",' },
+    {
+      doc: "check /tmp/fleet-<sessionId>/baseline <tree-root>",
+      script: '<baseline-dir> <tree-root>",',
+    },
   ],
 };
 
