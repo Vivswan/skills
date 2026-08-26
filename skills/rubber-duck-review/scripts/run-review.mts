@@ -71,8 +71,20 @@ const TOOL_ARGS: Record<Tool, (prompt: string) => string[]> = {
     prompt,
   ],
   // -p consumes the next argument, so the prompt must immediately follow it.
+  // -s strips the model/stats decoration so stdout is only the response.
+  // --available-tools is a visibility allow-list: view/rg/glob are the read
+  // tools; shell, write, MCP, web, and subagent tools are not even available.
+  // The deny flags stay as belt-and-braces (deny outranks every allow).
   // copilot does not stream JSON, so its stdout is plain text.
-  copilot: (prompt) => ["-p", prompt, "--deny-tool=write", "--deny-tool=shell"],
+  copilot: (prompt) => [
+    "-p",
+    prompt,
+    "-s",
+    "--available-tools=view,rg,glob",
+    "--deny-tool=write",
+    "--deny-tool=shell",
+    "--disable-builtin-mcps",
+  ],
 };
 
 const USAGE = [

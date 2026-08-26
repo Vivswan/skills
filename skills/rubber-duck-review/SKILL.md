@@ -28,7 +28,7 @@ Use this skill when someone asks for:
 - If no dedicated tool exists, fall back to a read-only CLI invocation through this skill's `scripts/run-review.mts` (step 3). Pick the reviewer by which model *you* are:
   - If you are currently using **Claude** → `codex`, fallback `copilot`.
   - If you are currently using **Codex or GitHub Copilot** → `claude`, fallback `copilot`.
-- Never let the reviewer write files, edit code, or run unrestricted shell commands. The script enforces read-only flags: `--sandbox read-only` (codex) / `--permission-mode plan` (claude) lets it run read-only commands (grep, `git diff`, typecheck) but blocks writes. That self-checking makes findings concrete. (Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.)
+- Never let the reviewer write files, edit code, or run unrestricted shell commands. The script enforces read-only flags: `--sandbox read-only` (codex) / `--permission-mode plan` (claude) / a read-only tool allow-list (copilot) lets it run read-only commands (grep, `git diff`, typecheck; copilot can only read and grep files) but blocks writes. That self-checking makes findings concrete. (Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.)
 
 ### 2. Craft the prompt
 
@@ -58,7 +58,7 @@ prompt_file="$(mktemp "${TMPDIR:-/tmp}/rubber-duck-prompt.XXXXXX")"
 bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|copilot per step 1
 ```
 
-- Reviewer argument: `codex` (runs `codex exec --json --sandbox read-only`), `claude` (runs `claude -p --permission-mode plan --verbose --output-format stream-json`; `--verbose` is required with `stream-json`), or `copilot` (runs `copilot -p <prompt> --deny-tool=write --deny-tool=shell`; copilot does not stream JSON, so there is no liveness signal while it runs - prefer codex/claude).
+- Reviewer argument: `codex` (runs `codex exec --json --sandbox read-only`), `claude` (runs `claude -p --permission-mode plan --verbose --output-format stream-json`; `--verbose` is required with `stream-json`), or `copilot` (runs `copilot -p <prompt> -s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps`: a read-only tool allow-list, so the reviewer can read and grep files but cannot shell out - no `git diff` or typecheck, so name the files to read - write, reach MCP servers, or spawn subagents; it also does not stream JSON, so there is no liveness signal. Last-resort fallback - prefer codex/claude).
 - If the environment rejects the prompt as a command argument (or the prompt is very large), add `--stdin-prompt` (codex/claude only): the prompt file itself is served as the reviewer's stdin. A file fd is EOF-terminated, so it cannot hang - the stdin hang trap is an open pipe, not a used stdin.
 - Foreground (the default) blocks until the reviewer exits, so give the tool call a generous timeout; subagents (worktree builders, spawned workers) always run foreground - a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
 - `--background` prints the output-file path and the PID of a detached monitor that records the reviewer's exit status beside the stream; leads use it to keep working while the review runs, then extract the verdict once it exits (step 4). Killing that PID cancels the review (the signal is forwarded to the reviewer).

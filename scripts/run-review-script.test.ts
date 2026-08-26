@@ -110,11 +110,15 @@ exit "\${STUB_EXIT:-0}"
 
 const FAKE_COPILOT = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
-if [ "$1" != "-p" ] || [ "$3 $4" != "--deny-tool=write --deny-tool=shell" ] || [ "$#" -ne 4 ]; then
+ro='-s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps'
+if [ "$1" != "-p" ] || [ "$3 $4 $5 $6 $7" != "$ro" ] || [ "$#" -ne 7 ]; then
   violate "copilot argv: $*"; exit 64
 fi
 printf '%s' "$2" > "\${STUB_PROMPT_COPY}"
-if [ "\${STUB_MODE:-ok}" = "ok" ]; then echo "COPILOT VERDICT: correct"; fi
+case "\${STUB_MODE:-ok}" in
+  ok) echo "COPILOT VERDICT: correct";;
+  blank) printf '   \\n';;
+esac
 exit "\${STUB_EXIT:-0}"
 `;
 
@@ -218,6 +222,12 @@ describe("run-review.mts", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("COPILOT VERDICT: correct\n");
     expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+  });
+
+  test("copilot whitespace-only output is a failed review, not a verdict", () => {
+    const r = run(["copilot", promptFile], { STUB_MODE: "blank" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("review FAILED - relaunch");
   });
 
   test("a stub that reads stdin completes: stdin is 'ignore', not an open pipe", () => {
