@@ -18,6 +18,7 @@ The agent applies these on its own when the task matches:
 - [/craft-skills-and-memories](./skills/craft-skills-and-memories/) - Create and repair skills and memories at their canonical source
 - [/no-invalid-states](./skills/no-invalid-states/) - Invariants in the type system instead of runtime checks
 - [/no-sleep-waiting-on-subagents](./skills/no-sleep-waiting-on-subagents/) - React to completion notifications, never sleep or poll
+- [/retire-the-class](./skills/retire-the-class/) - Class-retiring substrate changes instead of pointwise patches
 - [/review-before-commit](./skills/review-before-commit/) - Independent review converges before any commit
 - [/rubber-duck-review](./skills/rubber-duck-review/) - Cross-model, read-only second-opinion code review
 - [/watch-ci-after-push](./skills/watch-ci-after-push/) - Background CI watcher after every push
