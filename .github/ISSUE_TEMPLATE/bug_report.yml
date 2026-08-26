@@ -18,6 +18,7 @@ body:
         - pr-and-issue-discipline
         - review-before-commit
         - rubber-duck-review
+        - verify-with-controls
         - watch-ci-after-push
         - worktree-hygiene
         - Not skill-specific (catalog, install, or tooling)
