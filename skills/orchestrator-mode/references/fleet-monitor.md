@@ -105,7 +105,7 @@ Two disaster-shaped non-disasters: **HEAD == origin/main at 0-ahead/0-behind is 
 
 ## Probe Cost
 
-Routine sweeps must be O(cheap), and the sweep script is built to that budget: status hash, dirty-file mtimes, HEAD sha, ahead/behind - never a whole-tree filesystem walk, which collapses under wave-start I/O (parallel installs can kill consecutive sweeps at the command cap). Expensive walks belong at flag-time, against one worktree only.
+Routine sweeps must be O(cheap), and the sweep script is built to that budget: status hash, dirty-file mtimes, HEAD sha, ahead/behind - never a whole-tree filesystem walk, which collapses under wave-start I/O (parallel installs can kill consecutive sweeps at the command cap). The row's one size-scaling reading is `treeFileCount`, backed by a per-worktree `git ls-tree -r` at HEAD - the sweep's heaviest git call; it reads the object store rather than walking the filesystem, but its cost still grows with tree size. Expensive walks belong at flag-time, against one worktree only.
 
 ## Verifying a Landing
 

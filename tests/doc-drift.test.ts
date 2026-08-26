@@ -53,6 +53,7 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: '"pid":', script: "pid: entry.pid" },
     { doc: '"command":', script: "command: entry.command" },
     { doc: '"state":', script: "state: states.get(" },
+    { doc: "git ls-tree -r", script: '"ls-tree"' },
   ],
   "probe.mts": [
     { doc: "probe.mts count", script: 'case "count":' },
@@ -62,7 +63,7 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: "count <file> <literal>", script: "count needs <file> <literal>" },
     { doc: "json-keys <file> [<file2>]", script: "json-keys needs <file> [<other-file>]" },
     { doc: "set <repo-root> <base-ref>", script: "set needs <repo-root> <base-ref>" },
-    { doc: "tokens <table.json>", script: "tokens needs <table.json> <tree-root>" },
+    { doc: "tokens <table.json> <root>", script: "tokens needs <table.json> <tree-root>" },
     { doc: '"text":', script: "spec.text" },
     { doc: '"expect"', script: 'needs "expect" of ">=1"' },
     { doc: '"expect": 0', script: "expect >= 0" },
