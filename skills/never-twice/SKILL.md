@@ -1,6 +1,6 @@
 ---
 name: never-twice
-description: Use when you just corrected an agent or fixed the same failure class twice - climb past the instance fix, architecture or data structures first, a CI gate second; rules and vigilance are last-resort debts.
+description: Use when you just corrected an agent or fixed the same failure class twice. Climb past the instance fix, architecture or data structures first, a CI gate second; rules and vigilance are last-resort debts.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -8,7 +8,7 @@ metadata:
 
 # Never Twice
 
-> Categorically eliminate the problem - through better architecture or a better choice of data structures - so the failure class cannot recur, instead of fixing its instances one at a time.
+> Categorically eliminate the problem (through better architecture or a better choice of data structures) so the failure class cannot recur, instead of fixing its instances one at a time.
 
 Every correction and every repeated failure gets the most durable response reachable:
 
@@ -19,7 +19,9 @@ Every correction and every repeated failure gets the most durable response reach
 | 3 | a skill or written rule | recurs, but the next agent knows | fallback |
 | 4 | human vigilance | anything | avoid |
 
-The ladder is not a menu. Preference decays exponentially down it: rung 1 is the goal, rung 2 a clearly weaker but acceptable gate, rungs 3 and 4 each another large step down - taken only when every higher rung is genuinely unreachable. And a rung-3 or rung-4 landing is a debt, not a resolution: when a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
+The ladder is not a menu. Preference decays exponentially down it: rung 1 is the goal, rung 2 a clearly weaker but acceptable gate, rungs 3 and 4 each another large step down, taken only when every higher rung is genuinely unreachable.
+
+And a rung-3 or rung-4 landing is a **debt**, not a resolution: when a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
 
 ## Rung 1: the class cannot recur
 
@@ -82,23 +84,27 @@ Log timestamps are ISO 8601 (2026-08-26T14:03:00Z), never epoch.
 
 ## Workflow
 
-1. Name the class in one sentence: "any new Event member can ship without a roster entry." If you cannot, it is not a class yet - fix the instance and move on.
-2. Find the substrate that admits new members: two artifacts synced by convention, a string where a closed set belongs, state kept in prose, a hand-typed ritual.
-3. Climb as close to rung 1 as the task allows: take the most durable rung you can implement within the task's scope and authority.
-4. Ship it. A lower-rung fallback ships only with the gap to the more durable rung named in your report - and tracked as its own task where you have the authority to create one, never parked as a note (a note is state kept in prose, the substrate that admitted the class).
+1. **Name the class** in one sentence: "any new Event member can ship without a roster entry." If you cannot, it is not a class yet: fix the instance and move on.
+2. **Find the substrate** that admits new members: two artifacts synced by convention, a string where a closed set belongs, state kept in prose, a hand-typed ritual.
+3. **Climb** as close to rung 1 as the task allows: take the most durable rung you can implement within the task's scope and authority.
+4. **Ship it.** A lower-rung fallback ships only with the gap to the more durable rung named in your report. Track that gap as its own task where you have the authority to create one. Never park it as a note: a note is state kept in prose, the substrate that admitted the class.
 
 Test whatever ships:
 
 > If a new member of this class appears tomorrow, does the fix hold, or does it silently pass the same way?
 
-Three answers. It silently passes: the class is alive. It fails loudly but late - at runtime, after shipping: an instance guard, the class is still alive. Or it cannot recur, at the rung that holds it: impossible to build (1), stopped in CI (2), caught by a loaded rule (3).
+Three answers:
+
+- It **silently passes**: the class is alive.
+- It **fails loudly but late** (at runtime, after shipping): an instance guard, the class is still alive.
+- It **cannot recur**, at the rung that holds it: impossible to build (1), stopped in CI (2), caught by a loaded rule (3).
 
 ## Review Criteria
 
 Skills that run code reviews (such as `/rubber-duck-review`) expand this section into their reviewer prompt when this skill is installed. Ask the reviewer to flag:
 
-- fixes that repeat an earlier fix of the same failure class - cite the evidence (the prior commit, doc line, or correction), not a hunch
+- fixes that repeat an earlier fix of the same failure class; cite the evidence (the prior commit, doc line, or correction), not a hunch
 - for each, name the rung the fix sits on, propose a concrete more durable rung, and say why it is reachable within this change's scope (or why it is not)
-- apply the test to whatever ships: a new member of the class tomorrow - impossible to build, stopped in CI, caught by a loaded rule, or silent?
+- apply the test to whatever ships: if a new member of the class appears tomorrow, is it impossible to build, stopped in CI, caught by a loaded rule, or silent?
 
 Triage the resulting findings with the workflow above.
