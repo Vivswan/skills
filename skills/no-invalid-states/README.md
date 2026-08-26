@@ -1,6 +1,6 @@
 # No Invalid States
 
-`/no-invalid-states` is a review-and-refactor skill that moves correctness invariants out of scattered runtime checks and into the type system: parse at boundaries, then make invalid internal states impossible to construct.
+`/no-invalid-states` is a review-and-refactor skill that moves correctness invariants out of scattered runtime checks and into the type system. Parse at boundaries, then make invalid internal states impossible to construct.
 
 ## Install
 

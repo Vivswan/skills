@@ -93,4 +93,4 @@ Some invariants belong below the application:
 - `UNIQUE` constraints instead of check-then-insert races
 - enum columns or lookup tables for closed sets
 
-A database constraint outlives every application rewrite; when the invariant is about stored data, enforce it there and let the application types mirror it.
+A database constraint outlives every application rewrite. When the invariant is about stored data, enforce it there and let the application types mirror it.
