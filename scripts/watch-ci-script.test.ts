@@ -7,8 +7,10 @@ import { ROOT } from "./lib";
 // Exit-matrix test for the watch-ci helper: a fake `gh` on PATH drives every
 // branch of the script, pinning the contract its reviews established - a red
 // run exits 1, a gh operational failure exits 2 (never 1), a green fleet
-// exits 0, and a red run outranks a gh hiccup. A fake `sleep` keeps the
-// discovery-retry scenarios instant.
+// exits 0, and a red run outranks a gh hiccup. The unit of judgment is the
+// workflow: only the latest run per workflow is judged, and older
+// re-triggered runs are reported as superseded without affecting the exit
+// code. A fake `sleep` keeps the discovery-retry scenarios instant.
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.sh");
 
@@ -20,8 +22,9 @@ const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.
 const FAKE_GH = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${GH_VIOLATIONS}"; }
 jq_view='"\\(.conclusion)\\t\\(.name)"'
+jq_list='.[] | "\\(.databaseId)\\t=\\(.workflowDatabaseId)\\t\\(.workflowName)"'
 if [ "$1 $2" = "run list" ]; then
-  if [ "$*" != "run list --commit deadbeef --json databaseId --jq .[].databaseId" ]; then
+  if [ "$*" != "run list --commit deadbeef --json databaseId,workflowDatabaseId,workflowName --jq $jq_list" ]; then
     violate "list: $*"; exit 64
   fi
   [ "\${GH_LIST_EXIT:-0}" -ne 0 ] && exit "\${GH_LIST_EXIT}"
@@ -30,7 +33,11 @@ if [ "$1 $2" = "run list" ]; then
     n=$((n + 1)); printf '%s' "$n" > "\${GH_LIST_COUNTER}"
     [ "$n" -lt "\${GH_LIST_READY_AFTER}" ] && exit 0
   fi
-  [ -n "\${GH_LIST_IDS:-}" ] && printf '%s\\n' \${GH_LIST_IDS}
+  for lid in \${GH_LIST_IDS:-}; do
+    nvar="GH_NAME_\${lid}"
+    wvar="GH_WF_\${lid}"
+    printf '%s\\t=%s\\t%s\\n' "$lid" "\${!wvar-wf-$lid}" "\${!nvar:-CI-$lid}"
+  done
   exit 0
 fi
 if [ "$1 $2" = "run watch" ]; then
@@ -47,10 +54,12 @@ if [ "$1 $2" = "run view" ]; then
   fi
   var="GH_VIEW_\${id}"
   spec="\${!var:-success}"
+  nvar="GH_NAME_\${id}"
+  name="\${!nvar:-CI-$id}"
   case "$spec" in
     FAILCMD) exit 4;;
-    EMPTY) printf '\\tCI-%s\\n' "$id"; exit 0;;
-    *) printf '%s\\tCI-%s\\n' "$spec" "$id"; exit 0;;
+    EMPTY) printf '\\t%s\\n' "$name"; exit 0;;
+    *) printf '%s\\t%s\\n' "$spec" "$name"; exit 0;;
   esac
 fi
 violate "unknown: $*"
@@ -151,5 +160,65 @@ describe("watch-ci.sh exit matrix", () => {
   test("a red run outranks a gh hiccup: exits 1", () => {
     const r = run({ GH_LIST_IDS: "1 2", GH_VIEW_1: "failure", GH_VIEW_2: "FAILCMD" });
     expect(r.code).toBe(1);
+  });
+
+  test("an older cancelled run of a re-triggered workflow is superseded, not red", () => {
+    // Unsorted ids of different digit lengths pin the numeric (not lexical)
+    // newest-run pick, and the glob-metacharacter name pins the quoting in
+    // the membership test. GH_VIEW_9 is a trap: if the script judged the
+    // superseded run instead of skipping it, the cancelled conclusion would
+    // surface as FAIL and exit 1.
+    const name = "CI *?[x]";
+    const r = run({
+      GH_LIST_IDS: "9 100",
+      GH_WF_9: "77",
+      GH_WF_100: "77",
+      GH_NAME_9: name,
+      GH_NAME_100: name,
+      GH_VIEW_9: "cancelled",
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`superseded: ${name} (9)`);
+    expect(r.stdout).toContain(`pass: ${name} (100)`);
+    expect(r.stdout).not.toContain("FAIL");
+  });
+
+  test("runs without a workflow id are judged individually, never superseded", () => {
+    const r = run({ GH_LIST_IDS: "1 2", GH_WF_1: "null", GH_WF_2: "null", GH_VIEW_1: "cancelled" });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("FAIL(cancelled): CI-1 (1)");
+    expect(r.stdout).toContain("pass: CI-2 (2)");
+    expect(r.stdout).not.toContain("superseded");
+  });
+
+  test("an empty workflow-id field neither collapses nor groups", () => {
+    // Tab is IFS whitespace, so an unguarded empty middle field would shift
+    // the name into the id slot and same-name runs would supersede each
+    // other; the sentinel-prefixed field must keep both runs judged.
+    const r = run({
+      GH_LIST_IDS: "1 2",
+      GH_WF_1: "",
+      GH_WF_2: "",
+      GH_NAME_1: "CI",
+      GH_NAME_2: "CI",
+      GH_VIEW_1: "cancelled",
+    });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("FAIL(cancelled): CI (1)");
+    expect(r.stdout).toContain("pass: CI (2)");
+    expect(r.stdout).not.toContain("superseded");
+  });
+
+  test("a cancelled latest run with no newer run is a real failure", () => {
+    const r = run({ GH_LIST_IDS: "1", GH_VIEW_1: "cancelled" });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("FAIL(cancelled): CI-1 (1)");
+  });
+
+  test("a skipped conclusion counts as pass", () => {
+    const r = run({ GH_LIST_IDS: "1", GH_VIEW_1: "skipped" });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("skip: CI-1 (1)");
+    expect(r.stdout).not.toContain("FAIL");
   });
 });
