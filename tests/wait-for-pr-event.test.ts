@@ -299,6 +299,23 @@ describe("wait-for-pr-event.mts", () => {
     expect(r.stdout).toContain("check lint -> vanished (was success)");
   });
 
+  test("a check appearing pending AFTER the baseline still reports its vanishing", () => {
+    // baseline [] -> pending (not a delta) -> [] must emit the vanish:
+    // deltas diff against the previous snapshot, not the original baseline.
+    // The second real poll sits one full 15s interval after the first.
+    const r = run(
+      ["7", "--repo", "octo/example", "--until", "checks", "--interval", "15", "--timeout", "60"],
+      {
+        "gql-1": gql(),
+        "pr-1": prView(),
+        "pr-2": prView([["ci", "", "IN_PROGRESS"]]),
+        "pr-3": prView(),
+      },
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("check ci -> vanished (was pending)");
+  }, 30000);
+
   test("a malformed but zero-exit baseline response still exits 2", () => {
     const r = run(["7", "--repo", "octo/example"], { "gql-1": "not json at all" });
     expect(r.code).toBe(2);

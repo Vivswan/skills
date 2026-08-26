@@ -340,38 +340,42 @@ function renderSnapshot(snapshot: Snapshot): string {
 
 // --- deltas ------------------------------------------------------------------
 
-/** Evidence lines for every WATCHED change between baseline and current;
- * merged/closed transitions are handled by settleTerminalState instead. */
-function diffDeltas(baseline: Snapshot, current: Snapshot, watched: Set<Watched>): string[] {
+/** Evidence lines for every WATCHED change since the previous successful
+ * snapshot; merged/closed transitions are handled by settleTerminalState.
+ * Diffing against the PREVIOUS snapshot, not the baseline, matters for one
+ * case only (any watched delta exits at once, so the two are otherwise
+ * equal): a check that appears pending AFTER the baseline is not itself a
+ * delta, but its later conclusion or disappearance must still be one. */
+function diffDeltas(previous: Snapshot, current: Snapshot, watched: Set<Watched>): string[] {
   const deltas: string[] = [];
   if (watched.has("comment")) {
-    if (current.issueComments !== baseline.issueComments) {
-      deltas.push(`issue comments ${baseline.issueComments} -> ${current.issueComments}`);
+    if (current.issueComments !== previous.issueComments) {
+      deltas.push(`issue comments ${previous.issueComments} -> ${current.issueComments}`);
     }
-    if (current.threadTotal !== baseline.threadTotal) {
-      deltas.push(`review threads ${baseline.threadTotal} -> ${current.threadTotal}`);
+    if (current.threadTotal !== previous.threadTotal) {
+      deltas.push(`review threads ${previous.threadTotal} -> ${current.threadTotal}`);
     }
-    if (current.unresolvedThreads !== baseline.unresolvedThreads) {
+    if (current.unresolvedThreads !== previous.unresolvedThreads) {
       deltas.push(
-        `unresolved threads ${baseline.unresolvedThreads} -> ${current.unresolvedThreads}`,
+        `unresolved threads ${previous.unresolvedThreads} -> ${current.unresolvedThreads}`,
       );
     }
   }
   if (watched.has("review")) {
     const changed =
-      current.reviewCount !== baseline.reviewCount ||
-      (current.latestReview?.id ?? null) !== (baseline.latestReview?.id ?? null);
+      current.reviewCount !== previous.reviewCount ||
+      (current.latestReview?.id ?? null) !== (previous.latestReview?.id ?? null);
     if (changed) {
       deltas.push(
         current.latestReview
           ? `new review by ${current.latestReview.login} (${current.latestReview.state}) at ${current.latestReview.submittedAt}`
-          : `reviews ${baseline.reviewCount} -> ${current.reviewCount}`,
+          : `reviews ${previous.reviewCount} -> ${current.reviewCount}`,
       );
     }
   }
   if (watched.has("checks")) {
     for (const [key, { name, conclusion }] of current.checks) {
-      const before = baseline.checks.get(key);
+      const before = previous.checks.get(key);
       if (before === undefined && conclusion !== "pending") {
         deltas.push(`check ${name} -> ${conclusion} (new)`);
       } else if (before !== undefined && before.conclusion !== conclusion) {
@@ -380,7 +384,7 @@ function diffDeltas(baseline: Snapshot, current: Snapshot, watched: Set<Watched>
     }
     // A vanished check (a force-push resets the rollup) is a change too;
     // staying silent about it would read as "nothing happened".
-    for (const [key, { name, conclusion }] of baseline.checks) {
+    for (const [key, { name, conclusion }] of previous.checks) {
       if (!current.checks.has(key)) {
         deltas.push(`check ${name} -> vanished (was ${conclusion})`);
       }
@@ -552,7 +556,7 @@ async function main(): Promise<never> {
     }
     if (current !== null) {
       settleTerminalState(current, options.watched, prLabel);
-      const deltas = diffDeltas(baseline, current, options.watched);
+      const deltas = diffDeltas(last, current, options.watched);
       if (deltas.length > 0) {
         for (const line of deltas) print(line);
         process.exit(0);
