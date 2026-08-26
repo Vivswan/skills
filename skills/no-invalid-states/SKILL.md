@@ -14,7 +14,11 @@ The core principle:
 
 > Validate at boundaries, convert into stronger representations, and make invalid internal states difficult or impossible to construct.
 
-This is the "parse, don't validate" discipline. It does not mean deleting runtime validation: checks on external, dynamic, or untrusted data stay. The goal is that each fact is checked once, at the edge, and then encoded in a representation the rest of the program can trust.
+This is the "parse, don't validate" discipline:
+
+- Each fact is checked **once**, at the edge.
+- The result is encoded in a representation the rest of the program can trust.
+- Runtime validation is not deleted: checks on external, dynamic, or untrusted data stay.
 
 ## When to Apply
 
@@ -30,7 +34,7 @@ Use this skill when the code shows any of these signals:
 - incorrect operation ordering that could be rejected statically
 - casts, non-null assertions, or type ignores used to quiet the checker
 
-Do not use this skill to add abstraction to code that is already simple, or in place of a bug hunt; it improves representation, not behavior.
+Do not use this skill to add abstraction to code that is already simple, or in place of a bug hunt. It improves representation, not behavior.
 
 ## Workflow
 
@@ -52,13 +56,14 @@ Also inspect:
 - methods that fail only because another method was not called first
 - unchecked casts or assertions that exist to convince the type checker
 
-For each candidate, write the invariant as one sentence. For example: "a connection may only send data after it has successfully connected." If you cannot state the invariant, you cannot encode it; skip it.
+For each candidate, write the invariant as one sentence. For example: "a connection may only send data after it has successfully connected."
+
+If you cannot state the invariant, you cannot encode it; skip it.
 
 ### 2. Classify each invariant: static or dynamic
 
-Static, internal invariants belong in the program's structure. Examples: initialized vs uninitialized, authenticated vs unauthenticated, parsed vs raw, validated ID vs arbitrary string, mutually exclusive states.
-
-Dynamic, external conditions keep their runtime checks. Types cannot prove that an HTTP request succeeded, a file still exists, a token has not expired, user input is well-formed, or a service is reachable.
+- **Static**, internal invariants belong in the program's structure. Examples: initialized vs uninitialized, authenticated vs unauthenticated, parsed vs raw, validated ID vs arbitrary string, mutually exclusive states.
+- **Dynamic**, external conditions keep their runtime checks. Types cannot prove that an HTTP request succeeded, a file still exists, a token has not expired, user input is well-formed, or a service is reachable.
 
 The target shape is a one-way pipeline:
 
@@ -71,14 +76,20 @@ untrusted or raw value
 
 ### 3. Resolve at the ownership level
 
-Before choosing a representation, find who MUTATES the state behind the invariant. The resolution belongs at those mutation points, not at the consumers. The telltale is N call sites carrying the same guard, or a flag that every consumer must remember to honor: validation at N read points where prevention at the few write points would do.
+Before choosing a representation, find who **mutates** the state behind the invariant. The resolution belongs at those mutation points, not at the consumers.
 
-Worked example: a stored credential goes stale when its associated endpoint URL changes. The consumer-side design makes all six request paths check a `staleCredential` flag before using it: six guards, six error surfaces, and every future request path must remember the check. The owner-side design routes every URL change - settings UI save, config file edit, import - through one owning transition that resolves the question at that moment ("keep this credential for the new endpoint?"). Afterwards no request path needs a staleness guard; runtime authentication failures stay handled, as the dynamic condition they are.
+The telltale: N call sites carrying the same guard, or a flag that every consumer must remember to honor. That is validation at N read points where prevention at the few write points would do.
+
+Worked example: a stored credential goes stale when its associated endpoint URL changes.
+
+- Consumer-side design: all six request paths check a `staleCredential` flag before using it. Six guards, six error surfaces, and every future request path must remember the check.
+- Owner-side design: every URL change (settings UI save, config file edit, import) goes through one owning transition that resolves the question at that moment ("keep this credential for the new endpoint?").
+- Afterwards: no request path needs a staleness guard. Runtime authentication failures stay handled, as the dynamic condition they are.
 
 Two rules make the owner-side fix sound:
 
-- Enumerate ALL mutation points before claiming completeness. A consumer-side check accidentally covers write paths you forgot; an owner-side fix must route each one through the owning transition explicitly (a GUI and the settings file it edits are two paths, not one).
-- The resolution at the mutation point need not be a type: a validating transition, a normalization, or a question put to the user at the moment the intent is expressed all work. The next step covers the cases where a stronger representation is the right mechanism.
+- Enumerate **all** mutation points before claiming completeness. A consumer-side check accidentally covers write paths you forgot; an owner-side fix must route each one through the owning transition explicitly. A GUI and the settings file it edits are two paths, not one.
+- The resolution at the mutation point need not be a type. A validating transition, a normalization, or a question put to the user at the moment the intent is expressed all work. The next step covers the cases where a stronger representation is the right mechanism.
 
 ### 4. Choose the strongest idiomatic representation
 
@@ -118,13 +129,21 @@ Rules while refactoring:
 - Make illegal construction hard: private fields, validating constructors, factory functions, state-transition functions, frozen or readonly data.
 - Validate once. `validate -> use, validate -> use` becomes `parse once -> use, use, use`.
 - Never silence the type checker with broad casts, `any`, non-null assertions, or ignore comments to force a refactor through.
-- Preserve existing behavior unless you have confirmed a bug; if you find one, report it separately rather than fixing it silently.
-- Respect public API compatibility where practical; strengthen internals first, then widen outward.
-- Make the smallest architectural change that removes the invalid state. Do not convert every boolean into a state machine. A refactor is worthwhile only when it eliminates repeated checks, prevents wrong ordering, removes impossible field combinations, or clarifies the API contract. Readability beats type-system cleverness.
+- Preserve existing behavior unless you have confirmed a bug. If you find one, report it separately rather than fixing it silently.
+- Respect public API compatibility where practical: strengthen internals first, then widen outward.
+- Make the **smallest** architectural change that removes the invalid state. Do not convert every boolean into a state machine.
+- A refactor is worthwhile only when it eliminates repeated checks, prevents wrong ordering, removes impossible field combinations, or clarifies the API contract. Readability beats type-system cleverness.
 
 ### 6. Test and verify
 
-Update or add tests for valid state transitions, rejected boundary input, exhaustive state handling, and behavior preservation. Add compile-fail or type-level tests only if the project already has a mechanism for them.
+Update or add tests for:
+
+- valid state transitions
+- rejected boundary input
+- exhaustive state handling
+- behavior preservation
+
+Add compile-fail or type-level tests only if the project already has a mechanism for them.
 
 Then run the repository's own tooling. Inspect the project configuration (`package.json` scripts, `Makefile`, `Cargo.toml`, `pyproject.toml`, CI workflows) rather than assuming command names. Typical gates:
 
@@ -150,7 +169,12 @@ When asked to modify code, implement the changes rather than describing them. At
 
 Skills that run code reviews (such as `/rubber-duck-review`) expand this section into their reviewer prompt when this skill is installed. Ask the reviewer to flag:
 
-- invariants enforced only by runtime checks or convention: boolean lifecycle flags, optional fields that must appear or be absent together, "must call X before Y" ordering enforced at runtime, repeated validation of already-validated values, and field combinations that should be impossible to represent
+- invariants enforced only by runtime checks or convention:
+  - boolean lifecycle flags
+  - optional fields that must appear or be absent together
+  - "must call X before Y" ordering enforced at runtime
+  - repeated validation of already-validated values
+  - field combinations that should be impossible to represent
 - consumer-side guards that an owner-side resolution would remove: the same check repeated at N call sites, or a flag every consumer must remember to honor, when the state has enumerable mutation points where the question could be resolved once
 - for each finding, the stronger representation (sum type, newtype, typestate, validating constructor) or owner-side resolution that would remove the invalid state
 

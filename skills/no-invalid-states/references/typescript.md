@@ -90,7 +90,9 @@ function handle(state: State): void {
 
 ## Boundary schemas
 
-Parse external data (HTTP bodies, env vars, file contents, message queues) once, at the edge, into the internal types. If the project has a schema library, define the schema next to the type and infer one from the other so they cannot drift. Do not sprinkle `typeof x === "string"` guards through business logic; if internal code needs a guard, the boundary leaked.
+Parse external data (HTTP bodies, env vars, file contents, message queues) once, at the edge, into the internal types. If the project has a schema library, define the schema next to the type and infer one from the other so they cannot drift.
+
+Do not sprinkle `typeof x === "string"` guards through business logic. If internal code needs a guard, the boundary leaked.
 
 ## What to avoid
 

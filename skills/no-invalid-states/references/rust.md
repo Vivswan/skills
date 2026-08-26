@@ -106,4 +106,5 @@ instead of a struct with `card_number: Option<_>`, `expiry: Option<_>`, and `po_
 
 ## What to avoid
 
-Do not reach for `Rc<RefCell<_>>`, `Arc<Mutex<_>>`, cloning, heap allocation, or `unsafe` merely to dodge designing ownership correctly. If a typestate refactor forces one of these in, the refactor is wrong-shaped for this code; fall back to an enum or separate types.
+- Do not reach for `Rc<RefCell<_>>`, `Arc<Mutex<_>>`, cloning, heap allocation, or `unsafe` merely to dodge designing ownership correctly.
+- If a typestate refactor forces one of these in, the refactor is wrong-shaped for this code. Fall back to an enum or separate types.
