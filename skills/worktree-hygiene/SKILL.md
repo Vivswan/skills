@@ -26,16 +26,13 @@ Verify all three before `git worktree remove`, freshly, in this order:
 1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain` and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinator's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work.
 2. **Landed, by content.** Confirm the branch's work is pushed or landed before deleting anything.
    - Check ancestry first, against a ref the fetch just wrote: `git fetch <remote> <mainline>` followed by `git merge-base --is-ancestor <branch> FETCH_HEAD`. Test `FETCH_HEAD`, not `<remote>/<mainline>`: whether the fetch updates the remote-tracking ref depends on the remote's configured fetch mapping, and a stale local ref proves nothing once the remote moved ahead.
-   - A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Verify content equivalence against the fetched tip instead, executable and fail-closed:
+   - A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Whenever ancestry fails, require exact content equivalence at the fetched tip, for every file the branch touched (empty output = landed):
 
      ```bash
-     git cherry FETCH_HEAD <branch>   # every line "-": each commit is patch-equivalent upstream
-     # squash landings collapse commits, so when "+" lines remain, compare end state
-     # for every file the branch touched (empty diff = identical at the fetched tip):
-     git diff FETCH_HEAD <branch> -- <file...>
+     git diff FETCH_HEAD <branch> -- $(git diff --name-only "$(git merge-base FETCH_HEAD <branch>)" <branch>)
      ```
 
-     Any remaining difference blocks the deletion. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition.
+     Any remaining difference blocks the deletion. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
 3. **No live writer.** Check for processes whose cwd is inside the worktree (`lsof -a -p <pid> -d cwd`, or `lsof +D <tree>`). An actor absent from the running list is not itself writing, but processes it spawned (test chains, installs) can still be; kill them or wait them out first. And never remove a LOCKED tree (`git worktree list --porcelain` shows `locked` with its reason) or a tree another actor may be using without knowing whose it is and why.
 
 After removing:
@@ -80,7 +77,7 @@ Every linked worktree keeps a small private git dir (HEAD, index, in-progress re
 
 - **`git config` writes are repository-wide.** An actor enabling `rerere`, setting `remote.pushDefault`, or rewriting `branch.<name>.*` sections changes behavior in every sibling worktree at once, mid-run. (Per-worktree config exists only when `extensions.worktreeConfig` is enabled and the write targets `config.worktree`; without that, every write is shared.)
 - **Identity is shared.** A `user.email` or `user.name` write in one tree stamps every sibling's next commit. Set identity per command (`git -c user.email=...`) or in environment variables scoped to the actor, never in the shared config while others run.
-- **Branches and tags are shared.** A fetch, a branch deletion, or a tag move performed in one tree is instantly visible in all (per-tree refs are the exception: HEAD and the other pseudo-refs, `refs/worktree/*`, `refs/bisect/*`, `refs/rewritten/*`); a sibling mid-rebase against a ref you delete fails in ways it cannot diagnose. Coordinate ref surgery, or schedule it when no sibling is live.
+- **Branches and tags are shared.** A branch update or deletion or a tag move performed in one tree is instantly visible in all (per-tree refs are the exception: HEAD, `FETCH_HEAD` and the other pseudo-refs, `refs/worktree/*`, `refs/bisect/*`, `refs/rewritten/*`); a sibling mid-rebase against a ref you delete fails in ways it cannot diagnose. Coordinate ref surgery, or schedule it when no sibling is live.
 - **Hooks are shared by default.** Installing or editing a hook from one worktree changes what every sibling's next commit runs. (A per-worktree `core.hooksPath`, or a relative hooks path resolving per tree, is the exception; absent that, assume shared.)
 
 ## File Ownership Across Parallel Actors
