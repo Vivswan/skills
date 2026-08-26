@@ -16,6 +16,7 @@ The agent applies these on its own when the task matches:
 
 - [/code-standards](./skills/code-standards/) - House standards for maintainable code, folded into reviews
 - [/craft-skills-and-memories](./skills/craft-skills-and-memories/) - Create and repair skills and memories at their canonical source
+- [/never-twice](./skills/never-twice/) - Climb every repeated failure to the most durable fix reachable
 - [/no-invalid-states](./skills/no-invalid-states/) - Invariants in the type system instead of runtime checks
 - [/no-sleep-waiting-on-subagents](./skills/no-sleep-waiting-on-subagents/) - React to completion notifications, never sleep or poll
 - [/review-before-commit](./skills/review-before-commit/) - Independent review converges before any commit
@@ -43,8 +44,11 @@ graph LR
   rbc --> nis["/no-invalid-states"]
   rdr --> cs
   rdr --> nis
+  rdr --> nt
   nis --> rdr
   cs --> nis
+  nt["/never-twice"] --> rdr
+  nt --> nis
   om --> nsw["/no-sleep-waiting-on-subagents"]
   nsw --> wca
   csm["/craft-skills-and-memories"] --> nw["/natural-writing"]

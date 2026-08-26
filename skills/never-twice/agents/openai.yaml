@@ -1,0 +1,7 @@
+# Codex sidecar for this skill. The interface block mirrors
+# .codex-plugin/plugin.json (displayName, shortDescription, brandColor) and
+# the SKILL.md H1; the smoke test keeps them identical.
+interface:
+  display_name: "Never Twice"
+  short_description: "No failure class ever gets fixed twice by hand."
+  brand_color: "#B45309"
