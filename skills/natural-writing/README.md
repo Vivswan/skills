@@ -14,7 +14,7 @@ This skill is explicit-invocation-only: agents load it when you invoke it (e.g. 
 
 - `references/signs-catalog.md` holds a distilled snapshot of the full Wikipedia field guide, pinned to a specific page revision and sync date.
 - `references/words-to-avoid.md` holds the term lists.
-- The Wikipedia page changes as models and community observations change, so the workflow prefers the live page when there is network and falls back to the snapshot offline.
+- The Wikipedia page changes as models and community observations change, so the workflow prefers the live page when online and falls back to the snapshot offline.
 - `SKILL.md` records the pinned revision and documents how to update the snapshot when the page moves on.
 
 House rule on top of the Wikipedia catalog: no dash-as-punctuation at all (no em dashes, and no en-dash or spaced-hyphen substitutes).
