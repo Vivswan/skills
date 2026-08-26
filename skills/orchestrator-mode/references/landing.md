@@ -24,8 +24,12 @@ git config remote.pushDefault origin # multi-remote repos (fork checkouts) need 
 gh stack init track-1            # bottom of the chain, before spawning builders
 gh stack add  track-2            # one layer per track, in dependency order
 # STOP: switch the main checkout back to the mainline, spawn the builders,
-# and collect each layer's committed work (Worktree interplay, below).
-# Submitting now would publish EMPTY layer PRs.
+# and let them commit each layer's work. When a layer's builder signals done,
+# stop it and REMOVE its worktree (Worktree interplay, below): a branch
+# checked out in ANY worktree cannot be checked out elsewhere, so every step
+# below fails "already used by worktree" while a builder still holds its
+# layer. Submitting before the layers carry the collected commits would
+# publish EMPTY layer PRs.
 git checkout track-1             # stack commands error (ErrNotInStack) from the mainline;
 #                                  the bottom layer is the natural anchor to run them from
 gh stack sync                    # restack upper layers onto the collected work first:
@@ -41,9 +45,9 @@ gh stack sync --prune                # restack the remainder, drop merged branch
 git checkout <mainline>              # back to the mainline once stack operations are done
 ```
 
-Read `gh stack sync`'s verdict in its OUTPUT, never its exit code - both the pre-submit restack and the post-merge sync: it can print "Sync aborted" and still exit 0, leaving successors silently stale. On an aborted sync, stop and reconcile before continuing - the same exit-code-vs-verdict rule the skill's Land section states for gates.
+Read `gh stack sync`'s verdict in its OUTPUT, never its exit code - both the pre-submit restack and the post-merge sync: it can print "Sync aborted" and still exit 0, leaving successors silently stale. On an aborted sync, stop and reconcile before continuing - the same exit-code-vs-verdict rule the skill's Land section states for gates. And after any restack that changed a link's content, re-run the landing-gate review on that link (item 2 above) before it merges.
 
-Worktree interplay: git refuses to check out a branch already checked out in a worktree, and builders hold their layer branches in theirs. So after `init`/`add` create the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree; and the lead runs `rebase --upstack`/`sync`/`merge` from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live. Layer commits happen only on that layer's branch in its builder's worktree; the lead's stack operations are the only cross-layer writes.
+Worktree interplay: git refuses to check out a branch already checked out in a worktree, and builders hold their layer branches in theirs. So after `init`/`add` create the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree; and the lead runs `rebase --upstack`/`sync`/`merge` from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live. Removal itself is destructive: run the removal checks in `references/worktree-hygiene.md` (fresh status codes, no live processes with cwd inside the tree) before deleting anything. Layer commits happen only on that layer's branch in its builder's worktree; the lead's stack operations are the only cross-layer writes.
 
 ## A PR per Track (PR repos)
 
