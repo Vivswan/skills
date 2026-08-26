@@ -93,9 +93,10 @@ gh stack merge <pr> --yes --squash   # DELEGATED PATH ONLY: this line runs when 
 #                                      set, the commit on the mainline) before the sync below:
 #                                      same logs-vs-postcondition principle as the sync check.
 gh pr ready <num> --undo             # FIRST: flip every about-to-be-restacked successor to
-#                                      DRAFT before anything rewrites it. sync itself pushes
-#                                      the rewritten branches, so drafting afterward leaves a
-#                                      window where a still-ready successor exposes unverified
+#                                      DRAFT before anything rewrites it. The flip guards the
+#                                      WHOLE rewrite-and-push span (sync through submit):
+#                                      drafting later in that span leaves a window where a
+#                                      still-ready successor exposes unverified rewritten
 #                                      content to an auto-merge or user merge - close the
 #                                      window before rewriting, not after (the skill's
 #                                      Babysit-section both-directions draft rule, applied at
