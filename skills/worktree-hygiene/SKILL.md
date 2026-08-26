@@ -31,9 +31,9 @@ Verify all three before `git worktree remove`, freshly, in this order:
 
 After removing:
 
-- **Remove with `git worktree remove`, never a bare `rm -rf`.** Manual deletion leaves the worktree's administrative entry in the shared git dir, so git keeps treating its branch as checked out (and blocks deleting it) until `git worktree prune`. After a deletion that already happened manually, prune explicitly.
+- **Remove with `git worktree remove`, never a bare `rm -rf`.** Manual deletion leaves the worktree's administrative entry in the shared git dir, so git keeps treating its branch as checked out (and blocks deleting it) until the entry is pruned (`git worktree prune`; git also expires stale entries on its own per `gc.worktreePruneExpire`, but never count on that timing). After a deletion that already happened manually, prune explicitly.
 - **Removal does not kill survivors.** A finished actor's wedged test chain can outlive its deleted directory for hours. Re-check and kill any process whose cwd names the deleted path.
-- **Delete the branch too once it is no longer needed**, but verify the landing first (rule 2), never by what `git branch -d` says: `-d` only tests merge into the branch's configured upstream (or into HEAD when none is set), so it knows nothing about the landing workflow, and under squash and rebase merges it refuses after every successful landing. Treat a refusal as a prompt to verify by rule 2, never as a verdict in either direction; once verified, delete with `git branch -D`.
+- **Delete the branch too once it is no longer needed**, but verify the landing first (rule 2), never by what `git branch -d` says: `-d` only tests merge into the branch's configured upstream (or into HEAD when none is set), and the usual upstream is the branch's own `origin/<topic>`, not your mainline. So it can succeed on unlanded work and refuse on landed work; neither verdict proves anything about landing. Verify by rule 2, then delete with `git branch -D`.
 
 ### Auto-removal can destroy a live workspace
 
@@ -71,7 +71,7 @@ Every linked worktree keeps a small private git dir (HEAD, index, in-progress re
 
 - **`git config` writes are repository-wide.** An actor enabling `rerere`, setting `remote.pushDefault`, or rewriting `branch.<name>.*` sections changes behavior in every sibling worktree at once, mid-run. (Per-worktree config exists only when `extensions.worktreeConfig` is enabled and the write targets `config.worktree`; without that, every write is shared.)
 - **Identity is shared.** A `user.email` or `user.name` write in one tree stamps every sibling's next commit. Set identity per command (`git -c user.email=...`) or in environment variables scoped to the actor, never in the shared config while others run.
-- **Branches and tags are shared.** A fetch, a branch deletion, or a tag move performed in one tree is instantly visible in all (only HEAD and `refs/worktree/*` are per-tree); a sibling mid-rebase against a ref you delete fails in ways it cannot diagnose. Coordinate ref surgery, or schedule it when no sibling is live.
+- **Branches and tags are shared.** A fetch, a branch deletion, or a tag move performed in one tree is instantly visible in all (per-tree refs are the exception: HEAD and the other pseudo-refs, `refs/worktree/*`, `refs/bisect/*`, `refs/rewritten/*`); a sibling mid-rebase against a ref you delete fails in ways it cannot diagnose. Coordinate ref surgery, or schedule it when no sibling is live.
 - **Hooks are shared by default.** Installing or editing a hook from one worktree changes what every sibling's next commit runs. (A per-worktree `core.hooksPath`, or a relative hooks path resolving per tree, is the exception; absent that, assume shared.)
 
 ## File Ownership Across Parallel Actors
