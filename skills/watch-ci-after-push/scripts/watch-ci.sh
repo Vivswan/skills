@@ -1,36 +1,150 @@
 #!/usr/bin/env bash
 # Watch all CI runs for a commit: discover them (with registration-lag
-# polling), wait for each, report pass/fail with failing-job log excerpts.
+# polling), wait for the latest run of each workflow, report pass/fail with
+# failing-job log excerpts.
 # Usage: watch-ci.sh [<full-sha>]   (defaults to HEAD)
-# Exit 0: all runs passed. 1: at least one run concluded non-success.
-# 2: no runs registered, or gh itself failed (discovery or status checks).
+# Exit 0: the latest run of every workflow passed (event-condition skips
+# count as pass; older re-triggered runs are reported as superseded, never
+# judged). 1: at least one workflow's latest run ended with any non-success,
+# non-skipped conclusion (e.g. failure/cancelled/timed_out). 2: no runs
+# registered, or gh itself failed (discovery or status checks).
 set -euo pipefail
 
 # Full SHA required: gh run list --commit silently matches nothing for short SHAs.
 sha="${1:-$(git rev-parse HEAD)}"
 
-run_ids=""
+# --limit 100: the default page is 20 runs, and heavy retriggering can fill
+# it with one workflow, pushing another workflow off the page so it would
+# never be judged at all.
+# attempt is part of each line because GitHub RE-RUNS keep the run id and
+# increment attempt; convergence below must see a mid-watch re-run as change.
+# The "=" prefixes keep the attempt and workflow-id fields non-empty: tab is
+# IFS whitespace, so read would otherwise collapse an empty field and shift
+# the later fields into the wrong slots, silently mis-grouping the runs.
+discover() {
+  gh run list --commit "$sha" --limit 100 --json databaseId,attempt,workflowDatabaseId,workflowName --jq '.[] | "\(.databaseId)\t=\(.attempt)\t=\(.workflowDatabaseId)\t\(.workflowName)"'
+}
+
+# The unit of judgment is the workflow, not the run: re-triggers (e.g. a
+# pull_request `edited` event) stack several runs of one workflow on the same
+# SHA and a concurrency group cancels all but the newest, so judging every
+# run would report a green pipeline as red. select_latest reads run_lines and
+# sets run_ids to the newest run per workflow id (run ids are monotonic,
+# hence the numeric sort); older runs of the same workflow are informational
+# only ($1 = 1 prints them as superseded) and never affect the exit code.
+# Grouping is by workflowDatabaseId, not display name: two workflow files can
+# share a name, and one must never supersede the other. run_sig additionally
+# records id:attempt per selected run: it is the convergence signature, since
+# a re-run changes only the attempt, never the id.
+select_latest() {
+  run_ids=""
+  run_sig=""
+  seen_wfids=$'\n'
+  while IFS=$'\t' read -r id attempt wfid name; do
+    [ -n "$id" ] || continue
+    attempt="${attempt#=}"
+    wfid="${wfid#=}"
+    # Ruleset/unnamed runs can lack a workflow id (jq renders it "null");
+    # judge each individually rather than collapsing them into one bogus
+    # group.
+    case "$wfid" in
+      "" | null)
+        run_ids="$run_ids $id"
+        run_sig="$run_sig $id:$attempt"
+        continue
+        ;;
+    esac
+    case "$seen_wfids" in
+      *$'\n'"$wfid"$'\n'*)
+        if [ "$1" = "1" ]; then
+          echo "superseded: $name ($id)"
+        fi
+        ;;
+      *)
+        seen_wfids="$seen_wfids$wfid"$'\n'
+        run_ids="$run_ids $id"
+        run_sig="$run_sig $id:$attempt"
+        ;;
+    esac
+  done <<EOF
+$(printf '%s\n' "$run_lines" | sort -rn)
+EOF
+}
+
+run_lines=""
 for attempt in 1 2 3 4 5; do
   # || true: a gh failure (auth, non-GitHub remote) must not masquerade as
   # a red pipeline via set -e; it falls through to the exit-2 path below.
-  run_ids="$(gh run list --commit "$sha" --json databaseId --jq '.[].databaseId' || true)"
-  [ -n "$run_ids" ] && break
+  run_lines="$(discover || true)"
+  [ -n "$run_lines" ] && break
   [ "$attempt" -lt 5 ] && sleep 3
 done
 
-if [ -z "$run_ids" ]; then
+if [ -z "$run_lines" ]; then
   echo "no workflow runs registered for $sha after ~15s (or gh failed; check stderr above, gh auth status, and the remote)" >&2
+  exit 2
+fi
+
+# Selections stay silent until the final one so each superseded line is
+# printed exactly once.
+select_latest 0
+
+# "Latest" is only latest at a discovery snapshot: a re-trigger DURING a wait
+# supersedes a selected run, and its concurrency cancellation must not read
+# as FAIL. Iterate wait -> re-discover -> re-select to a fixed point (capped)
+# so the judged runs are the latest at judgment time. Convergence compares
+# id:attempt signatures, not just ids: a RE-RUN keeps the id and bumps the
+# attempt, and judging it before its wait would read an in-flight attempt.
+converged=0
+for round in 1 2 3 4 5; do
+  for id in $run_ids; do
+    # The watch only waits; classification comes from the conclusion query in
+    # the judgment loop below, so a watch aborted by a gh/network error
+    # cannot misreport.
+    gh run watch "$id" >/dev/null 2>&1 || true
+  done
+  # A failed or empty re-discovery is tooling trouble, same as at first
+  # discovery; silently judging the stale snapshot instead could re-report a
+  # now-superseded cancellation as a real FAIL.
+  run_lines="$(discover || true)"
+  if [ -z "$run_lines" ]; then
+    echo "re-discovery after the watch returned nothing for $sha (gh failed, or the runs vanished); refusing to judge a stale snapshot" >&2
+    exit 2
+  fi
+  prev_sig="$run_sig"
+  select_latest 0
+  if [ "$run_sig" = "$prev_sig" ]; then
+    converged=1
+    break
+  fi
+done
+
+if [ "$converged" -ne 1 ]; then
+  echo "note: retriggering was still active after 5 discovery rounds; judging the current selection, which may itself already be superseded"
+  for id in $run_ids; do
+    gh run watch "$id" >/dev/null 2>&1 || true
+  done
+fi
+
+# Re-runs the selection on the final snapshot purely to print each older run
+# as a superseded info line.
+select_latest 1
+
+# Discovery found runs, so an empty selection here means the grouping pipe
+# itself broke; that must surface as tooling trouble, never as green.
+if [ -z "$run_ids" ]; then
+  echo "internal: no runs selected from the discovery output for $sha" >&2
   exit 2
 fi
 
 # Run outcome (fail) and gh health (gherr) are tracked separately so an
 # auth/network failure is never reported as a red pipeline, and vice versa.
+# Every selected run was already watched to completion above, so this loop
+# only classifies; another wait here would reopen the supersession race the
+# fixed-point loop just closed.
 fail=0
 gherr=0
 for id in $run_ids; do
-  # The watch only waits; classification comes from the conclusion query
-  # below, so a watch aborted by a gh/network error cannot misreport.
-  gh run watch "$id" >/dev/null 2>&1 || true
   if ! line="$(gh run view "$id" --json name,conclusion --jq '"\(.conclusion)\t\(.name)"' 2>/dev/null)"; then
     echo "gh failed while checking run $id (auth or network?)" >&2
     gherr=1
@@ -42,14 +156,23 @@ for id in $run_ids; do
     success)
       echo "pass: $name ($id)"
       ;;
+    skipped)
+      # Event-condition skips (workflow_run fan-out, duplicate triggers) are
+      # not failures; mapping them to FAIL trains readers to discount exit 1.
+      echo "skip: $name ($id)"
+      ;;
     "" | null)
-      # Watch returned but the run has no conclusion: the watch was cut short.
-      # gh normalizes a null conclusion to "" in --json output; "null" guards
-      # any path where jq renders the raw JSON null instead.
+      # The run has no conclusion although its watch returned: the watch was
+      # cut short. gh normalizes a null conclusion to "" in --json output;
+      # "null" guards any path where jq renders the raw JSON null instead.
       echo "run $id ($name) is not concluded; the watch aborted early (gh or network?)" >&2
       gherr=1
       ;;
     *)
+      # Every other conclusion (failure, cancelled, timed_out, neutral,
+      # action_required, stale, startup_failure, ...) is a FAIL - including a
+      # cancelled LATEST run: with no newer run to supersede it, cancellation
+      # means the pipeline never delivered a verdict.
       fail=1
       echo "FAIL($conclusion): $name ($id)"
       # || true: --log-failed exits non-zero for expired logs or runs with no

@@ -40,19 +40,24 @@ Preferred: spawn a background subagent with this brief, then keep working. Never
 ```text
 Watch the CI runs for commit <full-sha> on <repo>: run
 "<skill-dir>/scripts/watch-ci.sh <full-sha>" from the repo root and
-report its full output. Exit 0: all green - say so in one line.
-Exit 1: at least one run concluded non-success - include the FAIL
-lines and the log excerpts. Exit 2: discovery or gh itself failed -
-report that as tooling trouble, NEVER as a red pipeline. Report even
-on success; never go silent. You watch and report ONLY: never fix,
-commit, or push from this role.
+report its full output. Exit 0: all green (skipped runs count as
+pass) - say so in one line. Exit 1: some workflow's latest run ended
+with any non-success, non-skipped conclusion (e.g.
+failure/cancelled/timed_out) - include the FAIL lines and the log
+excerpts. Exit 2: discovery or gh itself failed - report that as
+tooling trouble, NEVER as a red pipeline. Report even on success;
+never go silent. You watch and report ONLY: never fix, commit, or
+push from this role.
 ```
 
 Fallback without subagents: this skill ships `scripts/watch-ci.sh` (the path is relative to the installed skill folder, not the repo under review), which does discovery, watching, and the failure report in one command - run it as a background shell command with its output redirected to a file, and read that file when it exits:
 
 ```bash
 bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1
-# exit 0: all green; 1: failures (log excerpts in the file); 2: no runs registered or gh failed
+# exit 0: latest run per workflow green (older re-triggered runs are reported
+# as superseded, not judged); 1: some latest run ended with a non-success,
+# non-skipped conclusion (log excerpts in the file); 2: no runs registered or
+# gh failed
 ```
 
 ### 3. Report
