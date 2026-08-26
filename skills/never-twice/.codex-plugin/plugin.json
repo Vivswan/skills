@@ -1,0 +1,36 @@
+{
+  "name": "never-twice",
+  "description": "Never fix the same failure class twice: climb every correction to the most durable response reachable - architecture and data structures first, then CI checks, then rules.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/never-twice",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "refactoring",
+    "failure-classes",
+    "root-cause",
+    "architecture",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Never Twice",
+    "shortDescription": "No failure class ever gets fixed twice by hand.",
+    "longDescription": "Fires when an agent is corrected or the same failure class is fixed twice, then climbs a four-rung ladder to the most durable response reachable: architecture or data structures so the class cannot recur, a CI lint or test so it cannot land, a skill or rule so the next agent knows, and human vigilance only as a last resort.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Edit", "Refactor"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/never-twice",
+    "defaultPrompt": [
+      "This is the second time we fixed this kind of bug - never twice.",
+      "I just corrected you on this again; climb the ladder instead.",
+      "Would a new member of this failure class be impossible to build, loud but late, or silent?"
+    ],
+    "brandColor": "#B45309"
+  }
+}

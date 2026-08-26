@@ -14,7 +14,7 @@ body:
         - no-sleep-waiting-on-subagents
         - natural-writing
         - orchestrator-mode
-        - retire-the-class
+        - never-twice
         - review-before-commit
         - rubber-duck-review
         - watch-ci-after-push
