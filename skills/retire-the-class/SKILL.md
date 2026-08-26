@@ -45,9 +45,11 @@ A silent pass means the class is still alive. So does a loud-but-late failure: a
 
 New members keep appearing because something weak admits them: two artifacts synced by convention, a stringly-typed identifier, an untyped output channel, state kept in memory or prose, a hand-retyped ritual. That substrate, not the latest member, is the fix target.
 
-### 3. Pick the class-retiring form
+### 3. Pick the highest-rung response
 
-| Class keeps appearing as | Class-retiring form |
+The table lists the highest reachable rung per shape: rung 1 wherever it exists, and the two entries marked rung 2 where prevention is impractical.
+
+| Class keeps appearing as | Highest-rung response |
 | --- | --- |
 | repeated null or lifecycle guards at N call sites | a sum type or an owning transition - the type-level mechanisms live in the `/no-invalid-states` skill |
 | two artifacts synced by convention (an enum and its dispatch table, a schema and its docs) | derive one from the other - a single source with the duplicate generated: drift is unrepresentable (rung 1) |
@@ -62,7 +64,7 @@ Every row is a rung-1 move except the two marked rung 2 - the CI agreement check
 
 ### 4. Ship the class-retiring change
 
-The class-retiring change - the categorical elimination, not the instance fix - is the deliverable; build it now, even when it is a big refactor. Only when urgency forces it does the pointwise fix ship first - and then the class-retiring change is boarded immediately as its own task on the active plan or board, never parked as a note (a note is state kept in prose: the exact substrate this skill exists to retire), and the work is reported as incomplete until the class is retired.
+The class-retiring change (rung 1) - the categorical elimination, not the instance fix - is the deliverable; build it now, even when it is a big refactor. A rung-2 fallback ships only where rung 1 is impractical, is recorded as rung 2, and names the rung-1 gap it leaves open. Only when urgency forces it does the pointwise fix ship first - and then the class-retiring change is boarded immediately as its own task on the active plan or board, never parked as a note (a note is state kept in prose: the exact substrate this skill exists to retire), and the work is reported as incomplete until the class is retired.
 
 ## Worked Examples
 
