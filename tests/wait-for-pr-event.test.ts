@@ -487,6 +487,17 @@ describe("wait-for-pr-event.mts", () => {
     expect(r.ghCalls.filter((call) => call.startsWith("api graphql"))).toHaveLength(3);
   });
 
+  test("a failed final read exits 2, never presenting stale evidence as final", () => {
+    const r = run(
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      { "gql-1": gql({ comments: 3 }), "pr-1": prView() },
+      { STUB_FAIL_GQL_CALLS: "3" }, // baseline and first poll succeed; the final read fails
+    );
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("final read at the deadline failed");
+    expect(r.stdout).not.toContain("no watched change");
+  });
+
   test("without --repo the current repo is resolved via gh repo view", () => {
     const r = run(["7"], {
       "gql-1": gql(),
