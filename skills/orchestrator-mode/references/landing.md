@@ -50,10 +50,10 @@ gh stack submit --auto           # push all layers, open one draft PR each
 # prepared:
 gh pr edit <num> --title "<repo-convention title>" --body-file <file>  # once per PR submit just opened
 # per converged layer, bottom-up:
-gh stack merge <pr> --yes --squash|--merge|--rebase   # method per the repo's merge policy
-#                                      (settings, CONTRIBUTING, recent history) or the setup
-#                                      interview - squash is only the example; explicit on the
-#                                      first merge either way
+gh stack merge <pr> --yes --squash   # or --merge / --rebase: the method is a per-repo choice
+#                                      read from the repo's merge policy (settings, CONTRIBUTING,
+#                                      recent history) or the setup interview - squash is only
+#                                      the example; explicit on the first merge either way
 gh stack sync --prune < /dev/null > /tmp/sync.out 2>&1   # restack the remainder, drop merged
 #                                      branches (same non-TTY capture as the pre-submit sync)
 gh stack submit --auto               # push the restacked remainder so successor PRs update:
@@ -63,7 +63,7 @@ gh stack submit --auto               # push the restacked remainder so successor
 git checkout <mainline>              # back to the mainline once stack operations are done
 ```
 
-Judge `gh stack sync` by BOTH signals, at both sync sites (the pre-submit restack and the post-merge sync): the exit code catches hard failures (nonzero on rebase conflicts and API failures), and the captured verdict in `/tmp/sync.out` catches soft aborts that exit 0 ("Sync aborted" leaves successors silently stale) - neither signal substitutes for the other. Continue only on exit 0 AND a non-aborted capture; either alone failing stops the flow to reconcile first. This is the skill's Land-section exit-code-vs-verdict discipline applied in both directions. And after any restack that changed a link's content, re-run the landing-gate review on that link (item 2 above) before it merges.
+Judge `gh stack sync` by BOTH signals, at both sync sites (the pre-submit restack and the post-merge sync): the exit code catches hard failures (nonzero on rebase conflicts and API failures), and the capture in `/tmp/sync.out` is scanned for ANY failure marker - "Sync aborted", "Push failed", error lines - not just the abort text, because gh-stack can print a failure, keep going, and still exit 0. Either signal failing (a nonzero exit OR any marker in the capture) stops the flow to reconcile first. Then, because absence of failure text is still not success, verify the POSTCONDITION sync existed to produce before continuing: the restacked successors actually moved - the next layer's merge-base now contains the merged commit, or the stack's status view shows the chain clean. Logs approximate; the postcondition is the truth - the same family as the exit-code lesson. And after any restack that changed a link's content, re-run the landing-gate review on that link (item 2 above) before it merges.
 
 Worktree interplay: git refuses to check out a branch already checked out in a worktree, and builders hold their layer branches in theirs. So after `init`/`add` create the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree; and the lead runs `rebase --upstack`/`sync`/`merge` from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live. Removal itself is destructive: run the removal checks in `references/worktree-hygiene.md` (fresh status codes, no live processes with cwd inside the tree) before deleting anything. Collection is a HANDOFF: stopping a builder and removing its worktree transfers ownership of that layer branch to the lead's stack operations only - review fixes on a collected layer ALWAYS go to a FRESH builder in a NEW worktree, with no collection exception to the skill's findings-go-to-a-builder rule, and never by resurrecting the removed builder (a message to a stopped agent resumes it, into a directory that no longer exists; see `references/worktree-hygiene.md` on handovers). Until collection, layer commits happen only on that layer's branch in its builder's worktree; the lead's stack operations are the only cross-layer writes.
 
