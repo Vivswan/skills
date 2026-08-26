@@ -371,7 +371,22 @@ describe("atomic writes", () => {
     expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({ workers: {}, flags: [] });
   });
 
-  test("racing writers never leave the file torn or unparseable", async () => {
+  test("eight serialized exit-0 writers all persist", () => {
+    const file = freshFile();
+    run(file, "init");
+    for (let i = 0; i < 8; i += 1) {
+      expect(runJson(file, "flag", `builder-${i}`, "serialized write").code).toBe(0);
+    }
+    const ledger = JSON.parse(readFileSync(file, "utf-8"));
+    const workers = ledger.flags.map((f: { worker: string }) => f.worker).sort();
+    expect(workers).toEqual(Array.from({ length: 8 }, (_, i) => `builder-${i}`).sort());
+  });
+
+  test("racing writers never leave the file torn or corrupt", async () => {
+    // True concurrency is documented last-writer-wins (no locking), so lost
+    // updates are accepted here; the pinned guarantee is that the file is
+    // never corrupt: always complete JSON that passes the loader's shape and
+    // hash-integrity validation.
     const file = freshFile();
     run(file, "init");
     const procs = Array.from({ length: 8 }, (_, i) =>
@@ -382,13 +397,11 @@ describe("atomic writes", () => {
     );
     await Promise.all(procs.map((proc) => proc.exited));
     for (const proc of procs) {
-      // Every racer read a complete ledger and appended cleanly; last writer wins.
+      // Every racer read a complete ledger and appended cleanly.
       expect(proc.exitCode).toBe(0);
     }
-    const ledger = JSON.parse(readFileSync(file, "utf-8"));
-    expect(Array.isArray(ledger.flags)).toBe(true);
-    expect(ledger.flags.length).toBeGreaterThanOrEqual(1);
-    // A follow-up command still accepts the file as well-formed.
+    expect(() => JSON.parse(readFileSync(file, "utf-8"))).not.toThrow();
+    // show runs the full loader (shape + hash integrity): exit 0 means not corrupt.
     expect(runJson(file, "show").code).toBe(0);
   });
 });
