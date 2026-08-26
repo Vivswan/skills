@@ -27,33 +27,40 @@ A silent pass means the class is still alive.
 
 ### 1. Name the class in one sentence
 
-"Any grep-based probe reads 0 both when the check passes and when the probe is broken." If you cannot name it in one sentence, it is not a class yet: ship the pointwise fix and move on.
+"Any new member of the event enum can ship without a roster entry." If you cannot name it in one sentence, it is not a class yet: ship the pointwise fix and move on.
 
 ### 2. Find the substrate the class lives on
 
-New members keep appearing because something weak admits them: an untyped output channel, a text-token check against live content, state kept in memory or prose, a hand-retyped ritual. That substrate, not the latest member, is the fix target.
+New members keep appearing because something weak admits them: two artifacts synced by convention, a stringly-typed identifier, an untyped output channel, state kept in memory or prose, a hand-retyped ritual. That substrate, not the latest member, is the fix target.
 
 ### 3. Pick the class-retiring form
 
 | Class keeps appearing as | Class-retiring form |
 | --- | --- |
-| repeated tool traps documented in prose | a tested script that bakes them in |
-| a count standing in for a thing | a set, or an evidence-bearing result |
-| state that evaporates (memory, prose, scrollback) | a persisted ledger |
-| substring tokens matched against live text | pinned-content snapshots and diffs |
-| repeated runtime guards for the same invariant | a stronger representation - the type-level mechanisms live in the `/no-invalid-states` skill; this skill covers the rest of the space |
+| repeated null or lifecycle guards at N call sites | a sum type or an owning transition - the type-level mechanisms live in the `/no-invalid-states` skill |
+| two artifacts synced by convention (an enum and its dispatch table, a schema and its docs) | a single source, with the duplicate generated or checked |
+| stringly-typed identifiers drifting apart | an enum or branded type with exhaustiveness checking |
+| a warning-comment checklist or trap doc that grows per incident | an executable check: a test, a lint rule, a script |
+| a count or boolean standing in for a set or richer state | the set or the state itself |
+| state living in prose, memory, or scrollback | a persisted structured store |
 
 ### 4. Ship the class-retiring change
 
 The class-retiring change is the deliverable; build it now, even when it is a big refactor. Only when urgency forces it does the pointwise fix ship first - and then the class-retiring change is boarded immediately as its own task on the active plan or board, never parked as a note (a note is state kept in prose: the exact substrate this skill exists to retire), and the work is reported as incomplete until the class is retired.
 
-## Worked Example
+## Worked Examples
 
-Before: a monitoring doc grew about 40 lines of probe traps in one shift. Each incident added another warning - "this grep pipeline reads 0 both when the check passes and when the log path moved", "count lines only after filtering the header". Every fix worked, and every fix left the next operator one more line to remember. The doc was growing per incident: the class was alive.
+### A roster hole, fixed twice
 
-The class, in one sentence: any probe whose broken state is indistinguishable from a passing check silently passes. The substrate: ad-hoc grep pipelines whose only output channel is an untyped count.
+Before: an event enum gained a new member, and the handler roster dispatching on it was not updated, so the new event fell through silently. The fix added the missing entry and read as complete. Weeks later the next member shipped with the same hole; that fix added its entry plus a runtime assertion that the roster covers every member, and also read as complete. Both were pointwise: a third member tomorrow still ships with a hole, caught by the assertion after deploy at best.
 
-After: a probe tool with a three-way result - pass with evidence, fail with the offending lines as evidence, or a loud probe error - plus tested scripts replacing the hand-typed pipelines. A clean zero passes only with source-verification evidence attached: the canonical source it read, that source's freshness, and how many records it scanned. Anything the tool cannot vouch for is a probe error, never a bare 0. A new probe mistake now fails loudly in the tool instead of earning a warning line. The doc stopped growing per incident: the class is retired, not managed.
+The class, in one sentence: any new enum member can ship without a roster entry. The substrate: two artifacts - the enum and the roster - synced by convention.
+
+After: the roster became a compile-time-exhaustive structure (a `Record<Event, Handler>` in TypeScript, an exhaustive `match` in Rust). A new member now fails the build until the roster covers it. The class is unrepresentable, not guarded.
+
+### A trap doc that grew per incident
+
+A monitoring doc grew about 40 lines of probe traps in one shift ("this grep pipeline reads 0 both when the check passes and when the log path moved"). The class: any probe whose broken state is indistinguishable from a passing check silently passes. The substrate: ad-hoc pipelines whose only output channel is an untyped count. Retired by a probe tool with a three-way result - pass with evidence, fail with evidence, or a loud probe error (a clean zero passes only with source-verification evidence attached) - plus tested scripts replacing the hand-typed pipelines. The doc stopped growing per incident.
 
 ## Review Criteria
 

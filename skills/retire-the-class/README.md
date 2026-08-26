@@ -19,8 +19,8 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/retire-the-cla
 ## What It Does
 
 - Names the failure class in one sentence; if it cannot be named, it is not a class yet
-- Finds the substrate the class lives on: an untyped output channel, a text-token check, state kept in prose, a hand-retyped ritual
-- Picks the class-retiring form: tested scripts over documented traps, evidence-bearing results over counts, persisted ledgers over evaporating state, pinned snapshots over substring tokens
+- Finds the substrate the class lives on: two artifacts synced by convention, a stringly-typed identifier, an untyped output channel, state kept in prose, a hand-retyped ritual
+- Picks the class-retiring form: a single generated-or-checked source over convention-synced duplicates, exhaustiveness-checked enums over drifting strings, executable checks over trap docs, sets and richer state over counts and booleans, persisted stores over evaporating state
 - Builds the class-retiring change as the deliverable; when urgency ships a pointwise fix first, the class-retiring change is boarded immediately (never parked as a note) and the work is reported incomplete until the class is retired
 - Pairs with [`/rubber-duck-review`](../rubber-duck-review/): when both skills are installed, the review skill folds these criteria into its second-opinion passes
 - Hands the type-level mechanisms (sum types, newtypes, typestate) to [`/no-invalid-states`](../no-invalid-states/) and covers the rest of the space
