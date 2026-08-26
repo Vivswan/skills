@@ -21,18 +21,19 @@ metadata:
 
 ## Removing a Worktree
 
-Verify all three before `git worktree remove` or `rm -rf`, freshly, in this order:
+Verify all three before `git worktree remove`, freshly, in this order:
 
-1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain` and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes distinguish `??`/`M` real work from `D` artifacts and a coordinator's keepalive marker (below).
+1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain` and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinator's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work.
 2. **Landed, by content.** Confirm the branch's work is pushed or landed before deleting anything.
-   - When the mainline uses merge commits or direct pushes, ancestry answers it: `git fetch` first (a stale local ref proves nothing once the remote moved ahead), then `git merge-base --is-ancestor <branch> origin/<mainline>`.
+   - When the mainline uses merge commits or direct pushes, ancestry answers it: `git fetch <remote> <mainline>` first, naming the exact remote and ref (an unqualified fetch can leave the ref you are about to trust stale in a multi-remote repository, and a stale ref proves nothing once the remote moved ahead), then `git merge-base --is-ancestor <branch> <remote>/<mainline>`.
    - When it uses squash or rebase merges, the branch's shas never land verbatim, so ancestry always says no. Verify by CONTENT instead: subject match, patch diff, the files present at the remote tip.
 3. **No live writer.** Check for processes whose cwd is inside the worktree (`lsof -a -p <pid> -d cwd`, or `lsof +D <tree>`). An actor absent from the running list is not itself writing, but processes it spawned (test chains, installs) can still be; kill them or wait them out first. And never remove a LOCKED tree (`git worktree list --porcelain` shows `locked` with its reason) or a tree another actor may be using without knowing whose it is and why.
 
 After removing:
 
+- **Remove with `git worktree remove`, never a bare `rm -rf`.** Manual deletion leaves the worktree's administrative entry in the shared git dir, so git keeps treating its branch as checked out (and blocks deleting it) until `git worktree prune`. After a deletion that already happened manually, prune explicitly.
 - **Removal does not kill survivors.** A finished actor's wedged test chain can outlive its deleted directory for hours. Re-check and kill any process whose cwd names the deleted path.
-- **Delete the branch too once it is no longer needed**, but verify the landing by content first (rule 2), never by what `git branch -d` says. In squash- and rebase-merge workflows `-d` refuses even after every successful landing, so a refusal there is normal: verify by content, then `git branch -D`. Only in merge-commit and direct-push workflows does a refused `-d` actually indicate unlanded commits worth investigating.
+- **Delete the branch too once it is no longer needed**, but verify the landing by content first (rule 2), never by what `git branch -d` says: `-d` tests whether the branch is merged into its configured upstream (or into HEAD when none is set), so its verdict knows nothing about the repository's landing workflow. In squash- and rebase-merge workflows it refuses even after every successful landing, so a refusal there is normal: verify by content, then `git branch -D`. Only in merge-commit and direct-push workflows does a refused `-d` actually indicate unlanded commits worth investigating.
 
 ### Auto-removal can destroy a live workspace
 
@@ -52,7 +53,7 @@ Ownership transfers explicitly, never by inference: at any moment exactly one ac
 
 ## One Branch, One Worktree
 
-Git refuses to check out a branch that is already checked out in ANY worktree ("already used by worktree"). So a branch is held by at most one tree, and the holder must release it before anyone else can take it:
+Git refuses, by default, to check out a branch that is already checked out in ANY worktree ("already used by worktree"). So a branch is held by at most one tree, and the holder must release it before anyone else can take it:
 
 ```bash
 git -C <holding-tree> checkout --detach   # or check out another branch there,
@@ -60,15 +61,17 @@ git -C <holding-tree> checkout --detach   # or check out another branch there,
 git checkout <branch>                     # only now succeeds elsewhere
 ```
 
-Plan around it rather than fighting it: operations that need a branch checked out (rebase, merge, stack tooling) run only after the tree holding that branch is released or removed, never while its owner is live.
+The refusal is a guard, not a lock: `git worktree add --force` and `git checkout --ignore-other-worktrees` override it. Never use them to take a branch a live tree holds; two checkouts of one branch means two writers of one ref.
+
+Plan around the guard rather than fighting it: operations that need a branch checked out (rebase, merge, stack tooling) run only after the tree holding that branch is released or removed, never while its owner is live.
 
 ## Worktrees Share the Main Repository's .git
 
-Every worktree of a repository shares one `.git` directory: one config, one set of refs, one remote list, one hook set. Only HEAD, the index, and the checkout are per-tree. Consequences for concurrent actors:
+Every linked worktree keeps a small private git dir (HEAD, index, in-progress rebase or bisect state, `refs/worktree/*`) and shares everything else through the main repository's git dir (`$GIT_COMMON_DIR`): one config, one remote list, one hook set, one store for branches and tags. Consequences for concurrent actors:
 
-- **`git config` writes are repository-wide.** An actor enabling `rerere`, setting `remote.pushDefault`, or rewriting `branch.<name>.*` sections changes behavior in every sibling worktree at once, mid-run.
+- **`git config` writes are repository-wide.** An actor enabling `rerere`, setting `remote.pushDefault`, or rewriting `branch.<name>.*` sections changes behavior in every sibling worktree at once, mid-run. (Per-worktree config exists only when `extensions.worktreeConfig` is enabled and the write targets `config.worktree`; without that, every write is shared.)
 - **Identity is shared.** A `user.email` or `user.name` write in one tree stamps every sibling's next commit. Set identity per command (`git -c user.email=...`) or in environment variables scoped to the actor, never in the shared config while others run.
-- **Refs are shared.** A fetch, a branch deletion, or a tag move performed in one tree is instantly visible in all; a sibling mid-rebase against a ref you delete fails in ways it cannot diagnose. Coordinate ref surgery, or schedule it when no sibling is live.
+- **Branches and tags are shared.** A fetch, a branch deletion, or a tag move performed in one tree is instantly visible in all (only HEAD and `refs/worktree/*` are per-tree); a sibling mid-rebase against a ref you delete fails in ways it cannot diagnose. Coordinate ref surgery, or schedule it when no sibling is live.
 - **Hooks are shared.** Installing or editing a hook from one worktree changes what every sibling's next commit runs.
 
 ## File Ownership Across Parallel Actors

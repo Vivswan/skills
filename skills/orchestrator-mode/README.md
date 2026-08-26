@@ -31,7 +31,7 @@ npx skills add Vivswan/skills -g --skill pr-and-issue-discipline
 - Delegates review loops to builders and gates each landing with an integration review
 - Gates every landing: direct pushes onto a mainline or PRs with per-track bases (independent or stacked), with reviews and CI watchers either way
 - Keeps a fleet monitor watching for stalled or dead agents
-- Sweeps finished agents, tasks, and worktrees so only live work stays visible
+- Sweeps finished agents, tasks, and worktrees so only live work stays visible, under the [`/worktree-hygiene`](../worktree-hygiene/) rules for removals, handovers, and shared trees
 
 ## Layout
 
