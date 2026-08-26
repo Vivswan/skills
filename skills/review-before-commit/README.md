@@ -21,7 +21,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/review-before-
 - Gets the tree green (typecheck, lint, tests) before spending a reviewer on it
 - Launches independent background reviews (via [`/rubber-duck-review`](../rubber-duck-review/) when installed) and keeps working
 - Triages every finding: fix, reject with reasons, or skip for a recorded reason
-- Re-reviews until convergence, then commits - and hands off to [`/watch-ci-after-push`](../watch-ci-after-push/) after the push
+- Re-reviews until convergence, then commits and hands off to [`/watch-ci-after-push`](../watch-ci-after-push/) after the push
 - Honors explicit user waivers and scales down for trivial mechanical changes
 
 ## Plugin-Ready Layout
