@@ -17,11 +17,14 @@ const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "wait-for-
 const FAKE_GH = `#!/usr/bin/env bash
 # One log line per call: the graphql query argument itself spans lines.
 { printf '%s' "$*" | tr '\\n' ' '; printf '\\n'; } >> "\${STUB_ARGS_LOG}"
-serve() {
-  local prefix="$1"
-  local countfile="\${STUB_DIR}/.\${prefix}-count"
+next() {
+  local countfile="\${STUB_DIR}/.$1-count"
   local n=$(( $(cat "$countfile" 2>/dev/null || echo 0) + 1 ))
   echo "$n" > "$countfile"
+  echo "$n"
+}
+serve() {
+  local prefix="$1" n="$2"
   while [ "$n" -gt 1 ] && [ ! -f "\${STUB_DIR}/\${prefix}-\${n}.json" ]; do n=$((n-1)); done
   local file="\${STUB_DIR}/\${prefix}-\${n}.json"
   if [ ! -f "$file" ]; then echo "stub gh: no \${prefix} fixture" >&2; exit 1; fi
@@ -29,12 +32,18 @@ serve() {
 }
 case "$1" in
   api)
+    n="$(next gql)"
     if [ "\${STUB_FAIL_GQL:-0}" = "1" ]; then echo "gh: graphql boom" >&2; exit 1; fi
-    serve gql
+    if [ -n "\${STUB_FAIL_GQL_AFTER:-}" ] && [ "$n" -gt "\${STUB_FAIL_GQL_AFTER}" ]; then
+      echo "gh: graphql boom" >&2; exit 1
+    fi
+    case " \${STUB_FAIL_GQL_CALLS:-} " in *" $n "*) echo "gh: graphql boom" >&2; exit 1;; esac
+    serve gql "$n"
     ;;
   pr)
+    n="$(next pr)"
     if [ "\${STUB_FAIL_PR:-0}" = "1" ]; then echo "gh: pr view boom" >&2; exit 1; fi
-    serve pr
+    serve pr "$n"
     ;;
   repo)
     echo '{"nameWithOwner":"octo/example"}'
@@ -101,15 +110,21 @@ function gql(shape: GqlShape = {}): string {
   });
 }
 
-/** checks as [name, conclusion, status] rows, gh pr view rollup shape. */
-function prView(checks: Array<[string, string, string?]> = []): string {
+/** checks as [name, conclusion, status?, typename?] rows in the gh pr view
+ * rollup shape; StatusContext rows use context/state instead of
+ * name/conclusion, exactly as gh renders them. */
+function prView(checks: Array<[string, string, string?, string?]> = []): string {
   return JSON.stringify({
-    statusCheckRollup: checks.map(([name, conclusion, status]) => ({
-      __typename: "CheckRun",
-      name,
-      conclusion,
-      status: status ?? (conclusion === "" ? "IN_PROGRESS" : "COMPLETED"),
-    })),
+    statusCheckRollup: checks.map(([name, conclusion, status, typename]) =>
+      typename === "StatusContext"
+        ? { __typename: typename, context: name, state: conclusion }
+        : {
+            __typename: "CheckRun",
+            name,
+            conclusion,
+            status: status ?? (conclusion === "" ? "IN_PROGRESS" : "COMPLETED"),
+          },
+    ),
   });
 }
 
@@ -243,6 +258,75 @@ describe("wait-for-pr-event.mts", () => {
     expect(r.stdout).toContain("check ci -> failure (was pending)");
   });
 
+  test("a StatusContext state change is a check delta too", () => {
+    const r = run(["7", "--repo", "octo/example", "--until", "checks"], {
+      "gql-1": gql(),
+      "pr-1": prView([["deploy/preview", "PENDING", undefined, "StatusContext"]]),
+      "pr-2": prView([["deploy/preview", "FAILURE", undefined, "StatusContext"]]),
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("check deploy/preview -> failure (was pending)");
+  });
+
+  test("a CheckRun and a StatusContext sharing a name are tracked separately", () => {
+    const r = run(["7", "--repo", "octo/example", "--until", "checks"], {
+      "gql-1": gql(),
+      "pr-1": prView([
+        ["ci", "SUCCESS"],
+        ["ci", "PENDING", undefined, "StatusContext"],
+      ]),
+      "pr-2": prView([
+        ["ci", "SUCCESS"],
+        ["ci", "SUCCESS", undefined, "StatusContext"],
+      ]),
+    });
+    expect(r.code).toBe(0);
+    // Exactly one delta: the StatusContext flip, not a masked CheckRun.
+    expect(r.stdout.match(/check ci -> /g)).toHaveLength(1);
+    expect(r.stdout).toContain("check ci -> success (was pending)");
+  });
+
+  test("a check vanishing from the rollup is a delta, not silence", () => {
+    const r = run(["7", "--repo", "octo/example", "--until", "checks"], {
+      "gql-1": gql(),
+      "pr-1": prView([
+        ["ci", "SUCCESS"],
+        ["lint", "SUCCESS"],
+      ]),
+      "pr-2": prView([["ci", "SUCCESS"]]),
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("check lint -> vanished (was success)");
+  });
+
+  test("a malformed but zero-exit baseline response still exits 2", () => {
+    const r = run(["7", "--repo", "octo/example"], { "gql-1": "not json at all" });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("baseline read failed");
+  });
+
+  test("three consecutive poll failures exit 2, never retrying forever", () => {
+    const r = run(
+      ["7", "--repo", "octo/example", "--timeout", "60"],
+      STATIC,
+      { STUB_FAIL_GQL_AFTER: "1" }, // baseline succeeds, every poll fails
+    );
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("poll failed (3/3)");
+    expect(r.stderr).toContain("giving up rather than retrying forever");
+  }, 20000);
+
+  test("one transient poll failure is retried and a later delta still exits 0", () => {
+    const r = run(
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "60"],
+      { "gql-1": gql({ comments: 3 }), "gql-3": gql({ comments: 4 }), "pr-1": prView() },
+      { STUB_FAIL_GQL_CALLS: "2" },
+    );
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("poll failed (1/3)");
+    expect(r.stdout).toContain("issue comments 3 -> 4");
+  }, 20000);
+
   test("merged while merge is not watched exits 1: the wait's job ended", () => {
     const r = run(["7", "--repo", "octo/example"], {
       "gql-1": gql(),
@@ -317,6 +401,27 @@ describe("wait-for-pr-event.mts", () => {
     expect(run([], STATIC).code).toBe(2);
     expect(run(["7", "--until", "comment,mail"], STATIC).code).toBe(2);
     expect(run(["7", "--repo", "not-a-repo"], STATIC).code).toBe(2);
+    // Digits that overflow to an unsafe integer would make an Infinity-like
+    // deadline; they must be a usage error, not an eternal wait.
+    const overflow = run(["7", "--timeout", "99999999999999999999"], STATIC);
+    expect(overflow.code).toBe(2);
+    expect(overflow.stderr).toContain("safe integer range");
+  });
+
+  test("the deadline expiring during the sleep exits 3 without another poll", () => {
+    const r = run(
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      {
+        "gql-1": gql({ comments: 3 }),
+        "gql-2": gql({ comments: 3 }),
+        "gql-3": gql({ comments: 4 }), // must never be reached
+        "pr-1": prView(),
+      },
+    );
+    expect(r.code).toBe(3);
+    expect(r.stdout).not.toContain("issue comments 3 -> 4");
+    // Baseline + exactly one poll: the truncated sleep IS the timeout.
+    expect(r.ghCalls.filter((call) => call.startsWith("api graphql"))).toHaveLength(2);
   });
 
   test("without --repo the current repo is resolved via gh repo view", () => {

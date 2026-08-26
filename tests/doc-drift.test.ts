@@ -314,6 +314,10 @@ const SURFACES: Record<string, Surface> = {
         script: "const MIN_INTERVAL_SECONDS = 15;",
       },
       {
+        doc: "(default 1800)",
+        script: "const DEFAULT_TIMEOUT_SECONDS = 1800;",
+      },
+      {
         doc: "via GraphQL `isResolved`",
         script: "nodes { isResolved }",
       },
@@ -324,6 +328,11 @@ const SURFACES: Record<string, Surface> = {
       {
         doc: "0 | a watched event happened",
         script: "for (const line of deltas) print(line);\n        process.exit(0);",
+      },
+      {
+        doc: "`check <name> -> failure`, merged)",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: 'merged at ${snapshot.mergedAt ?? "an unrecorded time"}`);\n      process.exit(0);',
       },
       {
         doc: "1 | the PR merged or closed while that outcome was not watched; the wait's job ended",
@@ -339,9 +348,19 @@ const SURFACES: Record<string, Surface> = {
         script: "writeFileSync(2, `${message}\\n${USAGE}\\n`);\n  process.exit(2);",
       },
       {
+        doc: "gh missing or failing); it never retries forever",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "writeFileSync(2, `${message}\\n`);\n  process.exit(2);",
+      },
+      {
         doc: "3 | timeout with no watched change",
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "print(`final:    ${renderSnapshot(last)}`);\n      process.exit(3);",
+        script: "print(`final:    ${renderSnapshot(last)}`);\n    process.exit(3);",
+      },
+      {
+        doc: "the baseline and final snapshots are in the output",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "print(`baseline: ${renderSnapshot(baseline)}`);",
       },
     ],
   },

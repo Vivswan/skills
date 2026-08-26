@@ -35,6 +35,9 @@ const MIN_INTERVAL_SECONDS = 15;
 const DEFAULT_TIMEOUT_SECONDS = 1800;
 const GH_CALL_TIMEOUT_MS = 60_000;
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+// A failed poll retries sooner than the interval: transient API errors get
+// bounded retries, not a full silent interval each.
+const POLL_RETRY_SECONDS = 2;
 // 100 threads per page; a PR with >5000 threads is a broken measurement.
 const MAX_THREAD_PAGES = 50;
 
@@ -133,6 +136,11 @@ interface Review {
   submittedAt: string;
 }
 
+interface CheckState {
+  name: string;
+  conclusion: string;
+}
+
 interface Snapshot {
   state: string;
   mergedAt: string | null;
@@ -141,8 +149,10 @@ interface Snapshot {
   unresolvedThreads: number;
   reviewCount: number;
   latestReview: Review | null;
-  /** check name -> lowercased conclusion; "pending" while unconcluded. */
-  checks: Map<string, string>;
+  /** keyed by "<typename>:<name>" so a CheckRun and a StatusContext sharing
+   * a display name stay distinct; conclusion is lowercased, "pending" while
+   * unconcluded. */
+  checks: Map<string, CheckState>;
 }
 
 const PR_QUERY = `
@@ -181,19 +191,28 @@ function parsePrPage(raw: string): PrPage {
     throw new GhError("GraphQL response has no pullRequest (wrong repo or PR number?)");
   }
   const mergedAt = get(pr, "mergedAt");
+  if (mergedAt !== null && typeof mergedAt !== "string") {
+    throw new GhError("GraphQL response: mergedAt is neither a string nor null");
+  }
   const reviews = get(pr, "reviews");
   const reviewNodes = get(reviews, "nodes");
+  if (!Array.isArray(reviewNodes)) {
+    throw new GhError("GraphQL response: reviews.nodes is not an array");
+  }
   let latestReview: Review | null = null;
-  if (Array.isArray(reviewNodes) && reviewNodes.length > 0) {
+  if (reviewNodes.length > 0) {
     const node = reviewNodes[reviewNodes.length - 1];
     const login = get(get(node, "author"), "login");
     const submittedAt = get(node, "submittedAt");
+    if (submittedAt !== null && typeof submittedAt !== "string") {
+      throw new GhError("GraphQL response: review submittedAt is neither a string nor null");
+    }
     latestReview = {
       id: requireString(get(node, "fullDatabaseId"), "review fullDatabaseId"),
       state: requireString(get(node, "state"), "review state"),
       // Deleted accounts null the author; a PENDING review has no submittedAt.
       login: typeof login === "string" ? login : "unknown",
-      submittedAt: typeof submittedAt === "string" ? submittedAt : "unsubmitted",
+      submittedAt: submittedAt ?? "unsubmitted",
     };
   }
   const threads = get(pr, "reviewThreads");
@@ -209,7 +228,7 @@ function parsePrPage(raw: string): PrPage {
   const endCursor = get(pageInfo, "endCursor");
   return {
     state: requireString(get(pr, "state"), "state"),
-    mergedAt: typeof mergedAt === "string" ? mergedAt : null,
+    mergedAt,
     issueComments: requireNumber(get(get(pr, "comments"), "totalCount"), "comments.totalCount"),
     reviewCount: requireNumber(get(reviews, "totalCount"), "reviews.totalCount"),
     latestReview,
@@ -225,11 +244,17 @@ function parsePrPage(raw: string): PrPage {
   };
 }
 
-function readChecks(repo: string, prNumber: number): Map<string, string> {
+function readChecks(repo: string, prNumber: number): Map<string, CheckState> {
   const raw = gh(["pr", "view", String(prNumber), "--repo", repo, "--json", "statusCheckRollup"]);
-  const rollup = get(parseJson(raw, "gh pr view"), "statusCheckRollup");
-  const checks = new Map<string, string>();
-  if (rollup === null || rollup === undefined) return checks;
+  const parsed = parseJson(raw, "gh pr view");
+  // The field must be PRESENT: a response missing it is a broken read, not a
+  // PR with no checks (null and [] are how gh renders those).
+  if (!isRecord(parsed) || !("statusCheckRollup" in parsed)) {
+    throw new GhError("gh pr view: response carries no statusCheckRollup field");
+  }
+  const rollup = parsed.statusCheckRollup;
+  const checks = new Map<string, CheckState>();
+  if (rollup === null) return checks;
   if (!Array.isArray(rollup)) throw new GhError("gh pr view: statusCheckRollup is not an array");
   for (const entry of rollup) {
     // CheckRun rows carry name+conclusion, StatusContext rows context+state.
@@ -237,11 +262,15 @@ function readChecks(repo: string, prNumber: number): Map<string, string> {
     if (typeof name !== "string" || name === "") {
       throw new GhError("gh pr view: a statusCheckRollup entry has neither name nor context");
     }
+    const typename = get(entry, "__typename");
     const conclusion = get(entry, "conclusion") ?? get(entry, "state");
-    checks.set(
+    // Keyed by typename too: a CheckRun and a StatusContext can share a
+    // display name, and one must never mask the other's conclusion.
+    checks.set(`${typeof typename === "string" ? typename : "CheckRun"}:${name}`, {
       name,
-      typeof conclusion === "string" && conclusion !== "" ? conclusion.toLowerCase() : "pending",
-    );
+      conclusion:
+        typeof conclusion === "string" && conclusion !== "" ? conclusion.toLowerCase() : "pending",
+    });
   }
   return checks;
 }
@@ -299,7 +328,9 @@ function renderSnapshot(snapshot: Snapshot): string {
   const checks =
     snapshot.checks.size === 0
       ? "none"
-      : [...snapshot.checks].map(([name, conclusion]) => `${name}=${conclusion}`).join(" ");
+      : [...snapshot.checks.values()]
+          .map(({ name, conclusion }) => `${name}=${conclusion}`)
+          .join(" ");
   return (
     `state ${snapshot.state}; issue comments ${snapshot.issueComments}; ` +
     `review threads ${snapshot.threadTotal} (${snapshot.unresolvedThreads} unresolved); ` +
@@ -339,12 +370,19 @@ function diffDeltas(baseline: Snapshot, current: Snapshot, watched: Set<Watched>
     }
   }
   if (watched.has("checks")) {
-    for (const [name, conclusion] of current.checks) {
-      const before = baseline.checks.get(name);
+    for (const [key, { name, conclusion }] of current.checks) {
+      const before = baseline.checks.get(key);
       if (before === undefined && conclusion !== "pending") {
         deltas.push(`check ${name} -> ${conclusion} (new)`);
-      } else if (before !== undefined && before !== conclusion) {
-        deltas.push(`check ${name} -> ${conclusion} (was ${before})`);
+      } else if (before !== undefined && before.conclusion !== conclusion) {
+        deltas.push(`check ${name} -> ${conclusion} (was ${before.conclusion})`);
+      }
+    }
+    // A vanished check (a force-push resets the rollup) is a change too;
+    // staying silent about it would read as "nothing happened".
+    for (const [key, { name, conclusion }] of baseline.checks) {
+      if (!current.checks.has(key)) {
+        deltas.push(`check ${name} -> vanished (was ${conclusion})`);
       }
     }
   }
@@ -394,6 +432,16 @@ function parseUntil(raw: string): Set<Watched> {
   return watched;
 }
 
+/** Digit-only AND safely representable: a long enough digit string parses to
+ * Infinity-adjacent doubles, and an Infinity deadline would wait forever. */
+function parseCount(flag: string, value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed)) {
+    usageError(`${flag} must be a whole number within safe integer range, got: ${value}`);
+  }
+  return parsed;
+}
+
 function parseArgs(argv: string[]): Options {
   let prNumber: number | null = null;
   let until = DEFAULT_UNTIL;
@@ -411,17 +459,14 @@ function parseArgs(argv: string[]): Options {
       i += 1;
       if (arg === "--until") until = value;
       else if (arg === "--repo") repo = value;
-      else {
-        if (!/^\d+$/.test(value))
-          usageError(`${arg} must be a whole number of seconds, got: ${value}`);
-        if (arg === "--interval") intervalSeconds = Number.parseInt(value, 10);
-        else timeoutSeconds = Number.parseInt(value, 10);
-      }
+      else if (arg === "--interval") intervalSeconds = parseCount(arg, value);
+      else timeoutSeconds = parseCount(arg, value);
     } else if (arg.startsWith("-")) {
       usageError(`unknown flag: ${arg}`);
     } else if (prNumber === null) {
-      if (!/^[1-9]\d*$/.test(arg))
+      if (!/^[1-9]\d*$/.test(arg) || !Number.isSafeInteger(Number.parseInt(arg, 10))) {
         usageError(`<pr-number> must be a positive integer, got: ${arg}`);
+      }
       prNumber = Number.parseInt(arg, 10);
     } else {
       usageError(`unexpected extra argument: ${arg}`);
@@ -441,17 +486,18 @@ function parseArgs(argv: string[]): Options {
 }
 
 function resolveRepo(): string {
-  let raw: string;
+  // One catch for the whole read: a gh failure and malformed gh output are
+  // the same tooling error (exit 2), never an uncaught crash.
   try {
-    raw = gh(["repo", "view", "--json", "nameWithOwner"]);
+    const raw = gh(["repo", "view", "--json", "nameWithOwner"]);
+    const nameWithOwner = get(parseJson(raw, "gh repo view"), "nameWithOwner");
+    if (typeof nameWithOwner !== "string" || !nameWithOwner.includes("/")) {
+      throw new GhError("gh repo view returned no nameWithOwner");
+    }
+    return nameWithOwner;
   } catch (error) {
     toolingError(`cannot resolve the current repo (pass --repo owner/name): ${errorText(error)}`);
   }
-  const nameWithOwner = get(parseJson(raw, "gh repo view"), "nameWithOwner");
-  if (typeof nameWithOwner !== "string" || !nameWithOwner.includes("/")) {
-    toolingError("gh repo view returned no nameWithOwner; pass --repo owner/name");
-  }
-  return nameWithOwner;
 }
 
 // --- main --------------------------------------------------------------------
@@ -479,6 +525,12 @@ async function main(): Promise<never> {
   const deadline = Date.now() + options.timeoutSeconds * 1000;
   let consecutiveFailures = 0;
   let last = baseline;
+  const exitTimeout = (): never => {
+    print(`no watched change in ${watchedList} after ${options.timeoutSeconds}s on ${prLabel}`);
+    print(`baseline: ${renderSnapshot(baseline)}`);
+    print(`final:    ${renderSnapshot(last)}`);
+    process.exit(3);
+  };
   while (true) {
     // The first poll runs right after the baseline: a multi-page baseline
     // read takes real time, and activity landing inside that window should
@@ -508,13 +560,13 @@ async function main(): Promise<never> {
       last = current;
     }
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      print(`no watched change in ${watchedList} after ${options.timeoutSeconds}s on ${prLabel}`);
-      print(`baseline: ${renderSnapshot(baseline)}`);
-      print(`final:    ${renderSnapshot(last)}`);
-      process.exit(3);
-    }
-    await sleep(Math.min(options.intervalSeconds * 1000, remainingMs));
+    if (remainingMs <= 0) exitTimeout();
+    const waitSeconds = consecutiveFailures > 0 ? POLL_RETRY_SECONDS : options.intervalSeconds;
+    const sleepMs = Math.min(waitSeconds * 1000, remainingMs);
+    await sleep(sleepMs);
+    // A sleep truncated to the deadline IS the timeout: exiting here keeps
+    // the deadline honest instead of overrunning it with one more poll.
+    if (sleepMs === remainingMs) exitTimeout();
   }
 }
 
