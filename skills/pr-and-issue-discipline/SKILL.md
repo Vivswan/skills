@@ -10,7 +10,7 @@ metadata:
 
 > Show the change before telling it: real captured output first, the fewest words after, drafts that track convergence in both directions, and a human hand on the merge by default.
 
-These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, solo or in a fleet.
+These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session.
 
 ## When to Apply
 
@@ -125,8 +125,9 @@ The human, by default. A PR exists to put a human gate before the mainline: the 
 **The landing action is exit-conditioned, never chained**, for a PR merge and a direct push alike. Read the gate's own verdict and STOP; land in a separate command only after the gate itself reports green. Green means the gate's exit code AND its verdict, and a review gate is green only when its findings are triaged, not merely when its process exits 0.
 
 ```bash
-tail gate.log; git merge && git push   # WRONG: && chains on tail's exit status,
-                                       # shipping a red-gated commit regardless of the log
+tail gate.log; git merge && git push    # WRONG: the merge runs whatever the log said
+tail gate.log && git merge && git push  # WRONG: && conditions on tail printing the log,
+                                        # not on the gate's verdict; a red log still merges
 ```
 
 ## Companion Gates

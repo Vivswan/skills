@@ -102,7 +102,8 @@ gh pr ready <num> --undo             # BEFORE the lower link is even OFFERED as 
 #                                      both-directions draft rule, applied at the restack site).
 gh stack merge <pr> --yes --squash   # DELEGATED PATH ONLY: this line runs when the interview
 #                                      delegated merging to the lead, a merge queue owns the
-#                                      ordering, or a standing Land-section exception applies.
+#                                      ordering, or a standing /pr-and-issue-discipline
+#                                      exception applies.
 #                                      The DEFAULT hand is the user, so the default loop stops
 #                                      at flip-ready plus a "ready to merge" report per link.
 #                                      Method: or --merge / --rebase - a per-repo choice read
