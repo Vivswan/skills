@@ -80,7 +80,7 @@ bun <skill-dir>/scripts/ledger.mts /tmp/fleet-<sessionId>/ledger.json init
 bun <skill-dir>/scripts/ledger.mts <file> state <worker> <state>    # active | dormant-by-design | landing-gate | landed-swept
 bun <skill-dir>/scripts/ledger.mts <file> flag <worker> <text>      # content-hashed; an identical standing flag is REFUSED
 bun <skill-dir>/scripts/ledger.mts <file> retract <hash-prefix>     # retraction is a recorded transition
-bun <skill-dir>/scripts/ledger.mts <file> grant <worker> <wording> <glob...>
+bun <skill-dir>/scripts/ledger.mts <file> grant <worker> "<wording>" "<glob>"...   # quote wording AND globs: unquoted, the shell splits the wording and expands the globs
 bun <skill-dir>/scripts/ledger.mts <file> show [worker]
 ```
 

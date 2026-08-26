@@ -26,6 +26,8 @@ gh stack add  track-2            # one layer per track, in dependency order
 # STOP: switch the main checkout back to the mainline, spawn the builders,
 # and collect each layer's committed work (Worktree interplay, below).
 # Submitting now would publish EMPTY layer PRs.
+git checkout track-1             # stack commands error (ErrNotInStack) from the mainline;
+#                                  the bottom layer is the natural anchor to run them from
 gh stack sync                    # restack upper layers onto the collected work first:
 #                                  submit only pushes, it does not cascade-rebase, and
 #                                  track-2 was branched before track-1's commits existed
@@ -36,6 +38,7 @@ gh pr edit <num> --body-file <file>  # once per PR submit just opened
 # per converged layer, bottom-up:
 gh stack merge <pr> --yes --squash   # method explicit on the first merge
 gh stack sync --prune                # restack the remainder, drop merged branches
+git checkout <mainline>              # back to the mainline once stack operations are done
 ```
 
 Read `gh stack sync`'s verdict in its OUTPUT, never its exit code - both the pre-submit restack and the post-merge sync: it can print "Sync aborted" and still exit 0, leaving successors silently stale. On an aborted sync, stop and reconcile before continuing - the same exit-code-vs-verdict rule the skill's Land section states for gates.

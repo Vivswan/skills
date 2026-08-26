@@ -24,7 +24,7 @@ const SCRIPTS_DIR = join(ROOT, "skills", "orchestrator-mode", "scripts");
 
 const doc = readFileSync(DOC_PATH, "utf-8");
 
-type CitedToken = string | { doc: string; script: string };
+type CitedToken = { doc: string; script: string };
 
 const CITED_TOKENS: Record<string, CitedToken[]> = {
   "sweep.mts": [
@@ -48,14 +48,14 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: '"state"', script: "state: states.get(" },
   ],
   "probe.mts": [
-    "<base-ref>",
-    "<table.json>",
-    '"expect"',
-    '">=1"',
     { doc: "probe.mts count", script: 'case "count":' },
     { doc: "probe.mts json-keys", script: 'case "json-keys":' },
     { doc: "probe.mts set", script: 'case "set":' },
     { doc: "probe.mts tokens", script: 'case "tokens":' },
+    { doc: "set <repo-root> <base-ref>", script: "set needs <repo-root> <base-ref>" },
+    { doc: "tokens <table.json>", script: "tokens needs <table.json> <tree-root>" },
+    { doc: '"expect"', script: 'needs "expect" of ">=1"' },
+    { doc: '">=1"', script: 'expect === ">=1"' },
   ],
   "ledger.mts": [
     { doc: "dormant-by-design", script: '"dormant-by-design"' },
@@ -66,14 +66,13 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: "state <worker> <state>", script: 'case "state":' },
     { doc: "flag <worker> <text>", script: 'case "flag":' },
     { doc: "retract <hash-prefix>", script: 'case "retract":' },
-    { doc: "grant <worker> <wording>", script: 'case "grant":' },
+    { doc: 'grant <worker> "<wording>"', script: 'case "grant":' },
     { doc: "show [worker]", script: 'case "show":' },
   ],
   "baseline.mts": [
-    "<tree-root>",
-    "<file...>",
     { doc: "baseline.mts pin", script: 'command === "pin"' },
     { doc: "baseline.mts check", script: 'command === "check"' },
+    { doc: "<tree-root> <file...>", script: '<tree-root> <file...>",' },
   ],
 };
 
@@ -81,13 +80,11 @@ for (const [script, tokens] of Object.entries(CITED_TOKENS)) {
   const source = readFileSync(join(SCRIPTS_DIR, script), "utf-8");
   describe(`fleet-monitor.md <-> ${script}`, () => {
     for (const token of tokens) {
-      const docToken = typeof token === "string" ? token : token.doc;
-      const scriptToken = typeof token === "string" ? token : token.script;
-      test(`doc still asserts ${JSON.stringify(docToken)}`, () => {
-        expect(doc).toContain(docToken);
+      test(`doc still asserts ${JSON.stringify(token.doc)}`, () => {
+        expect(doc).toContain(token.doc);
       });
-      test(`${script} still carries ${JSON.stringify(scriptToken)}`, () => {
-        expect(source).toContain(scriptToken);
+      test(`${script} still carries ${JSON.stringify(token.script)}`, () => {
+        expect(source).toContain(token.script);
       });
     }
   });
