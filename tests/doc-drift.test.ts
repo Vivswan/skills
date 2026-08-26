@@ -80,6 +80,7 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: "`endLine`", script: "endLine?: number" },
   ],
   "ledger.mts": [
+    { doc: "scripts/ledger.mts <file>", script: "usage: ledger <file> <command> [args...]" },
     {
       doc: "active | dormant-by-design | landing-gate | landed-swept",
       script: '["active", "dormant-by-design", "landing-gate", "landed-swept"]',
