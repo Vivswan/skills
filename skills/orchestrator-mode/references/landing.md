@@ -19,12 +19,16 @@ The three landing-mode procedures for orchestrator mode. Mode selection, who mer
 With gh-stack, the lead's loop looks like (all commands non-interactive per that skill's flag table - `--json`, `--auto`, `--yes`):
 
 ```bash
-git config rerere.enabled true   # init prompts for this on a first TTY run; pre-enable to stay non-interactive
+git config rerere.enabled true       # init prompts for this on a first TTY run; pre-enable to stay non-interactive
+git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push target; adjust origin to the writable remote
 gh stack init track-1            # bottom of the chain, before spawning builders
 gh stack add  track-2            # one layer per track, in dependency order
 # STOP: switch the main checkout back to the mainline, spawn the builders,
 # and collect each layer's committed work (Worktree interplay, below).
 # Submitting now would publish EMPTY layer PRs.
+gh stack sync                    # restack upper layers onto the collected work first:
+#                                  submit only pushes, it does not cascade-rebase, and
+#                                  track-2 was branched before track-1's commits existed
 gh stack submit --auto           # push all layers, open one draft PR each
 # submit derives titles and bodies automatically (no body flag) - rewrite
 # each created PR body into the visualization-first format (Land section):
@@ -34,7 +38,7 @@ gh stack merge <pr> --yes --squash   # method explicit on the first merge
 gh stack sync --prune                # restack the remainder, drop merged branches
 ```
 
-Read `gh stack sync`'s verdict in its OUTPUT, never its exit code: it can print "Sync aborted" and still exit 0, leaving successors silently stale. On an aborted sync, stop and reconcile before continuing - the same exit-code-vs-verdict rule the skill's Land section states for gates.
+Read `gh stack sync`'s verdict in its OUTPUT, never its exit code - both the pre-submit restack and the post-merge sync: it can print "Sync aborted" and still exit 0, leaving successors silently stale. On an aborted sync, stop and reconcile before continuing - the same exit-code-vs-verdict rule the skill's Land section states for gates.
 
 Worktree interplay: git refuses to check out a branch already checked out in a worktree, and builders hold their layer branches in theirs. So after `init`/`add` create the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree; and the lead runs `rebase --upstack`/`sync`/`merge` from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live. Layer commits happen only on that layer's branch in its builder's worktree; the lead's stack operations are the only cross-layer writes.
 
