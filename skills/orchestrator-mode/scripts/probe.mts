@@ -190,10 +190,10 @@ function cmdCount(file: string, literal: string): never {
 
 // --- json-keys ----------------------------------------------------------------
 
-// A plain key uses dot notation; any other key is bracket-quoted so that an
-// object key that LOOKS like a path segment ("a[0]", "a.b") can never
-// collide with a real array index or nested key and mask a key-set diff.
-const PLAIN_KEY = /^[A-Za-z0-9_$-]+$/;
+// Bare dot rendering only for JS-identifier keys, so every rendered path is
+// a valid JS accessor chain; any other key ("1st", "foo-bar", "a[0]", "a.b")
+// bracket-quotes and can never collide with a real index or nested key.
+const PLAIN_KEY = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 function childPath(prefix: string, key: string): string {
   if (PLAIN_KEY.test(key)) {
