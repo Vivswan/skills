@@ -23,7 +23,7 @@ Skills: Installable, plugin-ready skills that give coding agents disciplined wor
 ## Managed by repo-platform
 
 - Files whose header says "managed by Vivswan/repo-platform" arrive via sync PRs pushed by that repository. Do not edit them here; change them in Vivswan/repo-platform and let the next sync PR deliver the update.
-- Repository settings (description, topics, labels, rulesets, merge policy) are applied from Vivswan/repo-platform: by the `settings/repos/` file named after this repository over there when one exists, otherwise by this repository's own `.github/settings.yml`. Do not change settings by hand in the GitHub UI; edit the settings file.
+- Repository settings (description, topics, labels, rulesets, merge policy) are applied from Vivswan/repo-platform: it merges the fleet defaults and this repository's selected-module layers at apply time, then this repository's own `.github/settings.yml` (identity keys and local overrides) over them, and finally a fleet override layer carrying the invariants no repository may weaken (squash-only merging, the branch protection rulesets). A same-name label here replaces the fleet one; a same-name ruleset merges, so you can tighten a fleet ruleset but not strip a rule from it. Do not change settings by hand in the GitHub UI; edit `.github/settings.yml`.
 - Repo-owned escape hatches stay local: `.github/workflows/checks.yml`, `.gitleaks.toml`, `.gitignore`'s marked LOCAL section, `.typography-allow.local` (typography exemptions; the managed `.typography-allow` is overwritten by sync), and the repository-specific section below.
 - Module selection is this repository's own: edit the `modules` list in `.repo-platform.yml` and the next sync PR applies the change.
 
