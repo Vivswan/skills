@@ -8,9 +8,11 @@ metadata:
 
 # Retire the Class
 
+> Categorically eliminate the problem - through better architecture or a better choice of data structures - so the failure class cannot recur, instead of fixing its instances one at a time.
+
 When the same failure class gets patched twice, or a countermeasure list keeps growing, stop patching pointwise: find the architecture, data-structure, or substrate change that makes the whole class unrepresentable, and prefer it even when it is a big refactor.
 
-A fix that looks finished and a fix that removes the class are different deliverables. The generalization question that tells them apart:
+A fix that looks finished and a fix that removes the class are different deliverables. The generalization question that tests whether a fix clears the bar above:
 
 > If a new member of this class appears tomorrow, does the fix hold, or does it silently pass the same way?
 
@@ -46,7 +48,7 @@ New members keep appearing because something weak admits them: two artifacts syn
 
 ### 4. Ship the class-retiring change
 
-The class-retiring change is the deliverable; build it now, even when it is a big refactor. Only when urgency forces it does the pointwise fix ship first - and then the class-retiring change is boarded immediately as its own task on the active plan or board, never parked as a note (a note is state kept in prose: the exact substrate this skill exists to retire), and the work is reported as incomplete until the class is retired.
+The class-retiring change - the categorical elimination, not the instance fix - is the deliverable; build it now, even when it is a big refactor. Only when urgency forces it does the pointwise fix ship first - and then the class-retiring change is boarded immediately as its own task on the active plan or board, never parked as a note (a note is state kept in prose: the exact substrate this skill exists to retire), and the work is reported as incomplete until the class is retired.
 
 ## Worked Examples
 
