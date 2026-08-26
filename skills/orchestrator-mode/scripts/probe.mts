@@ -482,7 +482,11 @@ function validateTable(tablePath: string, parsed: unknown): Record<string, Token
     // report ok:true would let a damaged table masquerade as a pass.
     fail(`${tablePath}: table is empty - a probe with no tokens cannot pass`);
   }
-  const table: Record<string, TokenSpec[]> = {};
+  // Null prototype: "__proto__" is a valid relative file name, and on a
+  // default object it would invoke the prototype setter instead of creating
+  // an own entry - the table would validate but Object.entries would omit
+  // it, letting tokens report ok:true with zero checks.
+  const table: Record<string, TokenSpec[]> = Object.create(null);
   for (const [file, specs] of entries) {
     if (isAbsolute(file) || file.split(/[\\/]/).includes("..")) {
       fail(`${tablePath}: entry "${file}" must be a relative path inside the tree root`);

@@ -638,6 +638,28 @@ describe("probe tokens", () => {
     expect(out.ok).toBe(true);
   });
 
+  test("a file literally named __proto__ is measured, never swallowed", () => {
+    // "__proto__" is a valid relative file name. A table map built on a
+    // default-prototype object would pass validation but drop the entry (the
+    // assignment hits the prototype setter, not an own property), and tokens
+    // would report ok:true with ZERO checks - a silent pass on nothing.
+    const dir = fixtureDir();
+    const tree = join(dir, "tree");
+    mkdirSync(tree);
+    writeFileSync(join(tree, "__proto__"), "proto marker present\n");
+    const table = join(dir, "table.json");
+    // Raw JSON text: in a JS object literal a "__proto__" key sets the
+    // prototype and JSON.stringify would emit {}.
+    writeFileSync(table, '{"__proto__": [{"text": "proto marker present", "expect": ">=1"}]}');
+    const { code, out } = probe("tokens", table, tree);
+    expect(code).toBe(0);
+    expect(out.ok).toBe(true);
+    const results = out.value as TokenResult[];
+    expect(results).toHaveLength(1);
+    expect(results[0]?.file).toBe("__proto__");
+    expect(results[0]?.actual).toBe(1);
+  });
+
   test("a FIFO at a probed path fails loudly instead of blocking forever", () => {
     const dir = fixtureDir();
     const tree = join(dir, "tree");
