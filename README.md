@@ -46,6 +46,8 @@ graph LR
   rdr --> nis
   nis --> rdr
   cs --> nis
+  rtc["/retire-the-class"] --> rdr
+  rtc --> nis
   om --> nsw["/no-sleep-waiting-on-subagents"]
   nsw --> wca
   csm["/craft-skills-and-memories"] --> nw["/natural-writing"]
