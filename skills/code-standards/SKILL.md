@@ -8,13 +8,15 @@ metadata:
 
 # Code Standards
 
-House standards for code and the artifacts around it. Apply them while writing; check them while reviewing. Where a standard has a canonical case (the specimen that set the rule), it is stated with it, because the concrete case recalls better than the rule; the `references/` file named under each standard carries the full detail - the why, the how-to-apply list, and the boundaries and exceptions.
+House standards for code and the artifacts around it. Apply them while writing; check them while reviewing.
+
+Where a standard has a canonical case (the specimen that set the rule), it is stated with it: the concrete case recalls better than the rule. The `references/` file named under each standard carries the full detail: the why, the how-to-apply list, and the boundaries and exceptions.
 
 ## The Standards
 
 ### Fix the class, not the instance
 
-A systemic problem gets a root fix that makes recurrence impossible (a workflow change, a shared test, tooling, a stronger type) - never only a fix of the case at hand.
+A systemic problem gets a root fix that makes recurrence impossible (a workflow change, a shared test, tooling, a stronger type), never only a fix of the case at hand.
 
 Specimen (the case that set the rule): every Dependabot PR in a repo failed CI because a committed bundle drifted after dependency bumps. Hand-rebuilding the bundle on each PR fixes five PRs today and none tomorrow; the accepted fix was a CI workflow that rebuilds the bundle on every PR and pushes the regeneration commit automatically.
 
@@ -22,7 +24,10 @@ Full detail: `references/design.md`.
 
 ### Guard recurring problems with tests
 
-If the same problem occurs a second or third time, or you judge it likely to recur (a drift-prone copy, a negligence-prone manual step, an easy-to-forget pipeline), add a guard: a test or tripwire that catches it at the source, or a pipeline fix that makes it impossible. When the guard is outside your reach (another repo, CI you cannot edit), tell the user what needs fixing and how, instead of silently absorbing the recurrence.
+Add a guard when a problem recurs or you judge it likely to recur: a test or tripwire that catches it at the source, or a pipeline fix that makes it impossible.
+
+- Triggers: the same problem a second or third time, a drift-prone copy, a negligence-prone manual step, an easy-to-forget pipeline.
+- Guard outside your reach (another repo, CI you cannot edit): tell the user what needs fixing and how, instead of silently absorbing the recurrence.
 
 Full detail: `references/design.md`.
 
@@ -30,27 +35,41 @@ Full detail: `references/design.md`.
 
 Parameterize the axis that keeps changing instead of hardcoding today's instance.
 
-Specimen: a safety classifier whose rulebook kept changing was built as a classifier FACTORY with the rubric as an input - any rubric change produces a new classifier for free, and the same machinery serves uses beyond safety.
+Specimen: a safety classifier whose rulebook kept changing was built as a classifier FACTORY with the rubric as an input. Any rubric change produces a new classifier for free, and the same machinery serves uses beyond safety.
 
 Full detail, including the one-pipeline-per-concept rule (the page that grew three visibly diverging error-band renderers) and where DRY stops: `references/design.md`.
 
 ### Maintainability over effort
 
-Code quality outweighs diff size and effort spent. A big refactor is always better than a fix done the wrong way: wrong-shaped fixes compound into tech debt. Take the larger refactor when it is cleaner, reduce complexity, and enforce invariants in types rather than repeated checks (see the `/no-invalid-states` skill). Use assertions to pin invariants the type system cannot carry - one assertion at a boundary removes whole families of downstream edge-case handling.
+Code quality outweighs diff size and effort spent. A big refactor is always better than a fix done the wrong way: wrong-shaped fixes compound into tech debt.
 
-Specimen: a documented workaround hybrid was reworked outright rather than kept - never preserve a workaround to keep a diff small.
+- Take the larger refactor when it is cleaner, and reduce complexity.
+- Enforce invariants in types rather than repeated checks (see the `/no-invalid-states` skill).
+- Use assertions to pin invariants the type system cannot carry: one assertion at a boundary removes whole families of downstream edge-case handling.
+
+Specimen: a documented workaround hybrid was reworked outright rather than kept. Never preserve a workaround to keep a diff small.
 
 Full detail: `references/design.md`.
 
 ### Comments only for what code cannot show
 
-Comments exist only for non-obvious constraints, cross-file invariants, and external-system quirks; the code is the single source of truth. Keep them SHORT (one to three lines), delete comments that restate the code outright, and treat a comment that has grown into a paragraph as containing either narration (delete it) or a workaround defense (fix the code, not the comment).
+Comments exist only for non-obvious constraints, cross-file invariants, and external-system quirks; the code is the single source of truth.
+
+- Keep them SHORT: one to three lines.
+- Delete comments that restate the code outright.
+- A comment grown into a paragraph holds either narration (delete it) or a workaround defense (fix the code, not the comment).
 
 Full detail, including the TODO ban: `references/comments.md`.
 
 ### No barrel files or pass-through functions
 
-An import-only index file, a "keep old importers compiling" re-export left after a move, or a function whose whole body forwards to another function without adding anything: delete it and repoint the importers or callers at the defining module or real function. A wrapper earns its existence only by adding something real (a default, a conversion, error mapping, an injected dependency, a narrowed type). In Python, `__init__.py` stays EMPTY unless absolutely necessary: re-exports there are the same barrel.
+Delete these and repoint the importers or callers at the defining module or real function:
+
+- an import-only index file
+- a "keep old importers compiling" re-export left after a move
+- a function whose whole body forwards to another function without adding anything
+
+A wrapper earns its existence only by adding something real (a default, a conversion, error mapping, an injected dependency, a narrowed type). In Python, `__init__.py` stays EMPTY unless absolutely necessary: re-exports there are the same barrel.
 
 Full detail, including the migration-staging exception and what is not a barrel: `references/structure.md`.
 
@@ -64,7 +83,7 @@ Full detail: `references/comments.md`.
 
 ### Lean AGENTS.md
 
-Agent instruction files (AGENTS.md, CLAUDE.md) hold only project essentials: purpose, toolchain entry points, conventions CI enforces, safety constraints, and pointers. Cut anything an agent could learn by reading the code and keep a one-line pointer instead - duplicated detail drifts and then misleads; a pointer cannot drift.
+Agent instruction files (AGENTS.md, CLAUDE.md) hold only project essentials: purpose, toolchain entry points, conventions CI enforces, safety constraints, and pointers. Cut anything an agent could learn by reading the code and keep a one-line pointer instead: duplicated detail drifts and then misleads; a pointer cannot drift.
 
 Full detail: `references/artifacts.md`.
 
@@ -72,7 +91,7 @@ Full detail: `references/artifacts.md`.
 
 Commit and PR messages state what changed and why, following the repo's subject conventions. No AI or tool attribution lines and no hard wrapping of the body at 72 columns (a wrapped body renders as ragged mid-sentence breaks in GitHub's soft-wrapping UI).
 
-Specimen of the one sanctioned attribution: human community credit in repos that take contributions - `fix: ... (#NN, thanks @user)` in the subject, `Co-authored-by:` trailers for humans whose code landed. Credit for people, never for tools.
+Specimen of the one sanctioned attribution, human community credit in repos that take contributions: `fix: ... (#NN, thanks @user)` in the subject, `Co-authored-by:` trailers for humans whose code landed. Credit for people, never for tools.
 
 Full detail, including the email-patch exception: `references/artifacts.md`.
 
@@ -88,7 +107,7 @@ Full detail: `references/artifacts.md`.
 - A recurring or recurrence-prone problem fixed again without a guard test, tripwire, or pipeline fix (or a proposal to the user when the pipeline is out of reach).
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
-- Comments that restate the code, and paragraph-long comments justifying workarounds (flag the code, not just the comment).
+- Comments that restate the code, and paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md edits that duplicate implementation detail derivable from the code.
