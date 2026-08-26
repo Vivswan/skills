@@ -20,7 +20,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/orchestrator-m
 
 ## What It Does
 
-- Decomposes work by dependency graph and parallelizes only the independent tracks
+- Decomposes work by dependency graph and parallelizes the independent tracks - dependent tracks may build concurrently against a predecessor branch or a named interface stub
 - Gives every subagent an explicit file whitelist so branches merge cleanly
 - Delegates review loops to builders and gates each landing with an integration review
 - Gates every landing: direct pushes onto a mainline or PRs with per-track bases (independent or stacked) - reviews and CI watchers either way
