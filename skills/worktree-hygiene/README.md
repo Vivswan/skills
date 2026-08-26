@@ -2,7 +2,7 @@
 
 `/worktree-hygiene` fires when a session creates, removes, hands over, or shares git worktrees. A worktree is shared mutable state, and every rule guards against a destructive failure seen in production:
 
-- **Removal safety**: fresh status codes (never a stale dirty count), landing verified by ancestry or by content (squash and rebase merges never land the branch's shas), no live process with its cwd inside the tree, no locked tree removed blind
+- **Removal safety**: fresh status codes (never a stale dirty count), landing verified by ancestry against a just-fetched ref or by content (squash and rebase merges rewrite shas, so a failed ancestry check proves nothing), no live process with its cwd inside the tree, no locked tree removed blind
 - **Handover**: ownership transfers explicitly - stop the predecessor first, prove no live writer before editing, never message a stopped actor whose directory is gone
 - **One branch, one worktree**: git refuses a checkout a sibling tree holds; release before taking it elsewhere
 - **Shared `.git`**: config writes, identity, branches and tags, and hooks hit every sibling worktree at once
