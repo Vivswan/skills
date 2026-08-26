@@ -26,7 +26,16 @@ Verify all three before `git worktree remove`, freshly, in this order:
 1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain` and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinator's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work.
 2. **Landed, by content.** Confirm the branch's work is pushed or landed before deleting anything.
    - Check ancestry first, against a ref the fetch just wrote: `git fetch <remote> <mainline>` followed by `git merge-base --is-ancestor <branch> FETCH_HEAD`. Test `FETCH_HEAD`, not `<remote>/<mainline>`: whether the fetch updates the remote-tracking ref depends on the remote's configured fetch mapping, and a stale local ref proves nothing once the remote moved ahead.
-   - A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Verify by CONTENT instead: subject match, patch diff, the files present at the remote tip.
+   - A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Verify content equivalence against the fetched tip instead, executable and fail-closed:
+
+     ```bash
+     git cherry FETCH_HEAD <branch>   # every line "-": each commit is patch-equivalent upstream
+     # squash landings collapse commits, so when "+" lines remain, compare end state
+     # for every file the branch touched (empty diff = identical at the fetched tip):
+     git diff FETCH_HEAD <branch> -- <file...>
+     ```
+
+     Any remaining difference blocks the deletion. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition.
 3. **No live writer.** Check for processes whose cwd is inside the worktree (`lsof -a -p <pid> -d cwd`, or `lsof +D <tree>`). An actor absent from the running list is not itself writing, but processes it spawned (test chains, installs) can still be; kill them or wait them out first. And never remove a LOCKED tree (`git worktree list --porcelain` shows `locked` with its reason) or a tree another actor may be using without knowing whose it is and why.
 
 After removing:
@@ -47,7 +56,7 @@ Harnesses that auto-clean isolation worktrees remove them when their actor compl
 Ownership transfers explicitly, never by inference: at any moment exactly one actor owns a worktree, and a handover is a named event (a stop plus a grant), not a guess from silence.
 
 - **Stop the predecessor first.** A message sent to a completed or idle agent RESUMES it. An acknowledgment or thank-you sent after a handover wakes the predecessor, which resumes writing into the worktree its successor now owns (a live-writer clobber). The order is always: stop the actor first (TaskStop in Claude Code); any farewell after that is unnecessary.
-- **A successor proves there is no live writer** before editing. Check for processes with cwd inside the tree first (the same lsof check as removal rule 3), then hash a hot file, wait, hash again (`shasum <file>; sleep 5; shasum <file>`). Matching hashes are supporting evidence, never proof on their own: a writer can be idle between edits or writing a different file.
+- **A successor checks for a live writer** before editing. Check for processes with cwd inside the tree first (the same lsof check as removal rule 3), then hash a hot file, wait, hash again (`shasum <file>; sleep 5; shasum <file>`). These checks gather evidence, never proof: a writer can be idle between edits or writing a different file. The ownership invariant stays the explicit stop-and-grant above.
 - **A removed tree's branch goes to whoever collects it.** Stopping an actor and removing its worktree transfers its branch to the collector, and only to the collector. Follow-up fixes on that branch go to a FRESH actor in a NEW worktree.
 - **Never resurrect a released actor.** A message to a stopped actor resumes it into a directory that no longer exists. Once its worktree is removed, that actor is never messaged again.
 
