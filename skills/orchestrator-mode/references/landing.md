@@ -78,6 +78,15 @@ gh stack submit --auto           # push all layers, open one draft PR each
 # prepared:
 gh pr edit <num> --title "<repo-convention title>" --body-file <file>  # once per PR submit just opened
 # per converged layer, bottom-up:
+gh pr ready <num> --undo             # BEFORE the lower link is even OFFERED as ready to merge
+#                                      (or merged, in the delegated path): flip every dependent
+#                                      successor to DRAFT. The exposure window opens the moment
+#                                      the lower link becomes mergeable - once it merges, squash
+#                                      plus base deletion mean a successor taken by auto-merge
+#                                      or a fast user action in that window lands unrestacked
+#                                      and un-regated. One successor draft span per link merge,
+#                                      from offer to reconvergence (the skill's Babysit-section
+#                                      both-directions draft rule, applied at the restack site).
 gh stack merge <pr> --yes --squash   # DELEGATED PATH ONLY: this line runs when the interview
 #                                      delegated merging to the lead, a merge queue owns the
 #                                      ordering, or a standing Land-section exception applies.
@@ -92,15 +101,6 @@ gh stack merge <pr> --yes --squash   # DELEGATED PATH ONLY: this line runs when 
 #                                      landed. WATCH until the PR is actually merged (mergedAt
 #                                      set, the commit on the mainline) before the sync below:
 #                                      same logs-vs-postcondition principle as the sync check.
-gh pr ready <num> --undo             # FIRST: flip every about-to-be-restacked successor to
-#                                      DRAFT before anything rewrites it. The flip guards the
-#                                      WHOLE rewrite-and-push span (sync through submit):
-#                                      drafting later in that span leaves a window where a
-#                                      still-ready successor exposes unverified rewritten
-#                                      content to an auto-merge or user merge - close the
-#                                      window before rewriting, not after (the skill's
-#                                      Babysit-section both-directions draft rule, applied at
-#                                      the restack site)
 gh stack sync --prune < /dev/null > "$SYNC_OUT" 2>&1   # restack the remainder, drop merged
 SYNC_STATUS=$?                       # same executable gate as the pre-submit sync
 { grep -qE "Stack synced|Branches synced" "$SYNC_OUT" && ! grep -qE "Push failed|Sync aborted" "$SYNC_OUT"; } || SYNC_STATUS=1
