@@ -3,19 +3,22 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * Doc-drift gate: skills/orchestrator-mode/references/fleet-monitor.md cites
- * exact CLI verbs, flags, JSON field names, and schema strings of the fleet
- * scripts. Nothing else binds those citations to the sources, so a rename in
- * either place would leave every gate green while the doc lies. Each entry
- * below must appear VERBATIM in both the doc and its script source; a
- * one-sided rename fails this test until doc and script move together.
+ * Doc-drift gate for skills/orchestrator-mode/references/fleet-monitor.md.
+ * What it pins - exactly the map below, nothing broader: every CONTRACT the
+ * doc cites about the four fleet scripts, namely CLI invocation shapes and
+ * their arity/usage contracts, ledger worker states, sweep-row and diagnostic
+ * output fields, transcript-report fields, and token-table schema keys.
+ * Non-contract citations (external commands like pgrep/ps, git idioms, path
+ * examples) are deliberately unpinned. Each entry must appear VERBATIM in
+ * both the doc and its script source; a one-sided rename fails this test
+ * until doc and script move together.
  *
  * Entries pin a distinctive form PER SIDE: the doc side is a usage-line or
  * sample-JSON fragment, and the script side is a CODE-SHAPED fragment (an
- * object-literal key at the emission site, a dispatch literal, a quoted
- * string) - never a bare word that a stale comment could satisfy. The gate's
- * job is doc-to-source text pinning only; actually executing the scripts is
- * the per-script *.test.ts suites' job.
+ * object-literal key at the emission site, a dispatch literal or usage-error
+ * string, a declaration literal) - never a bare word that a stale comment
+ * could satisfy. The gate's job is doc-to-source text pinning only; actually
+ * executing the scripts is the per-script *.test.ts suites' job.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -33,9 +36,14 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
       script: 'console.error("usage: sweep.mts <repo-root> [--transcripts <dir>]")',
     },
     { doc: "--transcripts", script: '"--transcripts"' },
+    { doc: '"worktree":', script: "worktree: path," },
+    { doc: '"branch":', script: "branch," },
+    { doc: '"ok":', script: "ok: true," },
     { doc: "ok:false", script: "ok: false" },
     { doc: '"headSha":', script: "headSha," },
     { doc: '"aheadBehind":', script: "aheadBehind," },
+    { doc: '"ahead":', script: "ahead: Number.parseInt(ahead" },
+    { doc: '"behind":', script: "behind: Number.parseInt(behind" },
     { doc: '"treeFileCount":', script: "treeFileCount," },
     { doc: '"dirtyCount":', script: "dirtyCount: dirtyPaths.length" },
     { doc: '"untrackedCount":', script: "untrackedCount: untrackedPaths.length" },
@@ -68,6 +76,7 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: '"expect"', script: 'needs "expect" of ">=1"' },
     { doc: '"expect": 0', script: "expect >= 0" },
     { doc: '">=1"', script: 'expect === ">=1"' },
+    { doc: "`endLine`", script: "endLine?: number" },
   ],
   "ledger.mts": [
     {
