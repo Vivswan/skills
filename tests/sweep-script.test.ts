@@ -16,12 +16,14 @@ import { ROOT } from "../scripts/lib";
 
 // Fixture-repo test for the fleet sweep script: a temp git repo with a live
 // worktree (ahead of origin, dirty + untracked), a repo-wiping worktree, a
-// worktree whose directory was deleted, and a transcript directory, pinning
-// the contracts the sweep exists for - a vanished worktree is an ok:false row
-// and never a zeros row, newestDirtyMtime tracks dirty AND untracked files
-// (never the index), treeFileCount exposes a wipe commit that every other
-// field reads as normal, and the transcript sensor survives truncated final
-// JSONL lines, including one larger than the sensor's base tail window.
+// worktree whose directory was deleted, a divergent origin/develop branch for
+// the --base option, and a transcript directory, pinning the contracts the
+// sweep exists for - a vanished worktree is an ok:false row and never a zeros
+// row, newestDirtyMtime tracks dirty AND untracked files (never the index),
+// treeFileCount exposes a wipe commit that every other field reads as normal,
+// aheadBehind follows --base and an unresolvable base is loud, and the
+// transcript sensor survives truncated final JSONL lines, including one
+// larger than the sensor's base tail window.
 
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "sweep.mts");
 const SWEEP_TIMEOUT = 60_000;
@@ -101,6 +103,20 @@ git(wtWipe, "commit", "-m", "initial");
 const wtGone = join(fixtureRoot, "wt-gone");
 git(repo, "worktree", "add", wtGone, "-b", "track-gone");
 rmSync(wtGone, { recursive: true, force: true });
+
+// A divergent non-default mainline for the --base option: origin/develop is
+// main plus one commit main does not have, so counts against it differ from
+// counts against origin/main in BOTH directions for wt-live (ahead by its own
+// commit, behind by the develop-only commit). The temporary worktree is
+// removed so the sweep's row set stays at four.
+const wtDev = join(fixtureRoot, "wt-dev");
+git(repo, "worktree", "add", wtDev, "-b", "develop");
+writeFileSync(join(wtDev, "dev-only.txt"), "develop\n");
+git(wtDev, "add", "dev-only.txt");
+git(wtDev, "commit", "-m", "develop work");
+git(wtDev, "push", "origin", "develop");
+git(repo, "worktree", "remove", wtDev);
+git(repo, "fetch", "origin");
 
 function runSweep(root: string, extraEnv: Record<string, string> = {}, ...extraArgs: string[]) {
   return Bun.spawnSync(["bun", SCRIPT, root, ...extraArgs], {
@@ -448,6 +464,93 @@ describe("sweep.mts worktree rows", () => {
       expect(existsSync(violations)).toBe(false);
       expect(rowFor(rows, "repo").ok).toBe(true);
       expect(rowFor(rows, "wt-live").ok).toBe(true);
+    },
+    SWEEP_TIMEOUT,
+  );
+
+  test(
+    "--base measures aheadBehind against the given ref; omitted, the default base is unchanged",
+    () => {
+      const rows = sweep("--base", "origin/develop");
+      expect(rows.some((r) => "baseRef" in r || "defaultRef" in r)).toBe(false);
+      // Against develop: main lacks the develop-only commit and adds nothing.
+      expect(rowFor(rows, "repo").aheadBehind).toEqual({ ahead: 0, behind: 1 });
+      // wt-live is ahead by its own commit AND behind by the develop-only
+      // commit - both numbers differ from the default-base reading below, so
+      // a regression to the default resolution cannot pass by coincidence.
+      expect(rowFor(rows, "wt-live").aheadBehind).toEqual({ ahead: 1, behind: 1 });
+
+      const defaultRows = sweep();
+      expect(rowFor(defaultRows, "repo").aheadBehind).toEqual({ ahead: 0, behind: 0 });
+      expect(rowFor(defaultRows, "wt-live").aheadBehind).toEqual({ ahead: 1, behind: 0 });
+    },
+    SWEEP_TIMEOUT,
+  );
+
+  test(
+    "an unresolvable --base ref is a loud baseRef error and null counts, never zeros",
+    () => {
+      const rows = sweep("--base", "origin/no-such-branch");
+      const line = rows.find((r) => "baseRef" in r)?.baseRef;
+      expect(line.ok).toBe(false);
+      expect(line.error).toContain("origin/no-such-branch");
+      // Never a silent fallback to the default branch either: that would be
+      // exactly the wrong-branch counts the flag exists to prevent.
+      expect(rows.some((r) => "defaultRef" in r)).toBe(false);
+      expect(rowFor(rows, "repo").aheadBehind).toBeNull();
+      expect(rowFor(rows, "wt-live").aheadBehind).toBeNull();
+    },
+    SWEEP_TIMEOUT,
+  );
+
+  test(
+    "an ambiguous --base ref is refused, never resolved by git's precedence rules",
+    () => {
+      // A tag and a branch both named ambi, at DIFFERENT commits: rev-parse
+      // exits 0 and silently picks the tag by precedence, so the sweep must
+      // detect the ambiguity warning and refuse rather than guess.
+      git(repo, "tag", "ambi", "origin/develop");
+      git(repo, "branch", "ambi", "main");
+      try {
+        const rows = sweep("--base", "ambi");
+        const line = rows.find((r) => "baseRef" in r)?.baseRef;
+        expect(line.ok).toBe(false);
+        expect(line.error).toContain("ambiguous");
+        expect(rowFor(rows, "repo").aheadBehind).toBeNull();
+
+        // A repo-local core.warnAmbiguousRefs=false suppresses the warning
+        // the check reads; the probe must force it back on.
+        git(repo, "config", "core.warnAmbiguousRefs", "false");
+        try {
+          const suppressed = sweep("--base", "ambi");
+          const suppressedLine = suppressed.find((r) => "baseRef" in r)?.baseRef;
+          expect(suppressedLine.ok).toBe(false);
+          expect(suppressedLine.error).toContain("ambiguous");
+        } finally {
+          git(repo, "config", "--unset", "core.warnAmbiguousRefs");
+        }
+      } finally {
+        git(repo, "tag", "-d", "ambi");
+        git(repo, "branch", "-D", "ambi");
+      }
+    },
+    SWEEP_TIMEOUT,
+  );
+
+  test(
+    "--base without a value is a usage error",
+    () => {
+      const result = runSweep(repo, {}, "--base");
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr.toString()).toContain(
+        "usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]",
+      );
+      // A "-"-prefixed value is the next option consumed by mistake (a
+      // refname can never start with "-"): a usage error too, never an exit-0
+      // sweep with a baseRef diagnostic about a ref named --transcripts.
+      const flagEaten = runSweep(repo, {}, "--base", "--transcripts");
+      expect(flagEaten.exitCode).toBe(2);
+      expect(flagEaten.stderr.toString()).toContain("usage: sweep.mts");
     },
     SWEEP_TIMEOUT,
   );

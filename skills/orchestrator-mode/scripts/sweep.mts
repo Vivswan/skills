@@ -10,7 +10,12 @@
  * cwd (never argv or shell pipelines), and a worktree where anything fails
  * yields an ok:false row instead of a zeros row.
  *
- * Usage: sweep.mts <repo-root> [--transcripts <dir>]
+ * Usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]
+ *
+ * --base <ref> measures every row's aheadBehind against <ref> (any
+ * committish, e.g. origin/develop) instead of origin's default branch, for
+ * sessions integrating into a non-default mainline. Omitted, the default
+ * branch resolution below is unchanged.
  *
  * Output lines, in order:
  *   {"control":"FAILED","reason":...}          only when the sweep itself is
@@ -23,6 +28,12 @@
  *   {"defaultRef":{"ok":false,"error":...}}    only when origin's default
  *                                              branch cannot be resolved
  *                                              (rows carry aheadBehind:null)
+ *   {"baseRef":{"ok":false,"error":...}}       only when an explicit --base
+ *                                              ref is unresolvable or
+ *                                              ambiguous (rows carry
+ *                                              aheadBehind:null; never a
+ *                                              fallback to the default
+ *                                              branch)
  *   {"worktree":...,"ok":true,...}             one per worktree
  *   {"worktree":...,"ok":false,"error":...}    vanished dir or git failure
  *   {"transcripts":{...}}                      only with --transcripts
@@ -54,7 +65,7 @@ const TRANSCRIPT_TAIL_BYTES = 64 * 1024;
 const TRANSCRIPT_TAIL_MAX_BYTES = 8 * 1024 * 1024;
 
 type RunResult =
-  | { ok: true; stdout: Buffer; degraded?: boolean }
+  | { ok: true; stdout: Buffer; stderr: Buffer; degraded?: boolean }
   | { ok: false; error: string; code: number | null };
 
 /**
@@ -89,7 +100,7 @@ function sanitizedEnv(): NodeJS.ProcessEnv {
 function run(
   cmd: string,
   args: string[],
-  opts: { acceptStdoutOnError?: boolean } = {},
+  opts: { acceptStdoutOnError?: boolean; env?: Record<string, string> } = {},
 ): Promise<RunResult> {
   return new Promise((resolvePromise) => {
     execFile(
@@ -99,11 +110,11 @@ function run(
         timeout: COMMAND_TIMEOUT_MS,
         maxBuffer: MAX_BUFFER,
         encoding: "buffer",
-        env: sanitizedEnv(),
+        env: { ...sanitizedEnv(), ...opts.env },
       },
       (error, stdout, stderr) => {
         if (!error) {
-          resolvePromise({ ok: true, stdout });
+          resolvePromise({ ok: true, stdout, stderr });
           return;
         }
         // lsof and ps exit nonzero when some processes are unreadable or
@@ -115,7 +126,7 @@ function run(
         const genuineNonzeroExit =
           !error.killed && error.signal == null && typeof error.code === "number";
         if (opts.acceptStdoutOnError && genuineNonzeroExit && stdout.length > 0) {
-          resolvePromise({ ok: true, stdout, degraded: true });
+          resolvePromise({ ok: true, stdout, stderr, degraded: true });
           return;
         }
         const detail = stderr.toString("utf8").trim().split("\n")[0] ?? "";
@@ -406,9 +417,56 @@ function transcriptReport(dir: string): unknown {
 
 // --- per-worktree row -------------------------------------------------------
 
-type DefaultRef = { ref: string; sha: string } | { ref: null; error: string };
+type BaseRef = { ref: string; sha: string } | { ref: null; error: string };
 
-async function resolveDefaultRef(repoRoot: string): Promise<DefaultRef> {
+/**
+ * Resolve an operator-supplied --base ref to a pinned sha. Any committish is
+ * accepted (origin/develop, a local branch, a tag, a sha); --end-of-options
+ * keeps a hostile ref string from being read as a git option, and ^{commit}
+ * rejects non-commit objects. The sha is pinned once for the whole sweep for
+ * the same reason as the default-branch sha below: a concurrent fetch moving
+ * the ref mid-sweep would otherwise hand different rows different bases. An
+ * explicitly requested base that cannot be resolved is a loud error - never
+ * a silent fallback to the default branch, whose counts would be exactly the
+ * wrong-branch readings the flag exists to prevent.
+ */
+async function resolveBaseRef(repoRoot: string, ref: string): Promise<BaseRef> {
+  // No --quiet here, unlike the default-branch probes: --quiet would also
+  // suppress the "refname is ambiguous" warning this probe must read. A
+  // missing ref therefore fails through rev-parse's ordinary nonzero exit,
+  // carrying git's own message.
+  const probe = await run(
+    "git",
+    [
+      "-C",
+      repoRoot,
+      // A repo-local core.warnAmbiguousRefs=false would suppress the very
+      // warning the check below reads; force it on for this probe.
+      "-c",
+      "core.warnAmbiguousRefs=true",
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `${ref}^{commit}`,
+    ],
+    // Pin the locale for this probe only, so a translated warning cannot
+    // slip past the text check.
+    { env: { LC_ALL: "C" } },
+  );
+  if (!probe.ok) {
+    return { ref: null, error: `cannot resolve --base ref ${ref}: ${probe.error}` };
+  }
+  // rev-parse exits 0 on an AMBIGUOUS name (say, a tag and a branch both
+  // named develop), silently resolving it by its own precedence rules with
+  // only a stderr warning; a sweep must never guess which mainline the
+  // operator meant.
+  if (probe.stderr.toString("utf8").includes("is ambiguous")) {
+    return { ref: null, error: `cannot resolve --base ref ${ref}: refname is ambiguous` };
+  }
+  return { ref, sha: probe.stdout.toString("utf8").trim() };
+}
+
+async function resolveDefaultRef(repoRoot: string): Promise<BaseRef> {
   const candidates: string[] = [];
   const head = await run("git", [
     "-C",
@@ -484,7 +542,7 @@ function gitValue(stdout: Buffer): string {
 
 async function worktreeRow(
   path: string,
-  defaultBaseSha: string | null,
+  baseSha: string | null,
   processes: ProcessRow[],
 ): Promise<Record<string, unknown>> {
   if (!existsSync(path)) {
@@ -568,16 +626,17 @@ async function worktreeRow(
   const treeFileCount = splitNul(tree.stdout).filter((name) => name.length > 0).length;
 
   let aheadBehind: { ahead: number; behind: number } | null = null;
-  if (defaultBaseSha !== null) {
-    // The base is the sweep-wide PINNED sha of origin's default branch, not
-    // the mutable ref name: a concurrent fetch moving the ref mid-sweep
-    // would otherwise give different rows different bases.
+  if (baseSha !== null) {
+    // The base is the sweep-wide PINNED sha of the base ref (origin's
+    // default branch, or the --base ref), not the mutable ref name: a
+    // concurrent fetch moving the ref mid-sweep would otherwise give
+    // different rows different bases.
     const counts = await run("git", [
       ...pinned,
       "rev-list",
       "--left-right",
       "--count",
-      `${defaultBaseSha}...HEAD`,
+      `${baseSha}...HEAD`,
     ]);
     if (!counts.ok) return { worktree: path, ok: false, error: counts.error };
     const [behind, ahead] = counts.stdout.toString("utf8").trim().split(/\s+/);
@@ -650,7 +709,7 @@ async function worktreeRow(
 // --- main -------------------------------------------------------------------
 
 function usage(): number {
-  console.error("usage: sweep.mts <repo-root> [--transcripts <dir>]");
+  console.error("usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]");
   return 2;
 }
 
@@ -664,9 +723,17 @@ async function main(): Promise<number> {
   const args = process.argv.slice(2);
   let repoRoot: string | null = null;
   let transcriptsDir: string | null = null;
+  let baseRefArg: string | null = null;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i] as string;
-    if (arg === "--transcripts") {
+    if (arg === "--base") {
+      const value = args[++i];
+      // A refname can never start with "-", so a "-"-prefixed value is a
+      // missing value with the NEXT option consumed by mistake ("--base
+      // --transcripts"): a usage error, not a baseRef diagnostic.
+      if (value === undefined || value.startsWith("-")) return usage();
+      baseRefArg = value;
+    } else if (arg === "--transcripts") {
       const value = args[++i];
       if (value === undefined) return usage();
       transcriptsDir = resolve(value);
@@ -759,13 +826,16 @@ async function main(): Promise<number> {
     );
   }
 
-  const defaultRef = await resolveDefaultRef(repoRoot);
+  const base =
+    baseRefArg === null
+      ? await resolveDefaultRef(repoRoot)
+      : await resolveBaseRef(repoRoot, baseRefArg);
   const rows: Record<string, unknown>[] = [];
   for (const worktreePath of worktreePaths) {
     rows.push(
       await worktreeRow(
         worktreePath,
-        defaultRef.ref === null ? null : defaultRef.sha,
+        base.ref === null ? null : base.sha,
         processesByWorktree.get(worktreePath) ?? [],
       ),
     );
@@ -790,7 +860,13 @@ async function main(): Promise<number> {
   }
 
   if (lsofLine !== null) emit(lsofLine);
-  if (defaultRef.ref === null) emit({ defaultRef: { ok: false, error: defaultRef.error } });
+  if (base.ref === null) {
+    emit(
+      baseRefArg === null
+        ? { defaultRef: { ok: false, error: base.error } }
+        : { baseRef: { ok: false, error: base.error } },
+    );
+  }
   for (const row of rows) emit(row);
   if (transcriptsDir !== null) emit(transcriptReport(transcriptsDir));
   return controlAlive ? 0 : 1;
