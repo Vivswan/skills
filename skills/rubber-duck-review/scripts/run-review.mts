@@ -18,13 +18,15 @@
  * construction and cannot hang: the stdin hang trap is an OPEN pipe.
  *
  * --background detaches a monitor copy of this script that runs the reviewer
- * to completion and records its exit status in review.status beside the
- * stream; --extract refuses to report a verdict until that status is a
- * recorded success, so extracting too early (or after a failed run) fails
- * safe.
+ * to completion and records the reviewer, output filename, and exit status in
+ * review.status beside the stream; --extract validates all three against its
+ * own invocation and refuses to report a verdict until the recorded status is
+ * a success, so extracting too early, from a failed run, or from the wrong
+ * capture fails safe.
  *
  * Exit codes:
- *   0  verdict extracted and printed to stdout
+ *   0  verdict extracted and printed to stdout, or a --background launch
+ *      started (that run's verdict comes later, via --extract)
  *   1  review FAILED - relaunch (empty or cut stream, error events, blank
  *      or unrecorded verdicts, or a non-zero reviewer exit; an empty review
  *      must never read as clean)
@@ -37,12 +39,13 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TOOLS = ["codex", "claude", "copilot"] as const;
@@ -205,6 +208,25 @@ function scratchPaths(dir: string, tool: Tool): Scratch {
   };
 }
 
+/** review.status binds a capture to its reviewer and output file, so
+ * --extract cannot be pointed at another reviewer's stream (or a non-stream
+ * file) and read it with the wrong rules. Written without `status` at launch;
+ * rewritten with it on completion. */
+function recordStatus(scratch: Scratch, tool: Tool, status?: string): void {
+  // Write-then-rename: a concurrent --extract must never observe a truncated
+  // record (writeFileSync truncates before writing).
+  const pending = `${scratch.statusFile}.tmp`;
+  writeFileSync(
+    pending,
+    JSON.stringify({
+      tool,
+      output: basename(scratch.outFile),
+      ...(status === undefined ? {} : { status }),
+    }),
+  );
+  renameSync(pending, scratch.statusFile);
+}
+
 interface ReviewerHooks {
   onLife?: () => void;
   onSpawnError: (error: Error) => void;
@@ -228,6 +250,7 @@ function runReviewer(
   }
   const outFd = openSync(scratch.outFile, "w");
   const errFd = openSync(scratch.errFile, "w");
+  recordStatus(scratch, tool);
   const closeFds = () => {
     closeSync(outFd);
     closeSync(errFd);
@@ -270,7 +293,7 @@ function runReviewer(
   child.on("close", (code) => {
     settle(() => {
       const status = String(code ?? "signal");
-      writeFileSync(scratch.statusFile, status);
+      recordStatus(scratch, tool, status);
       hooks.onDone(status);
     });
   });
@@ -314,10 +337,7 @@ function runForeground(tool: Tool, delivery: Delivery, scratch: Scratch): void {
 function runCapture(tool: Tool, delivery: Delivery, scratch: Scratch): void {
   const child = runReviewer(tool, delivery, scratch, {
     onSpawnError: (error) => {
-      writeFileSync(
-        scratch.statusFile,
-        isEnoent(error) ? "not-found" : `spawn failed: ${String(error)}`,
-      );
+      recordStatus(scratch, tool, isEnoent(error) ? "not-found" : `spawn failed: ${String(error)}`);
     },
     onDone: () => {},
   });
@@ -360,26 +380,57 @@ function runBackground(tool: Tool, prompt: string, stdinPrompt: boolean): void {
 function extractRecorded(tool: Tool, outputFile: string): void {
   // Status first: before the monitor records completion (or even creates the
   // stream), extraction must fail as an unfinished review, not a usage error.
-  let status: string | null = null;
+  let recordText: string | null = null;
   try {
-    status = readFileSync(join(dirname(outputFile), "review.status"), "utf-8").trim();
+    recordText = readFileSync(join(dirname(outputFile), "review.status"), "utf-8");
   } catch {
-    // no status recorded: the run is still going, or was not captured here
+    // no record beside the file: the monitor may not have started yet
   }
-  if (status === null) {
+  if (recordText === null) {
     reportVerdict(
       { ok: false, reason: "no exit status recorded (reviewer still running?)" },
       outputFile,
     );
     return;
   }
-  if (status === "not-found") {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(recordText);
+  } catch {
+    usageError(`unrecognized review.status beside ${outputFile}: not a run-review capture`);
+  }
+  if (!isRecord(parsed)) {
+    usageError(`unrecognized review.status beside ${outputFile}: not a run-review capture`);
+  }
+  const { tool: recordedTool, output: recordedOutput, status: recordedStatus } = parsed;
+  if (typeof recordedTool !== "string" || typeof recordedOutput !== "string") {
+    usageError(`unrecognized review.status beside ${outputFile}: not a run-review capture`);
+  }
+  if (recordedTool !== tool) {
+    usageError(
+      `this capture was launched with reviewer '${recordedTool}', not '${tool}'; extract with the same reviewer`,
+    );
+  }
+  if (recordedOutput !== basename(outputFile)) {
+    usageError(`this capture's output file is '${recordedOutput}', not '${basename(outputFile)}'`);
+  }
+  if (!("status" in parsed)) {
+    reportVerdict(
+      { ok: false, reason: "no exit status recorded (reviewer still running?)" },
+      outputFile,
+    );
+    return;
+  }
+  if (typeof recordedStatus !== "string") {
+    usageError(`unrecognized review.status beside ${outputFile}: non-string status`);
+  }
+  if (recordedStatus === "not-found") {
     process.stderr.write(`reviewer binary not found: ${tool}\n`);
     process.exitCode = 2;
     return;
   }
-  if (status !== "0") {
-    reportVerdict({ ok: false, reason: `recorded reviewer status: ${status}` }, outputFile);
+  if (recordedStatus !== "0") {
+    reportVerdict({ ok: false, reason: `recorded reviewer status: ${recordedStatus}` }, outputFile);
     return;
   }
   let raw: string;

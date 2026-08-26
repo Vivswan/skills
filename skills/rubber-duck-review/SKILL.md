@@ -64,14 +64,14 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - `--background` prints the output-file path and the PID of a detached monitor that records the reviewer's exit status beside the stream; leads use it to keep working while the review runs, then extract the verdict once it exits (step 4). Killing that PID cancels the review (the signal is forwarded to the reviewer).
 - Progress: a foreground run prints at most two progress lines to stderr - one when the stream first shows life, one when the reviewer exits (a failure then adds its own `review FAILED` line). Silence in between is normal; a real review can take a while.
 - Runtime: `bun`; `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
-- Exit codes: 0 = verdict extracted and printed to stdout; 1 = `review FAILED - relaunch`; 2 = usage error or reviewer binary not found.
+- Exit codes: 0 = verdict extracted and printed to stdout, or a `--background` launch started (that run's verdict comes later, via `--extract`); 1 = `review FAILED - relaunch`; 2 = usage error or reviewer binary not found.
 
 ### 4. Act on the printed verdict
 
-- Exit 0: the verdict is on stdout. Triage it per steps 6-7: apply or reject each finding, and treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes.
+- Exit 0 from a foreground run or `--extract`: the verdict is on stdout. Triage it per steps 6-7: apply or reject each finding, and treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes. (A `--background` launch also exits 0, printing only the output path and PID; its verdict comes from `--extract`.)
 - Exit 1 (`review FAILED - relaunch`): the stream was empty, cut before a verdict event, blank, contained error events, or the reviewer exited non-zero. That is no review at all, never a clean pass - relaunch it (the captured output path is in the failure message if you want to inspect why).
 - Exit 2: fix the invocation or install the missing reviewer binary; nothing was reviewed.
-- After a `--background` run exits, extract the verdict from the captured stream with the same rules and exit codes: `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>`, where `<reviewer>` is the same argument the review was launched with. It refuses to report a verdict until the run has recorded a successful exit beside the stream, so extracting too early fails safe.
+- After a `--background` run exits, extract the verdict from the captured stream with the same rules and exit codes: `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>`, where `<reviewer>` is the same argument the review was launched with. It validates the reviewer and output file against what the launch recorded, and refuses to report a verdict until the run has recorded a successful exit beside the stream - so extracting too early, with the wrong reviewer, or from the wrong file fails safe.
 - Failed and background runs keep their scratch dir (under the OS tmp dir, never the working tree) for inspection; `rm -rf` it once triaged. Foreground successes clean up after themselves.
 
 ### 5. Large change sets: fan out one review per section

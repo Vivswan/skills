@@ -167,17 +167,20 @@ function run(args: string[], env: Record<string, string> = {}, path?: string) {
   };
 }
 
-/** Poll for the review.status file a background run's monitor records. */
+/** Poll for the completed review.status record a background monitor writes
+ * (present without `status` from launch; `status` lands on completion). */
 function waitForStatus(outputFile: string): string {
   const statusFile = join(dirname(outputFile), "review.status");
   for (let i = 0; i < 100; i += 1) {
     try {
-      return readFileSync(statusFile, "utf-8");
+      const record = JSON.parse(readFileSync(statusFile, "utf-8"));
+      if (typeof record.status === "string") return record.status;
     } catch {
-      Bun.sleepSync(50);
+      // record not written yet
     }
+    Bun.sleepSync(50);
   }
-  throw new Error(`no ${statusFile} after 5s`);
+  throw new Error(`no completed ${statusFile} after 5s`);
 }
 
 function backgroundOutputFile(stdout: string): string {
@@ -371,6 +374,58 @@ describe("run-review.mts", () => {
     expect(extracted.code).toBe(1);
     expect(extracted.stderr).toContain("no exit status recorded");
     rmSync(earlyDir, { recursive: true, force: true });
+  });
+
+  test("--extract with a different reviewer than the launch is refused: exit 2", () => {
+    const r = run(["codex", promptFile, "--background"]);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("0");
+    const extracted = run(["claude", "--extract", outputFile]);
+    expect(extracted.code).toBe(2);
+    expect(extracted.stderr).toContain("launched with reviewer 'codex'");
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  test("--extract pointed at a different file in the capture dir is refused: exit 2", () => {
+    const r = run(["codex", promptFile, "--background"]);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("0");
+    // prompt.txt sits beside review.status; it must not pass as the stream.
+    const extracted = run(["codex", "--extract", join(dirname(outputFile), "prompt.txt")]);
+    expect(extracted.code).toBe(2);
+    expect(extracted.stderr).toContain("output file is 'review.jsonl'");
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  test("--extract on a launch-time record without a status yet exits 1", () => {
+    const pendingDir = mkdtempSync(join(tmpdir(), "run-review-launched-"));
+    const outputFile = join(pendingDir, "review.jsonl");
+    writeFileSync(
+      outputFile,
+      '{"type":"item.completed","item":{"type":"agent_message","text":"looks complete"}}\n{"type":"turn.completed"}\n',
+    );
+    writeFileSync(join(pendingDir, "review.status"), '{"tool":"codex","output":"review.jsonl"}');
+    const extracted = run(["codex", "--extract", outputFile]);
+    expect(extracted.code).toBe(1);
+    expect(extracted.stderr).toContain("no exit status recorded");
+    rmSync(pendingDir, { recursive: true, force: true });
+  });
+
+  test("--extract on a corrupt or non-string-status record is a usage error: exit 2", () => {
+    const corruptDir = mkdtempSync(join(tmpdir(), "run-review-corrupt-"));
+    const outputFile = join(corruptDir, "review.jsonl");
+    writeFileSync(
+      outputFile,
+      '{"type":"item.completed","item":{"type":"agent_message","text":"looks complete"}}\n{"type":"turn.completed"}\n',
+    );
+    const statusFile = join(corruptDir, "review.status");
+    writeFileSync(statusFile, "not json");
+    expect(run(["codex", "--extract", outputFile]).code).toBe(2);
+    writeFileSync(statusFile, '{"tool":"codex","output":"review.jsonl","status":0}');
+    const extracted = run(["codex", "--extract", outputFile]);
+    expect(extracted.code).toBe(2);
+    expect(extracted.stderr).toContain("non-string status");
+    rmSync(corruptDir, { recursive: true, force: true });
   });
 
   test("--extract before the monitor even creates the stream exits 1, not 2", () => {
