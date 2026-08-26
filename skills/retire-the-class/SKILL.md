@@ -56,11 +56,11 @@ The table lists the highest reachable rung per shape: rung 1 wherever it exists,
 | convention-synced artifacts where generation is impractical | a CI agreement check: drift recurs but cannot land (rung 2) |
 | string values from a closed set, dispatched on by string | a closed union or enum with an exhaustive consumer - a total `Record<Union, T>`, or a `match`/`switch` with a `never` default - so a new member breaks compilation (the `/no-invalid-states` references document the mechanics) |
 | stringly-typed identifiers re-validated at every consumer | a branded type behind a smart constructor: validate once at the boundary, trust thereafter (retires re-validation, not roster holes) |
-| a warning-comment checklist or trap doc that grows per incident | an executable check: a test, a lint rule, a script (rung 2) |
+| a warning-comment checklist or trap doc that grows per incident | redesign the substrate the traps warn about so the mistake cannot be made (rung 1 - the probe-tool worked example below); where redesign is impractical, an executable check: a test, a lint rule, a script (rung 2) |
 | a count or boolean standing in for a set or richer state | the set or the state itself |
 | state living in prose, memory, or scrollback | a persisted structured store |
 
-Every row is a rung-1 move except the two marked rung 2 - the CI agreement check and the trap-doc row: an executable check stops the class from landing even though it can still recur.
+Every unmarked response is a rung-1 move. The two marked rung 2 - the CI agreement check and the trap-doc executable-check fallback - stop the class from landing even though it can still recur.
 
 ### 4. Ship the class-retiring change
 
