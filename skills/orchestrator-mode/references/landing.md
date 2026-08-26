@@ -46,6 +46,10 @@ Everything above still applies; this subsection only adds what is stack-specific
 The lead's loop, top to bottom. Nothing in the block may prompt: no interactive rebase, and any command that could open a prompt gets stdin closed (`< /dev/null`).
 
 ```bash
+set -e                               # every step below is load-bearing: a failed rebase, push,
+#                                      or check stops the flow HERE, before anything (a boundary
+#                                      re-record, a push, a retarget) builds on the failure
+export GIT_TERMINAL_PROMPT=0         # a credential prompt would hang the block; fail loudly instead
 git config rerere.enabled true       # record conflict resolutions once and replay them on later
 #                                      restacks, in place of a hand-resolve (or a prompt) each time
 git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push target; adjust origin to the writable remote
@@ -59,13 +63,13 @@ git config branch.track-2.depTip "$(git rev-parse track-1)"
 #                                  is MAINTAINED, not set-once (the direct gate's dependent-track
 #                                  rule above): re-record it after every restack of the layer. A
 #                                  stale recording replays later or rewritten dependency commits.
-# STOP: switch the main checkout back to the mainline, spawn the builders,
-# and let them commit each layer's work. When a layer's builder signals done,
-# stop it and REMOVE its worktree (Worktree interplay, below): a branch
-# checked out in ANY worktree cannot be checked out elsewhere, so every step
-# below fails "already used by worktree" while a builder still holds its
-# layer. Publishing before the layers carry the collected commits would
-# publish EMPTY layer PRs.
+git checkout <mainline>              # release the layer branches for the builders' worktrees
+# STOP: spawn the builders and let them commit each layer's work. When a layer's
+# builder signals done, stop it and REMOVE its worktree (Worktree interplay,
+# below): a branch checked out in ANY worktree cannot be checked out elsewhere,
+# so every step below fails "already used by worktree" while a builder still
+# holds its layer. Publishing before the layers carry the collected commits
+# would publish EMPTY layer PRs.
 # Restack each successor onto its dependency's collected work, bottom-up:
 # track-2 was branched before track-1's commits existed. Transplant only the
 # delta past the recorded boundary, then move the boundary:
@@ -108,8 +112,10 @@ gh pr merge <pr> --squash            # DELEGATED PATH ONLY: this line runs when 
 # After the lower link merges, per successor bottom-up. Transplant only the delta:
 # a squash merge rewrites history, so the dependency's commits are not ancestors of
 # the squash commit, and a whole-branch rebase would replay the dependency's changes:
-git rebase --onto <mainline> "$(git config branch.track-2.depTip)" track-2 < /dev/null
-git config branch.track-2.depTip "$(git rev-parse <mainline>)"   # the base moved: re-record it
+git fetch origin <mainline>          # the squash landed on the REMOTE mainline; fetch first, or
+#                                      the transplant targets a stale pre-merge tip
+git rebase --onto origin/<mainline> "$(git config branch.track-2.depTip)" track-2 < /dev/null
+git config branch.track-2.depTip "$(git rev-parse origin/<mainline>)"   # the base moved: re-record it
 git push --force-with-lease origin track-2   # an unpushed restack leaves a stale PR whose CI
 #                                      never covered what will actually merge, and the shared
 #                                      re-gate rule (item 3 above) applies to every
@@ -124,7 +130,7 @@ git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP:
 git checkout <mainline>              # back to the mainline once stack operations are done
 ```
 
-A failed step in this loop is loud on its own: a rebase stops on a conflict with a nonzero exit, and `--force-with-lease` refuses to push over a branch that moved under you. Either failure stops the flow to reconcile before anything else runs. What still needs explicit verification is the POSTCONDITION each step exists to produce, per site: before publishing, each successor's base contains the dependency's current tip; after a merge, the next layer's merge-base contains the merged mainline commit (both `merge-base --is-ancestor` checks in the block). Logs approximate; the postcondition is the truth (`/verify-with-controls` rule 4).
+A failed step in this loop is loud on its own: a rebase stops on a conflict with a nonzero exit, and `--force-with-lease` refuses to push over a branch that moved under you. The block's `set -e` turns that loudness into a full stop, so no later step (a boundary re-record, a push, a retarget) builds on a failure. What still needs explicit verification is the POSTCONDITION each step exists to produce, per site: before publishing, each successor's base contains the dependency's current tip; after a merge, the next layer's merge-base contains the merged mainline commit (both `merge-base --is-ancestor` checks in the block). Logs approximate; the postcondition is the truth (`/verify-with-controls` rule 4).
 
 Worktree interplay: git refuses to check out a branch already checked out in a worktree (the `/worktree-hygiene` skill's one-branch-one-worktree rule), and builders hold their layer branches in theirs.
 
