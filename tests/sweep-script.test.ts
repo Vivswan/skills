@@ -545,6 +545,12 @@ describe("sweep.mts worktree rows", () => {
       expect(result.stderr.toString()).toContain(
         "usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]",
       );
+      // A "-"-prefixed value is the next option consumed by mistake (a
+      // refname can never start with "-"): a usage error too, never an exit-0
+      // sweep with a baseRef diagnostic about a ref named --transcripts.
+      const flagEaten = runSweep(repo, {}, "--base", "--transcripts");
+      expect(flagEaten.exitCode).toBe(2);
+      expect(flagEaten.stderr.toString()).toContain("usage: sweep.mts");
     },
     SWEEP_TIMEOUT,
   );

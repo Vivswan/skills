@@ -728,7 +728,10 @@ async function main(): Promise<number> {
     const arg = args[i] as string;
     if (arg === "--base") {
       const value = args[++i];
-      if (value === undefined) return usage();
+      // A refname can never start with "-", so a "-"-prefixed value is a
+      // missing value with the NEXT option consumed by mistake ("--base
+      // --transcripts"): a usage error, not a baseRef diagnostic.
+      if (value === undefined || value.startsWith("-")) return usage();
       baseRefArg = value;
     } else if (arg === "--transcripts") {
       const value = args[++i];
