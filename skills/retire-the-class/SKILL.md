@@ -50,14 +50,15 @@ New members keep appearing because something weak admits them: two artifacts syn
 | Class keeps appearing as | Class-retiring form |
 | --- | --- |
 | repeated null or lifecycle guards at N call sites | a sum type or an owning transition - the type-level mechanisms live in the `/no-invalid-states` skill |
-| two artifacts synced by convention (an enum and its dispatch table, a schema and its docs) | a single source, with the duplicate generated or checked |
+| two artifacts synced by convention (an enum and its dispatch table, a schema and its docs) | derive one from the other - a single source with the duplicate generated: drift is unrepresentable (rung 1) |
+| convention-synced artifacts where generation is impractical | a CI agreement check: drift recurs but cannot land (rung 2) |
 | string values from a closed set, dispatched on by string | a closed union or enum: a new member breaks every non-exhaustive handler at compile time |
 | stringly-typed identifiers re-validated at every consumer | a branded type behind a smart constructor: validate once at the boundary, trust thereafter (retires re-validation, not roster holes) |
 | a warning-comment checklist or trap doc that grows per incident | an executable check: a test, a lint rule, a script |
 | a count or boolean standing in for a set or richer state | the set or the state itself |
 | state living in prose, memory, or scrollback | a persisted structured store |
 
-Every row is a rung-1 move except the trap-doc row, which is rung 2: an executable check stops the class from landing even though it can still recur.
+Every row is a rung-1 move except the two marked rung 2 - the CI agreement check and the trap-doc row: an executable check stops the class from landing even though it can still recur.
 
 ### 4. Ship the class-retiring change
 
