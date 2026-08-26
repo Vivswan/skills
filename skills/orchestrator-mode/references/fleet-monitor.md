@@ -48,7 +48,7 @@ The row is data; these rules are what it means:
 Any claim about file content - "the sentence landed", "the key set matches", "this track touched only its territory" - runs through the probe script, never a raw grep:
 
 ```bash
-bun <skill-dir>/scripts/probe.mts count <file> <literal>       # lines with a token-bounded match, with per-match evidence
+bun <skill-dir>/scripts/probe.mts count <file> <literal>       # occurrences of a token-bounded match, with per-match evidence
 bun <skill-dir>/scripts/probe.mts json-keys <file> [<file2>]   # parsed key paths; with two files, the key-set diff
 bun <skill-dir>/scripts/probe.mts set <repo-root> <base-ref>   # changed files: committed (base..HEAD) + dirty, as one union
 bun <skill-dir>/scripts/probe.mts tokens <table.json> <root>   # a token table (schema below) against a tree
