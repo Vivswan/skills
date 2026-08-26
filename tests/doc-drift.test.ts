@@ -30,7 +30,7 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
   "sweep.mts": [
     {
       doc: "sweep.mts <repo-root> [--transcripts <dir>]",
-      script: "sweep.mts <repo-root> [--transcripts <dir>]",
+      script: 'console.error("usage: sweep.mts <repo-root> [--transcripts <dir>]")',
     },
     { doc: "--transcripts", script: '"--transcripts"' },
     { doc: "ok:false", script: "ok: false" },
