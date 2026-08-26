@@ -79,11 +79,18 @@ function errorText(error: unknown): string {
  * baseline time. Distinct from usage errors, which never retry. */
 class GhError extends Error {}
 
-function gh(args: string[]): string {
+/** Run gh with the per-call timeout capped to the remaining budget, so one
+ * snapshot read (pagination included) can never stretch a deadline by more
+ * than a single call timeout. `budgetEndsAt` is an absolute timestamp. */
+function gh(args: string[], budgetEndsAt: number): string {
+  const budgetMs = budgetEndsAt - Date.now();
+  if (budgetMs <= 0) {
+    throw new GhError(`gh ${args.slice(0, 2).join(" ")}: read exceeded its time budget`);
+  }
   const result = spawnSync("gh", args, {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: GH_CALL_TIMEOUT_MS,
+    timeout: Math.min(GH_CALL_TIMEOUT_MS, budgetMs),
   });
   if (result.error) {
     if ((result.error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -258,8 +265,11 @@ function parsePrPage(raw: string): PrPage {
   };
 }
 
-function readChecks(repo: string, prNumber: number): Map<string, CheckState> {
-  const raw = gh(["pr", "view", String(prNumber), "--repo", repo, "--json", "statusCheckRollup"]);
+function readChecks(repo: string, prNumber: number, budgetEndsAt: number): Map<string, CheckState> {
+  const raw = gh(
+    ["pr", "view", String(prNumber), "--repo", repo, "--json", "statusCheckRollup"],
+    budgetEndsAt,
+  );
   const parsed = parseJson(raw, "gh pr view");
   // The field must be PRESENT: a response missing it is a broken read, not a
   // PR with no checks (null and [] are how gh renders those).
@@ -292,7 +302,7 @@ function readChecks(repo: string, prNumber: number): Map<string, CheckState> {
   return checks;
 }
 
-function readSnapshot(repo: string, prNumber: number): Snapshot {
+function readSnapshot(repo: string, prNumber: number, budgetEndsAt: number): Snapshot {
   const [owner, name] = repo.split("/") as [string, string];
   let first: PrPage | null = null;
   let threadTotal = 0;
@@ -316,7 +326,7 @@ function readSnapshot(repo: string, prNumber: number): Snapshot {
       `number=${prNumber}`,
     ];
     if (cursor !== null) args.push("-F", `cursor=${cursor}`);
-    const page = parsePrPage(gh(args));
+    const page = parsePrPage(gh(args, budgetEndsAt));
     first ??= page;
     threadTotal += page.threads.length;
     for (const thread of page.threads) {
@@ -339,7 +349,7 @@ function readSnapshot(repo: string, prNumber: number): Snapshot {
     threadTotal,
     unresolvedThreads,
     threadComments,
-    checks: readChecks(repo, prNumber),
+    checks: readChecks(repo, prNumber, budgetEndsAt),
   };
 }
 
@@ -520,7 +530,7 @@ function resolveRepo(): string {
   // One catch for the whole read: a gh failure and malformed gh output are
   // the same tooling error (exit 2), never an uncaught crash.
   try {
-    const raw = gh(["repo", "view", "--json", "nameWithOwner"]);
+    const raw = gh(["repo", "view", "--json", "nameWithOwner"], Date.now() + GH_CALL_TIMEOUT_MS);
     const nameWithOwner = get(parseJson(raw, "gh repo view"), "nameWithOwner");
     if (typeof nameWithOwner !== "string" || !nameWithOwner.includes("/")) {
       throw new GhError("gh repo view returned no nameWithOwner");
@@ -541,7 +551,10 @@ async function main(): Promise<never> {
 
   let baseline: Snapshot;
   try {
-    baseline = readSnapshot(repo, options.prNumber);
+    // The wait deadline starts after the baseline; the baseline gets its own
+    // generous fixed budget so a giant PR can still be read, while a stalled
+    // API is bounded per call.
+    baseline = readSnapshot(repo, options.prNumber, Date.now() + 10 * GH_CALL_TIMEOUT_MS);
   } catch (error) {
     toolingError(
       `baseline read failed; refusing to wait on a PR it cannot see: ${errorText(error)}`,
@@ -569,7 +582,15 @@ async function main(): Promise<never> {
     // surface immediately, not one full interval later.
     let current: Snapshot | null = null;
     try {
-      current = readSnapshot(repo, options.prNumber);
+      // Budget: up to the wait deadline, but never below one call timeout,
+      // so a poll near (or at, for the final read) the deadline still gets
+      // one bounded attempt. Worst case, the wait overruns the deadline by
+      // a single GH_CALL_TIMEOUT_MS, never by minutes of pagination.
+      current = readSnapshot(
+        repo,
+        options.prNumber,
+        Math.max(deadline, Date.now() + GH_CALL_TIMEOUT_MS),
+      );
       consecutiveFailures = 0;
     } catch (error) {
       consecutiveFailures += 1;
