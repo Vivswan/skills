@@ -67,6 +67,8 @@ Work around the broken step to complete what the user actually asked for. The fi
 
 Rewrite the affected step so it is correct as written and meets the quality bar; keep copy-paste blocks runnable. A one-off warning bolted to the end leaves the broken instructions in place.
 
+**Code first when the skill ships scripts.** When a skill that ships `scripts/` fails in practice, the fix lands in the script plus a regression test that reproduces the incident; prose changes are reserved for judgment lessons the script cannot embody (when to flag, how to read a result). A trap folded into a tested script cannot re-fire; a trap folded into prose regrows the catalog - each incident adds a warning paragraph, the file swells, and a future session hand-rolls the broken step anyway. Worked case: a fleet-monitoring skill accumulated shell-probe trap prose (word-splitting, self-matching greps, a missing `timeout` binary) until the probes moved into tested scripts and the prose shrank to the judgment layer.
+
 ### 5. Put the edit through the normal gates
 
 A skill or memory edit is a change like any other: run whatever checks and review process govern the place it lives. Where none exist (e.g. a plain installed copy), at least re-run the failing scenario to confirm the rewritten instructions work.
