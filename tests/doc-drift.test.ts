@@ -109,8 +109,16 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
       script: 'pin <baseline-dir> <tree-root> <file...>",',
     },
     {
+      doc: "/tmp/fleet-<sessionId>/baseline <tree-root> <file...>",
+      script: "pin requires <baseline-dir> <tree-root> <file...>",
+    },
+    {
       doc: "check /tmp/fleet-<sessionId>/baseline <tree-root>",
       script: '<baseline-dir> <tree-root>",',
+    },
+    {
+      doc: "check /tmp/fleet-<sessionId>/baseline <tree-root>",
+      script: "check requires <baseline-dir> <tree-root>",
     },
   ],
 };

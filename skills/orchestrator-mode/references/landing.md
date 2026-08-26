@@ -68,6 +68,11 @@ gh stack submit --auto               # push the restacked remainder so successor
 #                                      an unpushed restack leaves stale PRs whose CI never
 #                                      covered what will actually merge, and the re-gate rule
 #                                      (item 2 above) applies to every content-changed link
+gh pr ready <num> --undo             # every content-changed successor flips BACK TO DRAFT until
+#                                      its CI and re-gate reconverge: submit preserves PR state,
+#                                      so a previously-ready successor could otherwise merge
+#                                      before its re-gate - the skill's Babysit-section
+#                                      both-directions draft rule, applied at the restack site
 git checkout <mainline>              # back to the mainline once stack operations are done
 ```
 
