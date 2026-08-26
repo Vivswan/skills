@@ -54,9 +54,9 @@ The table lists the highest reachable rung per shape: rung 1 wherever it exists,
 | repeated null or lifecycle guards at N call sites | a sum type or an owning transition - the type-level mechanisms live in the `/no-invalid-states` skill |
 | two artifacts synced by convention (an enum and its dispatch table, a schema and its docs) | derive one from the other - a single source with the duplicate generated: drift is unrepresentable (rung 1) |
 | convention-synced artifacts where generation is impractical | a CI agreement check: drift recurs but cannot land (rung 2) |
-| string values from a closed set, dispatched on by string | a closed union or enum: a new member breaks every non-exhaustive handler at compile time |
+| string values from a closed set, dispatched on by string | a closed union or enum with an exhaustive consumer - a total `Record<Union, T>`, or a `match`/`switch` with a `never` default - so a new member breaks compilation (the `/no-invalid-states` references document the mechanics) |
 | stringly-typed identifiers re-validated at every consumer | a branded type behind a smart constructor: validate once at the boundary, trust thereafter (retires re-validation, not roster holes) |
-| a warning-comment checklist or trap doc that grows per incident | an executable check: a test, a lint rule, a script |
+| a warning-comment checklist or trap doc that grows per incident | an executable check: a test, a lint rule, a script (rung 2) |
 | a count or boolean standing in for a set or richer state | the set or the state itself |
 | state living in prose, memory, or scrollback | a persisted structured store |
 
