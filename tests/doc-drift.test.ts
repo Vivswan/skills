@@ -51,6 +51,7 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: '"statusHash":', script: "statusHash," },
     { doc: '"defaultRef":{"ok":false', script: "defaultRef: { ok: false" },
     { doc: '"lsof":{"ok":false', script: "lsof: { ok: false" },
+    { doc: '"degraded":true', script: "degraded: true," },
     { doc: '"control":"FAILED"', script: 'control: "FAILED"' },
     { doc: "agent-*.jsonl", script: "agent-(.+)\\.jsonl" },
     { doc: "`mtime`", script: "mtime: stat.mtime.toISOString()" },
