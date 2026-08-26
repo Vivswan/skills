@@ -85,7 +85,7 @@ Include environment only when it matters: a version-specific parser bug names th
 - Open every PR as a DRAFT, and keep it draft through its review loop.
 - Flip READY the moment it converges: never batched, never held back.
 - Flip BACK TO DRAFT the moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding), before the fix round starts.
-- A PR is out of draft exactly when no commits are pending, so only converged PRs are ever offered for merge.
+- Draft state tracks pending commits; CONVERGENCE gates the merge offer. A fresh comment needing only a reply does not bounce a ready PR back to draft (its reply-and-resolve lands the same cycle, no commit), but a PR is offered for merge only while the full converged definition below holds.
 
 **Converged** means: CI green, every review thread resolved (fixed or answered), and the latest review round raised nothing new and valid.
 
