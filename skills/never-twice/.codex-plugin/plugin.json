@@ -1,6 +1,6 @@
 {
   "name": "never-twice",
-  "description": "Never fix the same failure class twice: climb every correction to the most durable response reachable - architecture and data structures first, then CI checks, then rules.",
+  "description": "Never fix the same failure class twice. Climb every correction to the most durable response reachable: architecture and data structures first, then CI checks, then rules.",
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",
@@ -27,7 +27,7 @@
     "capabilities": ["Read", "Edit", "Refactor"],
     "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/never-twice",
     "defaultPrompt": [
-      "This is the second time we fixed this kind of bug - never twice.",
+      "This is the second time we fixed this kind of bug. Never twice.",
       "I just corrected you on this again; climb the ladder instead.",
       "Would a new member of this failure class be impossible to build, loud but late, or silent?"
     ],
