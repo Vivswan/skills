@@ -1,6 +1,11 @@
 # Craft Skills and Memories
 
-`/craft-skills-and-memories` covers both ends of the lifecycle of an agent's instruction sources: creating skills and memories to a shared quality bar (example-led, trigger-form descriptions, right scope), and repairing them at their canonical source when they fail in practice. Skills stay general-purpose; memories are created and fixed at their own scope (project-specific or common).
+`/craft-skills-and-memories` covers both ends of the lifecycle of an agent's instruction sources:
+
+- **Creating** skills and memories to a shared quality bar: example-led, trigger-form descriptions, right scope.
+- **Repairing** them at their canonical source when they fail in practice.
+
+Skills stay general-purpose. Memories are created and fixed at their own scope, project-specific or common.
 
 ## Install
 
