@@ -8,7 +8,7 @@ metadata:
 
 # PR and Issue Discipline
 
-> Show the change before telling it: real captured output first, the fewest words after, drafts that track convergence in both directions, and a human hand on the merge by default.
+> Show the change before telling it: real captured output first, the fewest words after, drafts that flip ready on convergence and back on commit-requiring work, and a human hand on the merge by default.
 
 These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session.
 
