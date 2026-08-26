@@ -101,12 +101,14 @@ interface DiffResult {
  * Environment for the git call with every GIT_* variable dropped and config
  * files disabled: an inherited GIT_EXTERNAL_DIFF or a diff.external setting
  * could silently corrupt the diff, and this tool's product is trustworthy
- * verification.
+ * verification. The prefix match is case-insensitive because Windows
+ * environment names are (git_config_count would otherwise survive and Git
+ * would honor it there).
  */
-function scrubbedGitEnv(): Record<string, string> {
+export function scrubbedGitEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !key.startsWith("GIT_")) env[key] = value;
+    if (value !== undefined && !key.toUpperCase().startsWith("GIT_")) env[key] = value;
   }
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_SYSTEM = "/dev/null";
@@ -174,16 +176,25 @@ function canonicalize(path: string): string {
   }
 }
 
+/**
+ * True when a path.relative(base, target) result means target sits at or
+ * below base. relative() emits ".." segments with the host separator, so
+ * both "../" and "..\\" parent prefixes must be recognized as escapes.
+ */
+export function relativeStaysWithin(relPath: string): boolean {
+  return (
+    relPath === "" ||
+    (!isAbsolute(relPath) &&
+      relPath !== ".." &&
+      !relPath.startsWith("../") &&
+      !relPath.startsWith("..\\"))
+  );
+}
+
 function pin(baselineDir: string, treeRoot: string, files: readonly string[]): number {
   // A tree root at or under the baseline dir would let the install step
   // delete the very tree being pinned; refuse before any mutation.
-  const treeFromBaseline = relative(canonicalize(baselineDir), canonicalize(treeRoot));
-  if (
-    treeFromBaseline === "" ||
-    (!isAbsolute(treeFromBaseline) &&
-      treeFromBaseline !== ".." &&
-      !treeFromBaseline.startsWith("../"))
-  ) {
+  if (relativeStaysWithin(relative(canonicalize(baselineDir), canonicalize(treeRoot)))) {
     usageError(`tree-root ${treeRoot} must not be inside baseline-dir ${baselineDir}`);
   }
   const paths = [...new Set(files)].sort();
@@ -411,19 +422,22 @@ async function main(): Promise<number> {
 }
 
 // Set exitCode instead of calling process.exit() so stdout/stderr always
-// drain fully before the process ends, even for very large diffs.
-try {
-  process.exitCode = await main();
-} catch (error) {
-  if (error instanceof UsageError) {
-    note(`error: ${error.message}`);
-    note(USAGE);
-    emitSummary({ ok: false, error: `usage error: ${error.message}` });
-    process.exitCode = 2;
-  } else {
-    const message = errorMessage(error);
-    note(`baseline: unexpected failure: ${message}`);
-    emitSummary({ ok: false, error: `unexpected failure: ${message}` });
-    process.exitCode = 1;
+// drain fully before the process ends, even for very large diffs. Guarded so
+// importing the exported helpers (unit tests) runs nothing.
+if (import.meta.main) {
+  try {
+    process.exitCode = await main();
+  } catch (error) {
+    if (error instanceof UsageError) {
+      note(`error: ${error.message}`);
+      note(USAGE);
+      emitSummary({ ok: false, error: `usage error: ${error.message}` });
+      process.exitCode = 2;
+    } else {
+      const message = errorMessage(error);
+      note(`baseline: unexpected failure: ${message}`);
+      emitSummary({ ok: false, error: `unexpected failure: ${message}` });
+      process.exitCode = 1;
+    }
   }
 }

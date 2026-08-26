@@ -11,6 +11,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  relativeStaysWithin,
+  scrubbedGitEnv,
+} from "../skills/orchestrator-mode/scripts/baseline.mts";
 import { ROOT } from "./lib";
 
 // Contract test for the baseline snapshot helper: pinned copies plus git
@@ -75,6 +79,39 @@ function fileStatus(summary: Summary | null, path: string) {
   expect(entry).toBeDefined();
   return entry as NonNullable<typeof entry>;
 }
+
+describe("baseline.mts pure helpers", () => {
+  test("scrubbedGitEnv drops GIT_* case-insensitively, keeps everything else", () => {
+    process.env.GIT_EXTERNAL_DIFF = "/usr/bin/true";
+    process.env.git_config_count = "1";
+    process.env.Git_Dir = "/nowhere";
+    process.env.NOT_GIT_RELATED = "kept"; // prefix-only match: GIT_ mid-name stays
+    try {
+      const env = scrubbedGitEnv();
+      expect(env.GIT_EXTERNAL_DIFF).toBeUndefined();
+      expect(env.git_config_count).toBeUndefined();
+      expect(env.Git_Dir).toBeUndefined();
+      expect(env.NOT_GIT_RELATED).toBe("kept");
+      expect(env.PATH).toBe(process.env.PATH as string);
+      expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+      expect(env.GIT_CONFIG_SYSTEM).toBe("/dev/null");
+    } finally {
+      delete process.env.GIT_EXTERNAL_DIFF;
+      delete process.env.git_config_count;
+      delete process.env.Git_Dir;
+      delete process.env.NOT_GIT_RELATED;
+    }
+  });
+
+  test("relativeStaysWithin recognizes parent escapes with either separator", () => {
+    expect(relativeStaysWithin("")).toBe(true);
+    expect(relativeStaysWithin("sub/dir")).toBe(true);
+    expect(relativeStaysWithin("..")).toBe(false);
+    expect(relativeStaysWithin("../sibling")).toBe(false);
+    expect(relativeStaysWithin("..\\sibling")).toBe(false); // Windows path.relative output
+    expect(relativeStaysWithin("/elsewhere")).toBe(false);
+  });
+});
 
 describe("baseline.mts pin/check", () => {
   test("pin then check on an untouched tree is clean", () => {
