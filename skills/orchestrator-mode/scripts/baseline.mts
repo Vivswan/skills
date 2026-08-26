@@ -96,11 +96,29 @@ interface DiffResult {
   readonly diff: string;
 }
 
+/**
+ * Environment for the git call with every GIT_* variable dropped and config
+ * files disabled: an inherited GIT_EXTERNAL_DIFF or a diff.external setting
+ * could silently corrupt the diff, and this tool's product is trustworthy
+ * verification.
+ */
+function scrubbedGitEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && !key.startsWith("GIT_")) env[key] = value;
+  }
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  env.GIT_CONFIG_SYSTEM = "/dev/null";
+  return env;
+}
+
 async function gitDiffNoIndex(baselineFile: string, treeFile: string): Promise<DiffResult> {
   try {
-    await execFileAsync("git", ["diff", "--no-index", "--no-color", "--", baselineFile, treeFile], {
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    await execFileAsync(
+      "git",
+      ["diff", "--no-index", "--no-color", "--no-ext-diff", "--", baselineFile, treeFile],
+      { maxBuffer: 64 * 1024 * 1024, env: scrubbedGitEnv() },
+    );
     return { identical: true, diff: "" };
   } catch (error) {
     const failure = error as { code?: number | string; stdout?: string; stderr?: string };

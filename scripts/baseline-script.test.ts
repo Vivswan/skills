@@ -55,8 +55,12 @@ interface Summary {
   files: { path: string; status?: string; pinned?: boolean; reason?: string; detail?: string }[];
 }
 
-function runBaseline(args: string[]) {
-  const result = Bun.spawnSync(["bun", SCRIPT, ...args], { stdout: "pipe", stderr: "pipe" });
+function runBaseline(args: string[], env: Record<string, string> = {}) {
+  const result = Bun.spawnSync(["bun", SCRIPT, ...args], {
+    env: { ...process.env, ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const stdout = result.stdout.toString();
   return {
     code: result.exitCode,
@@ -302,6 +306,23 @@ describe("baseline.mts pin/check", () => {
     expect(entry.status).toBe("drifted");
     expect(entry.detail).toContain("-the real guidance");
     expect(entry.detail).toContain("+different words");
+  });
+
+  test("an inherited GIT_EXTERNAL_DIFF cannot corrupt the verdict", () => {
+    const fx = makeFixture({ "docs/a.md": "alpha beta\n" });
+    expect(runBaseline(["pin", fx.baseline, fx.tree, "docs/a.md"]).code).toBe(0);
+    fx.write("docs/a.md", "alpha gamma\n");
+
+    // /usr/bin/true as an external diff driver would swallow the comparison
+    // and report the drifted file as identical; the scrubbed git env must
+    // ignore it and still produce the real diff.
+    const check = runBaseline(["check", fx.baseline, fx.tree], {
+      GIT_EXTERNAL_DIFF: "/usr/bin/true",
+    });
+    expect(check.code).toBe(1);
+    const entry = fileStatus(check.summary, "docs/a.md");
+    expect(entry.status).toBe("drifted");
+    expect(entry.detail).toContain("+alpha gamma");
   });
 
   test("bad usage exits 2 and still emits an ok:false JSON summary", () => {
