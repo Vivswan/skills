@@ -13,7 +13,7 @@ Produce prose that avoids the documented signs of AI writing, based on [Wikipedi
 
 One pattern alone can be fine. The goal is prose where the patterns don't cluster and nothing reads generated.
 
-Scope: this skill is a guideline, not law. Its rules yield to the reader's actual readability needs; for a reader with dyslexia, skimmable beats pattern-pure.
+Scope: this skill is a guideline, not law. Skimmability for the reader outranks any rule in it (short front-loaded paragraphs, no text blobs, examples first).
 
 ## When to apply
 
