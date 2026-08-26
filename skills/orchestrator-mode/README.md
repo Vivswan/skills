@@ -32,7 +32,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/orchestrator-m
 - [`SKILL.md`](./SKILL.md): the session playbook, in lifecycle order
 - [`references/spawn-briefs.md`](./references/spawn-briefs.md): what every spawn brief must contain
 - [`references/fleet-monitor.md`](./references/fleet-monitor.md): the monitor's script wiring and liveness judgment
-- [`references/landing.md`](./references/landing.md): the three landing-mode procedures
+- [`references/landing.md`](./references/landing.md): the two landing gates (direct commits; PRs with per-track independent or stacked bases)
 - [`references/worktree-hygiene.md`](./references/worktree-hygiene.md): handovers, removals, and file ownership
 - [`scripts/`](./scripts): the fleet instruments - `sweep.mts`, `probe.mts`, `ledger.mts`, `baseline.mts` (run with bun)
 

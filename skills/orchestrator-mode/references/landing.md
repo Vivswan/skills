@@ -62,11 +62,12 @@ SYNC_STATUS=$?                       # capture immediately - nothing after the f
 #                                  on a terminal it opens a divergence wizard that blocks
 #                                  automation instead of printing the "Sync aborted" text
 #                                  the verdict check below reads.
-grep -qE "Stack synced|Branches synced" "$SYNC_OUT" || SYNC_STATUS=1  # POSITIVE verdict required:
-#                                  these are sync's documented final success messages (per
-#                                  gh-stack's own help); requiring one instead of scanning for
-#                                  failure text cannot false-fail on branch names containing
-#                                  "error", and absence covers "Sync aborted"/"Push failed" too
+{ grep -qE "Stack synced|Branches synced" "$SYNC_OUT" && ! grep -qE "Push failed|Sync aborted" "$SYNC_OUT"; } || SYNC_STATUS=1
+#                                  BOTH conditions required: gh-stack prints its final success
+#                                  verdict unconditionally, even after logging "Push failed",
+#                                  so presence-of-success and absence-of-failure each catch
+#                                  what the other misses - neither alone suffices (and neither
+#                                  can false-fail on branch names containing "error")
 [ "$SYNC_STATUS" -ne 0 ] && exit 1   # STOP and reconcile (verdict rule below); never continue to submit
 # postcondition before submit: each successor's base contains the lower layer's current tip
 gh stack submit --auto           # push all layers, open one draft PR each
@@ -101,7 +102,7 @@ gh pr ready <num> --undo             # FIRST: flip every about-to-be-restacked s
 #                                      the restack site)
 gh stack sync --prune < /dev/null > "$SYNC_OUT" 2>&1   # restack the remainder, drop merged
 SYNC_STATUS=$?                       # same executable gate as the pre-submit sync
-grep -qE "Stack synced|Branches synced" "$SYNC_OUT" || SYNC_STATUS=1
+{ grep -qE "Stack synced|Branches synced" "$SYNC_OUT" && ! grep -qE "Push failed|Sync aborted" "$SYNC_OUT"; } || SYNC_STATUS=1
 [ "$SYNC_STATUS" -ne 0 ] && exit 1   # STOP: reconcile before pushing or re-flipping anything
 # postcondition before continuing: the next layer's merge-base contains the merged mainline commit
 gh stack submit --auto               # push the restacked remainder so successor PRs update:
@@ -112,6 +113,6 @@ gh stack submit --auto               # push the restacked remainder so successor
 git checkout <mainline>              # back to the mainline once stack operations are done
 ```
 
-Judge `gh stack sync` by BOTH signals, at both sync sites (the pre-submit restack and the post-merge sync): the exit code catches hard failures (nonzero on rebase conflicts and API failures), and the capture in `"$SYNC_OUT"` must contain one of sync's documented SUCCESS verdicts - "Stack synced" or "Branches synced" - because gh-stack can print a soft failure ("Sync aborted", "Push failed"), keep going, and still exit 0, and scanning for failure text instead would false-fail on branch names that merely contain "error". Either signal failing (a nonzero exit OR a missing success verdict) stops the flow to reconcile first. Then, because a verdict line is still only a log, verify the POSTCONDITION sync existed to produce before continuing, per site: the pre-submit sync is verified by each successor's base containing the LOWER LAYER'S CURRENT TIP; the post-merge sync by the next layer's merge-base containing the MERGED MAINLINE COMMIT (or the stack status view showing the chain clean). Logs approximate; the postcondition is the truth - the same family as the exit-code lesson.
+Judge `gh stack sync` by ALL its signals, at both sync sites (the pre-submit restack and the post-merge sync): the exit code catches hard failures (nonzero on rebase conflicts and API failures), and the capture in `"$SYNC_OUT"` must contain one of sync's documented SUCCESS verdicts - "Stack synced" or "Branches synced" - AND no explicit failure marker ("Push failed", "Sync aborted"): gh-stack prints its final verdict unconditionally, even after logging a failure, so presence-of-success and absence-of-failure each catch what the other misses, and matching these exact strings cannot false-fail on branch names that merely contain "error". Any signal failing (a nonzero exit, a missing success verdict, or a failure marker present) stops the flow to reconcile first. Then, because a verdict line is still only a log, verify the POSTCONDITION sync existed to produce before continuing, per site: the pre-submit sync is verified by each successor's base containing the LOWER LAYER'S CURRENT TIP; the post-merge sync by the next layer's merge-base containing the MERGED MAINLINE COMMIT (or the stack status view showing the chain clean). Logs approximate; the postcondition is the truth - the same family as the exit-code lesson.
 
 Worktree interplay: git refuses to check out a branch already checked out in a worktree, and builders hold their layer branches in theirs. So after `init`/`add` create the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree; and the lead runs `rebase --upstack`/`sync`/`merge` from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live. Removal itself is destructive: run the removal checks in `references/worktree-hygiene.md` (fresh status codes, no live processes with cwd inside the tree) before deleting anything. Collection is a HANDOFF: stopping a builder and removing its worktree transfers ownership of that layer branch to the lead's stack operations only - review fixes on a collected layer ALWAYS go to a FRESH builder in a NEW worktree, with no collection exception to the skill's findings-go-to-a-builder rule, and never by resurrecting the removed builder (a message to a stopped agent resumes it, into a directory that no longer exists; see `references/worktree-hygiene.md` on handovers). For a layer the main checkout itself holds - the bottom-layer anchor in the block above - release the branch first with `git checkout <mainline>` before creating the fix worktree, then recollect and re-anchor on a stack branch before the next stack command: the same one-branch-one-worktree rule this paragraph opens with. Until collection, layer commits happen only on that layer's branch in its builder's worktree; the lead's stack operations are the only cross-layer writes.

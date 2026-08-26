@@ -74,6 +74,7 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: "set <repo-root> <base-ref>", script: "set needs <repo-root> <base-ref>" },
     { doc: "tokens <table.json> <root>", script: "tokens needs <table.json> <tree-root>" },
     { doc: '"text":', script: "spec.text" },
+    { doc: '"expect"', script: "spec.expect" },
     { doc: '"expect"', script: 'needs "expect" of ">=1"' },
     { doc: '"expect": 0', script: "expect >= 0" },
     { doc: '">=1"', script: 'expect === ">=1"' },
