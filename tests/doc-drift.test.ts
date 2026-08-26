@@ -70,10 +70,10 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: '">=1"', script: 'expect === ">=1"' },
   ],
   "ledger.mts": [
-    { doc: "active | dormant-by-design", script: '"active"' },
-    { doc: "dormant-by-design", script: '"dormant-by-design"' },
-    { doc: "landing-gate", script: '"landing-gate"' },
-    { doc: "landed-swept", script: '"landed-swept"' },
+    {
+      doc: "active | dormant-by-design | landing-gate | landed-swept",
+      script: '["active", "dormant-by-design", "landing-gate", "landed-swept"]',
+    },
     { doc: "lockfile", script: "${file}.lock" },
     { doc: "ledger.json init", script: 'case "init":' },
     { doc: "state <worker> <state>", script: 'case "state":' },
