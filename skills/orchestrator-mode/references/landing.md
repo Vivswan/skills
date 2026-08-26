@@ -7,7 +7,7 @@ A landing is two independent choices:
 
 The two sections below are the gate's two values. The base choice exists in direct mode too: dependent tracks still build branch-on-branch, they just land serially instead of via stacked PRs.
 
-Who merges, the standing merge exceptions, visualization-first PR bodies, draft discipline, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-and-issue-discipline` skill. Review-before-landing and the CI watcher after every push or merge stay in the skill's Land section (6), and the fleet-specific babysit additions (routing fixes to the owning builder, cross-track comment routing) in its Babysit section (5). The steps below only name WHEN those gates fire in each mode; their definitions and defaults live there, not here.
+Who merges, the standing merge exceptions, visualization-first PR bodies, draft discipline, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-and-issue-discipline` skill. Review-before-landing and the CI watcher after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode; their definitions and defaults live there, not here.
 
 ## Direct Commits to the Mainline
 
