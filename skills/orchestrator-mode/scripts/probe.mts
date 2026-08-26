@@ -31,7 +31,7 @@ import { isAbsolute, join, sep } from "node:path";
 
 const USAGE = [
   "usage: probe <subcommand> ...",
-  "  probe count <file> <literal>        count lines containing the literal, with evidence",
+  "  probe count <file> <literal>        count whitespace-normalized matches, with evidence",
   "  probe json-keys <file> [<file2>]    parsed key paths; with two files, the key-set diff",
   "  probe set <repo-root> <base-ref>    changed files: committed (base..HEAD) + dirty union",
   "  probe tokens <table.json> <root>    run a token table against a tree",
@@ -104,24 +104,42 @@ function readRequiredFile(path: string): string {
 
 // --- fixed-string matching with token boundaries ---------------------------
 //
-// The literal is a fixed string (never a regex), but a raw substring test
-// reproduces the longer-sibling trap: "release.yml" inside
-// "update-release.yml" reads as a hit and reports false drift on a correct
-// landing. So a match only counts when it is not embedded in a longer
-// word/filename token. Word characters are [A-Za-z0-9_-]; a dot embeds only
-// when it connects the match to another word character (".yml" style), so a
-// sentence-final dot stays a boundary and cannot produce a false zero on
-// prose.
+// The literal is a fixed string (never a regex). Two traps shape the
+// matcher:
+//
+// 1. Longer siblings: a raw substring test reads "release.yml" inside
+//    "update-release.yml" as a hit and reports false drift on a correct
+//    landing. So a match only counts when it is not embedded in a longer
+//    word/filename token. Word characters are [A-Za-z0-9_-]; a dot embeds
+//    only when it connects the match to another word character (".yml"
+//    style), so a sentence-final dot stays a boundary and cannot produce a
+//    false zero on prose.
+//
+// 2. Reflow: per-line matching reads a rewrapped paragraph as a deletion.
+//    A reflow commit splits a long token across a line boundary and the
+//    per-line count silently drops to 0 - indistinguishable from the
+//    sentence being genuinely deleted. So the literal and the searched
+//    text BOTH collapse every whitespace run (spaces, tabs, newlines) to a
+//    single space before matching; a pure reflow only changes whitespace
+//    and therefore can never change a count. One edge policy on both
+//    sides: leading/trailing whitespace is boundary noise and is trimmed
+//    (anchoring, not literal whitespace, guards the edges), and a
+//    whitespace-only literal is rejected loudly at the entry points -
+//    under normalization it could only ever measure whitespace, which is
+//    exactly what a reflow changes. Matching happens in the normalized
+//    text, but evidence reports ORIGINAL lines: each match carries the
+//    first original line it starts on, plus endLine when the match spans
+//    a wrap.
 
 function isWordChar(c: string | undefined): boolean {
   return c !== undefined && /[A-Za-z0-9_-]/.test(c);
 }
 
-function embedsBefore(line: string, start: number, literal: string): boolean {
+function embedsBefore(text: string, start: number, literal: string): boolean {
   const edge = literal[0];
-  const prev = line[start - 1];
+  const prev = text[start - 1];
   if (isWordChar(edge)) {
-    return isWordChar(prev) || (prev === "." && isWordChar(line[start - 2]));
+    return isWordChar(prev) || (prev === "." && isWordChar(text[start - 2]));
   }
   if (edge === ".") {
     return isWordChar(prev);
@@ -129,11 +147,11 @@ function embedsBefore(line: string, start: number, literal: string): boolean {
   return false;
 }
 
-function embedsAfter(line: string, end: number, literal: string): boolean {
+function embedsAfter(text: string, end: number, literal: string): boolean {
   const edge = literal[literal.length - 1];
-  const next = line[end];
+  const next = text[end];
   if (isWordChar(edge)) {
-    return isWordChar(next) || (next === "." && isWordChar(line[end + 1]));
+    return isWordChar(next) || (next === "." && isWordChar(text[end + 1]));
   }
   if (edge === ".") {
     return isWordChar(next);
@@ -141,15 +159,19 @@ function embedsAfter(line: string, end: number, literal: string): boolean {
   return false;
 }
 
-function lineHasAnchoredMatch(line: string, literal: string): boolean {
-  let from = 0;
+// Next anchored (non-embedded) occurrence of the literal at or after `from`,
+// or -1. Boundary checks look at the characters adjacent to the candidate;
+// in normalized text a collapsed space is still a non-word character, so
+// the anchoring that keeps "release.yml" out of "update-release.yml"
+// survives normalization unchanged.
+function anchoredIndexOf(text: string, literal: string, from: number): number {
   while (true) {
-    const at = line.indexOf(literal, from);
+    const at = text.indexOf(literal, from);
     if (at === -1) {
-      return false;
+      return -1;
     }
-    if (!embedsBefore(line, at, literal) && !embedsAfter(line, at + literal.length, literal)) {
-      return true;
+    if (!embedsBefore(text, at, literal) && !embedsAfter(text, at + literal.length, literal)) {
+      return at;
     }
     from = at + 1;
   }
@@ -158,19 +180,91 @@ function lineHasAnchoredMatch(line: string, literal: string): boolean {
 interface Evidence {
   line: number;
   text: string;
+  // Present only when the match spans a wrapped line boundary; `line` is
+  // then the first original line of the span and endLine the last.
+  endLine?: number;
 }
 
-function countMatchingLines(
-  content: string,
-  literal: string,
-): { value: number; evidence: Evidence[] } {
-  const evidence: Evidence[] = [];
-  const lines = content.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const text = lines[i];
-    if (text !== undefined && lineHasAnchoredMatch(text, literal)) {
-      evidence.push({ line: i + 1, text });
+interface Normalized {
+  text: string;
+  // For every character of `text`, the 1-based original line it came from.
+  lineOf: number[];
+}
+
+// One line-break definition shared by the normalizer's line counter and the
+// evidence split, so a match's reported lines always agree with the lines a
+// reader would count: CRLF, lone CR, LF, and the unicode line/paragraph
+// separators. Diverging definitions would let a spanning match report the
+// wrong line or drop its endLine note.
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
+
+function isLineBreak(c: string, next: string | undefined): boolean {
+  // A CR followed by LF is one CRLF break; count it once, at the LF.
+  if (c === "\r") {
+    return next !== "\n";
+  }
+  return c === "\n" || c === "\u2028" || c === "\u2029";
+}
+
+// Collapse every whitespace run to a single space while recording, per
+// normalized character, the original line it belongs to. Only INTERIOR runs
+// become spaces - leading and trailing runs vanish, matching the trimmed
+// needle. The collapsed space carries the line of the character FOLLOWING
+// the run, so evidence points at the line holding the matched content, not
+// at the previous line's tail.
+function normalizeWhitespace(content: string): Normalized {
+  const chars: string[] = [];
+  const lineOf: number[] = [];
+  let line = 1;
+  let inRun = false;
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i] as string;
+    if (/\s/.test(c)) {
+      inRun = true;
+      if (isLineBreak(c, content[i + 1])) {
+        line += 1;
+      }
+      continue;
     }
+    if (inRun && chars.length > 0) {
+      chars.push(" ");
+      lineOf.push(line);
+    }
+    inRun = false;
+    chars.push(c);
+    lineOf.push(line);
+  }
+  return { text: chars.join(""), lineOf };
+}
+
+// The needle side of the shared normalization policy: collapse runs, trim
+// edges. Returns null for a whitespace-only literal so each entry point can
+// refuse it loudly instead of measuring whitespace.
+function normalizeLiteral(literal: string): string | null {
+  const needle = literal.replace(/\s+/g, " ").trim();
+  return needle.length === 0 ? null : needle;
+}
+
+function countMatches(content: string, needle: string): { value: number; evidence: Evidence[] } {
+  const { text, lineOf } = normalizeWhitespace(content);
+  const originalLines = content.split(LINE_BREAK);
+  const evidence: Evidence[] = [];
+  let from = 0;
+  while (true) {
+    const at = anchoredIndexOf(text, needle, from);
+    if (at === -1) {
+      break;
+    }
+    const startLine = lineOf[at] ?? 1;
+    const endLine = lineOf[at + needle.length - 1] ?? startLine;
+    const entry: Evidence = { line: startLine, text: originalLines[startLine - 1] ?? "" };
+    if (endLine !== startLine) {
+      entry.endLine = endLine;
+    }
+    evidence.push(entry);
+    // Non-overlapping: resume past the whole match, so one occurrence can
+    // never be double-counted through its own interior.
+    from = at + needle.length;
   }
   // The count IS the evidence: value === evidence.length by construction,
   // so a number can never travel without the lines that back it.
@@ -180,11 +274,12 @@ function countMatchingLines(
 // --- count ------------------------------------------------------------------
 
 function cmdCount(file: string, literal: string): never {
-  if (literal.length === 0) {
-    usage("count: literal must be non-empty");
+  const needle = normalizeLiteral(literal);
+  if (needle === null) {
+    usage("count: literal must contain a non-whitespace character");
   }
   const content = readRequiredFile(file);
-  const { value, evidence } = countMatchingLines(content, literal);
+  const { value, evidence } = countMatches(content, needle);
   emit({ ok: true, file, literal, value, evidence }, 0);
 }
 
@@ -358,8 +453,12 @@ function cmdSet(root: string, baseRef: string): never {
 
 type Expectation = ">=1" | number;
 
+// A validated token carries its normalized needle from the moment the table
+// is parsed, so no downstream consumer can match on an unnormalized (or
+// whitespace-only) text by mistake.
 interface TokenSpec {
   text: string;
+  needle: string;
   expect: Expectation;
 }
 
@@ -383,6 +482,11 @@ function validateTable(tablePath: string, parsed: unknown): Record<string, Token
     // report ok:true would let a damaged table masquerade as a pass.
     fail(`${tablePath}: table is empty - a probe with no tokens cannot pass`);
   }
+  // Null prototype: "__proto__" is a valid relative file name, and on a
+  // default object it would invoke the prototype setter instead of creating
+  // an own entry - the table would validate but Object.entries would omit
+  // it, letting tokens report ok:true with zero checks.
+  const table: Record<string, TokenSpec[]> = Object.create(null);
   for (const [file, specs] of entries) {
     if (isAbsolute(file) || file.split(/[\\/]/).includes("..")) {
       fail(`${tablePath}: entry "${file}" must be a relative path inside the tree root`);
@@ -390,14 +494,18 @@ function validateTable(tablePath: string, parsed: unknown): Record<string, Token
     if (!Array.isArray(specs) || specs.length === 0) {
       fail(`${tablePath}: entry for "${file}" must be a non-empty array of tokens`);
     }
+    const tokens: TokenSpec[] = [];
     for (const spec of specs) {
-      if (
-        spec === null ||
-        typeof spec !== "object" ||
-        typeof spec.text !== "string" ||
-        spec.text.length === 0
-      ) {
+      if (spec === null || typeof spec !== "object" || typeof spec.text !== "string") {
         fail(`${tablePath}: every token for "${file}" needs a non-empty "text"`);
+      }
+      const needle = normalizeLiteral(spec.text);
+      if (needle === null) {
+        // Under whitespace normalization a whitespace-only token could only
+        // ever measure whitespace - exactly what a reflow changes.
+        fail(
+          `${tablePath}: every token for "${file}" needs a "text" with a non-whitespace character`,
+        );
       }
       const expect: unknown = spec.expect;
       const valid =
@@ -407,9 +515,11 @@ function validateTable(tablePath: string, parsed: unknown): Record<string, Token
           `${tablePath}: token "${spec.text}" in "${file}" needs "expect" of ">=1" or a non-negative integer`,
         );
       }
+      tokens.push({ text: spec.text, needle, expect: expect as Expectation });
     }
+    table[file] = tokens;
   }
-  return parsed as Record<string, TokenSpec[]>;
+  return table;
 }
 
 function cmdTokens(tablePath: string, treeRoot: string): never {
@@ -468,7 +578,7 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
         });
         continue;
       }
-      const { value, evidence } = countMatchingLines(content, spec.text);
+      const { value, evidence } = countMatches(content, spec.needle);
       const pass = spec.expect === ">=1" ? value >= 1 : value === spec.expect;
       results.push({
         file,
