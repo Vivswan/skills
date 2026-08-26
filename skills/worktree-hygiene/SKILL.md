@@ -39,7 +39,7 @@ After removing:
 
 Harnesses that auto-clean isolation worktrees remove them when their actor completes with a clean tree. An actor that stops "to wait" before anything is written, while others still work in its tree, leaves them working in a deleted directory.
 
-- An actor coordinating others inside its own isolation worktree dirties the tree IMMEDIATELY on start; one untracked marker file at the worktree root is enough (e.g. `.orchestrator-keepalive`). The marker is never staged or committed; when later status reads judge "real work", a lone `??` for the marker is an artifact, not work. Delete it before the final signal or handoff.
+- An actor coordinating others inside its own isolation worktree dirties the tree IMMEDIATELY on start; one untracked marker file at the worktree root is enough (e.g. `.orchestrator-keepalive`). Verify the marker actually shows as `??` in `git status --porcelain`: an ignore rule can hide it, and a hidden marker protects nothing; pick another name when it does. The marker is never staged or committed; when later status reads judge "real work", a lone `??` for the marker is an artifact, not work. Delete it before the final signal or handoff.
 - Before resuming any actor that stopped clean in an isolation worktree, verify the worktree still exists. Respawn fresh when it does not.
 
 ## Handing Over a Worktree
@@ -47,7 +47,7 @@ Harnesses that auto-clean isolation worktrees remove them when their actor compl
 Ownership transfers explicitly, never by inference: at any moment exactly one actor owns a worktree, and a handover is a named event (a stop plus a grant), not a guess from silence.
 
 - **Stop the predecessor first.** A message sent to a completed or idle agent RESUMES it. An acknowledgment or thank-you sent after a handover wakes the predecessor, which resumes writing into the worktree its successor now owns (a live-writer clobber). The order is always: stop the actor first (TaskStop in Claude Code); any farewell after that is unnecessary.
-- **A successor proves there is no live writer** before editing: hash a hot file, wait, hash again (`shasum <file>; sleep 5; shasum <file>`), and edit only when the hashes match.
+- **A successor proves there is no live writer** before editing. Check for processes with cwd inside the tree first (the same lsof check as removal rule 3), then hash a hot file, wait, hash again (`shasum <file>; sleep 5; shasum <file>`). Matching hashes are supporting evidence, never proof on their own: a writer can be idle between edits or writing a different file.
 - **A removed tree's branch goes to whoever collects it.** Stopping an actor and removing its worktree transfers its branch to the collector, and only to the collector. Follow-up fixes on that branch go to a FRESH actor in a NEW worktree.
 - **Never resurrect a released actor.** A message to a stopped actor resumes it into a directory that no longer exists. Once its worktree is removed, that actor is never messaged again.
 
