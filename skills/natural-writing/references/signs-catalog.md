@@ -224,7 +224,7 @@ Machine artifacts pasted from chatbot UIs:
 - URL trackers: `utm_source=chatgpt.com`, `utm_source=openai`, `utm_source=copilot.com`, `referrer=grok.com`
 - `↩` footnote back-arrows
 
-Instead: These are always bugs. Grep output for them (`turn0`, `oaicite`, `utm_source=`, `【`, `[cite:`, `:::`, `grok_`, `start_span`, `ppl-ai-file-upload`) and strip trackers off URLs.
+Instead: These are always bugs. Grep output for them (`turn0`, `oaicite`, `utm_source=`, `【`, `[cite:`, `:::`, `grok_`, `start_span`, `end_span`, `ppl-ai-file-upload`) and strip trackers off URLs.
 
 ### 5.3 Citation fabrication and sloppiness
 

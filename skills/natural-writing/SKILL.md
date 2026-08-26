@@ -68,7 +68,7 @@ Before delivering, reread the output against the checklist above. Scan it agains
 ```bash
 # Dash punctuation and machine artifacts: any hit outside quoted material is a bug.
 # (Unspaced en dashes in numeric ranges like 2024–2025 are allowed and not flagged.)
-grep -nE '—| – | - |turn0|oaicite|oai_citation|contentReference|attributableIndex|attached_file|grok[_-]|start_span|ppl-ai-file-upload|【|\[cite:|\[web:[0-9]|:::writing|utm_source=(chatgpt\.com|openai|copilot\.com)|referrer=grok\.com|↩|XX-XX|INSERT_|PASTE_' draft.md
+grep -nE '—| – | - |turn0|oaicite|oai_citation|contentReference|attributableIndex|attached_file|grok[_-]|(start|end)_span|ppl-ai-file-upload|【|\[cite:|\[web:[0-9]|:::writing|utm_source=(chatgpt\.com|openai|copilot\.com)|referrer=grok\.com|↩|XX-XX|INSERT_|PASTE_' draft.md
 
 # High-signal AI vocabulary: hits are prompts to reread the sentence, not automatic errors
 grep -inE 'delve|deep dive|tapestry|testament|pivotal|crucial|underscor|showcas|foster(ing|s)|garner|meticulous|vibrant|intrica|boasts|bolster|interplay|stands as|serves as|not just|not only' draft.md

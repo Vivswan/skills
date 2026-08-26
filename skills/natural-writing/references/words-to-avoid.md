@@ -62,7 +62,7 @@ ensured that ... adheres to, refined, enhanced, enriched, streamlined, in compli
 
 ## Tool residue (grep patterns)
 
-turn0, oaicite, oai_citation, contentReference, attributableIndex, attached_file, grok_card, grok_render_citation_card_json, 【, [cite:, [web:, start_span, ppl-ai-file-upload, :::writing, utm_source=chatgpt.com, utm_source=openai, utm_source=copilot.com, referrer=grok.com, ↩
+turn0, oaicite, oai_citation, contentReference, attributableIndex, attached_file, grok_card, grok_render_citation_card_json, 【, [cite:, [web:, start_span, end_span, ppl-ai-file-upload, :::writing, utm_source=chatgpt.com, utm_source=openai, utm_source=copilot.com, referrer=grok.com, ↩
 
 ## Punctuation and formatting (house rules)
 
