@@ -32,9 +32,13 @@ type CitedToken = { doc: string; script: string };
 const CITED_TOKENS: Record<string, CitedToken[]> = {
   "sweep.mts": [
     {
-      doc: "sweep.mts <repo-root> [--transcripts <dir>]",
-      script: 'console.error("usage: sweep.mts <repo-root> [--transcripts <dir>]")',
+      doc: "sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]",
+      script: 'console.error("usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]")',
     },
+    { doc: "`--base <mainline>`", script: 'arg === "--base"' },
+    { doc: "`--base origin/develop`", script: "cannot resolve --base ref" },
+    { doc: "or ambiguous `--base` ref", script: '.includes("is ambiguous")' },
+    { doc: '"baseRef":{"ok":false', script: "baseRef: { ok: false" },
     { doc: "--transcripts", script: '"--transcripts"' },
     { doc: '"worktree":', script: "worktree: path," },
     { doc: '"branch":', script: "branch," },
