@@ -2,6 +2,8 @@
 
 The three landing-mode procedures for orchestrator mode. Mode selection, who merges, and the universal rules that apply in every mode - the trivial-fix exception, visualization-first PR bodies, review-before-landing, the CI watcher after every push or merge, the exit-conditioned merge - are defined in the skill's Land section (6); the babysit-to-convergence loop for open PRs is the skill's Babysit section (5). The steps below only name WHEN those gates fire in each mode - their definitions and defaults live in the skill, not here.
 
+The modes compose within one session; they are not mutually exclusive. Independent tracks ride flat PRs while a track that depends on a sibling's UNLANDED content stacks its PR on that branch - base set to the dependency's branch, retargeted to the mainline when the dependency merges. The failure this composability kills, from production: a docs track's final round sat blocked for a full cycle waiting for a script-fix PR to merge, when basing the docs PR on the script-fix branch would have removed the wait entirely.
+
 ## Serial Landings (direct-push repos)
 
 1. One pending change on the mainline at a time, in plan order.

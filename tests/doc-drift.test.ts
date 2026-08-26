@@ -85,7 +85,10 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
   "baseline.mts": [
     { doc: "baseline.mts pin", script: 'command === "pin"' },
     { doc: "baseline.mts check", script: 'command === "check"' },
-    { doc: "<tree-root> <file...>", script: '<tree-root> <file...>",' },
+    {
+      doc: "/tmp/fleet-<sessionId>/baseline <tree-root> <file...>",
+      script: 'pin <baseline-dir> <tree-root> <file...>",',
+    },
     {
       doc: "check /tmp/fleet-<sessionId>/baseline <tree-root>",
       script: '<baseline-dir> <tree-root>",',

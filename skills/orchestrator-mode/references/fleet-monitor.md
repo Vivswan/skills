@@ -54,7 +54,7 @@ bun <skill-dir>/scripts/probe.mts set <repo-root> <base-ref>   # changed files: 
 bun <skill-dir>/scripts/probe.mts tokens <table.json> <root>   # a token table (schema below) against a tree
 ```
 
-Every result is evidence-bearing or a loud error, never a bare number: counts carry their matched lines, probed paths are existence-validated before any zero is trusted, JSON is parsed rather than grepped, and change sets union committed and dirty paths. Literal matching is fixed-string and token-bounded: a literal embedded in a longer word or filename does not count, so `release.yml` can never match `update-release.yml`. Exit semantics differ by subcommand: `tokens` and two-file `json-keys` are checks - exit 0 is a verified pass, exit 1 a failed check; `count` and single-file `json-keys` and `set` are measurements - exit 0 means the measurement succeeded, and the verdict is yours to read from the value and evidence. Exit 1 is also any broken probe (a vanished file fails every token loudly - a negative token can never read a missing file as 0 occurrences and silently pass); exit 2 is usage.
+Every result is evidence-bearing or a loud error, never a bare number: counts carry their matched lines, probed paths are existence-validated before any zero is trusted, JSON is parsed rather than grepped, and change sets union committed and dirty paths. Literal matching is fixed-string, token-bounded, and whitespace-normalized: a literal embedded in a longer word or filename does not count (so `release.yml` can never match `update-release.yml`), and every whitespace run in both literal and text collapses to a single space before matching, so a reflow that rewraps a paragraph across line boundaries cannot produce a false 0 by construction. Exit semantics differ by subcommand: `tokens` and two-file `json-keys` are checks - exit 0 is a verified pass, exit 1 a failed check; `count` and single-file `json-keys` and `set` are measurements - exit 0 means the measurement succeeded, and the verdict is yours to read from the value and evidence. Exit 1 is also any broken probe (a vanished file fails every token loudly - a negative token can never read a missing file as 0 occurrences and silently pass); exit 2 is usage.
 
 A `tokens` table is a JSON object mapping tree-relative files to token lists, each token a `text` plus an `expect` of a non-negative integer or `">=1"`:
 
@@ -62,6 +62,8 @@ A `tokens` table is a JSON object mapping tree-relative files to token lists, ea
 {"docs/guide.md": [{"text": "the exact sentence that must appear twice", "expect": 2},
                    {"text": "the removed line that must stay gone", "expect": 0}]}
 ```
+
+Per-locale content needs per-locale tokens: locales differ in WORDS, not just script, so a claim verified against zh-cn wording says nothing about zh-tw - each locale's file gets its own entry in the table.
 
 The judgment that stays with the operator:
 
