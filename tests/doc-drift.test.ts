@@ -14,7 +14,8 @@ import { basename, join } from "node:path";
  * - skills/rubber-duck-review/SKILL.md <-> its scripts/run-review.mts: the
  *   two usage shapes (launch and --extract), the three reviewer invocations
  *   with their tool-restriction flags, the --background and --stdin-prompt
- *   flag dispatches, and the exit-code 0/1/2 semantics including the
+ *   flag dispatches with their output-emission and stdin-delivery sites, and
+ *   the exit-code 0/1/2 semantics including the
  *   "review FAILED - relaunch" verdict literal.
  * - skills/watch-ci-after-push/SKILL.md <-> its scripts/watch-ci.sh: the
  *   invocation shape (one full-SHA argument, defaulting to HEAD), the
@@ -193,7 +194,16 @@ const SURFACES: Record<string, Surface> = {
         doc: "`--background` prints the output-file path and the PID of a detached monitor",
         script: 'arg === "--background"',
       },
+      {
+        doc: "`--background` prints the output-file path and the PID of a detached monitor",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "process.stdout.write(`output: ${scratch.outFile}\\npid: ${monitor.pid}\\n`);",
+      },
       { doc: "`--stdin-prompt` (codex/claude only)", script: 'arg === "--stdin-prompt"' },
+      {
+        doc: "The prompt file itself is served as the reviewer's stdin",
+        script: "stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, prompt)",
+      },
       {
         doc: "0: verdict extracted and printed to stdout, or a `--background` launch started",
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
