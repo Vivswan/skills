@@ -21,12 +21,14 @@ const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.
 // that is the guaranteed detection channel, since the script normalizes some
 // list/view failures to exit 2 and deliberately ignores the watch exit
 // status. list/view mismatches also exit 64 as a secondary signal.
+// GH_LIST_IDS entries are "id" or "id@attempt" (attempt defaults to 1);
+// GH_LIST_IDS2/GH_LIST_IDS3 swap in later discovery snapshots.
 const FAKE_GH = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${GH_VIOLATIONS}"; }
 jq_view='"\\(.conclusion)\\t\\(.name)"'
-jq_list='.[] | "\\(.databaseId)\\t=\\(.workflowDatabaseId)\\t\\(.workflowName)"'
+jq_list='.[] | "\\(.databaseId)\\t=\\(.attempt)\\t=\\(.workflowDatabaseId)\\t\\(.workflowName)"'
 if [ "$1 $2" = "run list" ]; then
-  if [ "$*" != "run list --commit deadbeef --limit 100 --json databaseId,workflowDatabaseId,workflowName --jq $jq_list" ]; then
+  if [ "$*" != "run list --commit deadbeef --limit 100 --json databaseId,attempt,workflowDatabaseId,workflowName --jq $jq_list" ]; then
     violate "list: $*"; exit 64
   fi
   [ "\${GH_LIST_EXIT:-0}" -ne 0 ] && exit "\${GH_LIST_EXIT}"
@@ -42,10 +44,12 @@ if [ "$1 $2" = "run list" ]; then
     [ "$c" -ge 2 ] && ids="\${GH_LIST_IDS2}"
     if [ -n "\${GH_LIST_IDS3+x}" ] && [ "$c" -ge 3 ]; then ids="\${GH_LIST_IDS3}"; fi
   fi
-  for lid in $ids; do
+  for entry in $ids; do
+    lid="\${entry%%@*}"
+    att=1; case "$entry" in *@*) att="\${entry#*@}";; esac
     nvar="GH_NAME_\${lid}"
     wvar="GH_WF_\${lid}"
-    printf '%s\\t=%s\\t%s\\n' "$lid" "\${!wvar-wf-$lid}" "\${!nvar:-CI-$lid}"
+    printf '%s\\t=%s\\t=%s\\t%s\\n' "$lid" "$att" "\${!wvar-wf-$lid}" "\${!nvar:-CI-$lid}"
   done
   exit 0
 fi
@@ -274,6 +278,18 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("re-discovery after the watch returned nothing");
     expect(r.stdout).not.toContain("pass:");
+  });
+
+  test("a re-run (same id, higher attempt) is waited on again before judgment", () => {
+    // GitHub re-runs keep the run id and increment attempt, so an id-only
+    // convergence check would read the re-discovery as "unchanged" and judge
+    // the in-flight re-run. The id:attempt signature must force one more
+    // wait round: 3 list calls (initial, changed, stable), not 2.
+    const calls = join(binDir, "list-calls-rerun");
+    const r = run({ GH_LIST_IDS: "1@1", GH_LIST_IDS2: "1@2", GH_LIST_CALLS: calls });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pass: CI-1 (1)");
+    expect(readFileSync(calls, "utf-8")).toBe("3");
   });
 
   test("a cancelled latest run with no newer run is a real failure", () => {

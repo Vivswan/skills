@@ -16,11 +16,13 @@ sha="${1:-$(git rev-parse HEAD)}"
 # --limit 100: the default page is 20 runs, and heavy retriggering can fill
 # it with one workflow, pushing another workflow off the page so it would
 # never be judged at all.
-# The "=" prefix keeps the workflow-id field non-empty: tab is IFS
-# whitespace, so read would otherwise collapse an empty id and shift the
-# name into its place, silently mis-grouping the runs.
+# attempt is part of each line because GitHub RE-RUNS keep the run id and
+# increment attempt; convergence below must see a mid-watch re-run as change.
+# The "=" prefixes keep the attempt and workflow-id fields non-empty: tab is
+# IFS whitespace, so read would otherwise collapse an empty field and shift
+# the later fields into the wrong slots, silently mis-grouping the runs.
 discover() {
-  gh run list --commit "$sha" --limit 100 --json databaseId,workflowDatabaseId,workflowName --jq '.[] | "\(.databaseId)\t=\(.workflowDatabaseId)\t\(.workflowName)"'
+  gh run list --commit "$sha" --limit 100 --json databaseId,attempt,workflowDatabaseId,workflowName --jq '.[] | "\(.databaseId)\t=\(.attempt)\t=\(.workflowDatabaseId)\t\(.workflowName)"'
 }
 
 # The unit of judgment is the workflow, not the run: re-triggers (e.g. a
@@ -31,12 +33,16 @@ discover() {
 # hence the numeric sort); older runs of the same workflow are informational
 # only ($1 = 1 prints them as superseded) and never affect the exit code.
 # Grouping is by workflowDatabaseId, not display name: two workflow files can
-# share a name, and one must never supersede the other.
+# share a name, and one must never supersede the other. run_sig additionally
+# records id:attempt per selected run: it is the convergence signature, since
+# a re-run changes only the attempt, never the id.
 select_latest() {
   run_ids=""
+  run_sig=""
   seen_wfids=$'\n'
-  while IFS=$'\t' read -r id wfid name; do
+  while IFS=$'\t' read -r id attempt wfid name; do
     [ -n "$id" ] || continue
+    attempt="${attempt#=}"
     wfid="${wfid#=}"
     # Ruleset/unnamed runs can lack a workflow id (jq renders it "null");
     # judge each individually rather than collapsing them into one bogus
@@ -44,6 +50,7 @@ select_latest() {
     case "$wfid" in
       "" | null)
         run_ids="$run_ids $id"
+        run_sig="$run_sig $id:$attempt"
         continue
         ;;
     esac
@@ -56,6 +63,7 @@ select_latest() {
       *)
         seen_wfids="$seen_wfids$wfid"$'\n'
         run_ids="$run_ids $id"
+        run_sig="$run_sig $id:$attempt"
         ;;
     esac
   done <<EOF
@@ -84,7 +92,9 @@ select_latest 0
 # "Latest" is only latest at a discovery snapshot: a re-trigger DURING a wait
 # supersedes a selected run, and its concurrency cancellation must not read
 # as FAIL. Iterate wait -> re-discover -> re-select to a fixed point (capped)
-# so the judged runs are the latest at judgment time.
+# so the judged runs are the latest at judgment time. Convergence compares
+# id:attempt signatures, not just ids: a RE-RUN keeps the id and bumps the
+# attempt, and judging it before its wait would read an in-flight attempt.
 converged=0
 for round in 1 2 3 4 5; do
   for id in $run_ids; do
@@ -101,9 +111,9 @@ for round in 1 2 3 4 5; do
     echo "re-discovery after the watch returned nothing for $sha (gh failed, or the runs vanished); refusing to judge a stale snapshot" >&2
     exit 2
   fi
-  prev_ids="$run_ids"
+  prev_sig="$run_sig"
   select_latest 0
-  if [ "$run_ids" = "$prev_ids" ]; then
+  if [ "$run_sig" = "$prev_sig" ]; then
     converged=1
     break
   fi
