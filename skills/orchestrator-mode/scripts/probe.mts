@@ -43,13 +43,24 @@ function usage(error: string): never {
   emit({ ok: false, error: `${error}\n${USAGE}` }, 2);
 }
 
-function readRequiredFile(path: string): string {
-  let stats: ReturnType<typeof statSync>;
+// Only a genuinely absent path may read as missing. Permission errors,
+// symlink loops, and broken parent components are broken measurements, not
+// absent files - the errno must survive into the report so the two states
+// stay distinguishable.
+function statOrFail(path: string, missingMessage: string): ReturnType<typeof statSync> {
   try {
-    stats = statSync(path);
-  } catch {
-    fail(`${path}: no such file`);
+    return statSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      fail(`${path}: ${missingMessage}`);
+    }
+    fail(`${path}: stat failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function readRequiredFile(path: string): string {
+  const stats = statOrFail(path, "no such file");
   if (!stats.isFile()) {
     fail(`${path}: not a regular file`);
   }
@@ -218,34 +229,23 @@ function cmdJsonKeys(file: string, other: string | undefined): never {
 
 // --- set ---------------------------------------------------------------------
 
-// Git's repo-local environment variables (`git rev-parse --local-env-vars`).
-// The probe targets exactly the repo named by <repo-root>; when invoked from
-// inside a git hook, git exports these into child processes, and inheriting
-// any of them would silently redirect the measurement at the CALLING repo.
-// Non-local variables (GIT_TRACE, GIT_OPTIONAL_LOCKS, ...) pass through.
-const GIT_LOCAL_ENV_VARS = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_CONFIG",
-  "GIT_CONFIG_PARAMETERS",
-  "GIT_CONFIG_COUNT",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_IMPLICIT_WORK_TREE",
-  "GIT_GRAFT_FILE",
-  "GIT_INDEX_FILE",
-  "GIT_NO_REPLACE_OBJECTS",
-  "GIT_REPLACE_REF_BASE",
-  "GIT_PREFIX",
-  "GIT_SHALLOW_FILE",
-  "GIT_COMMON_DIR",
-];
-
 function git(root: string, args: string[]): { stdout: string; stderr: string } {
-  const env = { ...process.env };
-  for (const name of GIT_LOCAL_ENV_VARS) {
-    delete env[name];
+  // The probe targets exactly the repo named by <repo-root> and must measure
+  // it identically regardless of the caller's git context. Hooks and nested
+  // git operations export repo-local GIT_* vars - including internal ones
+  // outside the documented `git rev-parse --local-env-vars` set, such as
+  // GIT_INTERNAL_SUPER_PREFIX - that would redirect or break the
+  // measurement, and user/system config can reshape output. Strip ALL GIT_*
+  // and pin config to /dev/null; every behavior the probe depends on is
+  // requested by explicit flags instead.
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && !key.startsWith("GIT_")) {
+      env[key] = value;
+    }
   }
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  env.GIT_CONFIG_SYSTEM = "/dev/null";
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8", env });
   if (result.error) {
     fail(`git ${args.join(" ")}: ${result.error.message}`);
@@ -286,12 +286,7 @@ function parsePorcelain(raw: string): string[] {
 }
 
 function cmdSet(root: string, baseRef: string): never {
-  let stats: ReturnType<typeof statSync>;
-  try {
-    stats = statSync(root);
-  } catch {
-    fail(`${root}: no such directory`);
-  }
+  const stats = statOrFail(root, "no such directory");
   if (!stats.isDirectory()) {
     fail(`${root}: not a directory`);
   }
@@ -395,12 +390,7 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
     fail(`${tablePath}: ${error instanceof Error ? error.message : String(error)}`);
   }
   const table = validateTable(tablePath, parsed);
-  let rootStats: ReturnType<typeof statSync>;
-  try {
-    rootStats = statSync(treeRoot);
-  } catch {
-    fail(`${treeRoot}: no such directory`);
-  }
+  const rootStats = statOrFail(treeRoot, "no such directory");
   if (!rootStats.isDirectory()) {
     fail(`${treeRoot}: not a directory`);
   }

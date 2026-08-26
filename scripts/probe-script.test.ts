@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "./lib";
@@ -169,6 +169,20 @@ describe("probe count", () => {
     expect(code).toBe(1);
     expect(out.ok).toBe(false);
     expect(out.error).toContain("no such file");
+    expect(out.value).toBeUndefined();
+  });
+
+  test("a broken path (symlink loop) is not reported as a missing file", () => {
+    const dir = fixtureDir();
+    const loop = join(dir, "loop.txt");
+    symlinkSync(loop, loop);
+    const { code, out } = probe("count", loop, "anything");
+    expect(code).toBe(1);
+    expect(out.ok).toBe(false);
+    // A loop is a broken measurement, not an absent file; the errno must
+    // survive so the two states stay distinguishable.
+    expect(out.error).toContain("ELOOP");
+    expect(out.error).not.toContain("no such file");
     expect(out.value).toBeUndefined();
   });
 
@@ -407,6 +421,7 @@ describe("probe set", () => {
         GIT_COMMON_DIR: "/bogus/common",
         GIT_DIR: "/bogus/gitdir",
         GIT_INDEX_FILE: "/bogus/index",
+        GIT_INTERNAL_SUPER_PREFIX: "bogus/prefix/",
         GIT_WORK_TREE: "/bogus/worktree",
       },
       ["set", dir, base],
