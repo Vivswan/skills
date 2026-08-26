@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { ROOT } from "./lib";
+import { ROOT } from "../scripts/lib";
 
 // Contract tests for the run-review helper: stub reviewer binaries on PATH
 // drive every exit path, pinning the traps the script encapsulates - the

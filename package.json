@@ -10,7 +10,7 @@
     "link": "bun scripts/link-agents.ts",
     "add": "bun scripts/link-agents.ts --add",
     "smoke": "bun scripts/smoke-test.ts",
-    "test": "bun test scripts",
+    "test": "bun test tests",
     "test:cli": "bun scripts/cli-discovery-test.ts",
     "lint": "biome ci .",
     "lint:yaml": "uvx yamllint -s .",

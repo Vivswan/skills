@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { ROOT } from "./lib";
+import { ROOT } from "../scripts/lib";
 
 // Contract tests for the orchestrator-mode session ledger. Each test drives
 // the real script as a child process against a throwaway ledger file, pinning

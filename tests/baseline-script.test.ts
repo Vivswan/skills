@@ -11,11 +11,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { ROOT } from "../scripts/lib";
 import {
   relativeStaysWithin,
   scrubbedGitEnv,
 } from "../skills/orchestrator-mode/scripts/baseline.mts";
-import { ROOT } from "./lib";
 
 // Contract test for the baseline snapshot helper: pinned copies plus git
 // diff --no-index must turn every landing-verification failure mode into a

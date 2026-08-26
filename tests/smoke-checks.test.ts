@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { CheckFailure } from "./lib";
+import { CheckFailure } from "../scripts/lib";
 import {
   checkDescriptionTriggerForm,
   checkExplicitInvocationPairing,
   checkReadmeInvocationGrouping,
   checkReadmeSkillList,
-} from "./smoke-checks";
+} from "../scripts/smoke-checks";
 
 function readme(listArea: string): string {
   return `# Skills\n\n## Available Skills\n${listArea}\n## Installation\n\ntext\n`;

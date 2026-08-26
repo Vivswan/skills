@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ROOT } from "./lib";
+import { ROOT } from "../scripts/lib";
 
 // Exit-matrix test for the watch-ci helper: a fake `gh` on PATH drives every
 // branch of the script, pinning the contract its reviews established - a red

@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { ROOT } from "./lib";
+import { ROOT } from "../scripts/lib";
 
 // Fixture-repo test for the fleet sweep script: a temp git repo with a live
 // worktree (ahead of origin, dirty + untracked), a repo-wiping worktree, a

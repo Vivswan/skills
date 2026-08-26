@@ -53,6 +53,7 @@ skills/
     scripts/
 template/            starter files for the next skill
 scripts/             repo check scripts (TypeScript, run with bun)
+tests/               repo test files (bun test); new tests go here
 ```
 
 ### Creating a new skill
