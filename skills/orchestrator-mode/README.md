@@ -39,7 +39,6 @@ npx skills add Vivswan/skills -g --skill pr-and-issue-discipline
 - [`references/spawn-briefs.md`](./references/spawn-briefs.md): what every spawn brief must contain
 - [`references/fleet-monitor.md`](./references/fleet-monitor.md): the monitor's script wiring and liveness judgment
 - [`references/landing.md`](./references/landing.md): the two landing gates (direct commits; PRs with per-track independent or stacked bases)
-- [`references/worktree-hygiene.md`](./references/worktree-hygiene.md): handovers, removals, and file ownership
 - [`scripts/`](./scripts): the fleet instruments, `sweep.mts`, `probe.mts`, `ledger.mts`, and `baseline.mts` (run with bun; node 24.3+ also works, and older node exits 0 without doing the work because it lacks a working `import.meta.main`)
 
 ## Plugin-Ready Layout

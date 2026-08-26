@@ -38,13 +38,13 @@ Before creating the board or spawning anything, ask the user these in ONE messag
    - A user delegating merges wholesale should be offered direct commits instead: lead-merged PRs are direct commits with extra steps, worth keeping only where branch protection or a merge queue forces the PR mechanism.
    - Each track's BASE is not asked; it follows the dependency graph (the mainline for independent tracks, the dependency's branch for tracks building on unlanded content; see `references/landing.md`).
    - Infer the likely gate from branch protection, CONTRIBUTING docs, and recent history. When unsure, propose PRs (the safer guess on a protected repo).
-2. **Isolation**: a worktree per builder (default), or everyone in the main checkout? A shared tree forces the unique-ownership rules in `references/worktree-hygiene.md` and caps parallelism to disjoint file sets.
+2. **Isolation**: a worktree per builder (default), or everyone in the main checkout? A shared tree forces the unique-ownership rules in the `/worktree-hygiene` skill and caps parallelism to disjoint file sets.
 3. **Boundaries**: anything out of scope or do-not-touch (directories, files, configs) beyond what the plan implies?
 4. **Landing cadence**: land each track as it converges without further asks (the default), or pause for approval before each landing or merge? Either way the gates are unconditional: review-before-landing and the CI watcher run on every landing regardless of cadence.
 
 ## 2. Decompose, Board, Monitor, Builders
 
-1. **Map the dependency graph first** and decompose to the smallest independent units. Only truly independent tracks run in parallel, each in its own worktree by default (`isolation: "worktree"` in Claude Code, or plain `git worktree add`); a shared checkout caps parallelism to disjoint file sets under `references/worktree-hygiene.md`.
+1. **Map the dependency graph first** and decompose to the smallest independent units. Only truly independent tracks run in parallel, each in its own worktree by default (`isolation: "worktree"` in Claude Code, or plain `git worktree add`); a shared checkout caps parallelism to disjoint file sets under the `/worktree-hygiene` skill's ownership rules.
    - One exception: a dependent track MAY build concurrently by basing on its dependency's branch (or the mainline plus an interface stub the brief names), accepting the restack and re-gate when the dependency moves. Mechanics in `references/landing.md`.
    - Give each agent an explicit file whitelist and do-not-touch boundary so branches merge without conflicts. When parts share files, they stay with one agent.
 2. **Create the task board** (task list) from the decomposed tracks.
@@ -103,7 +103,7 @@ At phase boundaries (a wave finishing, a landing), stop subagents whose work is 
 
 - Before stopping an agent, check nothing still owes output, and copy handoff facts a later step needs into a still-open task first.
 - Long-lived service agents (CI watchers, the fleet monitor) stay up until their exit condition.
-- Worktree handovers, removals, and fan-out file ownership have destructive failure modes; follow `references/worktree-hygiene.md` for those rules.
+- Worktree handovers, removals, and fan-out file ownership have destructive failure modes; follow the `/worktree-hygiene` skill for those rules.
 
 ## Harness Variations
 
@@ -126,11 +126,10 @@ When the host agent cannot spawn subagents, keep the structure and drop the para
 - Leftover orchestration artifacts: keepalive marker files, wip commits meant to be rebased away, worktree paths leaked into configs or scripts.
 - Duplicated near-identical hunks across files, the signature of a fan-out that assigned overlapping ownership.
 
-Triage findings against sections 2 (Decompose, Board, Monitor, Builders) and 7 (Sweep and Wrap Up) above and `references/worktree-hygiene.md`. (The heading is deliberately not `## Review Criteria`: these checks are folded into the lead's own passes here, not auto-discovered into every `/rubber-duck-review` run.)
+Triage findings against sections 2 (Decompose, Board, Monitor, Builders) and 7 (Sweep and Wrap Up) above and the `/worktree-hygiene` skill. (The heading is deliberately not `## Review Criteria`: these checks are folded into the lead's own passes here, not auto-discovered into every `/rubber-duck-review` run.)
 
 ## References
 
 - `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, unnamed one-shot watchers, git-fixture hygiene for test suites)
 - `references/fleet-monitor.md`: the monitor's script wiring (sweep, probe, ledger, baseline) and the judgment rules learned from production false alarms
 - `references/landing.md`: the two landing gates (direct commits; PRs with per-track bases, including the gh-stack flow and the worktree rules around it)
-- `references/worktree-hygiene.md`: handovers, worktree removal safety, and per-file ownership across fan-out rounds

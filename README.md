@@ -23,6 +23,7 @@ The agent applies these on its own when the task matches:
 - [/review-before-commit](./skills/review-before-commit/) - Independent review converges before any commit
 - [/rubber-duck-review](./skills/rubber-duck-review/) - Cross-model, read-only second-opinion code review
 - [/watch-ci-after-push](./skills/watch-ci-after-push/) - Background CI watcher after every push
+- [/worktree-hygiene](./skills/worktree-hygiene/) - Safe worktree removal, explicit handovers, shared-repo rules
 
 ### Invoked by you
 
@@ -40,6 +41,7 @@ graph LR
   om --> wca["/watch-ci-after-push"]
   om --> cs["/code-standards"]
   om --> pid["/pr-and-issue-discipline"]
+  om --> wh["/worktree-hygiene"]
   pid --> wca
   pid --> rbc
   rbc --> rdr

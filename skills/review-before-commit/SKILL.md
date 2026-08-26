@@ -40,6 +40,7 @@ Run the project's gates (typecheck, lint, tests) before launching any review. Re
 - **Fix** valid findings, non-blocking included.
 - **Reject** incorrect or inapplicable findings with the reason.
 - **Skip** a valid finding only for a recorded reason (conflicts with the design, out of scope, explicit user decision).
+- **Never drop incidental discoveries silently** (failing tooling, drifted docs, an unrelated bug found along the way): fix them when in scope, otherwise report them explicitly in the final summary.
 
 ### 4. Converge, then commit
 
