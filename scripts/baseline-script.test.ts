@@ -392,5 +392,8 @@ describe("baseline.mts pin/check", () => {
     const backslash = runBaseline(["pin", "/tmp/x", "/tmp/y", "..\\outside.md"]);
     expect(backslash.code).toBe(2);
     expect(backslash.stderr).toContain("backslash");
+    const driveRelative = runBaseline(["pin", "/tmp/x", "/tmp/y", "C:outside.md"]);
+    expect(driveRelative.code).toBe(2);
+    expect(driveRelative.stderr).toContain("drive-prefixed");
   });
 });
