@@ -16,8 +16,8 @@
 //   probe tokens <table.json> <tree-root>
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, sep } from "node:path";
 
 const USAGE = [
   "usage: probe <subcommand> ...",
@@ -396,11 +396,21 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
   }
 
   const results: TokenResult[] = [];
+  // Canonicalize both sides: the lexical ".." check in validateTable cannot
+  // see symlinks, so a link.md entry could resolve outside the tree and the
+  // probe would read external (possibly stale) content as if it were the
+  // tree's. realpath the root once and require every entry's realpath to
+  // stay inside it.
+  const rootReal = realpathSync(treeRoot);
   for (const [file, specs] of Object.entries(table)) {
     let content: string | null = null;
     let readError: string | null = null;
     try {
-      content = readFileSync(join(treeRoot, file), "utf-8");
+      const real = realpathSync(join(treeRoot, file));
+      if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+        fail(`${file}: resolves outside tree root`);
+      }
+      content = readFileSync(real, "utf-8");
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       readError =

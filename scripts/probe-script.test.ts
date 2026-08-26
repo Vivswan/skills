@@ -572,6 +572,41 @@ describe("probe tokens", () => {
     expect(out.ok).toBe(false);
     expect(out.error).toContain("relative path inside the tree root");
   });
+
+  test("a symlink resolving outside the tree root is a loud error, not a reading", () => {
+    const dir = fixtureDir();
+    const tree = join(dir, "tree");
+    mkdirSync(tree);
+    writeFileSync(join(dir, "outside.md"), "escaped content\n");
+    // Lexically clean entry, but the symlink resolves outside the tree.
+    symlinkSync(join(dir, "outside.md"), join(tree, "link.md"));
+    const table = join(dir, "table.json");
+    writeFileSync(
+      table,
+      JSON.stringify({ "link.md": [{ "text": "escaped content", "expect": ">=1" }] }),
+    );
+    const { code, out } = probe("tokens", table, tree);
+    expect(code).toBe(1);
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("resolves outside tree root");
+    expect(out.value).toBeUndefined();
+  });
+
+  test("a symlink staying inside the tree root is still measured", () => {
+    const dir = fixtureDir();
+    const tree = join(dir, "tree");
+    mkdirSync(tree);
+    writeFileSync(join(tree, "real.md"), "inside content\n");
+    symlinkSync(join(tree, "real.md"), join(tree, "alias.md"));
+    const table = join(dir, "table.json");
+    writeFileSync(
+      table,
+      JSON.stringify({ "alias.md": [{ "text": "inside content", "expect": ">=1" }] }),
+    );
+    const { code, out } = probe("tokens", table, tree);
+    expect(code).toBe(0);
+    expect(out.ok).toBe(true);
+  });
 });
 
 describe("probe usage", () => {
