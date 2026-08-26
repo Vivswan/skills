@@ -23,6 +23,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  type Stats,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -55,8 +56,10 @@ function usage(error: string): never {
 // Only a genuinely absent path may read as missing. Permission errors,
 // symlink loops, and broken parent components are broken measurements, not
 // absent files - the errno must survive into the report so the two states
-// stay distinguishable.
-function statOrFail(path: string, missingMessage: string): ReturnType<typeof statSync> {
+// stay distinguishable. The return type is Stats, not
+// ReturnType<typeof statSync>: the latter includes undefined via the
+// throwIfNoEntry overload and fails strict checks at every caller.
+function statOrFail(path: string, missingMessage: string): Stats {
   try {
     return statSync(path);
   } catch (error) {
