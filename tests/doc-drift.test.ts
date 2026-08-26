@@ -94,9 +94,9 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: "flag <worker> <text>", script: "flag requires <worker> <text>" },
     { doc: "retract <hash-prefix>", script: 'case "retract":' },
     { doc: "retract <hash-prefix>", script: "retract requires <flag-hash-prefix>" },
-    { doc: 'grant <worker> "<wording>"', script: 'case "grant":' },
+    { doc: 'grant <worker> "<wording>" "<glob>"...', script: 'case "grant":' },
     {
-      doc: 'grant <worker> "<wording>"',
+      doc: 'grant <worker> "<wording>" "<glob>"...',
       script: "grant requires <worker> <wording> and one or more non-empty <glob...>",
     },
     { doc: "show [worker]", script: 'case "show":' },
