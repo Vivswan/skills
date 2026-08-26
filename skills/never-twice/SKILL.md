@@ -1,6 +1,6 @@
 ---
 name: never-twice
-description: Use when you just corrected an agent or fixed the same failure class twice. Climb past the instance fix, architecture or data structures first, a CI gate second; rules and vigilance are last-resort debts.
+description: "Use when you just corrected an agent or fixed the same failure class twice. Climb past the instance fix: architecture or data structures first, a CI gate second; rules and vigilance are last-resort debts."
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
