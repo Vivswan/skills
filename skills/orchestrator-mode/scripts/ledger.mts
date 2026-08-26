@@ -10,10 +10,22 @@
  * Usage: ledger.mts <file> <command> [args...]
  * Every command prints a JSON result to stdout.
  * Exit codes: 0 ok, 1 refused / not found / corrupt ledger, 2 usage.
+ *
+ * Concurrency contract: mutating commands (state, flag, retract, grant) hold
+ * an exclusive lockfile (<file>.lock, atomic create-if-absent) across their
+ * whole load/check/save, so under concurrent writers every exit-0 mutation is
+ * durable and duplicate flags are refused globally - never silently lost to a
+ * racing writer. Acquisition retries briefly; a lock is broken only when it is
+ * BOTH older than LEDGER_LOCK_STALE_MS (default 10s) AND its recorded holder
+ * pid is dead - a live holder is never stolen, however stalled. After
+ * LEDGER_LOCK_TIMEOUT_MS (default 5s) the command fails loudly with
+ * exit 1 rather than ever proceeding unlocked. Saves stay temp+rename atomic,
+ * so readers never see a torn file; init is itself an atomic
+ * create-if-absent, and show reads without the lock.
  */
 
 import { createHash } from "node:crypto";
-import { linkSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { linkSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 const WORKER_STATES = ["active", "dormant-by-design", "landing-gate", "landed-swept"] as const;
@@ -177,13 +189,25 @@ function tempPath(file: string): string {
 }
 
 /**
- * Atomic write: temp file in the same directory, then rename. Concurrent
- * writers race last-writer-wins, but a reader never sees a torn file.
+ * Atomic write: temp file in the same directory, then rename, so a reader
+ * never sees a torn file. Callers mutating an existing ledger must hold the
+ * ledger lock; rename alone does not prevent lost updates.
  */
 function saveLedger(file: string, ledger: Ledger): void {
+  if (heldLock !== null) {
+    assertLockStillHeld();
+  }
   const temp = tempPath(file);
-  writeFileSync(temp, `${JSON.stringify(ledger, null, 2)}\n`);
-  renameSync(temp, file);
+  try {
+    writeFileSync(temp, `${JSON.stringify(ledger, null, 2)}\n`);
+    renameSync(temp, file);
+  } finally {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // ENOENT after a successful rename (or a failed write): nothing to clean.
+    }
+  }
 }
 
 /**
@@ -203,8 +227,187 @@ function createLedgerExclusive(file: string, ledger: Ledger): boolean {
     }
     throw error;
   } finally {
-    unlinkSync(temp);
+    try {
+      unlinkSync(temp);
+    } catch {
+      // Temp cleanup is best-effort; it must never mask a successful link.
+    }
   }
+}
+
+const LOCK_RETRY_MS = 25;
+
+// Env knobs exist for tests and unusual deployments. Invalid values fail
+// loudly: NaN/Infinity would make the deadline comparison permanently false
+// (a waiter would hang forever), and zero/negative staleness would classify
+// live locks as stale.
+function lockMsFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    loudError(`${name} must be a positive integer (milliseconds), got "${raw}"`);
+  }
+  return value;
+}
+
+let heldLock: string | null = null;
+let heldLockIno: bigint | null = null;
+let heldBreakMutex: string | null = null;
+
+// emit() leaves via process.exit, which skips finally blocks, so the lock is
+// released in an exit handler that runs on every exit path (lock first, then
+// gate). The inode check keeps a displaced holder from unlinking a
+// successor's lock.
+process.on("exit", () => {
+  if (heldLock !== null && heldLockIno !== null) {
+    try {
+      if (statSync(heldLock, { bigint: true }).ino === heldLockIno) {
+        unlinkSync(heldLock);
+      }
+    } catch {
+      // Already gone; nothing to release.
+    }
+  }
+  if (heldBreakMutex !== null) {
+    try {
+      unlinkSync(heldBreakMutex);
+    } catch {
+      // Best-effort; an orphaned gate only pauses acquisition, loudly.
+    }
+  }
+});
+// SIGINT/SIGTERM do not run exit handlers by default; route them through
+// process.exit so an interrupted CLI still releases its lock. SIGKILL leaves
+// the lock for the stale rule.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => process.exit(1));
+}
+
+// Synchronous sleep without child processes: Atomics.wait always times out
+// on a value that never changes.
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * A lock may be broken only when BOTH hold: it is older than staleMs AND the
+ * pid recorded inside it is not a running process. Age alone is unsound - a
+ * live holder can stall past any threshold (suspension, scheduling, slow
+ * storage) and must never be stolen. EPERM (a process we cannot signal),
+ * unreadable content, and anything but a canonical "<digits>\n" record are
+ * treated as alive: never break a lock not attributable to a dead holder.
+ */
+function lockHolderAlive(lockPath: string): boolean {
+  let content: string;
+  try {
+    content = readFileSync(lockPath, "utf-8");
+  } catch {
+    return true;
+  }
+  if (!/^[1-9][0-9]*\n$/.test(content)) {
+    return true;
+  }
+  const pid = Number(content.trimEnd());
+  if (!Number.isSafeInteger(pid)) {
+    return true;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/**
+ * One gated attempt to take the ledger lock. EVERY create, inspection, or
+ * break of the lock happens only while holding the O_EXCL gate
+ * (<lock>.break), which is what makes check-then-unlink sound: between the
+ * staleness/liveness verdict and the unlink nothing can replace the lock
+ * path, because creating it requires the gate we hold and the only ungated
+ * transition is a holder releasing its own lock - a removal that can only
+ * turn the unlink into a no-op (ENOENT), never hand it a successor's lock.
+ * If a process is SIGKILLed inside this microsecond window, the orphaned
+ * gate pauses all acquisition and later writers fail loudly at timeout -
+ * never a steal.
+ */
+function tryAcquireUnderGate(lockPath: string, gatePath: string, staleMs: number): boolean {
+  try {
+    writeFileSync(gatePath, `${process.pid}\n`, { flag: "wx" });
+    heldBreakMutex = gatePath;
+  } catch {
+    return false; // Gate busy (or orphaned): retry until the loud timeout.
+  }
+  try {
+    try {
+      writeFileSync(lockPath, `${process.pid}\n`, { flag: "wx" });
+      heldLockIno = statSync(lockPath, { bigint: true }).ino;
+      heldLock = lockPath;
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+    try {
+      const observed = statSync(lockPath, { bigint: true });
+      if (Date.now() - Number(observed.mtimeMs) > staleMs && !lockHolderAlive(lockPath)) {
+        unlinkSync(lockPath);
+      }
+    } catch {
+      // The holder released mid-check; the next gated attempt will create.
+    }
+    return false;
+  } finally {
+    unlinkSync(gatePath);
+    heldBreakMutex = null;
+  }
+}
+
+/**
+ * Exclusive lock around a whole load/check/save, so concurrent writers cannot
+ * lose each other's exit-0 mutations or double-accept a duplicate flag.
+ * Timeout is a loud exit-1 error - a mutation never proceeds unlocked.
+ */
+function acquireLedgerLock(file: string): void {
+  const lockPath = `${file}.lock`;
+  const gatePath = `${lockPath}.break`;
+  const timeoutMs = lockMsFromEnv("LEDGER_LOCK_TIMEOUT_MS", 5000);
+  const staleMs = lockMsFromEnv("LEDGER_LOCK_STALE_MS", 10000);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (tryAcquireUnderGate(lockPath, gatePath, staleMs)) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      loudError(
+        `could not acquire ledger lock within ${timeoutMs}ms: ${lockPath} (a lock is broken automatically only when older than ${staleMs}ms AND its recorded holder pid is dead; if this persists, also check for an orphaned ${gatePath})`,
+      );
+    }
+    sleepSync(LOCK_RETRY_MS);
+  }
+}
+
+/**
+ * Last line of defense: if this process's lock was somehow displaced, refuse
+ * to write rather than silently losing a racing writer's update.
+ */
+function assertLockStillHeld(): void {
+  try {
+    if (
+      heldLock !== null &&
+      heldLockIno !== null &&
+      statSync(heldLock, { bigint: true }).ino === heldLockIno
+    ) {
+      return;
+    }
+  } catch {
+    // Fall through to the loud error.
+  }
+  loudError(`ledger lock was broken by another process; aborting without writing: ${heldLock}`);
 }
 
 // JSON-array encoding is injective, so ("a\nb", "c") and ("a", "b\nc") get
@@ -248,6 +451,7 @@ function main(file: string, command: string, rest: string[]): never {
       if (!(WORKER_STATES as readonly string[]).includes(state)) {
         usageError(`invalid state "${state}"; expected one of: ${WORKER_STATES.join(", ")}`);
       }
+      acquireLedgerLock(file);
       const ledger = loadLedger(file);
       const entry = workerEntry(ledger, worker);
       const previous = entry.state;
@@ -261,6 +465,7 @@ function main(file: string, command: string, rest: string[]): never {
         usageError("flag requires <worker> <text>");
       }
       const hash = flagHash(worker, text);
+      acquireLedgerLock(file);
       const ledger = loadLedger(file);
       const existing = ledger.flags.find((flag) => flag.hash === hash);
       if (existing?.status === "standing") {
@@ -282,6 +487,7 @@ function main(file: string, command: string, rest: string[]): never {
       if (rest.length !== 1 || !prefix) {
         usageError("retract requires <flag-hash-prefix>");
       }
+      acquireLedgerLock(file);
       const ledger = loadLedger(file);
       const matches = ledger.flags.filter((flag) => flag.hash.startsWith(prefix));
       if (matches.length === 0) {
@@ -316,6 +522,7 @@ function main(file: string, command: string, rest: string[]): never {
       if (!worker || !wording || globs.length === 0 || globs.some((glob) => glob.trim() === "")) {
         usageError("grant requires <worker> <wording> and one or more non-empty <glob...>");
       }
+      acquireLedgerLock(file);
       const ledger = loadLedger(file);
       const entry = workerEntry(ledger, worker);
       const at = new Date().toISOString();

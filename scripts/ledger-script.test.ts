@@ -1,5 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "./lib";
@@ -19,10 +27,26 @@ function freshFile(): string {
   return join(dir, `ledger-${fileCount}.json`);
 }
 
-function run(file: string, ...args: string[]) {
-  const result = Bun.spawnSync(["bun", SCRIPT, file, ...args], {
+// Children get a hermetic environment: the suite's own lock knobs must never
+// leak in from the parent shell.
+function childEnv(overrides: Record<string, string> = {}): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.LEDGER_LOCK_TIMEOUT_MS;
+  delete env.LEDGER_LOCK_STALE_MS;
+  return { ...env, ...overrides };
+}
+
+// A trailing object argument is an env overlay for the child process.
+type RunArg = string | Record<string, string>;
+
+function run(file: string, ...args: RunArg[]) {
+  const last = args[args.length - 1];
+  const env = last !== undefined && typeof last !== "string" ? last : undefined;
+  const cliArgs = (env ? args.slice(0, -1) : args) as string[];
+  const result = Bun.spawnSync(["bun", SCRIPT, file, ...cliArgs], {
     stdout: "pipe",
     stderr: "pipe",
+    env: childEnv(env),
   });
   return {
     code: result.exitCode,
@@ -31,7 +55,7 @@ function run(file: string, ...args: string[]) {
   };
 }
 
-function runJson(file: string, ...args: string[]) {
+function runJson(file: string, ...args: RunArg[]) {
   const r = run(file, ...args);
   return { ...r, json: JSON.parse(r.stdout) };
 }
@@ -356,7 +380,7 @@ describe("atomic writes", () => {
   test("racing inits create the ledger exactly once and never clobber", async () => {
     const file = freshFile();
     const procs = Array.from({ length: 8 }, () =>
-      Bun.spawn(["bun", SCRIPT, file, "init"], { stdout: "pipe", stderr: "pipe" }),
+      Bun.spawn(["bun", SCRIPT, file, "init"], { stdout: "pipe", stderr: "pipe", env: childEnv() }),
     );
     const results = await Promise.all(
       procs.map(async (proc) => {
@@ -383,16 +407,13 @@ describe("atomic writes", () => {
   });
 
   test("racing writers never leave the file torn or corrupt", async () => {
-    // True concurrency is documented last-writer-wins (no locking), so lost
-    // updates are accepted here; the pinned guarantee is that the file is
-    // never corrupt: always complete JSON that passes the loader's shape and
-    // hash-integrity validation.
     const file = freshFile();
     run(file, "init");
     const procs = Array.from({ length: 8 }, (_, i) =>
       Bun.spawn(["bun", SCRIPT, file, "flag", `builder-${i}`, "racing write"], {
         stdout: "pipe",
         stderr: "pipe",
+        env: childEnv(),
       }),
     );
     await Promise.all(procs.map((proc) => proc.exited));
@@ -403,5 +424,216 @@ describe("atomic writes", () => {
     expect(() => JSON.parse(readFileSync(file, "utf-8"))).not.toThrow();
     // show runs the full loader (shape + hash integrity): exit 0 means not corrupt.
     expect(runJson(file, "show").code).toBe(0);
+  });
+
+  test("eight identical CONCURRENT flags: exactly one accepted, seven refused", async () => {
+    const file = freshFile();
+    run(file, "init");
+    const procs = Array.from({ length: 8 }, () =>
+      Bun.spawn(["bun", SCRIPT, file, "flag", "builder-a", "same standing flag"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: childEnv(),
+      }),
+    );
+    const results = await Promise.all(
+      procs.map(async (proc) => {
+        const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+        return { code: proc.exitCode, json: JSON.parse(stdout) };
+      }),
+    );
+    const accepted = results.filter((r) => r.code === 0 && r.json.ok === true);
+    const refused = results.filter((r) => r.code === 1 && r.json.refused === "duplicate");
+    expect(accepted).toHaveLength(1);
+    expect(refused).toHaveLength(7);
+
+    const ledger = JSON.parse(readFileSync(file, "utf-8"));
+    expect(ledger.flags).toHaveLength(1);
+    expect(ledger.flags[0].hash).toBe(accepted[0]?.json.hash);
+  });
+
+  test("eight distinct CONCURRENT flags: all persist, every returned hash in the file", async () => {
+    const file = freshFile();
+    run(file, "init");
+    const procs = Array.from({ length: 8 }, (_, i) =>
+      Bun.spawn(["bun", SCRIPT, file, "flag", `builder-${i}`, "distinct concurrent write"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: childEnv(),
+      }),
+    );
+    const results = await Promise.all(
+      procs.map(async (proc) => {
+        const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+        return { code: proc.exitCode, json: JSON.parse(stdout) };
+      }),
+    );
+    for (const r of results) {
+      expect(r.code).toBe(0);
+      expect(r.json.ok).toBe(true);
+    }
+
+    const ledger = JSON.parse(readFileSync(file, "utf-8"));
+    expect(ledger.flags).toHaveLength(8);
+    const persisted = new Set(ledger.flags.map((f: { hash: string }) => f.hash));
+    for (const r of results) {
+      // An exit-0 hash the caller may later retract must actually be durable.
+      expect(persisted.has(r.json.hash)).toBe(true);
+    }
+  });
+});
+
+describe("ledger lock", () => {
+  // A pid guaranteed dead: a child that has already exited.
+  function deadPid(): number {
+    return Bun.spawnSync(["true"]).pid;
+  }
+
+  test("a stale lock whose holder is dead is broken and the write proceeds", () => {
+    const file = freshFile();
+    run(file, "init");
+    const lock = `${file}.lock`;
+    writeFileSync(lock, `${deadPid()}\n`);
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(lock, past, past);
+
+    const r = runJson(file, "flag", "builder-a", "after stale lock");
+    expect(r.code).toBe(0);
+    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(1);
+    expect(existsSync(`${lock}.break`)).toBe(false);
+  });
+
+  test("noncanonical lock content is never attributed to a dead holder", () => {
+    for (const content of ["123junk\n", "123.5\n", "0\n", "123", "-4\n", ""]) {
+      const file = freshFile();
+      run(file, "init");
+      const lock = `${file}.lock`;
+      writeFileSync(lock, content);
+      const past = new Date(Date.now() - 60_000);
+      utimesSync(lock, past, past);
+
+      const r = runJson(file, "flag", "builder-a", "must not happen", {
+        LEDGER_LOCK_TIMEOUT_MS: "200",
+      });
+      expect(r.code).toBe(1);
+      expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
+      expect(readFileSync(lock, "utf-8")).toBe(content);
+    }
+  });
+
+  test("an orphaned break mutex pauses auto-recovery: loud timeout, no steal", () => {
+    const file = freshFile();
+    run(file, "init");
+    const lock = `${file}.lock`;
+    writeFileSync(lock, `${deadPid()}\n`);
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(lock, past, past);
+    writeFileSync(`${lock}.break`, "1\n");
+
+    const r = runJson(file, "flag", "builder-a", "must not happen", {
+      LEDGER_LOCK_TIMEOUT_MS: "200",
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("lock");
+    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
+    expect(existsSync(lock)).toBe(true);
+  });
+
+  test("an orphaned break mutex with NO lock present still gates acquisition", () => {
+    const file = freshFile();
+    run(file, "init");
+    const lock = `${file}.lock`;
+    writeFileSync(`${lock}.break`, "1\n");
+
+    const r = runJson(file, "flag", "builder-a", "must not happen", {
+      LEDGER_LOCK_TIMEOUT_MS: "200",
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("lock");
+    // The writer must neither create the lock nor mutate the ledger.
+    expect(existsSync(lock)).toBe(false);
+    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
+    expect(readFileSync(`${lock}.break`, "utf-8")).toBe("1\n");
+  });
+
+  test("an aged lock whose holder is ALIVE is never stolen", () => {
+    const file = freshFile();
+    run(file, "init");
+    const lock = `${file}.lock`;
+    // This test process is the live holder; age the lock far past staleness.
+    writeFileSync(lock, `${process.pid}\n`);
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(lock, past, past);
+
+    const r = runJson(file, "flag", "builder-a", "must not happen", {
+      LEDGER_LOCK_TIMEOUT_MS: "300",
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("lock");
+    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
+    expect(existsSync(lock)).toBe(true);
+  });
+
+  test("a live lock times out loudly; the mutation never proceeds unlocked", () => {
+    const file = freshFile();
+    run(file, "init");
+    writeFileSync(`${file}.lock`, `${process.pid}\n`);
+
+    const r = runJson(file, "flag", "builder-a", "blocked write", {
+      LEDGER_LOCK_TIMEOUT_MS: "200",
+    });
+    expect(r.code).toBe(1);
+    expect(r.json.ok).toBe(false);
+    expect(r.stderr).toContain("lock");
+    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
+  });
+
+  test("commands leave no lock or gate files behind", () => {
+    const file = freshFile();
+    run(file, "init");
+    run(file, "state", "builder-a", "active");
+    run(file, "flag", "builder-a", "text");
+    run(file, "grant", "builder-a", "wording", "glob/**");
+    expect(existsSync(`${file}.lock`)).toBe(false);
+    expect(existsSync(`${file}.lock.break`)).toBe(false);
+  });
+
+  test("invalid lock env knobs fail loudly instead of hanging or stealing", () => {
+    for (const bad of ["NaN", "Infinity", "0", "-5", "1.5", "abc"]) {
+      const file = freshFile();
+      run(file, "init");
+      const r = runJson(file, "flag", "builder-a", "text", { LEDGER_LOCK_TIMEOUT_MS: bad });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("positive integer");
+      expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
+
+      const s = runJson(file, "flag", "builder-a", "text", { LEDGER_LOCK_STALE_MS: bad });
+      expect(s.code).toBe(1);
+      expect(s.stderr).toContain("positive integer");
+    }
+  });
+
+  test("concurrent waiters on a stale lock: both writes land, neither steals the other", async () => {
+    const file = freshFile();
+    run(file, "init");
+    const lock = `${file}.lock`;
+    writeFileSync(lock, `${deadPid()}\n`);
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(lock, past, past);
+
+    const procs = Array.from({ length: 2 }, (_, i) =>
+      Bun.spawn(["bun", SCRIPT, file, "flag", `builder-${i}`, "after stale break"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: childEnv(),
+      }),
+    );
+    await Promise.all(procs.map((proc) => proc.exited));
+    for (const proc of procs) {
+      expect(proc.exitCode).toBe(0);
+    }
+    const ledger = JSON.parse(readFileSync(file, "utf-8"));
+    expect(ledger.flags).toHaveLength(2);
+    expect(existsSync(lock)).toBe(false);
   });
 });
