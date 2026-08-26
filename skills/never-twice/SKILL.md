@@ -1,6 +1,6 @@
 ---
 name: never-twice
-description: Use when you just corrected an agent or fixed the same failure class twice - climb past the instance fix to the most durable response reachable, architecture and data structures first.
+description: Use when you just corrected an agent or fixed the same failure class twice - climb past the instance fix, architecture or data structures first, a CI gate second; rules and vigilance are last-resort debts.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -12,12 +12,14 @@ metadata:
 
 Every correction and every repeated failure gets the most durable response reachable:
 
-| Rung | Response | What the class can still do |
-| --- | --- | --- |
-| 1 | better architecture or data structures | cannot recur |
-| 2 | a lint rule or test in CI | recurs, but cannot land |
-| 3 | a skill or written rule | recurs, but the next agent knows |
-| 4 | human vigilance | anything - a last resort, not a plan |
+| Rung | Response | What the class can still do | Preference |
+| --- | --- | --- | --- |
+| 1 | better architecture or data structures | cannot recur | the goal |
+| 2 | a lint rule or test in CI | recurs, but cannot land | acceptable |
+| 3 | a skill or written rule | recurs, but the next agent knows | fallback |
+| 4 | human vigilance | anything | avoid |
+
+The ladder is not a menu. Preference decays exponentially down it: rung 1 is the goal, rung 2 a clearly weaker but acceptable gate, rungs 3 and 4 each another large step down - taken only when every higher rung is genuinely unreachable. And a rung-3 or rung-4 landing is a debt, not a resolution: when a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
 
 ## Rung 1: the class cannot recur
 

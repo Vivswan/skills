@@ -2,12 +2,14 @@
 
 `/never-twice` fires when you just corrected an agent or fixed the same failure class twice. Instead of the next instance fix, it climbs to the most durable response reachable:
 
-| Rung | Response | What the class can still do |
-| --- | --- | --- |
-| 1 | better architecture or data structures | cannot recur |
-| 2 | a lint rule or test in CI | recurs, but cannot land |
-| 3 | a skill or written rule | recurs, but the next agent knows |
-| 4 | human vigilance | anything - a last resort, not a plan |
+| Rung | Response | What the class can still do | Preference |
+| --- | --- | --- | --- |
+| 1 | better architecture or data structures | cannot recur | the goal |
+| 2 | a lint rule or test in CI | recurs, but cannot land | acceptable |
+| 3 | a skill or written rule | recurs, but the next agent knows | fallback |
+| 4 | human vigilance | anything | avoid |
+
+Preference decays exponentially down the ladder - rungs 1 and 2 are the acceptable tiers, rungs 3 and 4 are debts taken only when every higher rung is genuinely unreachable, converted up the ladder as soon as one becomes reachable.
 
 The test for whatever ships: if a new member of the failure class appears tomorrow, is it impossible to build (rung 1), stopped in CI (rung 2), caught by a loaded rule (rung 3), or silent - no rung held? A runtime guard that fails loudly but late, after shipping, is an instance fix, not a rung.
 
