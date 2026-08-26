@@ -29,11 +29,13 @@ Verify all three before `git worktree remove`, freshly, in this order:
    - A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Whenever ancestry fails, require exact content equivalence at the fetched tip, for every path the branch touched (NUL-safe and with renames split into their delete and add halves, so a missing source deletion cannot hide):
 
      ```bash
-     git diff --no-renames --name-only -z "$(git merge-base FETCH_HEAD <branch>)" <branch> \
+     set -o pipefail                                # a masked failure must never read as "landed"
+     base=$(git merge-base FETCH_HEAD <branch>) && [ -n "$base" ] || exit 1
+     git diff --no-renames --name-only -z "$base" <branch> \
        | xargs -0 git diff --no-renames FETCH_HEAD <branch> --
      ```
 
-     Empty output means landed; any output, or any of the commands failing, blocks the deletion. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
+     Landed means empty output AND a zero exit status; any output or any failing step blocks the deletion. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
 3. **No live writer.** Check for processes whose cwd is inside the worktree (`lsof -a -p <pid> -d cwd`, or `lsof +D <tree>`). An actor absent from the running list is not itself writing, but processes it spawned (test chains, installs) can still be; kill them or wait them out first. And never remove a LOCKED tree (`git worktree list --porcelain` shows `locked` with its reason) or a tree another actor may be using without knowing whose it is and why.
 
 After removing:
