@@ -430,12 +430,16 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
   // tree's. realpath the root once and require every entry's realpath to
   // stay inside it.
   const rootReal = realpathSync(treeRoot);
+  // A tree root that canonicalizes to the filesystem root already ends with
+  // the separator; naively appending sep would demand a "//" prefix and
+  // reject every valid descendant.
+  const rootPrefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
   for (const [file, specs] of Object.entries(table)) {
     let content: string | null = null;
     let readError: string | null = null;
     try {
       const real = realpathSync(join(treeRoot, file));
-      if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+      if (real !== rootReal && !real.startsWith(rootPrefix)) {
         fail(`${file}: resolves outside tree root`);
       }
       content = readRegularFile(real, file);

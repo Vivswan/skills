@@ -608,6 +608,23 @@ describe("probe tokens", () => {
     expect(out.ok).toBe(true);
   });
 
+  test("containment still accepts descendants when the tree root is /", () => {
+    const dir = fixtureDir();
+    writeFileSync(join(dir, "doc.md"), "root containment content\n");
+    const table = join(dir, "table.json");
+    // The entry is the fixture file's path relative to the filesystem root;
+    // with a naive rootReal + sep prefix ("//") every descendant of "/" is
+    // rejected as outside the tree.
+    const entry = join(dir, "doc.md").replace(/^\/+/, "");
+    writeFileSync(
+      table,
+      JSON.stringify({ [entry]: [{ "text": "root containment content", "expect": ">=1" }] }),
+    );
+    const { code, out } = probe("tokens", table, "/");
+    expect(code).toBe(0);
+    expect(out.ok).toBe(true);
+  });
+
   test("a FIFO at a probed path fails loudly instead of blocking forever", () => {
     const dir = fixtureDir();
     const tree = join(dir, "tree");
