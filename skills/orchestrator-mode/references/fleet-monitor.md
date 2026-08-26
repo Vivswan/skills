@@ -4,7 +4,7 @@ One subagent whose only job is watching the rest of the fleet. It starts a perio
 
 Sweep every 5-10 minutes. Each sweep is a single script invocation built to the Probe Cost budget below, so the bound is noise, not load. Reviewers sometimes idle without delivering: tell them explicitly to report back, and nudge if only an idle notification arrives.
 
-The measurement mechanism lives in this skill's `scripts/` now. Runtime: bun; node 24+ also works.
+The measurement mechanism lives in this skill's `scripts/` now. Runtime: bun; node 24.3+ also works (older node lacks a working `import.meta.main`, so `baseline.mts` would exit 0 without doing the work).
 
 Every mechanical trap those scripts retire (self-matching greps, zsh word-splitting and glob aborts, the missing `timeout` binary on macOS, fragile hand-grepped token checks, counts standing in for the sets they approximate) is deliberately absent from this file. A trap folded into a tested script cannot re-fire; keeping its prose recipe around only invites hand-rolling the probe again.
 
