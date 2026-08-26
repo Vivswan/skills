@@ -7,7 +7,7 @@ Who merges and the universal rules that apply under either gate - the trivial-fi
 ## Direct Commits to the Mainline
 
 1. One pending change on the mainline at a time, in plan order.
-2. Take the builder's branch (named in its completion signal) and prepare it per the repo's conventions: rebase onto the mainline, cherry-pick its commits, or export and apply its diff as a patch.
+2. Take the builder's branch (named in its completion signal) and prepare it per the repo's conventions: rebase onto the mainline, cherry-pick its commits, or export and apply its diff as a patch. A DEPENDENT track (based on a sibling's branch) needs one extra recorded fact: pin the dependency's tip sha at the moment the upper track branches, and at landing transplant only the track-specific delta - `git rebase --onto <mainline> <recorded-dep-tip> <upper-branch>` - because a dependency landed via squash or cherry-pick leaves its original commits outside the mainline's ancestry, so a whole-branch rebase would replay the dependency's changes. The boundary must be RECORDED, not inferred: squash rewrites history (the same lesson as the PR gate's restack-before-retarget rule below).
 3. Re-run the gates on the result and run the review pass. Then land per the prep mode: a rebase or cherry-pick already leaves committed work, so fast-forward the mainline onto it and push; an applied patch is uncommitted, so commit it first, then push. Either way, what gets pushed is the MAINLINE, never the builder's branch.
 4. Keep the mainline tree frozen while a review round is in flight, and serialize resource-exclusive validation (fixed ports, shared stacks).
 
