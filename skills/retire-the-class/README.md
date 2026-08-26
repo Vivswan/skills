@@ -27,7 +27,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/retire-the-cla
 
 ## The Test
 
-If a new member of the failure class appears tomorrow, does the fix hold, or does it silently pass the same way? A silent pass means the class is still alive.
+If a new member of the failure class appears tomorrow, does the fix hold, or does it silently pass the same way? A silent pass means the class is still alive - and so does a loud-but-late failure: a runtime guard only converts the silent pass into a failure after shipping. The class is retired when the invalid state cannot be built at all.
 
 ## Plugin-Ready Layout
 

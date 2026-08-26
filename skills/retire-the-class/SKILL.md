@@ -16,7 +16,7 @@ A fix that looks finished and a fix that removes the class are different deliver
 
 > If a new member of this class appears tomorrow, does the fix hold, or does it silently pass the same way?
 
-A silent pass means the class is still alive.
+A silent pass means the class is still alive. So does a loud-but-late failure: a runtime guard converts the silent pass into a failure after shipping, but the class is retired only when the invalid state cannot be built at all.
 
 ## When to Apply
 
@@ -54,7 +54,7 @@ The class-retiring change - the categorical elimination, not the instance fix - 
 
 ### A roster hole, fixed twice
 
-Before: an event enum gained a new member, and the handler roster dispatching on it was not updated, so the new event fell through silently. The fix added the missing entry and read as complete. Weeks later the next member shipped with the same hole; that fix added its entry plus a runtime assertion that the roster covers every member, and also read as complete. Both were pointwise: a third member tomorrow still ships with a hole, caught by the assertion after deploy at best.
+Before: an event enum gained a new member, and the handler roster dispatching on it was not updated, so the new event fell through silently. The fix added the missing entry and read as complete. Weeks later the next member shipped with the same hole; that fix added its entry plus a runtime assertion that the roster covers every member, and also read as complete. Both were pointwise: for a third member tomorrow, the first fix silently passes, and the assertion fails loudly but late - at runtime, after the hole has already shipped. Neither prevents the hole from being built.
 
 The class, in one sentence: any new enum member can ship without a roster entry. The substrate: two artifacts - the enum and the roster - synced by convention.
 
@@ -70,6 +70,6 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
 
 - fixes that are the second-or-later patch on the same failure class: the diff handles one more instance of a failure the codebase has been patched for before
 - countermeasure, trap, or known-bad-case lists (docs, checklists, warning comments, enumerated guards) that grew in this diff
-- for each finding, name the substrate change - architecture, data structure, or tooling - that would retire the whole class, and apply the generalization question: if a new member of the class appears tomorrow, does this fix hold, or does it silently pass?
+- for each finding, name the substrate change - architecture, data structure, or tooling - that would retire the whole class, and apply the generalization question: if a new member of the class appears tomorrow, is it prevented before shipping, does it fail loudly but late, or does it silently pass? Only prevention - the invalid state cannot be built - retires the class
 
 Triage the resulting findings with the workflow above.
