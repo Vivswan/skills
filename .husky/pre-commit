@@ -7,5 +7,35 @@ if [ ! -d node_modules ]; then
 	exit 1
 fi
 
+# Incident class: leaked git hook environment. git exports GIT_DIR,
+# GIT_INDEX_FILE, and other GIT_* variables to hooks; the test suites spawned
+# by `bun run check` inherit them, and a fixture git operation in a test that
+# does not scrub its own environment then mutates THIS repository instead of
+# its fixture (observed: fixture commits landing on real branches, and
+# core.bare/identity overwrites in the shared .git/config). Nothing below
+# needs any GIT_* variable - the hook runs at the top of the working tree, so
+# git rediscovers the repository from the working directory - scrub them all.
+for git_env_var in $(env | LC_ALL=C sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
+	unset "$git_env_var"
+done
+
+# Same incident class, second line of defense: the checks must leave
+# .git/config byte-identical. Snapshot it, run the checks capturing their
+# status so the comparison happens even when a check fails, and block the
+# commit if the config changed. --git-path resolves the shared config in
+# linked worktrees too.
+git_config="$(git rev-parse --git-path config)"
+git_config_snapshot="$(mktemp)"
+cp "$git_config" "$git_config_snapshot"
+
+check_status=0
 # The full gates CI also runs; catch failures before they leave the machine.
-bun run check
+bun run check || check_status=$?
+
+if ! cmp -s "$git_config" "$git_config_snapshot"; then
+	echo "FATAL: $git_config changed while 'bun run check' ran." >&2
+	echo "A spawned test mutated the real repository; pre-check snapshot kept at $git_config_snapshot." >&2
+	exit 1
+fi
+rm -f "$git_config_snapshot"
+exit "$check_status"
