@@ -106,7 +106,7 @@ A landing is two independent choices:
 - The GATE, chosen once in the interview: direct commits to the mainline, or a PR before it.
 - Each track's BASE, set by the dependency graph: the mainline for independent work, a sibling's unlanded branch for stacked work. Any combination in one session.
 
-The per-mode procedures, including the gh-stack loop and its worktree interplay, live in `references/landing.md`. What stays constant under either gate:
+The per-mode procedures, including the gh-stack loop and the worktree rules around it, live in `references/landing.md`. What stays constant under either gate:
 
 - **Trivial mechanical fixes bypass the human gate when the user grants it.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) is lead-merged directly once its gates are green. The merging hand's review is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
 - **A pipeline BLOCKED on a merge is the second standing exception.** When a converged PR gates queued work and the user is not acting, the lead merges it and informs the user in the next report. Waiting idle on a merge the lead could perform is the defect; the notification preserves the user's oversight.
@@ -156,5 +156,5 @@ Triage findings against sections 2 (Decompose, Board, Monitor, Builders) and 7 (
 
 - `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, unnamed one-shot watchers, git-fixture hygiene for test suites)
 - `references/fleet-monitor.md`: the monitor's script wiring (sweep, probe, ledger, baseline) and the judgment rules learned from production false alarms
-- `references/landing.md`: the two landing gates (direct commits; PRs with per-track bases, including the gh-stack flow and its worktree interplay)
+- `references/landing.md`: the two landing gates (direct commits; PRs with per-track bases, including the gh-stack flow and the worktree rules around it)
 - `references/worktree-hygiene.md`: handovers, worktree removal safety, and per-file ownership across fan-out rounds
