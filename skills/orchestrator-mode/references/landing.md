@@ -21,6 +21,9 @@ With gh-stack, the lead's loop looks like (all commands non-interactive per that
 ```bash
 gh stack init track-1            # bottom of the chain, before spawning builders
 gh stack add  track-2            # one layer per track, in dependency order
+# STOP: switch the main checkout back to the mainline, spawn the builders,
+# and collect each layer's committed work (Worktree interplay, below).
+# Submitting now would publish EMPTY layer PRs.
 gh stack submit --auto           # push all layers, open one draft PR each
 # per converged layer, bottom-up:
 gh stack merge <pr> --yes --squash   # method explicit on the first merge
