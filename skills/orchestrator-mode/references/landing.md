@@ -19,12 +19,16 @@ The three landing-mode procedures for orchestrator mode. Mode selection, who mer
 With gh-stack, the lead's loop looks like (all commands non-interactive per that skill's flag table - `--json`, `--auto`, `--yes`):
 
 ```bash
+git config rerere.enabled true   # init prompts for this on a first TTY run; pre-enable to stay non-interactive
 gh stack init track-1            # bottom of the chain, before spawning builders
 gh stack add  track-2            # one layer per track, in dependency order
 # STOP: switch the main checkout back to the mainline, spawn the builders,
 # and collect each layer's committed work (Worktree interplay, below).
 # Submitting now would publish EMPTY layer PRs.
 gh stack submit --auto           # push all layers, open one draft PR each
+# submit derives titles and bodies automatically (no body flag) - rewrite
+# each created PR body into the visualization-first format (Land section):
+gh pr edit <num> --body-file <file>  # once per PR submit just opened
 # per converged layer, bottom-up:
 gh stack merge <pr> --yes --squash   # method explicit on the first merge
 gh stack sync --prune                # restack the remainder, drop merged branches
