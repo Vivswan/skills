@@ -147,11 +147,14 @@ interface Snapshot {
   issueComments: number;
   threadTotal: number;
   unresolvedThreads: number;
+  /** Comments across all review threads: a REPLY inside an existing thread
+   * changes no thread count, so it needs its own watched number. */
+  threadComments: number;
   reviewCount: number;
   latestReview: Review | null;
-  /** keyed by "<typename>:<name>" so a CheckRun and a StatusContext sharing
-   * a display name stay distinct; conclusion is lowercased, "pending" while
-   * unconcluded. */
+  /** keyed by "<typename>:<workflow>:<name>" so a CheckRun and a
+   * StatusContext, or two same-name jobs from different workflows, stay
+   * distinct; conclusion is lowercased, "pending" while unconcluded. */
   checks: Map<string, CheckState>;
 }
 
@@ -167,12 +170,17 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
         nodes { fullDatabaseId state submittedAt author { login } }
       }
       reviewThreads(first: 100, after: $cursor) {
-        nodes { isResolved }
+        nodes { isResolved comments { totalCount } }
         pageInfo { hasNextPage endCursor }
       }
     }
   }
 }`;
+
+interface ThreadPage {
+  isResolved: boolean;
+  commentCount: number;
+}
 
 interface PrPage {
   state: string;
@@ -180,7 +188,7 @@ interface PrPage {
   issueComments: number;
   reviewCount: number;
   latestReview: Review | null;
-  threadResolved: boolean[];
+  threads: ThreadPage[];
   hasNextPage: boolean;
   endCursor: string | null;
 }
@@ -232,12 +240,18 @@ function parsePrPage(raw: string): PrPage {
     issueComments: requireNumber(get(get(pr, "comments"), "totalCount"), "comments.totalCount"),
     reviewCount: requireNumber(get(reviews, "totalCount"), "reviews.totalCount"),
     latestReview,
-    threadResolved: threadNodes.map((node, i) => {
+    threads: threadNodes.map((node, i): ThreadPage => {
       const resolved = get(node, "isResolved");
       if (typeof resolved !== "boolean") {
         throw new GhError(`GraphQL response: reviewThreads.nodes[${i}].isResolved is missing`);
       }
-      return resolved;
+      return {
+        isResolved: resolved,
+        commentCount: requireNumber(
+          get(get(node, "comments"), "totalCount"),
+          `reviewThreads.nodes[${i}].comments.totalCount`,
+        ),
+      };
     }),
     hasNextPage,
     endCursor: typeof endCursor === "string" ? endCursor : null,
@@ -263,11 +277,14 @@ function readChecks(repo: string, prNumber: number): Map<string, CheckState> {
       throw new GhError("gh pr view: a statusCheckRollup entry has neither name nor context");
     }
     const typename = get(entry, "__typename");
+    const kind = typeof typename === "string" ? typename : "CheckRun";
+    // gh renders the owning workflow for CheckRun rows; two workflows can
+    // expose the same job name, and one must never mask the other.
+    const workflow = get(entry, "workflowName");
+    const workflowName = typeof workflow === "string" ? workflow : "";
     const conclusion = get(entry, "conclusion") ?? get(entry, "state");
-    // Keyed by typename too: a CheckRun and a StatusContext can share a
-    // display name, and one must never mask the other's conclusion.
-    checks.set(`${typeof typename === "string" ? typename : "CheckRun"}:${name}`, {
-      name,
+    checks.set(`${kind}:${workflowName}:${name}`, {
+      name: workflowName === "" ? name : `${workflowName}:${name}`,
       conclusion:
         typeof conclusion === "string" && conclusion !== "" ? conclusion.toLowerCase() : "pending",
     });
@@ -280,6 +297,7 @@ function readSnapshot(repo: string, prNumber: number): Snapshot {
   let first: PrPage | null = null;
   let threadTotal = 0;
   let unresolvedThreads = 0;
+  let threadComments = 0;
   let cursor: string | null = null;
   for (let pageCount = 1; ; pageCount += 1) {
     if (pageCount > MAX_THREAD_PAGES) {
@@ -300,8 +318,11 @@ function readSnapshot(repo: string, prNumber: number): Snapshot {
     if (cursor !== null) args.push("-F", `cursor=${cursor}`);
     const page = parsePrPage(gh(args));
     first ??= page;
-    threadTotal += page.threadResolved.length;
-    unresolvedThreads += page.threadResolved.filter((resolved) => !resolved).length;
+    threadTotal += page.threads.length;
+    for (const thread of page.threads) {
+      if (!thread.isResolved) unresolvedThreads += 1;
+      threadComments += thread.commentCount;
+    }
     if (!page.hasNextPage) break;
     if (page.endCursor === null) {
       throw new GhError("GraphQL response: hasNextPage without an endCursor");
@@ -317,6 +338,7 @@ function readSnapshot(repo: string, prNumber: number): Snapshot {
     latestReview: first.latestReview,
     threadTotal,
     unresolvedThreads,
+    threadComments,
     checks: readChecks(repo, prNumber),
   };
 }
@@ -333,7 +355,7 @@ function renderSnapshot(snapshot: Snapshot): string {
           .join(" ");
   return (
     `state ${snapshot.state}; issue comments ${snapshot.issueComments}; ` +
-    `review threads ${snapshot.threadTotal} (${snapshot.unresolvedThreads} unresolved); ` +
+    `review threads ${snapshot.threadTotal} (${snapshot.unresolvedThreads} unresolved, ${snapshot.threadComments} comments); ` +
     `latest review ${review}; checks ${checks}; merged ${snapshot.mergedAt ?? "no"}`
   );
 }
@@ -359,6 +381,11 @@ function diffDeltas(previous: Snapshot, current: Snapshot, watched: Set<Watched>
       deltas.push(
         `unresolved threads ${previous.unresolvedThreads} -> ${current.unresolvedThreads}`,
       );
+    }
+    // A reply INSIDE an existing thread moves no thread count; only the
+    // summed per-thread comment totals can see it.
+    if (current.threadComments !== previous.threadComments) {
+      deltas.push(`thread comments ${previous.threadComments} -> ${current.threadComments}`);
     }
   }
   if (watched.has("review")) {
@@ -535,6 +562,7 @@ async function main(): Promise<never> {
     print(`final:    ${renderSnapshot(last)}`);
     process.exit(3);
   };
+  let finalRead = false;
   while (true) {
     // The first poll runs right after the baseline: a multi-page baseline
     // read takes real time, and activity landing inside that window should
@@ -563,14 +591,16 @@ async function main(): Promise<never> {
       }
       last = current;
     }
+    // The read after a deadline-truncated sleep was the FINAL one: it keeps
+    // the closing snapshot current and catches a delta landing in the last
+    // window; past it the timeout is honored, never another interval.
+    if (finalRead) exitTimeout();
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) exitTimeout();
     const waitSeconds = consecutiveFailures > 0 ? POLL_RETRY_SECONDS : options.intervalSeconds;
     const sleepMs = Math.min(waitSeconds * 1000, remainingMs);
     await sleep(sleepMs);
-    // A sleep truncated to the deadline IS the timeout: exiting here keeps
-    // the deadline honest instead of overrunning it with one more poll.
-    if (sleepMs === remainingMs) exitTimeout();
+    finalRead = sleepMs === remainingMs;
   }
 }
 

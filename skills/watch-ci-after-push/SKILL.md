@@ -78,7 +78,8 @@ bun "<skill-dir>/scripts/wait-for-pr-event.mts" <pr-number> --repo <owner/name> 
 
 - `--until` picks the watched events from `comment,review,checks,merge` (default: `comment,review`).
 - `--interval` sets seconds between polls (default 45, minimum 15); `--timeout` sets seconds before giving up (default 1800).
-- The waiter reads a complete baseline first (comment and review-thread counts via GraphQL `isResolved`, the latest review, per-check conclusions, merged state) and exits 2 instead of waiting when that read fails.
+- The waiter reads a complete baseline first (comment, thread-reply, and review-thread counts via GraphQL `isResolved`, the latest review, per-check conclusions, merged state) and exits 2 instead of waiting when that read fails.
+- At the deadline it makes one final bounded read, so the closing snapshot is current and a delta landing in the last window still exits 0.
 
 | Exit | Meaning |
 | --- | --- |

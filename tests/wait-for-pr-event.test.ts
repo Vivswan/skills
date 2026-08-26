@@ -68,8 +68,8 @@ interface GqlShape {
   comments?: number;
   reviewCount?: number;
   review?: { id: string; login: string; state: string; submittedAt: string } | null;
-  /** isResolved per thread on this page. */
-  threads?: boolean[];
+  /** per thread on this page: bare boolean = isResolved with one comment. */
+  threads?: Array<boolean | { isResolved: boolean; comments: number }>;
   hasNextPage?: boolean;
   endCursor?: string | null;
 }
@@ -98,7 +98,11 @@ function gql(shape: GqlShape = {}): string {
                   ],
           },
           reviewThreads: {
-            nodes: (shape.threads ?? []).map((isResolved) => ({ isResolved })),
+            nodes: (shape.threads ?? []).map((thread) =>
+              typeof thread === "boolean"
+                ? { isResolved: thread, comments: { totalCount: 1 } }
+                : { isResolved: thread.isResolved, comments: { totalCount: thread.comments } },
+            ),
             pageInfo: {
               hasNextPage: shape.hasNextPage ?? false,
               endCursor: shape.endCursor ?? null,
@@ -110,12 +114,12 @@ function gql(shape: GqlShape = {}): string {
   });
 }
 
-/** checks as [name, conclusion, status?, typename?] rows in the gh pr view
- * rollup shape; StatusContext rows use context/state instead of
+/** checks as [name, conclusion, status?, typename?, workflow?] rows in the
+ * gh pr view rollup shape; StatusContext rows use context/state instead of
  * name/conclusion, exactly as gh renders them. */
-function prView(checks: Array<[string, string, string?, string?]> = []): string {
+function prView(checks: Array<[string, string, string?, string?, string?]> = []): string {
   return JSON.stringify({
-    statusCheckRollup: checks.map(([name, conclusion, status, typename]) =>
+    statusCheckRollup: checks.map(([name, conclusion, status, typename, workflow]) =>
       typename === "StatusContext"
         ? { __typename: typename, context: name, state: conclusion }
         : {
@@ -123,6 +127,7 @@ function prView(checks: Array<[string, string, string?, string?]> = []): string 
             name,
             conclusion,
             status: status ?? (conclusion === "" ? "IN_PROGRESS" : "COMPLETED"),
+            workflowName: workflow ?? "",
           },
     ),
   });
@@ -219,6 +224,19 @@ describe("wait-for-pr-event.mts", () => {
     expect(r.stdout).toContain("issue comments 3 -> 4");
   });
 
+  test("a REPLY inside an existing thread is a delta even with counts unchanged", () => {
+    const r = run(["7", "--repo", "octo/example", "--until", "comment"], {
+      "gql-1": gql({ threads: [{ isResolved: false, comments: 2 }] }),
+      "gql-2": gql({ threads: [{ isResolved: false, comments: 3 }] }),
+      "pr-1": prView(),
+    });
+    expect(r.code).toBe(0);
+    // thread count and unresolved count are both unchanged; only the summed
+    // per-thread comment totals can see the reply.
+    expect(r.stdout).toContain("thread comments 2 -> 3");
+    expect(r.stdout).not.toContain("review threads 1 -> ");
+  });
+
   test("unresolved counts sum across thread pages, cursor passed to page 2", () => {
     const page1 = { threads: [false], hasNextPage: true, endCursor: "c1" };
     const r = run(["7", "--repo", "octo/example", "--until", "comment"], {
@@ -284,6 +302,23 @@ describe("wait-for-pr-event.mts", () => {
     // Exactly one delta: the StatusContext flip, not a masked CheckRun.
     expect(r.stdout.match(/check ci -> /g)).toHaveLength(1);
     expect(r.stdout).toContain("check ci -> success (was pending)");
+  });
+
+  test("same-name CheckRuns from different workflows never mask each other", () => {
+    const r = run(["7", "--repo", "octo/example", "--until", "checks"], {
+      "gql-1": gql(),
+      "pr-1": prView([
+        ["test", "SUCCESS", undefined, undefined, "ci.yml"],
+        ["test", "SUCCESS", undefined, undefined, "nightly.yml"],
+      ]),
+      "pr-2": prView([
+        ["test", "SUCCESS", undefined, undefined, "ci.yml"],
+        ["test", "FAILURE", undefined, undefined, "nightly.yml"],
+      ]),
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("check nightly.yml:test -> failure (was success)");
+    expect(r.stdout).not.toContain("check ci.yml:test ->");
   });
 
   test("a check vanishing from the rollup is a delta, not silence", () => {
@@ -425,20 +460,31 @@ describe("wait-for-pr-event.mts", () => {
     expect(overflow.stderr).toContain("safe integer range");
   });
 
-  test("the deadline expiring during the sleep exits 3 without another poll", () => {
+  test("the deadline triggers one final read: a last-window delta still exits 0", () => {
     const r = run(
       ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
       {
         "gql-1": gql({ comments: 3 }),
         "gql-2": gql({ comments: 3 }),
-        "gql-3": gql({ comments: 4 }), // must never be reached
+        "gql-3": gql({ comments: 4 }), // served by the final read at the deadline
         "pr-1": prView(),
       },
     );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("issue comments 3 -> 4");
+    // Baseline + one poll + the final read, nothing after it.
+    expect(r.ghCalls.filter((call) => call.startsWith("api graphql"))).toHaveLength(3);
+  });
+
+  test("after the final read the timeout is honored: exit 3, no further poll", () => {
+    const r = run(
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      { "gql-1": gql({ comments: 3 }), "pr-1": prView() },
+    );
     expect(r.code).toBe(3);
-    expect(r.stdout).not.toContain("issue comments 3 -> 4");
-    // Baseline + exactly one poll: the truncated sleep IS the timeout.
-    expect(r.ghCalls.filter((call) => call.startsWith("api graphql"))).toHaveLength(2);
+    expect(r.stdout).toContain("no watched change in comment after 1s");
+    // Baseline + one poll + the final read: the truncated sleep ends the wait.
+    expect(r.ghCalls.filter((call) => call.startsWith("api graphql"))).toHaveLength(3);
   });
 
   test("without --repo the current repo is resolved via gh repo view", () => {

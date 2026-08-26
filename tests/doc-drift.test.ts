@@ -319,7 +319,7 @@ const SURFACES: Record<string, Surface> = {
       },
       {
         doc: "via GraphQL `isResolved`",
-        script: "nodes { isResolved }",
+        script: "nodes { isResolved comments { totalCount } }",
       },
       {
         doc: "exits 2 instead of waiting when that read fails",
