@@ -77,25 +77,47 @@ if [ -z "$run_lines" ]; then
   exit 2
 fi
 
-# The first selection is silent: it only picks what to wait on. "Latest" is
-# decided again after the wait, and printing superseded lines in both passes
-# would duplicate them.
+# Selections stay silent until the final one so each superseded line is
+# printed exactly once.
 select_latest 0
 
-for id in $run_ids; do
-  # The watch only waits; classification comes from the conclusion query in
-  # the judgment loop below, so a watch aborted by a gh/network error cannot
-  # misreport.
-  gh run watch "$id" >/dev/null 2>&1 || true
+# "Latest" is only latest at a discovery snapshot: a re-trigger DURING a wait
+# supersedes a selected run, and its concurrency cancellation must not read
+# as FAIL. Iterate wait -> re-discover -> re-select to a fixed point (capped)
+# so the judged runs are the latest at judgment time.
+converged=0
+for round in 1 2 3 4 5; do
+  for id in $run_ids; do
+    # The watch only waits; classification comes from the conclusion query in
+    # the judgment loop below, so a watch aborted by a gh/network error
+    # cannot misreport.
+    gh run watch "$id" >/dev/null 2>&1 || true
+  done
+  # A failed or empty re-discovery is tooling trouble, same as at first
+  # discovery; silently judging the stale snapshot instead could re-report a
+  # now-superseded cancellation as a real FAIL.
+  run_lines="$(discover || true)"
+  if [ -z "$run_lines" ]; then
+    echo "re-discovery after the watch returned nothing for $sha (gh failed, or the runs vanished); refusing to judge a stale snapshot" >&2
+    exit 2
+  fi
+  prev_ids="$run_ids"
+  select_latest 0
+  if [ "$run_ids" = "$prev_ids" ]; then
+    converged=1
+    break
+  fi
 done
 
-# "Latest" was only latest at the discovery snapshot: a re-trigger DURING the
-# wait supersedes a selected run, and its concurrency cancellation must not
-# read as FAIL. One re-discovery re-selects against the post-wait reality.
-# || true and keeping the old lines: a re-discovery hiccup must not kill the
-# report that the already-watched runs can still provide.
-fresh_lines="$(discover || true)"
-[ -n "$fresh_lines" ] && run_lines="$fresh_lines"
+if [ "$converged" -ne 1 ]; then
+  echo "note: retriggering was still active after 5 discovery rounds; judging the current selection, which may itself already be superseded"
+  for id in $run_ids; do
+    gh run watch "$id" >/dev/null 2>&1 || true
+  done
+fi
+
+# Re-runs the selection on the final snapshot purely to print each older run
+# as a superseded info line.
 select_latest 1
 
 # Discovery found runs, so an empty selection here means the grouping pipe
@@ -107,12 +129,12 @@ fi
 
 # Run outcome (fail) and gh health (gherr) are tracked separately so an
 # auth/network failure is never reported as a red pipeline, and vice versa.
+# Every selected run was already watched to completion above, so this loop
+# only classifies; another wait here would reopen the supersession race the
+# fixed-point loop just closed.
 fail=0
 gherr=0
 for id in $run_ids; do
-  # A no-op wait for runs already watched above; a real wait for a run that
-  # appeared during the first watch and was selected by the re-discovery.
-  gh run watch "$id" >/dev/null 2>&1 || true
   if ! line="$(gh run view "$id" --json name,conclusion --jq '"\(.conclusion)\t\(.name)"' 2>/dev/null)"; then
     echo "gh failed while checking run $id (auth or network?)" >&2
     gherr=1
@@ -130,9 +152,9 @@ for id in $run_ids; do
       echo "skip: $name ($id)"
       ;;
     "" | null)
-      # Watch returned but the run has no conclusion: the watch was cut short.
-      # gh normalizes a null conclusion to "" in --json output; "null" guards
-      # any path where jq renders the raw JSON null instead.
+      # The run has no conclusion although its watch returned: the watch was
+      # cut short. gh normalizes a null conclusion to "" in --json output;
+      # "null" guards any path where jq renders the raw JSON null instead.
       echo "run $id ($name) is not concluded; the watch aborted early (gh or network?)" >&2
       gherr=1
       ;;

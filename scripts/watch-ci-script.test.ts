@@ -9,10 +9,10 @@ import { ROOT } from "./lib";
 // run exits 1, a gh operational failure exits 2 (never 1), a green fleet
 // exits 0, and a red run outranks a gh hiccup. The unit of judgment is the
 // workflow: only the latest run per workflow is judged (re-decided by a
-// single post-watch re-discovery, so mid-watch retriggers supersede rather
-// than FAIL), and older re-triggered runs are reported as superseded without
-// affecting the exit code. A fake `sleep` keeps the discovery-retry
-// scenarios instant.
+// capped wait/re-discover fixed-point loop, so mid-watch retriggers
+// supersede rather than FAIL), and older re-triggered runs are reported as
+// superseded without affecting the exit code. A fake `sleep` keeps the
+// discovery-retry scenarios instant.
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.sh");
 
@@ -40,6 +40,7 @@ if [ "$1 $2" = "run list" ]; then
     c=0; [ -f "\${GH_LIST_CALLS}" ] && c="$(cat "\${GH_LIST_CALLS}")"
     c=$((c + 1)); printf '%s' "$c" > "\${GH_LIST_CALLS}"
     [ "$c" -ge 2 ] && ids="\${GH_LIST_IDS2}"
+    if [ -n "\${GH_LIST_IDS3+x}" ] && [ "$c" -ge 3 ]; then ids="\${GH_LIST_IDS3}"; fi
   fi
   for lid in $ids; do
     nvar="GH_NAME_\${lid}"
@@ -238,6 +239,41 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.stdout).toContain("superseded: CI (1)");
     expect(r.stdout).toContain("pass: CI (2)");
     expect(r.stdout).not.toContain("FAIL");
+  });
+
+  test("a run appearing in the second wait batch is still converged on", () => {
+    // Wait batch 1 watches run 1; run 2 appears (second snapshot). Wait
+    // batch 2 watches run 2; run 3 appears (third snapshot). The fixed-point
+    // loop must keep re-selecting until the selection is stable and judge
+    // only run 3, with runs 1 and 2 demoted to superseded.
+    const calls = join(binDir, "list-calls-batch2");
+    const r = run({
+      GH_LIST_IDS: "1",
+      GH_LIST_IDS2: "2 1",
+      GH_LIST_IDS3: "3 2 1",
+      GH_LIST_CALLS: calls,
+      GH_WF_1: "77",
+      GH_WF_2: "77",
+      GH_WF_3: "77",
+      GH_NAME_1: "CI",
+      GH_NAME_2: "CI",
+      GH_NAME_3: "CI",
+      GH_VIEW_1: "cancelled",
+      GH_VIEW_2: "cancelled",
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("superseded: CI (2)");
+    expect(r.stdout).toContain("superseded: CI (1)");
+    expect(r.stdout).toContain("pass: CI (3)");
+    expect(r.stdout).not.toContain("FAIL");
+  });
+
+  test("a failed or empty re-discovery exits 2, never judges the stale snapshot", () => {
+    const calls = join(binDir, "list-calls-refresh");
+    const r = run({ GH_LIST_IDS: "1", GH_LIST_IDS2: "", GH_LIST_CALLS: calls });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("re-discovery after the watch returned nothing");
+    expect(r.stdout).not.toContain("pass:");
   });
 
   test("a cancelled latest run with no newer run is a real failure", () => {
