@@ -17,5 +17,6 @@ Already decided / out of scope:
 ```
 
 Skills that declare a `## Review Criteria` section contribute extra
-bullets when installed (in this collection, `/no-invalid-states` and
-`/code-standards`): expand each one's section into the review list above.
+bullets when installed (in this collection, `/no-invalid-states`,
+`/code-standards`, and `/retire-the-class`): expand each one's section
+into the review list above.
