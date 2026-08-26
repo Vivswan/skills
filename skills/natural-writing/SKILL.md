@@ -13,7 +13,7 @@ Produce prose that avoids the documented signs of AI writing, based on [Wikipedi
 
 One pattern alone can be fine. The goal is prose where the patterns don't cluster and nothing reads generated.
 
-Scope: this skill is a guideline, not law. Skimmability for the reader outranks any style rule in it (short front-loaded paragraphs, no text blobs, examples first); accuracy and reference-integrity rules always bind.
+Scope: this skill is a guideline, not law. Skimmability for the reader outranks any style rule in it (short front-loaded paragraphs, no text blobs, examples first); accuracy and reference-integrity rules always bind. Under that house standard, bold-label bullets and sparing keyword bolds are sanctioned formatting: the bold and bullet cautions in this skill apply to prose written for external readers, not to this repo's own skill docs.
 
 ## When to apply
 
