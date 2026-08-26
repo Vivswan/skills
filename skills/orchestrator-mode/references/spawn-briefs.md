@@ -11,7 +11,7 @@ Every brief includes:
 3. **The gates to run** (typecheck, lint, tests) and the instruction to run its own review loop before signaling done.
 4. **How to signal completion** (e.g. message the lead) and the handoff contract: commit finished work to the worktree's branch (never push unless the brief says so) and include the branch name, commit subjects, and any escalations in the signal. In PR-per-track mode the brief NAMES THE ACTOR explicitly, preserving both options: either the builder pushes its branch, opens the PR, reports the URL in its signal, and spawns (or requests) the CI watcher for its own pushes - or the builder stays no-push and the lead pushes from the worktree, opens the PR, and starts the watcher. The final signal is the only permitted stop.
 5. **The stop-and-wait ban** (below).
-6. **The comment rules, including the TODO ban** (below).
+6. **The comment rules and the TODO ban** (below). Comments only for what code cannot show; where the `/code-standards` skill is installed, the brief points builders at it for the full house standards.
 7. **The out-of-territory rule:** anything broken or wrong found outside the agent's file whitelist is reported in the completion signal, never fixed silently - a silent out-of-territory edit collides with another agent's territory, and a silently dropped finding is lost.
 8. **The inbox-reconciliation rule** (below): the final signal enumerates every lead message received, with one line of evidence per directive.
 9. **Scratch files go to /tmp, never the worktree.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
@@ -33,6 +33,15 @@ When a stranded agent must be nudged anyway, the nudge states the mechanism ("th
 ## Report-First for Watchers and Reviewers
 
 A watcher or reviewer's entire value is its report, and the single most common failure is a silent idle stop at the report seam - observed repeatedly even in agents whose brief ended with a report instruction. State the deliverable FIRST, not last: "your ENTIRE value is one SendMessage to the lead; a stop without it is total failure", and require that message in EVERY branch - success, failure, empty output, tooling error ("report tooling trouble as tooling trouble, never as a red pipeline"). Briefs shaped this way reported unprompted; briefs with the instruction buried needed a nudge per run.
+
+Better still, remove the seam: spawn one-shot watchers and gate reviewers UNNAMED where the harness delivers a completed agent's output to the spawner automatically (Claude Code does). A named watcher must remember to SendMessage at exactly the seam where agents strand - two report-seam strands in one production session were both named spawns whose harness would have delivered the same output for free. Reserve names for agents the lead must address mid-run.
+
+## Test Fixtures That Touch Git
+
+Two incident classes from one production session, each observed twice; every brief for a track whose tests create or run git repositories carries both rules:
+
+- **Fixture repos live in `mkdtemp` under `os.tmpdir()`, never inside the worktree, and fixture commits never land on the track's branch.** A test that runs `git init`/`git commit` in (or resolves paths into) the working tree wrote fixture commits onto the real branch and wiped the worktree twice when the fixture's cleanup ran against the enclosing repo.
+- **Every test suite that spawns git scrubs ALL `GIT_*` environment variables and pins `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null` for the child.** The pre-commit hook exports `GIT_DIR` and `GIT_INDEX_FILE` into `bun test`, silently redirecting every fixture's git calls at the REAL repository - two corruption incidents. Scrub in the test's spawn env, not the shell: the hook's variables are already in the process by the time the suite runs. The scrub also removes commit identity, so fixture commits fail on a clean CI runner: set deterministic identity AFTER the scrub, the way the landed suites do - `GIT_AUTHOR_NAME=fixture`, `GIT_AUTHOR_EMAIL=fixture@example.com`, `GIT_COMMITTER_NAME=fixture`, `GIT_COMMITTER_EMAIL=fixture@example.com`.
 
 ## Territory Binds Children
 
