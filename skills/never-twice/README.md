@@ -9,9 +9,11 @@
 | 3 | a skill or written rule | recurs, but the next agent knows | fallback |
 | 4 | human vigilance | anything | avoid |
 
-Preference decays exponentially down the ladder - rungs 1 and 2 are the acceptable tiers, rungs 3 and 4 are debts taken only when every higher rung is genuinely unreachable, converted up the ladder as soon as one becomes reachable.
+Preference decays exponentially down the ladder: rungs 1 and 2 are the acceptable tiers, rungs 3 and 4 are debts taken only when every higher rung is genuinely unreachable, converted up the ladder as soon as one becomes reachable.
 
-The test for whatever ships: if a new member of the failure class appears tomorrow, is it impossible to build (rung 1), stopped in CI (rung 2), caught by a loaded rule (rung 3), or silent - no rung held? A runtime guard that fails loudly but late, after shipping, is an instance fix, not a rung.
+The test for whatever ships: if a new member of the failure class appears tomorrow, is it impossible to build (rung 1), stopped in CI (rung 2), caught by a loaded rule (rung 3), or silent, with no rung held?
+
+A runtime guard that fails loudly but late, after shipping, is an instance fix, not a rung.
 
 ## Install
 
@@ -32,7 +34,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/never-twice -g
 - Names the failure class in one sentence; if it cannot be named, it is not a class yet
 - Finds the substrate that admits new members: convention-synced artifacts, strings where closed sets belong, state kept in prose, hand-typed rituals
 - Climbs as close to rung 1 as the task allows and ships it; a lower-rung fallback ships only with the more durable rung's gap named and tracked
-- Pairs with [`/rubber-duck-review`](../rubber-duck-review/): its Review Criteria join every second-opinion pass, asking which rung a fix sits on and whether a more durable rung was reachable
+- Pairs with [`/rubber-duck-review`](../rubber-duck-review/): its Review Criteria join every second-opinion pass and ask which rung a fix sits on and whether a more durable rung was reachable
 - Hands type-level mechanics (closed unions, branded types, typestate) to [`/no-invalid-states`](../no-invalid-states/)
 
 ## Plugin-Ready Layout
