@@ -53,7 +53,7 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
     { doc: '"pid":', script: "pid: entry.pid" },
     { doc: '"command":', script: "command: entry.command" },
     { doc: '"state":', script: "state: states.get(" },
-    { doc: "git ls-tree -r", script: '"ls-tree"' },
+    { doc: "git ls-tree -r", script: '"ls-tree", "-r"' },
   ],
   "probe.mts": [
     { doc: "probe.mts count", script: 'case "count":' },
