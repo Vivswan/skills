@@ -339,5 +339,8 @@ describe("baseline.mts pin/check", () => {
     expect(traversal.code).toBe(2);
     expect(traversal.summary?.ok).toBe(false);
     expect(traversal.stderr).toContain("path traversal");
+    const backslash = runBaseline(["pin", "/tmp/x", "/tmp/y", "..\\outside.md"]);
+    expect(backslash.code).toBe(2);
+    expect(backslash.stderr).toContain("backslash");
   });
 });

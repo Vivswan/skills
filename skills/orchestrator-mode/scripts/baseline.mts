@@ -87,6 +87,7 @@ function errorMessage(error: unknown): string {
 function relPathProblem(path: string): string | null {
   if (path === "") return "empty path";
   if (isAbsolute(path)) return "absolute path (must be relative to the root)";
+  if (path.includes("\\")) return "backslash in path (use '/' separators)";
   if (path.split("/").includes("..")) return "path traversal via '..'";
   return null;
 }
