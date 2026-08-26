@@ -69,10 +69,10 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 ### 4. Act on the printed verdict
 
 - Exit 0 from a foreground run or `--extract`: the verdict is on stdout. Triage it per steps 6-7: apply or reject each finding, and treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes. (A `--background` launch also exits 0, printing only the output path and PID; its verdict comes from `--extract`.)
-- Exit 1 (`review FAILED - relaunch`): the stream was empty, cut before a verdict event, blank, contained error events, or the reviewer exited non-zero. That is no review at all, never a clean pass - relaunch it (the captured output path is in the failure message if you want to inspect why).
+- Exit 1 (`review FAILED - relaunch`): the stream was empty, cut mid-turn, truncated on its final line, blank, contained error events, or the reviewer exited non-zero. That is no review at all, never a clean pass - relaunch it (the captured output path is in the failure message if you want to inspect why).
 - Exit 2: fix the invocation or install the missing reviewer binary; nothing was reviewed.
 - After a `--background` run exits, extract the verdict from the captured stream with the same rules and exit codes: `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>`, where `<reviewer>` is the same argument the review was launched with. It validates the reviewer and output file against what the launch recorded, and refuses to report a verdict until the run has recorded a successful exit beside the stream - so extracting too early, with the wrong reviewer, or from the wrong file fails safe.
-- Failed and background runs keep their scratch dir (under the OS tmp dir, never the working tree) for inspection; `rm -rf` it once triaged. Foreground successes clean up after themselves.
+- Failed and background runs keep their scratch dir (under the OS tmp dir, never the working tree) for inspection; `rm -rf` it once triaged. Foreground successes clean up after themselves. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the mktemp prompt file you wrote remains yours to remove.
 
 ### 5. Large change sets: fan out one review per section
 

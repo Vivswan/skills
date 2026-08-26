@@ -36,9 +36,15 @@ case "\${STUB_MODE:-ok}" in
     echo '{"type":"thread.started","thread_id":"t1"}'
     echo '{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}'
     echo '{"type":"item.completed","item":{"type":"agent_message","text":"intermediate narration"}}'
+    echo 'mid-stream garbage that is not JSON'
     echo '{"type":"item.completed","item":{"type":"command_execution","command":"git diff"}}'
     echo '{"type":"item.completed","item":{"type":"agent_message","text":"CODEX VERDICT: correct, no blocking findings"}}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  trunctail)
+    echo '{"type":"item.completed","item":{"type":"agent_message","text":"CODEX VERDICT: correct, no blocking findings"}}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    printf '{"type":"item.completed","item":{"type":"agent_'
     ;;
   cut)
     echo '{"type":"thread.started","thread_id":"t1"}'
@@ -277,6 +283,15 @@ describe("run-review.mts", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("review FAILED - relaunch");
+  });
+
+  test("a malformed trailing line voids the verdict even after turn.completed", () => {
+    // The ok-mode fixture proves mid-stream garbage stays skippable; only a
+    // truncated FINAL line may fail the review.
+    const r = run(["codex", promptFile], { STUB_MODE: "trunctail" });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("malformed trailing line");
   });
 
   test("claude stream ending without a result event exits 1", () => {

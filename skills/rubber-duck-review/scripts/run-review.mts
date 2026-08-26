@@ -10,7 +10,8 @@
  * shell), so backticks and $(...) in the prompt stay literal. stdin is
  * 'ignore' because both codex and claude otherwise block forever reading
  * additional input. The full stdout stream is captured to a scratch file
- * under os.tmpdir(), never the working tree.
+ * under os.tmpdir(), never the working tree, and the prompt is snapshotted
+ * into the same scratch dir so every review artifact cleans up together.
  *
  * --stdin-prompt (codex/claude only) serves the prompt file itself as the
  * reviewer's stdin, for restricted environments that reject large prompt
@@ -132,13 +133,18 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
   // turn.started with no matching end likewise voids any earlier verdict.
   let awaitingTurnEnd = false;
   let turnOpen = false;
+  // Mid-stream malformed lines are skippable noise, but a malformed FINAL
+  // line means the stream was truncated mid-write: void the verdict.
+  let lastLineMalformed = false;
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     let event: unknown;
     try {
       event = JSON.parse(trimmed);
+      lastLineMalformed = false;
     } catch {
+      lastLineMalformed = true;
       continue;
     }
     if (!isRecord(event)) continue;
@@ -166,6 +172,9 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
     }
   }
   if (errorEvent !== null) return { ok: false, reason: `error event: ${errorEvent}` };
+  if (lastLineMalformed) {
+    return { ok: false, reason: "malformed trailing line (stream truncated mid-write)" };
+  }
   if (verdict === null) {
     return {
       ok: false,
@@ -490,14 +499,22 @@ function main(): void {
   }
   if (prompt.trim() === "") usageError(`prompt file is empty: ${promptFile}`);
 
-  // Computed before the background branch so a bad tool/flag combination is
-  // a parent-side usage error, not a silent failure in the detached monitor.
-  const delivery = stdinPrompt ? stdinDelivery(tool, promptFile) : argvDelivery(tool, prompt);
+  // stdinDelivery owns the copilot rejection; validate up front (against the
+  // caller's path) so a bad tool/flag combination is a parent-side usage
+  // error even for --background, not a silent failure in the monitor.
+  if (stdinPrompt) stdinDelivery(tool, promptFile);
   if (background) {
     runBackground(tool, prompt, stdinPrompt);
     return;
   }
   const scratch = scratchPaths(captureDir ?? mkdtempSync(join(tmpdir(), "rubber-duck-")), tool);
+  // Snapshot the prompt into the scratch dir (in capture mode this rewrites
+  // the snapshot the parent already made): every review artifact, including
+  // any code excerpts in the prompt, lives and dies with the capture. The
+  // caller's own prompt file stays theirs.
+  const promptSnapshot = join(scratch.dir, "prompt.txt");
+  writeFileSync(promptSnapshot, prompt);
+  const delivery = stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, prompt);
   if (captureDir !== null) {
     runCapture(tool, delivery, scratch);
     return;
