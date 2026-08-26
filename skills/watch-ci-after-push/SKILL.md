@@ -8,7 +8,7 @@ metadata:
 
 # Watch CI After Push
 
-Every push gets a background watcher that reports pass/fail with failing-job logs. Never fire-and-forget a push, and never watch CI inline: an inline watch blocks the session for minutes while a background watcher costs nothing.
+Every push gets a **background watcher** that reports pass/fail with failing-job logs. Never fire-and-forget a push. Never watch CI inline: an inline watch blocks the session for minutes while a background watcher costs nothing.
 
 ## When to Apply
 
@@ -19,7 +19,8 @@ Every push gets a background watcher that reports pass/fail with failing-job log
 
 ### 1. Find the runs the push triggered
 
-Runs can take a few seconds to register after the push, so poll until they appear. Always pass the FULL 40-character SHA: `gh run list --commit` silently returns an empty list for short SHAs.
+- Poll until the runs appear: they can take a few seconds to register after the push.
+- Always pass the **FULL 40-character SHA**: `gh run list --commit` silently returns an empty list for short SHAs.
 
 ```bash
 sha="$(git rev-parse HEAD)"   # full SHA - short SHAs silently match nothing
@@ -31,11 +32,11 @@ done
 echo "$runs"
 ```
 
-An empty list after ~15s usually means no workflow triggers on this ref; say so and stop (include the repo's Actions URL).
+Still empty after ~15s? That usually means no workflow triggers on this ref. Say so and stop (include the repo's Actions URL).
 
 ### 2. Watch in the background
 
-Preferred: spawn a background subagent with this brief, then keep working. Never sleep or poll waiting for it; act on its report when the completion notification arrives:
+Preferred: spawn a **background subagent** with this brief, then keep working. Never sleep or poll waiting for it. Act on its report when the completion notification arrives:
 
 ```text
 Watch the CI runs for commit <full-sha> on <repo>: run
@@ -50,7 +51,7 @@ never go silent. You watch and report ONLY: never fix, commit, or
 push from this role.
 ```
 
-Fallback without subagents: this skill ships `scripts/watch-ci.sh` (the path is relative to the installed skill folder, not the repo under review), which does discovery, watching, and the failure report in one command - run it as a background shell command with its output redirected to a file, and read that file when it exits:
+Fallback without subagents: run the bundled `scripts/watch-ci.sh` as a background shell command. It does discovery, watching, and the failure report in one command. The path is relative to the installed skill folder, not the repo under review. Redirect its output to a file, and read that file when it exits:
 
 ```bash
 bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1
@@ -67,4 +68,5 @@ bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.o
 
 ## Fallback Without gh
 
-If the `gh` CLI is unavailable or unauthenticated, report the push and give the commit's checks URL (`https://github.com/<owner>/<repo>/commit/<sha>/checks`); do not silently skip the watch. For non-GitHub CI, use that system's equivalent watch command; the rule (background watcher, report pass/fail with failing logs) is the same.
+- `gh` unavailable or unauthenticated: report the push and give the commit's checks URL (`https://github.com/<owner>/<repo>/commit/<sha>/checks`). Do not silently skip the watch.
+- Non-GitHub CI: use that system's equivalent watch command. The rule is the same: background watcher, report pass/fail with failing logs.

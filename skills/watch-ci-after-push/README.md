@@ -1,6 +1,6 @@
 # Watch CI After Push
 
-`/watch-ci-after-push` makes every push end with a background CI watcher that reports pass/fail with failing-job logs. Never fire-and-forget a push; never watch CI inline.
+`/watch-ci-after-push` makes every push end with a **background CI watcher** that reports pass/fail with failing-job logs. Never fire-and-forget a push. Never watch CI inline.
 
 ## Install
 
