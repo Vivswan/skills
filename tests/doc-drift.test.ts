@@ -74,13 +74,23 @@ const CITED_TOKENS: Record<string, CitedToken[]> = {
       doc: "active | dormant-by-design | landing-gate | landed-swept",
       script: '["active", "dormant-by-design", "landing-gate", "landed-swept"]',
     },
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
     { doc: "lockfile", script: "${file}.lock" },
     { doc: "ledger.json init", script: 'case "init":' },
+    { doc: "ledger.json init", script: "init takes no arguments" },
     { doc: "state <worker> <state>", script: 'case "state":' },
+    { doc: "state <worker> <state>", script: "state requires <worker> <state>" },
     { doc: "flag <worker> <text>", script: 'case "flag":' },
+    { doc: "flag <worker> <text>", script: "flag requires <worker> <text>" },
     { doc: "retract <hash-prefix>", script: 'case "retract":' },
+    { doc: "retract <hash-prefix>", script: "retract requires <flag-hash-prefix>" },
     { doc: 'grant <worker> "<wording>"', script: 'case "grant":' },
+    {
+      doc: 'grant <worker> "<wording>"',
+      script: "grant requires <worker> <wording> and one or more non-empty <glob...>",
+    },
     { doc: "show [worker]", script: 'case "show":' },
+    { doc: "show [worker]", script: "show takes at most one <worker>" },
   ],
   "baseline.mts": [
     { doc: "baseline.mts pin", script: 'command === "pin"' },

@@ -23,7 +23,10 @@ With gh-stack, the lead's loop looks like (all commands non-interactive per that
 ```bash
 git config rerere.enabled true       # init prompts for this on a first TTY run; pre-enable to stay non-interactive
 git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push target; adjust origin to the writable remote
-gh stack init track-1            # bottom of the chain, before spawning builders
+gh stack init track-1 --base <mainline>  # bottom of the chain, before spawning builders.
+#                                  --base pins the trunk to the interviewed mainline: without
+#                                  it init bases the chain on the repo DEFAULT branch, wrong
+#                                  for a session targeting develop/release
 gh stack add  track-2            # one layer per track, in dependency order
 # STOP: switch the main checkout back to the mainline, spawn the builders,
 # and let them commit each layer's work. When a layer's builder signals done,
@@ -53,7 +56,12 @@ gh pr edit <num> --title "<repo-convention title>" --body-file <file>  # once pe
 gh stack merge <pr> --yes --squash   # or --merge / --rebase: the method is a per-repo choice
 #                                      read from the repo's merge policy (settings, CONTRIBUTING,
 #                                      recent history) or the setup interview - squash is only
-#                                      the example; explicit on the first merge either way
+#                                      the example; explicit on the first merge either way.
+#                                      With a merge queue, merge returns success on ENQUEUE,
+#                                      before the commits reach the mainline - enqueue is not
+#                                      landed. WATCH until the PR is actually merged (mergedAt
+#                                      set, the commit on the mainline) before the sync below:
+#                                      same logs-vs-postcondition principle as the sync check.
 gh stack sync --prune < /dev/null > /tmp/sync.out 2>&1   # restack the remainder, drop merged
 #                                      branches (same non-TTY capture as the pre-submit sync)
 gh stack submit --auto               # push the restacked remainder so successor PRs update:
@@ -63,7 +71,7 @@ gh stack submit --auto               # push the restacked remainder so successor
 git checkout <mainline>              # back to the mainline once stack operations are done
 ```
 
-Judge `gh stack sync` by BOTH signals, at both sync sites (the pre-submit restack and the post-merge sync): the exit code catches hard failures (nonzero on rebase conflicts and API failures), and the capture in `/tmp/sync.out` is scanned for ANY failure marker - "Sync aborted", "Push failed", error lines - not just the abort text, because gh-stack can print a failure, keep going, and still exit 0. Either signal failing (a nonzero exit OR any marker in the capture) stops the flow to reconcile first. Then, because absence of failure text is still not success, verify the POSTCONDITION sync existed to produce before continuing: the restacked successors actually moved - the next layer's merge-base now contains the merged commit, or the stack's status view shows the chain clean. Logs approximate; the postcondition is the truth - the same family as the exit-code lesson. And after any restack that changed a link's content, re-run the landing-gate review on that link (item 2 above) before it merges.
+Judge `gh stack sync` by BOTH signals, at both sync sites (the pre-submit restack and the post-merge sync): the exit code catches hard failures (nonzero on rebase conflicts and API failures), and the capture in `/tmp/sync.out` is scanned for ANY failure marker - "Sync aborted", "Push failed", error lines - not just the abort text, because gh-stack can print a failure, keep going, and still exit 0. Either signal failing (a nonzero exit OR any marker in the capture) stops the flow to reconcile first. Then, because absence of failure text is still not success, verify the POSTCONDITION sync existed to produce before continuing, per site: the pre-submit sync is verified by each successor's base containing the LOWER LAYER'S CURRENT TIP; the post-merge sync by the next layer's merge-base containing the MERGED MAINLINE COMMIT (or the stack status view showing the chain clean). Logs approximate; the postcondition is the truth - the same family as the exit-code lesson. And after any restack that changed a link's content, re-run the landing-gate review on that link (item 2 above) before it merges.
 
 Worktree interplay: git refuses to check out a branch already checked out in a worktree, and builders hold their layer branches in theirs. So after `init`/`add` create the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree; and the lead runs `rebase --upstack`/`sync`/`merge` from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live. Removal itself is destructive: run the removal checks in `references/worktree-hygiene.md` (fresh status codes, no live processes with cwd inside the tree) before deleting anything. Collection is a HANDOFF: stopping a builder and removing its worktree transfers ownership of that layer branch to the lead's stack operations only - review fixes on a collected layer ALWAYS go to a FRESH builder in a NEW worktree, with no collection exception to the skill's findings-go-to-a-builder rule, and never by resurrecting the removed builder (a message to a stopped agent resumes it, into a directory that no longer exists; see `references/worktree-hygiene.md` on handovers). Until collection, layer commits happen only on that layer's branch in its builder's worktree; the lead's stack operations are the only cross-layer writes.
 
