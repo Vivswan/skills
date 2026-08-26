@@ -16,6 +16,7 @@ const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "probe.mts")
 interface Evidence {
   line: number;
   text: string;
+  endLine?: number;
 }
 
 interface TokenResult {
@@ -667,5 +668,167 @@ describe("probe usage", () => {
     expect(none.out.error).toContain("usage:");
     const unknown = probe("frobnicate");
     expect(unknown.code).toBe(2);
+  });
+});
+
+describe("reflow safety", () => {
+  // The class regression: a reflow commit rewraps a markdown paragraph and
+  // splits a long token across a line boundary. A per-line matcher then
+  // reads a false 0, indistinguishable from the sentence being genuinely
+  // deleted. Whitespace-normalized matching makes a pure reflow (which only
+  // changes whitespace) unable to change any count.
+  const sentence = "the retired doctrine split long tokens across rewrapped lines";
+  const flat = `# Doc\n\nSome intro prose. ${sentence}. Trailing prose stays put.\n`;
+  const rewrapped = [
+    "# Doc",
+    "",
+    "Some intro prose. the retired doctrine split long",
+    "tokens across rewrapped lines. Trailing prose stays put.",
+    "",
+  ].join("\n");
+
+  test("a token split across a line boundary by rewrapping still counts 1", () => {
+    const dir = fixtureDir();
+    const before = join(dir, "before.md");
+    const after = join(dir, "after.md");
+    writeFileSync(before, flat);
+    writeFileSync(after, rewrapped);
+    const unwrapped = probe("count", before, sentence);
+    expect(unwrapped.code).toBe(0);
+    expect(unwrapped.out.value).toBe(1);
+    expect(unwrapped.out.evidence?.[0]?.line).toBe(3);
+    expect(unwrapped.out.evidence?.[0]?.endLine).toBeUndefined();
+    const wrapped = probe("count", after, sentence);
+    expect(wrapped.code).toBe(0);
+    expect(wrapped.out.value).toBe(1);
+    // Evidence points at the ORIGINAL first line of the span and notes the
+    // wrap via endLine.
+    expect(wrapped.out.evidence?.[0]?.line).toBe(3);
+    expect(wrapped.out.evidence?.[0]?.text).toBe(
+      "Some intro prose. the retired doctrine split long",
+    );
+    expect(wrapped.out.evidence?.[0]?.endLine).toBe(4);
+  });
+
+  test("whitespace differences inside the literal cannot change the count", () => {
+    const dir = fixtureDir();
+    const file = join(dir, "doc.md");
+    writeFileSync(file, "alpha  beta\tgamma\n");
+    const { code, out } = probe("count", file, "alpha beta gamma");
+    expect(code).toBe(0);
+    expect(out.value).toBe(1);
+    expect(out.evidence?.[0]).toEqual({ line: 1, text: "alpha  beta\tgamma" });
+  });
+
+  test("counting is per occurrence, not per line: reflow cannot merge counts", () => {
+    const dir = fixtureDir();
+    const merged = join(dir, "merged.md");
+    const split = join(dir, "split.md");
+    // The same two occurrences, once on one line and once on two: per-line
+    // counting would read 1 vs 2 and a reflow joining the lines would look
+    // like a deletion. Occurrence counting reads 2 for both.
+    writeFileSync(merged, "the marker and the marker again\n");
+    writeFileSync(split, "the marker and\nthe marker again\n");
+    const one = probe("count", merged, "marker");
+    expect(one.out.value).toBe(2);
+    expect(one.out.evidence?.map((e) => e.line)).toEqual([1, 1]);
+    const two = probe("count", split, "marker");
+    expect(two.out.value).toBe(2);
+    expect(two.out.evidence?.map((e) => e.line)).toEqual([1, 2]);
+  });
+
+  test("literal edge whitespace is boundary noise: file edges still match", () => {
+    const dir = fixtureDir();
+    const file = join(dir, "doc.md");
+    // "beta " must match even though the file ends "beta\n" (the trailing
+    // newline IS whitespace), and " alpha" must match at the very start of
+    // the file. Asymmetric edge handling here would let an expect:0 token
+    // silently pass on content that is really present.
+    writeFileSync(file, "alpha beta\n");
+    const trailing = probe("count", file, "beta ");
+    expect(trailing.code).toBe(0);
+    expect(trailing.out.value).toBe(1);
+    const leading = probe("count", file, " alpha");
+    expect(leading.code).toBe(0);
+    expect(leading.out.value).toBe(1);
+  });
+
+  test("a whitespace-only literal is a loud error, never a count", () => {
+    const dir = fixtureDir();
+    const file = join(dir, "doc.md");
+    writeFileSync(file, "some content\n");
+    const { code, out } = probe("count", file, " \t ");
+    expect(code).toBe(2);
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("non-whitespace");
+    const table = join(dir, "table.json");
+    writeFileSync(table, JSON.stringify({ "doc.md": [{ "text": "  ", "expect": ">=1" }] }));
+    const viaTokens = probe("tokens", table, dir);
+    expect(viaTokens.code).toBe(1);
+    expect(viaTokens.out.ok).toBe(false);
+    expect(viaTokens.out.error).toContain("non-whitespace");
+  });
+
+  test("lone CR, CRLF, and U+2028 breaks keep evidence line numbers honest", () => {
+    const dir = fixtureDir();
+    const file = join(dir, "doc.md");
+    // Line 1 ends with lone CR, line 2 with CRLF, line 3 with U+2028; the
+    // token spans lines 2-3. Counting only \n would misreport the span.
+    writeFileSync(file, "first line\rsecond alpha\r\nbeta third\u2028fourth line\n");
+    const { code, out } = probe("count", file, "alpha beta");
+    expect(code).toBe(0);
+    expect(out.value).toBe(1);
+    expect(out.evidence?.[0]?.line).toBe(2);
+    expect(out.evidence?.[0]?.text).toBe("second alpha");
+    expect(out.evidence?.[0]?.endLine).toBe(3);
+  });
+
+  test("release.yml still cannot match update-release.yml after normalization", () => {
+    const dir = fixtureDir();
+    const file = join(dir, "workflows.md");
+    writeFileSync(file, "The gate keeps update-release.yml wired\ninto the pipeline.\n");
+    const { code, out } = probe("count", file, "release.yml");
+    expect(code).toBe(0);
+    expect(out.ok).toBe(true);
+    expect(out.value).toBe(0);
+    expect(out.evidence).toEqual([]);
+  });
+
+  test("a genuinely deleted sentence still reads 0 on the reflowed file", () => {
+    const dir = fixtureDir();
+    const file = join(dir, "after.md");
+    writeFileSync(file, rewrapped);
+    const { code, out } = probe("count", file, "this sentence was genuinely deleted");
+    expect(code).toBe(0);
+    expect(out.ok).toBe(true);
+    expect(out.value).toBe(0);
+    expect(out.evidence).toEqual([]);
+  });
+
+  test("tokens tables survive a reflow: presence stays 1, absence stays 0", () => {
+    const dir = fixtureDir();
+    const tree = join(dir, "tree");
+    mkdirSync(tree);
+    writeFileSync(join(tree, "doc.md"), rewrapped);
+    const table = join(dir, "table.json");
+    writeFileSync(
+      table,
+      JSON.stringify({
+        "doc.md": [
+          { "text": sentence, "expect": 1 },
+          { "text": "this sentence was genuinely deleted", "expect": 0 },
+        ],
+      }),
+    );
+    const { code, out } = probe("tokens", table, tree);
+    expect(code).toBe(0);
+    expect(out.ok).toBe(true);
+    expect(out.failures).toBe(0);
+    const [kept, deleted] = out.value as TokenResult[];
+    expect(kept?.actual).toBe(1);
+    expect(kept?.evidence[0]?.line).toBe(3);
+    expect(kept?.evidence[0]?.endLine).toBe(4);
+    expect(deleted?.actual).toBe(0);
+    expect(deleted?.evidence).toEqual([]);
   });
 });
