@@ -1,6 +1,6 @@
 # No Sleep-Waiting on Subagents
 
-`/no-sleep-waiting-on-subagents` bans sleeping or polling while a background subagent runs: the harness notifies on completion, so the agent keeps working (or ends the turn) and reacts when the notification arrives.
+`/no-sleep-waiting-on-subagents` bans sleeping or polling while a background subagent runs. The harness notifies on completion. The agent keeps working (or ends the turn) and reacts when the notification arrives.
 
 ## Install
 
