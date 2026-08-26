@@ -251,6 +251,18 @@ describe("probe json-keys", () => {
     expect(same.out.ok).toBe(true);
   });
 
+  test("keys that are not valid JS identifiers are bracket-quoted", () => {
+    const dir = fixtureDir();
+    const file = join(dir, "idents.json");
+    // "1st" and "foo-bar" parse fine as JSON keys but are not JS
+    // identifiers; rendered bare they would break pasted accessor chains.
+    writeFileSync(file, '{"plain_Key$": 1, "1st": 2, "foo-bar": {"ok": 3}}\n');
+    const { code, out } = probe("json-keys", file);
+    expect(code).toBe(0);
+    expect(out.ok).toBe(true);
+    expect(out.value).toEqual(['["1st"]', '["foo-bar"]', '["foo-bar"].ok', "plain_Key$"]);
+  });
+
   test("a key literally named a[0] cannot collide with a real array index", () => {
     const dir = fixtureDir();
     const arrayFile = join(dir, "array.json");
