@@ -1,6 +1,10 @@
 # Words and phrases to avoid
 
-Term lists from [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing), grouped by pattern for scanning a draft against. The lists are written for reading, not for `grep -f`; for mechanical checks, use the two grep commands in SKILL.md step 4 (dash punctuation and tool residue are hard errors, the vocabulary grep is a prompt to reread). A hit is not automatically wrong; it means reread the sentence against the catalog and rewrite if the underlying pattern is present. Clusters of hits are the real signal.
+Term lists from [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing), grouped by pattern for scanning a draft against.
+
+- The lists are written for reading, not for `grep -f`. For mechanical checks, use the two grep commands in SKILL.md step 4 (dash punctuation and tool residue are hard errors, the vocabulary grep is a prompt to reread).
+- A hit is not automatically wrong. It means reread the sentence against the catalog and rewrite if the underlying pattern is there.
+- Clusters of hits are the real signal.
 
 ## AI vocabulary (empirically overused words)
 

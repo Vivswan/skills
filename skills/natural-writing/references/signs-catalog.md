@@ -4,8 +4,8 @@ Distilled from [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wik
 
 The page catalogs patterns observed in LLM output. Each entry below states the pattern, why it happens, and what to do instead. Two framing notes from the source apply throughout:
 
-- These are signs, not sins. Any one pattern also occurs in human writing. The tell is density and co-occurrence: where there is one, there are usually others. Aim for prose where these patterns don't cluster, not prose that nervously dodges a keyword list.
-- The pattern is the symptom. The root causes are regression to the mean (generic statements that fit any topic replace specific facts) and trained helpfulness (puffery, summaries, reassurance). Fix the cause: be specific, be neutral, stop when the information is delivered.
+- These are signs, not sins. Any one pattern also occurs in human writing. The tell is density and co-occurrence: where there is one, there are usually others. Aim for prose where these patterns don't cluster. Nervously dodging a keyword list is not the goal.
+- The pattern is the symptom. The root causes are regression to the mean (generic statements that fit any topic replace specific facts) and trained helpfulness (puffery, summaries, reassurance). Fix the cause: be specific and neutral, and stop when the information is delivered.
 
 Quoted phrases and characters inside this catalog are examples of the tells, not license to use them.
 
@@ -210,7 +210,12 @@ Instead: Cite only sources you actually retrieved and read. Verify every URL res
 
 ## 6. Process writing (summaries, commit messages, self-reports)
 
-From the page's "edit summaries" and "submission statements" sections, generalized: AI process-writing over-justifies. First-person formal paragraphs itemizing virtues ("ensured neutral tone", "adheres to guidelines"), exhaustive summaries of trivial changes, preemptive compliance claims ("This draft is neutral and well-sourced and meets all standards"), and assurances in place of evidence.
+From the page's "edit summaries" and "submission statements" sections, generalized: AI process-writing over-justifies. Watch for:
+
+- First-person formal paragraphs itemizing virtues ("ensured neutral tone", "adheres to guidelines").
+- Exhaustive summaries of trivial changes.
+- Preemptive compliance claims ("This draft is neutral and well-sourced and meets all standards").
+- Assurances in place of evidence.
 
 Instead: Commit messages and summaries state what changed and why, in the project's conventional length and register. Don't certify your own compliance; let the work show it. Never include self-congratulation or defensive justification.
 
@@ -248,4 +253,9 @@ The page lists signals that do NOT indicate AI. Don't contort writing to avoid t
 - Unsourced content (mostly human), or conversely present-but-real citations.
 - Correct markup, or bizarre markup errors of the human kind.
 
-Also from the source's caveats: humans detect AI text barely better than chance (heavy LLM users reach roughly 90%, still with false positives), automated detectors have real error rates, and human writing is drifting toward LLM style as people absorb it. So in audit mode: report signs and density, state likelihood, never claim certainty. And the deeper problems behind the signs (fabrication, unverified claims, promotion) matter more than the surface tells. Fixing only the surface makes text harder to check, not better.
+Also from the source's caveats:
+
+- Humans detect AI text barely better than chance (heavy LLM users reach roughly 90%, still with false positives), and automated detectors have real error rates.
+- Human writing is drifting toward LLM style as people absorb it.
+- So in audit mode: report signs and density, state likelihood, never claim certainty.
+- The deeper problems behind the signs (fabrication, unverified claims, promotion) matter more than the surface tells. Fixing only the surface makes text harder to check, not better.
