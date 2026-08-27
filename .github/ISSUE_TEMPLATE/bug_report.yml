@@ -11,7 +11,6 @@ body:
         - code-standards
         - craft-skills-and-memories
         - no-invalid-states
-        - no-sleep-waiting-on-subagents
         - natural-writing
         - orchestrator-mode
         - never-twice

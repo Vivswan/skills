@@ -18,7 +18,6 @@ The agent applies these on its own when the task matches:
 - [/craft-skills-and-memories](./skills/craft-skills-and-memories/) - Create and repair skills and memories at their canonical source
 - [/never-twice](./skills/never-twice/) - Climb every repeated failure to the most durable fix reachable
 - [/no-invalid-states](./skills/no-invalid-states/) - Invariants in the type system instead of runtime checks
-- [/no-sleep-waiting-on-subagents](./skills/no-sleep-waiting-on-subagents/) - React to completion notifications, never sleep or poll
 - [/pr-and-issue-discipline](./skills/pr-and-issue-discipline/) - Visualization-first PRs and issues, draft discipline, human-gated merges
 - [/rubber-duck-review](./skills/rubber-duck-review/) - Cross-model, read-only second-opinion code review
 - [/verify-with-controls](./skills/verify-with-controls/) - Controls and evidence before a zero, alarm, success claim, or stillness becomes a conclusion
@@ -53,8 +52,6 @@ graph LR
   nt --> nis
   om --> vwc["/verify-with-controls"]
   vwc --> rdr
-  om --> nsw["/no-sleep-waiting-on-subagents"]
-  nsw --> wca
   csm["/craft-skills-and-memories"] --> nw["/natural-writing"]
 ```
 
