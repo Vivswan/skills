@@ -108,6 +108,31 @@ describe("install-hooks", () => {
     }
   });
 
+  test("an inherited GIT_CONFIG file is ignored and left byte-identical", () => {
+    // GIT_CONFIG points `git config` at an arbitrary file the way --file
+    // does. Inherited, it would make the local unset edit that file and
+    // blind the survivor check while the REAL local hooksPath keeps
+    // shadowing the install. The installer must scrub it: the decoy stays
+    // byte-identical, the real local hooksPath is removed, the dispatcher
+    // lands in .git/hooks.
+    const repo = makeRepo();
+    const decoyDir = mkdtempSync(join(tmpdir(), "install-hooks-decoy-"));
+    const decoy = join(decoyDir, "gitconfig");
+    try {
+      writeFileSync(decoy, "[core]\n\thooksPath = /decoy/hooks\n");
+      const decoyBefore = readFileSync(decoy, "utf-8");
+      expect(sh(repo, "git", "config", "core.hooksPath", ".husky/_").code).toBe(0);
+      const r = install(repo, { GIT_CONFIG: decoy });
+      expect(r.code).toBe(0);
+      expect(readFileSync(decoy, "utf-8")).toBe(decoyBefore);
+      expect(sh(repo, "git", "config", "--local", "core.hooksPath").code).toBe(1); // unset
+      expect(readFileSync(join(repo, ".git", "hooks", "pre-commit"), "utf-8")).toBe(DISPATCHER);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(decoyDir, { recursive: true, force: true });
+    }
+  });
+
   test("outside a git repository it skips without failing the install", () => {
     const dir = mkdtempSync(join(tmpdir(), "install-hooks-norepo-"));
     try {

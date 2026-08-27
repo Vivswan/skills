@@ -25,20 +25,33 @@ import { ROOT } from "./lib";
 
 // The repository is the one containing the working directory (`bun install`
 // runs prepare at the package root); the dispatcher source always comes from
-// this checkout. Only the repo-REDIRECTING variables are dropped for git
-// spawns (a leaked GIT_DIR must not point the installation at some other
-// repository); GIT_CONFIG_* stay visible, because the same config that
-// applies here decides where hooks resolve at commit time.
-const REDIRECTING = new Set([
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_COMMON_DIR",
-  "GIT_OBJECT_DIRECTORY",
-]);
+// this checkout. Variables that would point git spawns AWAY from this
+// repository or its real configuration are dropped: GIT_DIR and friends
+// redirect the repository itself, GIT_CONFIG points `git config` at an
+// arbitrary file (like --file) - inherited, it would make the unset below
+// edit an unrelated user file and blind the survivor check - and
+// GIT_CONFIG_COUNT/GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n inject transient
+// entries the same way. GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM stay visible:
+// they select which real global/system files apply.
+function redirectsGit(key: string): boolean {
+  const k = key.toUpperCase();
+  return (
+    [
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_COMMON_DIR",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_CONFIG",
+      "GIT_CONFIG_COUNT",
+    ].includes(k) ||
+    k.startsWith("GIT_CONFIG_KEY_") ||
+    k.startsWith("GIT_CONFIG_VALUE_")
+  );
+}
 const env: Record<string, string> = {};
 for (const [key, value] of Object.entries(process.env)) {
-  if (value !== undefined && !REDIRECTING.has(key.toUpperCase())) env[key] = value;
+  if (value !== undefined && !redirectsGit(key)) env[key] = value;
 }
 
 function git(...args: string[]) {
@@ -51,9 +64,10 @@ if (git("rev-parse", "--git-dir").code !== 0) {
   process.exit(0);
 }
 
-// Remove the stale LOCAL hooksPath from earlier wiring. Exit 5 means
-// "nothing to unset"; anything else is a failure.
-const unset = git("config", "--unset-all", "core.hooksPath");
+// Remove the stale hooksPath from earlier wiring, pinned to the LOCAL scope
+// so no environment or option can retarget the edit. Exit 5 means "nothing
+// to unset"; anything else is a failure.
+const unset = git("config", "--local", "--unset-all", "core.hooksPath");
 if (unset.code !== 0 && unset.code !== 5) {
   console.error(`install-hooks: could not remove stale core.hooksPath (git exited ${unset.code}).`);
   process.exit(1);
