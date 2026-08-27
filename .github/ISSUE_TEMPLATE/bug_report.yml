@@ -16,7 +16,6 @@ body:
         - orchestrator-mode
         - never-twice
         - pr-and-issue-discipline
-        - review-before-commit
         - rubber-duck-review
         - verify-with-controls
         - watch-ci-after-push

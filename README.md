@@ -20,7 +20,6 @@ The agent applies these on its own when the task matches:
 - [/no-invalid-states](./skills/no-invalid-states/) - Invariants in the type system instead of runtime checks
 - [/no-sleep-waiting-on-subagents](./skills/no-sleep-waiting-on-subagents/) - React to completion notifications, never sleep or poll
 - [/pr-and-issue-discipline](./skills/pr-and-issue-discipline/) - Visualization-first PRs and issues, draft discipline, human-gated merges
-- [/review-before-commit](./skills/review-before-commit/) - Independent review converges before any commit
 - [/rubber-duck-review](./skills/rubber-duck-review/) - Cross-model, read-only second-opinion code review
 - [/verify-with-controls](./skills/verify-with-controls/) - Controls and evidence before a zero, alarm, success claim, or stillness becomes a conclusion
 - [/watch-ci-after-push](./skills/watch-ci-after-push/) - Background CI watcher after every push
@@ -38,19 +37,15 @@ How the skills reference each other (an arrow means "mentions and hands off to, 
 ```mermaid
 graph LR
   om["/orchestrator-mode"] --> rdr["/rubber-duck-review"]
-  om --> rbc["/review-before-commit"]
   om --> wca["/watch-ci-after-push"]
   om --> cs["/code-standards"]
   om --> pid["/pr-and-issue-discipline"]
   om --> wh["/worktree-hygiene"]
   pid --> wca
-  pid --> rbc
-  rbc --> rdr
-  rbc --> wca
-  rbc --> cs
-  rbc --> nis["/no-invalid-states"]
+  pid --> rdr
+  cs --> rdr
   rdr --> cs
-  rdr --> nis
+  rdr --> nis["/no-invalid-states"]
   rdr --> nt
   nis --> rdr
   cs --> nis

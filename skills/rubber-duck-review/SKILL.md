@@ -37,7 +37,7 @@ Use this skill when someone asks for:
 
 - Ask for a review of the relevant changes and surrounding context only.
 - Always include: `This is a review-only task. Do not edit, write, or modify any files. Only read and report findings.`
-- Tell it how to see the change (e.g. "run `git --no-pager diff HEAD` and read the new files") rather than pasting diffs; it follows imports and cross-file behavior better that way.
+- Tell it how to see the change, naming the same target the convergence gate scopes to (e.g. "run `git --no-pager diff --cached` and read the new files" before a commit, or "run `git --no-pager diff <base>...HEAD`" with the branch's actual base for a branch or PR) rather than pasting diffs; it follows imports and cross-file behavior better that way. `git diff HEAD` is neither: empty on a committed branch, and polluted by unstaged edits before a commit.
 - Ask the reviewer to look for:
   - Correctness issues
   - Future-proofing risks
@@ -116,7 +116,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 ### 7. Re-review until it converges
 
 - After applying fixes, **re-run the review** on the updated state, one review per section, not a single overall pass.
-- Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable. Treat that convergence as the gate; the `/review-before-commit` skill owns holding the commit until it opens.
+- Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable. That convergence IS the gate: nothing commits or lands until the review has converged on the exact final content of the change being landed (the staged diff at commit time - Git commits the index, not the tree; the branch or PR diff at merge time).
 
 ### 8. If these instructions don't work, fix the skill
 

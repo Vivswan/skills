@@ -28,5 +28,5 @@ Code and comments never reference planning artifacts: work-package names, spike 
 
 - Before keeping or writing any comment, ask what it says that the code does not; if the answer is nothing, remove it or don't write it.
 - Treat any multi-line comment defending a hack, special case, or fragile assumption as a signal to redesign that code until the comment becomes unnecessary.
-- Run these checks explicitly in every pre-commit review pass (see the `/review-before-commit` skill), and propagate them to every subagent that writes code.
+- Run these checks explicitly in every pre-commit review pass (see the `/rubber-duck-review` skill), and propagate them to every subagent that writes code.
 - When sweeping a whole repo, skip generated files and symlinked files.

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Review Before Commit"
-  short_description: "Independent review converges before any commit."
-  brand_color: "#0F766E"

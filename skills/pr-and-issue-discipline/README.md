@@ -28,7 +28,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/pr-and-issue-d
 - Flips drafts ready on convergence and back on commit-requiring work, and offers only converged PRs for merge
 - Loops each open PR to comment convergence: CI green, every thread resolved, the latest round quiet
 - Defaults the merge to the human hand, with two narrow standing exceptions and an exit-conditioned landing
-- Hands the CI watch to [`/watch-ci-after-push`](../watch-ci-after-push/) and the pre-landing review to [`/review-before-commit`](../review-before-commit/), where installed
+- Hands the CI watch to [`/watch-ci-after-push`](../watch-ci-after-push/) and the pre-landing review to [`/rubber-duck-review`](../rubber-duck-review/), where installed
 - Pairs with [`/orchestrator-mode`](../orchestrator-mode/), which runs this loop on every PR in a fleet and adds the fleet-specific routing on top
 
 ## Plugin-Ready Layout
