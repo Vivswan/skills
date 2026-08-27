@@ -19,6 +19,7 @@ body:
         - review-before-commit
         - rubber-duck-review
         - watch-ci-after-push
+        - worktree-hygiene
         - Not skill-specific (catalog, install, or tooling)
     validations:
       required: true

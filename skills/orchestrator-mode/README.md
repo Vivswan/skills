@@ -18,10 +18,11 @@ Directly from this folder:
 npx skills add https://github.com/Vivswan/skills/tree/main/skills/orchestrator-mode -g
 ```
 
-The shared PR mechanics (body format, draft discipline, comment convergence, who merges) live in the companion [`/pr-and-issue-discipline`](../pr-and-issue-discipline/) skill; a single-skill install should add it too:
+The shared PR mechanics (body format, draft discipline, comment convergence, who merges) live in the companion [`/pr-and-issue-discipline`](../pr-and-issue-discipline/) skill, and the worktree rules (removal safety, handovers, shared trees) in [`/worktree-hygiene`](../worktree-hygiene/); a single-skill install should add both:
 
 ```bash
 npx skills add Vivswan/skills -g --skill pr-and-issue-discipline
+npx skills add Vivswan/skills -g --skill worktree-hygiene
 ```
 
 ## What It Does
@@ -31,7 +32,7 @@ npx skills add Vivswan/skills -g --skill pr-and-issue-discipline
 - Delegates review loops to builders and gates each landing with an integration review
 - Gates every landing: direct pushes onto a mainline or PRs with per-track bases (independent or stacked), with reviews and CI watchers either way
 - Keeps a fleet monitor watching for stalled or dead agents
-- Sweeps finished agents, tasks, and worktrees so only live work stays visible
+- Sweeps finished agents, tasks, and worktrees so only live work stays visible, under the [`/worktree-hygiene`](../worktree-hygiene/) rules for removals, handovers, and shared trees
 
 ## Layout
 
@@ -39,7 +40,6 @@ npx skills add Vivswan/skills -g --skill pr-and-issue-discipline
 - [`references/spawn-briefs.md`](./references/spawn-briefs.md): what every spawn brief must contain
 - [`references/fleet-monitor.md`](./references/fleet-monitor.md): the monitor's script wiring and liveness judgment
 - [`references/landing.md`](./references/landing.md): the two landing gates (direct commits; PRs with per-track independent or stacked bases)
-- [`references/worktree-hygiene.md`](./references/worktree-hygiene.md): handovers, removals, and file ownership
 - [`scripts/`](./scripts): the fleet instruments, `sweep.mts`, `probe.mts`, `ledger.mts`, and `baseline.mts` (run with bun; node 24.3+ also works, and older node exits 0 without doing the work because it lacks a working `import.meta.main`)
 
 ## Plugin-Ready Layout

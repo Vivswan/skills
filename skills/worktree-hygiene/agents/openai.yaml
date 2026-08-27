@@ -1,0 +1,7 @@
+# Codex sidecar for this skill. The interface block mirrors
+# .codex-plugin/plugin.json (displayName, shortDescription, brandColor) and
+# the SKILL.md H1; the smoke test keeps them identical.
+interface:
+  display_name: "Worktree Hygiene"
+  short_description: "Safe removal, handover, and sharing of git worktrees."
+  brand_color: "#166534"
