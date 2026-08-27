@@ -40,21 +40,23 @@ import { ROOT } from "./lib";
 
 // The repository is the one containing the working directory (`bun install`
 // runs prepare at the package root); the dispatcher source always comes from
-// this checkout. git spawns get a minimal GIT_* surface: EVERY GIT_*
-// variable is dropped except the two real-config file selectors, which the
-// survivor check must see (and which tests inject fixtures through).
+// this checkout. git spawns get NO GIT_* variables at all: the survivor
+// check below must see the configuration that a normal, unmasked `git
+// commit` will see, and every GIT_* variable is a transient redirection
+// away from exactly that - GIT_DIR points at another repository, GIT_CONFIG
+// at an arbitrary file, GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM/
+// GIT_CONFIG_NOSYSTEM select or hide the real global and system files
+// (`GIT_CONFIG_GLOBAL=/dev/null bun install` would pass the check and leave
+// the dispatcher shadowed for every later unmasked commit), and
+// GIT_CONFIG_COUNT/KEY_n/VALUE_n/PARAMETERS inject transient entries.
 // Unknown GIT_* variables default to scrubbed (fail-safe), not inherited
-// (fail-open): an inherited GIT_CONFIG once blinded the survivor check by
-// retargeting `git config` at an arbitrary file, GIT_CONFIG_NOSYSTEM could
-// hide a system hooksPath, GIT_CONFIG_COUNT/KEY_n/VALUE_n and
-// GIT_CONFIG_PARAMETERS inject transient entries, GIT_DIR redirects the
-// repository itself - a blocklist loses this game one variable at a time.
-const KEEP = new Set(["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"]);
+// (fail-open) - a blocklist loses this game one variable at a time. Tests
+// isolate the global scope through HOME/XDG_CONFIG_HOME instead, which the
+// installer reads the same way commit-time git does.
 const env: Record<string, string> = {};
 for (const [key, value] of Object.entries(process.env)) {
   if (value === undefined) continue;
-  const upper = key.toUpperCase();
-  if (upper.startsWith("GIT_") && !KEEP.has(upper)) continue;
+  if (key.toUpperCase().startsWith("GIT_")) continue;
   env[key] = value;
 }
 
@@ -161,14 +163,11 @@ if (existing?.isFile() && !readFileSync(target, "utf-8").includes("scripts/insta
   );
 }
 
-// --- Mutations: every abort condition has passed.
-
-if (local.code === 0) {
-  const unset = git("config", "--local", "--unset-all", "core.hooksPath");
-  if (unset.code !== 0) {
-    fail(`could not remove the husky core.hooksPath (git exited ${unset.code}).`);
-  }
-}
+// --- Mutations: every abort condition has passed. Publish first, unwire
+// last: if any installation step fails (read-only hooks dir, full disk),
+// the husky hooksPath is still in place and commits stay checked - never a
+// state with husky unwired and no dispatcher installed. Until the unset
+// lands, the freshly installed dispatcher is merely shadowed by husky.
 
 // Atomic replacement: a plain copy TRUNCATES the live shared hook first, so
 // a commit racing the install would execute an empty file and pass
@@ -181,4 +180,11 @@ try {
   renameSync(staging, target);
 } finally {
   rmSync(staging, { force: true });
+}
+
+if (local.code === 0) {
+  const unset = git("config", "--local", "--unset-all", "core.hooksPath");
+  if (unset.code !== 0) {
+    fail(`could not remove the husky core.hooksPath (git exited ${unset.code}).`);
+  }
 }

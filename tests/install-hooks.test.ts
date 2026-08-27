@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -40,10 +41,20 @@ function makeRepo(): string {
   return dir;
 }
 
+// Every install runs against an isolated HOME/XDG_CONFIG_HOME: the
+// installer deliberately scrubs ALL GIT_* selectors (they are transient and
+// diverge from what unmasked commits see), so global-scope fixtures are
+// injected the way real machines carry them - as files under HOME.
+const cleanHome = mkdtempSync(join(tmpdir(), "install-hooks-home-"));
+
+function homeEnv(home: string): Record<string, string> {
+  return { HOME: home, XDG_CONFIG_HOME: join(home, ".config") };
+}
+
 function install(cwd: string, env: Record<string, string> = {}) {
   const result = Bun.spawnSync([process.execPath, SCRIPT], {
     cwd,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...homeEnv(cleanHome), ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -247,19 +258,77 @@ describe("install-hooks", () => {
     // A local unset cannot remove a global/system/include/worktree value;
     // installing anyway would be shadowed at commit time - or clobber the
     // user-wide hook location the config points at. The installer must
-    // refuse and name the survivor.
+    // refuse and name the survivor. The fixture lives where a real machine
+    // carries it: in HOME/.gitconfig.
     const repo = makeRepo();
-    const globalConfig = join(mkdtempSync(join(tmpdir(), "install-hooks-global-")), "gitconfig");
+    const home = mkdtempSync(join(tmpdir(), "install-hooks-global-"));
     try {
-      writeFileSync(globalConfig, "[core]\n\thooksPath = /somewhere/user-hooks\n");
-      const r = install(repo, { GIT_CONFIG_GLOBAL: globalConfig });
+      writeFileSync(join(home, ".gitconfig"), "[core]\n\thooksPath = /somewhere/user-hooks\n");
+      const r = install(repo, homeEnv(home));
       expect(r.code).toBe(1);
       expect(r.stderr).toContain("core.hooksPath is still set outside the repository scope");
       expect(r.stderr).toContain("global");
       expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
-      rmSync(join(globalConfig, ".."), { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a transient GIT_CONFIG_GLOBAL mask cannot hide the global hooksPath", () => {
+    // The reported bypass: `GIT_CONFIG_GLOBAL=/dev/null bun install` would
+    // blind the survivor check while every later UNMASKED commit still
+    // resolves ~/.gitconfig's hooksPath and silently skips the dispatcher.
+    // The installer scrubs the selector, reads the real global file, and
+    // aborts.
+    const repo = makeRepo();
+    const home = mkdtempSync(join(tmpdir(), "install-hooks-global-"));
+    try {
+      writeFileSync(join(home, ".gitconfig"), "[core]\n\thooksPath = /somewhere/user-hooks\n");
+      const r = install(repo, { ...homeEnv(home), GIT_CONFIG_GLOBAL: "/dev/null" });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("core.hooksPath is still set outside the repository scope");
+      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a transient GIT_CONFIG_SYSTEM selector is inert", () => {
+    // The inverse direction: a transient selector pointing AT a hooksPath
+    // file must not abort an install that unmasked commits would be fine
+    // with - commit-time git never sees that selector either.
+    const repo = makeRepo();
+    const sysDir = mkdtempSync(join(tmpdir(), "install-hooks-system-"));
+    const sysConfig = join(sysDir, "gitconfig");
+    try {
+      writeFileSync(sysConfig, "[core]\n\thooksPath = /system/hooks\n");
+      const r = install(repo, { GIT_CONFIG_SYSTEM: sysConfig });
+      expect(r.code).toBe(0);
+      expect(readFileSync(join(repo, ".git", "hooks", "pre-commit"), "utf-8")).toBe(DISPATCHER);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(sysDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed installation step leaves the husky wiring in place", () => {
+    // Publish first, unwire last: when the dispatcher cannot be written
+    // (read-only hooks directory here), the husky hooksPath must survive so
+    // commits stay checked - never unwired-with-nothing-installed.
+    const repo = makeRepo();
+    const hooksDir = join(repo, ".git", "hooks");
+    try {
+      expect(sh(repo, "git", "config", "core.hooksPath", ".husky/_").code).toBe(0);
+      chmodSync(hooksDir, 0o555);
+      const r = install(repo);
+      expect(r.code).not.toBe(0);
+      expect(sh(repo, "git", "config", "core.hooksPath").stdout).toBe(".husky/_");
+      expect(existsSync(join(hooksDir, "pre-commit"))).toBe(false);
+    } finally {
+      chmodSync(hooksDir, 0o755);
+      rmSync(repo, { recursive: true, force: true });
     }
   });
 
@@ -285,27 +354,6 @@ describe("install-hooks", () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
       rmSync(decoyDir, { recursive: true, force: true });
-    }
-  });
-
-  test("an inherited GIT_CONFIG_NOSYSTEM cannot hide a system hooksPath", () => {
-    // GIT_CONFIG_NOSYSTEM=1 makes git ignore the system scope; inherited, it
-    // would blind the survivor check while later git invocations (without
-    // it) still resolve the system hooksPath and shadow the dispatcher. The
-    // installer must scrub it and refuse on the system-scope survivor.
-    const repo = makeRepo();
-    const sysDir = mkdtempSync(join(tmpdir(), "install-hooks-system-"));
-    const sysConfig = join(sysDir, "gitconfig");
-    try {
-      writeFileSync(sysConfig, "[core]\n\thooksPath = /system/hooks\n");
-      const r = install(repo, { GIT_CONFIG_SYSTEM: sysConfig, GIT_CONFIG_NOSYSTEM: "1" });
-      expect(r.code).toBe(1);
-      expect(r.stderr).toContain("core.hooksPath is still set outside the repository scope");
-      expect(r.stderr).toContain("system");
-      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-      rmSync(sysDir, { recursive: true, force: true });
     }
   });
 
