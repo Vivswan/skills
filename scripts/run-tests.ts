@@ -61,12 +61,19 @@ try {
       stderr: "pipe",
     },
   );
-  // Tee stderr (where bun test reports results) while keeping a copy: the
-  // zero-test check below needs the "Ran N tests" summary line.
+  // Tee stderr (where bun test reports results) while keeping only a
+  // bounded TAIL copy: the zero-test check below needs just the final
+  // "Ran N tests" summary line, and an unbounded copy would scale the
+  // launcher's memory with the run's failure output. Backpressure is
+  // honored - ignoring a false from write() would queue every chunk in
+  // process memory a second time.
   const decoder = new TextDecoder();
+  const SUMMARY_TAIL_CHARS = 65536;
   for await (const chunk of child.stderr) {
-    process.stderr.write(chunk);
-    summary += decoder.decode(chunk, { stream: true });
+    if (!process.stderr.write(chunk)) {
+      await new Promise((resolve) => process.stderr.once("drain", resolve));
+    }
+    summary = (summary + decoder.decode(chunk, { stream: true })).slice(-SUMMARY_TAIL_CHARS);
   }
   summary += decoder.decode();
   status = await child.exited;

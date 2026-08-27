@@ -1,5 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
@@ -161,6 +169,48 @@ describe("fixture hygiene", () => {
     expect(sh(outer, "git", "rev-parse", "HEAD").trim()).toBe(outerHead);
     expect(sh(outer, "git", "status", "--porcelain").trim()).toBe("");
     expect(sh(outer, "git", "log", "--format=%s").trim()).toBe("outer base");
+  });
+
+  test("child git env is scrubbed case-insensitively, with optional locks pinned off", () => {
+    // Windows environment names are case-insensitive, so a leaked
+    // git_config_count or Git_Dir would be honored there while slipping past
+    // a case-sensitive scrub. A stub git records the environment it ACTUALLY
+    // received: no GIT_* survivor in any casing, and the probe's fixed pins
+    // present - including GIT_OPTIONAL_LOCKS=0, so a probe never contends a
+    // worker's index lock.
+    const dir = fixtureDir();
+    const dump = join(dir, "env-dump");
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir);
+    writeFileSync(
+      join(binDir, "git"),
+      `#!/usr/bin/env bash
+env >> "$PROBE_TEST_ENV_DUMP"
+case "$3" in
+  rev-parse) echo deadbeef;;
+esac
+exit 0
+`,
+    );
+    chmodSync(join(binDir, "git"), 0o755);
+    const r = probeWithEnv(
+      {
+        PATH: `${binDir}:${process.env.PATH}`,
+        PROBE_TEST_ENV_DUMP: dump,
+        git_config_count: "1",
+        Git_Dir: join(dir, "nowhere"),
+        GIT_TRACE: "1",
+      },
+      ["set", dir, "deadbeef"],
+    );
+    expect(r.code).toBe(0);
+    const seen = readFileSync(dump, "utf-8");
+    expect(seen).not.toContain("git_config_count=");
+    expect(seen).not.toContain("Git_Dir=");
+    expect(seen).not.toContain("GIT_TRACE=");
+    expect(seen).toContain("GIT_OPTIONAL_LOCKS=0");
+    expect(seen).toContain("GIT_CONFIG_GLOBAL=/dev/null");
+    expect(seen).toContain("GIT_CONFIG_SYSTEM=/dev/null");
   });
 });
 
