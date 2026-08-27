@@ -1,0 +1,6 @@
+# [test].preload verifies - by spawning probe children - that any bun test
+# run started here has a hermetic git birth environment, and refuses the run
+# otherwise; the canonical entry point is `bun run test`. See tests/preload.ts.
+
+[test]
+preload = ["./tests/preload.ts"]

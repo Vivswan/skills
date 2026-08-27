@@ -1,0 +1,25 @@
+#!/bin/sh
+# managed-by: Vivswan/skills scripts/install-hooks.ts - do not edit the installed copy
+# Pre-commit dispatcher, installed into the repository's shared hooks
+# directory by `bun install` (prepare -> scripts/install-hooks.ts); this file
+# in .githooks/ is the source of truth and the installed copy is overwritten
+# on every install (recognized by the exact managed-by marker above). git
+# runs pre-commit at the top of the working tree, so the hook logic is
+# resolved from the current checkout: every worktree runs its own
+# .githooks/pre-commit.mts, and a checkout without one fails the commit
+# instead of silently skipping the checks.
+set -u
+
+if [ ! -f .githooks/pre-commit.mts ]; then
+	echo "pre-commit: this checkout has no .githooks/pre-commit.mts; refusing to commit unchecked." >&2
+	echo "Update the checkout (rebase or merge a main that ships .githooks) and retry." >&2
+	exit 1
+fi
+
+if ! command -v bun >/dev/null 2>&1; then
+	echo "pre-commit: bun not found on PATH; the hook cannot run." >&2
+	echo "Install it from https://bun.sh (curl -fsSL https://bun.sh/install | bash) and retry." >&2
+	exit 1
+fi
+
+exec bun .githooks/pre-commit.mts "$@"
