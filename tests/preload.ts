@@ -50,14 +50,21 @@ if (discovery.exitCode === 0) {
 // a few variables would miss redirects the discovery probe cannot see (a
 // stray GIT_CONFIG pointing at the real .git/config, say: discovery still
 // fails from a scratch cwd, yet a default-env `git config` write would land
-// in the real file). Measured with env -0 so multi-line values cannot split.
-const dump = Bun.spawnSync(["env", "-0"], { stdout: "pipe" });
+// in the real file). Measured by a Bun child reporting its own birth
+// environment as JSON - portable where `env -0` is not (BSD env) - and
+// fail-closed on any probe failure.
+const dump = Bun.spawnSync(
+  [process.execPath, "-e", "process.stdout.write(JSON.stringify(process.env))"],
+  { stdout: "pipe", stderr: "pipe" },
+);
+if (dump.exitCode !== 0) {
+  refuse(`the birth-environment probe child failed (exit ${dump.exitCode})`);
+}
 const childGit = new Map<string, string>();
-for (const entry of dump.stdout.toString().split("\0")) {
-  const eq = entry.indexOf("=");
-  if (eq === -1) continue;
-  const key = entry.slice(0, eq);
-  if (key.toUpperCase().startsWith("GIT_")) childGit.set(key, entry.slice(eq + 1));
+for (const [key, value] of Object.entries(
+  JSON.parse(dump.stdout.toString()) as Record<string, string>,
+)) {
+  if (key.toUpperCase().startsWith("GIT_")) childGit.set(key, value);
 }
 const expectedGit = new Map(
   Object.entries(hermeticGitEnv({})).filter(([key]) => key.startsWith("GIT_")),

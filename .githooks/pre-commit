@@ -1,11 +1,13 @@
 #!/bin/sh
+# managed-by: Vivswan/skills scripts/install-hooks.ts - do not edit the installed copy
 # Pre-commit dispatcher, installed into the repository's shared hooks
 # directory by `bun install` (prepare -> scripts/install-hooks.ts); this file
 # in .githooks/ is the source of truth and the installed copy is overwritten
-# on every install. git runs pre-commit at the top of the working tree, so
-# the hook logic is resolved from the current checkout: every worktree runs
-# its own .githooks/pre-commit.mts, and a checkout without one fails the
-# commit instead of silently skipping the checks.
+# on every install (recognized by the exact managed-by marker above). git
+# runs pre-commit at the top of the working tree, so the hook logic is
+# resolved from the current checkout: every worktree runs its own
+# .githooks/pre-commit.mts, and a checkout without one fails the commit
+# instead of silently skipping the checks.
 set -u
 
 if [ ! -f .githooks/pre-commit.mts ]; then

@@ -282,12 +282,32 @@ describe("install-hooks", () => {
     }
   });
 
+  test("a user hook that merely INVOKES the installer script survives", () => {
+    // Mentioning the script's path is not ownership: only the exact
+    // managed-by marker line identifies our installs.
+    const repo = makeRepo();
+    try {
+      const target = join(repo, ".git", "hooks", "pre-commit");
+      const userHook = "#!/bin/sh\nbun scripts/install-hooks.ts # user wrapper\n";
+      writeFileSync(target, userHook);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("refusing to overwrite");
+      expect(readFileSync(target, "utf-8")).toBe(userHook);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("a previous install of our own dispatcher is overwritten (upgrade path)", () => {
     const repo = makeRepo();
     try {
       const target = join(repo, ".git", "hooks", "pre-commit");
-      // An older dispatcher version: recognizable by the self-description.
-      writeFileSync(target, "#!/bin/sh\n# old version, installed by scripts/install-hooks.ts\n");
+      // An older dispatcher version: recognizable by the exact marker line.
+      writeFileSync(
+        target,
+        "#!/bin/sh\n# managed-by: Vivswan/skills scripts/install-hooks.ts - do not edit the installed copy\n# old version\n",
+      );
       expect(install(repo).code).toBe(0);
       expect(readFileSync(target, "utf-8")).toBe(DISPATCHER);
     } finally {

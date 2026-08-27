@@ -166,10 +166,18 @@ const hooksDir = join(
 );
 const target = join(hooksDir, "pre-commit");
 
-// Overwrite only our own previous installs (recognized by the dispatcher's
-// self-description). lstat, not stat: a symlink here - even a dangling one -
-// is someone else's wiring, and following it would judge (and later write)
-// a file OUTSIDE the hooks directory.
+// Overwrite only our own previous installs, recognized by the dispatcher's
+// EXACT managed-by marker line - a mere mention of this script's path is
+// not ownership (a user hook that invokes or documents it must survive).
+// The source is self-checked for the marker so the two cannot drift apart.
+// lstat, not stat: a symlink here - even a dangling one - is someone else's
+// wiring, and following it would judge (and later write) a file OUTSIDE the
+// hooks directory.
+const MARKER = "# managed-by: Vivswan/skills scripts/install-hooks.ts";
+const dispatcherSource = readFileSync(join(ROOT, ".githooks", "pre-commit"), "utf-8");
+if (!dispatcherSource.includes(MARKER)) {
+  fail(".githooks/pre-commit lost its managed-by marker; restore it before installing.");
+}
 const existing = lstatSync(target, { throwIfNoEntry: false });
 if (existing && !existing.isFile()) {
   fail(
@@ -177,7 +185,7 @@ if (existing && !existing.isFile()) {
       "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
   );
 }
-if (existing?.isFile() && !readFileSync(target, "utf-8").includes("scripts/install-hooks.ts")) {
+if (existing?.isFile() && !readFileSync(target, "utf-8").includes(MARKER)) {
   fail(
     `${target} already exists and was not installed by this repo; refusing to overwrite it.\n` +
       "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
@@ -200,7 +208,7 @@ try {
   // a pre-positioned symlink at the staging path would land the content
   // outside the hooks directory before the rename.
   rmSync(staging, { force: true });
-  writeFileSync(staging, readFileSync(join(ROOT, ".githooks", "pre-commit")), { flag: "wx" });
+  writeFileSync(staging, dispatcherSource, { flag: "wx" });
   chmodSync(staging, 0o755);
   renameSync(staging, target);
 } finally {
