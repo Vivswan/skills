@@ -56,18 +56,65 @@ describe("install-hooks", () => {
     }
   });
 
-  test("removes a stale core.hooksPath and still installs into the DEFAULT hooks dir", () => {
+  test("removes a stale husky hooksPath and still installs into the DEFAULT hooks dir", () => {
     // Regression, observed live: `--git-path hooks` honors core.hooksPath,
     // so resolving the hooks dir before the unset installed the dispatcher
     // into the stale .husky/_ and left .git/hooks empty - a silent no-hook
-    // state. The unset must come first.
+    // state. The unset must come first, and absolute husky paths (husky
+    // itself writes those) migrate the same way.
     const repo = makeRepo();
     try {
-      expect(sh(repo, "git", "config", "core.hooksPath", ".husky/_").code).toBe(0);
+      expect(sh(repo, "git", "config", "core.hooksPath", "/somewhere/.husky/_").code).toBe(0);
       expect(install(repo).code).toBe(0);
       expect(sh(repo, "git", "config", "core.hooksPath").code).toBe(1); // unset
       expect(readFileSync(join(repo, ".git", "hooks", "pre-commit"), "utf-8")).toBe(DISPATCHER);
       expect(existsSync(join(repo, ".husky"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a local hooksPath this repo did not write aborts the install untouched", () => {
+    // Only the known husky value is ours to migrate; anything else is the
+    // contributor's intentional configuration.
+    const repo = makeRepo();
+    try {
+      expect(sh(repo, "git", "config", "core.hooksPath", "my-custom-hooks").code).toBe(0);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("something this repo did not write");
+      expect(r.stderr).toContain("my-custom-hooks");
+      expect(sh(repo, "git", "config", "core.hooksPath").stdout).toBe("my-custom-hooks");
+      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a pre-existing hook not written by this repo aborts the install untouched", () => {
+    // husky's core.hooksPath BYPASSED an existing .git/hooks/pre-commit; the
+    // migration must not DELETE it.
+    const repo = makeRepo();
+    try {
+      const target = join(repo, ".git", "hooks", "pre-commit");
+      writeFileSync(target, "#!/bin/sh\necho user-managed hook\n");
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("refusing to overwrite");
+      expect(readFileSync(target, "utf-8")).toBe("#!/bin/sh\necho user-managed hook\n");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a previous install of our own dispatcher is overwritten (upgrade path)", () => {
+    const repo = makeRepo();
+    try {
+      const target = join(repo, ".git", "hooks", "pre-commit");
+      // An older dispatcher version: recognizable by the self-description.
+      writeFileSync(target, "#!/bin/sh\n# old version, installed by scripts/install-hooks.ts\n");
+      expect(install(repo).code).toBe(0);
+      expect(readFileSync(target, "utf-8")).toBe(DISPATCHER);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

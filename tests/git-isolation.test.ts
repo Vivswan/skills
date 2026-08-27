@@ -73,22 +73,23 @@ describe("test git isolation (launcher + preload)", () => {
     assertChildEnvContained();
 
     const config = realConfigPath();
-    const before = readFileSync(config, "utf-8");
-    expect(before).not.toContain("leaky-test-wrote-this");
+    expect(readFileSync(config, "utf-8")).not.toContain("leaky-test-wrote-this");
     // The laziest possible leak: no env, no cwd. The launcher starts the
     // test process outside the repository, so discovery dies in a ceilinged
     // non-repo scratch directory instead of finding this repo.
     const r = run(undefined, "config", "user.name", "leaky-test-wrote-this");
     expect(r.code).not.toBe(0);
-    expect(readFileSync(config, "utf-8")).toBe(before);
+    // Canary-scoped, not byte-scoped: a sibling worktree may legitimately
+    // append [branch]/[remote] sections to the SHARED config mid-test - the
+    // fleet-concurrency false positive the deleted byte-guard had.
+    expect(readFileSync(config, "utf-8")).not.toContain("leaky-test-wrote-this");
   });
 
   test("a leaky repo-level config write from inside the working tree is contained", () => {
     assertChildEnvContained();
 
     const config = realConfigPath();
-    const before = readFileSync(config, "utf-8");
-    expect(before).not.toContain("leaky-test-wrote-this");
+    expect(readFileSync(config, "utf-8")).not.toContain("leaky-test-wrote-this");
     // A non-repo fixture directory inside the real working tree: without the
     // ceiling, git discovery climbs up, finds this repository, and writes
     // into its config - the incident shape, live-confirmed by the canary.
@@ -99,7 +100,7 @@ describe("test git isolation (launcher + preload)", () => {
     } finally {
       rmSync(leaky, { recursive: true, force: true });
     }
-    expect(readFileSync(config, "utf-8")).toBe(before);
+    expect(readFileSync(config, "utf-8")).not.toContain("leaky-test-wrote-this");
   });
 
   test("the machine's global git config cannot leak into fixtures", () => {

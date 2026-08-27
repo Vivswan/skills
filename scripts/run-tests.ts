@@ -29,7 +29,10 @@ import { ROOT } from "./lib";
 const args = process.argv
   .slice(2)
   .map((arg) => (existsSync(resolve(ROOT, arg)) ? resolve(ROOT, arg) : arg));
-if (args.length === 0) args.push(join(ROOT, "tests"));
+// Only a positional argument replaces the default target; an option-only
+// invocation (`bun run test --bail`) would otherwise run zero tests from the
+// empty scratch cwd and report success.
+if (!args.some((arg) => !arg.startsWith("-"))) args.push(join(ROOT, "tests"));
 
 const scratch = mkdtempSync(join(tmpdir(), "hermetic-tests-"));
 let status: number;

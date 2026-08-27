@@ -9,17 +9,19 @@
  * directory silently runs NO hook in any checkout that lacks the directory
  * (a sibling worktree on an older branch, or the same checkout after
  * switching to one). The installed dispatcher fails closed instead: it
- * refuses the commit when the checkout carries no hook logic. A stale local
- * core.hooksPath from earlier wiring is removed; a hooksPath that survives
- * in any other scope (global, system, include, worktree) aborts the install
- * loudly - installing anyway would either be shadowed at commit time or,
- * worse, overwrite a user-wide hook location.
+ * refuses the commit when the checkout carries no hook logic.
+ *
+ * The install never destroys configuration or hooks it does not own: only
+ * the known husky hooksPath is migrated away, any other local value or any
+ * value in an outer scope (global, system, include, worktree) aborts the
+ * install loudly, and a pre-existing hooks/pre-commit file not written by
+ * this script is left untouched (also aborting the install).
  *
  * Outside a git repository (an exported tarball, say) there is nothing to
  * wire, and installs must not fail there.
  */
 
-import { chmodSync, copyFileSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { ROOT } from "./lib";
 
@@ -53,12 +55,30 @@ if (git("rev-parse", "--git-dir").code !== 0) {
   process.exit(0);
 }
 
-// Remove the stale hooksPath from earlier wiring, pinned to the LOCAL scope
-// so no environment or option can retarget the edit. Exit 5 means "nothing
-// to unset"; anything else is a failure.
-const unset = git("config", "--local", "--unset-all", "core.hooksPath");
-if (unset.code !== 0 && unset.code !== 5) {
-  console.error(`install-hooks: could not remove stale core.hooksPath (git exited ${unset.code}).`);
+// Migrate ONLY the known husky hooksPath (".husky/_", relative or absolute).
+// Any other local value is someone's intentional configuration: abort
+// instead of silently deleting it. The edit is pinned to the LOCAL scope so
+// no environment or option can retarget it.
+const local = git("config", "--local", "--get-all", "core.hooksPath");
+if (local.code === 0) {
+  const values = local.stdout.split("\n").filter((line) => line.length > 0);
+  const isHusky = (value: string) => value === ".husky/_" || value.endsWith("/.husky/_");
+  if (!values.every(isHusky)) {
+    console.error(
+      `install-hooks: local core.hooksPath is set to something this repo did not write:\n  ${values.join("\n  ")}\n` +
+        "Migrate it yourself (git config --local --unset-all core.hooksPath), then rerun 'bun install'.",
+    );
+    process.exit(1);
+  }
+  const unset = git("config", "--local", "--unset-all", "core.hooksPath");
+  if (unset.code !== 0) {
+    console.error(
+      `install-hooks: could not remove the husky core.hooksPath (git exited ${unset.code}).`,
+    );
+    process.exit(1);
+  }
+} else if (local.code !== 1) {
+  console.error(`install-hooks: could not read local core.hooksPath (git exited ${local.code}).`);
   process.exit(1);
 }
 
@@ -87,7 +107,22 @@ const hooksDir = join(
   isAbsolute(commonDir.stdout) ? commonDir.stdout : resolve(commonDir.stdout),
   "hooks",
 );
+const target = join(hooksDir, "pre-commit");
+
+// Overwrite only our own previous installs (recognized by the dispatcher's
+// self-description); a pre-existing hook this script did not write is
+// user- or tool-managed and must not be destroyed.
+const existing = statSync(target, { throwIfNoEntry: false })?.isFile()
+  ? readFileSync(target, "utf-8")
+  : undefined;
+if (existing !== undefined && !existing.includes("scripts/install-hooks.ts")) {
+  console.error(
+    `install-hooks: ${target} already exists and was not installed by this repo; refusing to overwrite it.\n` +
+      "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
+  );
+  process.exit(1);
+}
 
 mkdirSync(hooksDir, { recursive: true });
-copyFileSync(join(ROOT, ".githooks", "pre-commit"), join(hooksDir, "pre-commit"));
-chmodSync(join(hooksDir, "pre-commit"), 0o755);
+copyFileSync(join(ROOT, ".githooks", "pre-commit"), target);
+chmodSync(target, 0o755);
