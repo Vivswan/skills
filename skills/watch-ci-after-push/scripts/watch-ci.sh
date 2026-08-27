@@ -73,6 +73,25 @@ discover() {
   gh run list --commit "$sha" --limit 100 --json databaseId,attempt,workflowDatabaseId,workflowName --jq '.[] | "\(.databaseId)\t=\(.attempt)\t=\(.workflowDatabaseId)\t\(.workflowName)"'
 }
 
+# Sets `missing` to the comma-joined expected names absent from run_lines,
+# and `discovered_names` to the unique names present. Used twice: to keep the
+# registration-lag polling alive while the gate workflow is still absent, and
+# to refuse a vacuous green at judgment time. The quoted "$want" in the case
+# pattern keeps glob metacharacters in workflow names literal.
+compute_missing() {
+  discovered_names="$(printf '%s\n' "$run_lines" | cut -f4- | sort -u)"
+  missing=""
+  while IFS= read -r want; do
+    [ -n "$want" ] || continue
+    case $'\n'"$discovered_names"$'\n' in
+      *$'\n'"$want"$'\n'*) ;;
+      *) missing="${missing:+$missing, }$want" ;;
+    esac
+  done <<EOF
+$(printf '%s\n' "$expected_csv" | tr ',' '\n')
+EOF
+}
+
 # The unit of judgment is the workflow, not the run: re-triggers (e.g. a
 # pull_request `edited` event) stack several runs of one workflow on the same
 # SHA and a concurrency group cancels all but the newest, so judging every
@@ -120,11 +139,20 @@ EOF
 }
 
 run_lines=""
+missing=""
 for attempt in 1 2 3 4 5; do
   # || true: a gh failure (auth, non-GitHub remote) must not masquerade as
   # a red pipeline via set -e; it falls through to the exit-2 path below.
   run_lines="$(discover || true)"
-  [ -n "$run_lines" ] && break
+  if [ -n "$run_lines" ]; then
+    # Keep polling while an expected workflow is still absent: a fast
+    # bystander (e.g. an auto-assign workflow) can register seconds before
+    # the gate workflow, and breaking on the first run alone would report
+    # the gate missing while it is only late. The window stays bounded at
+    # the same ~15s; a gate still absent after it is judged missing below.
+    compute_missing
+    [ -z "$missing" ] && break
+  fi
   [ "$attempt" -lt 5 ] && sleep 3
 done
 
@@ -186,21 +214,10 @@ if [ -z "$run_ids" ]; then
 fi
 
 # "Every discovered workflow passed" is vacuous when the workflow that
-# carries the required gate is not among the discovered runs at all. Check
-# every expected name against the final snapshot; absence is missing
-# evidence and exits 2 below, never a pass. The quoted "$want" in the case
-# pattern keeps glob metacharacters in workflow names literal.
-discovered_names="$(printf '%s\n' "$run_lines" | cut -f4- | sort -u)"
-missing=""
-while IFS= read -r want; do
-  [ -n "$want" ] || continue
-  case $'\n'"$discovered_names"$'\n' in
-    *$'\n'"$want"$'\n'*) ;;
-    *) missing="${missing:+$missing, }$want" ;;
-  esac
-done <<EOF
-$(printf '%s\n' "$expected_csv" | tr ',' '\n')
-EOF
+# carries the required gate is not among the discovered runs at all.
+# Recompute against the final snapshot (a gate that registered mid-watch
+# heals here); absence is missing evidence and exits 2 below, never a pass.
+compute_missing
 if [ -n "$missing" ]; then
   found_list=""
   while IFS= read -r found; do

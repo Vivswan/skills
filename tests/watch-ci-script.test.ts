@@ -400,4 +400,33 @@ describe("watch-ci.sh exit matrix", () => {
       expect(r.stdout).not.toContain("pass:");
     }
   });
+
+  test("a bystander registering before the expected workflow does not trip the gate", () => {
+    // The first TWO snapshots have only the fast bystander; the gate
+    // workflow registers on the third poll. The registration-lag loop must
+    // keep polling within its bounded window instead of reporting the
+    // merely-late gate as missing. Two bystander-only snapshots make the
+    // test discriminating: with the old break-on-first-run behavior the
+    // convergence loop would stabilize on the bystander alone after 2 list
+    // calls and exit 2.
+    const calls = join(binDir, "list-calls-late-gate");
+    const r = run(
+      {
+        GH_LIST_IDS: "2",
+        GH_LIST_IDS2: "2",
+        GH_LIST_IDS3: "2 1",
+        GH_LIST_CALLS: calls,
+        GH_NAME_1: "CI",
+        GH_NAME_2: "Bystander",
+      },
+      [],
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pass: CI (1)");
+    expect(r.stdout).toContain("pass: Bystander (2)");
+    expect(r.stderr).not.toContain("expected workflow(s) not found");
+    // 3 registration polls (bystander, bystander, both) + 1 post-watch
+    // re-discovery.
+    expect(readFileSync(calls, "utf-8")).toBe("4");
+  });
 });
