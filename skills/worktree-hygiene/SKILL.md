@@ -56,10 +56,10 @@ Removing a tree that sits on a branch keeps that branch. Delete the branch itsel
     set -o pipefail                                # a masked failure must never read as "landed"
     base=$(git merge-base FETCH_HEAD <branch>) && [ -n "$base" ] || exit 1
     git diff --no-renames --name-only -z "$base" <branch> \
-      | GIT_LITERAL_PATHSPECS=1 xargs -0 git diff --no-ext-diff --no-textconv --no-renames FETCH_HEAD <branch> --
+      | GIT_LITERAL_PATHSPECS=1 xargs -0 -r git diff --no-ext-diff --no-textconv --no-renames FETCH_HEAD <branch> --
     ```
 
-    Landed means empty output AND a zero exit status; any output or any failing step blocks the deletion. `GIT_LITERAL_PATHSPECS=1` keeps a filename like `:(top)foo` a filename instead of pathspec magic. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
+    Landed means empty output AND a zero exit status; any output or any failing step blocks the deletion. `GIT_LITERAL_PATHSPECS=1` keeps a filename like `:(top)foo` a filename instead of pathspec magic, and `xargs -r` keeps a branch with no changed paths from degenerating into a whole-tree comparison (GNU xargs would otherwise run the diff once with no paths; BSD xargs skips empty input either way). A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
 
 ### Auto-removal can destroy a live workspace
 
