@@ -1,4 +1,0 @@
-interface:
-  display_name: "No Sleep-Waiting on Subagents"
-  short_description: "React to subagent notifications instead of sleeping."
-  brand_color: "#0F766E"

@@ -58,7 +58,7 @@ Before creating the board or spawning anything, ask the user these in ONE messag
 7. **Fan out builders** for the independent tracks, in the isolation the interview chose.
    - Every spawn brief is self-contained per `references/spawn-briefs.md`: the full task contract inline, the territory whitelist, the gates, the signal format, the stop-and-wait ban, and the TODO ban. Where the `/code-standards` skill is installed, briefs point builders at it for the comment rules and the rest of the house standards.
    - One-shot watchers and gate reviewers spawn UNNAMED where the harness delivers a completed agent's output automatically: a named watcher must remember to report at exactly the seam where agents strand (details in `references/spawn-briefs.md`).
-8. **Rely on harness notifications** for subagent completion; the lead never sleeps or polls while waiting on a subagent (the `/no-sleep-waiting-on-subagents` skill states the rule, and spawn briefs propagate it to workers). The fleet monitor's periodic sweeps are different: they probe for stalls, not completion.
+8. **Rely on harness notifications** for subagent completion; the lead never sleeps or polls while waiting on a subagent, and spawn briefs propagate the rule to workers. The fleet monitor's periodic sweeps are different: they probe for stalls, not completion.
 
 ## 3. Keep the Fleet Parallel
 
