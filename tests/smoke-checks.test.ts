@@ -181,9 +181,18 @@ describe("checkReadmeMermaidGraph", () => {
   });
 
   test("rejects a graph missing a node for a published skill", () => {
-    const graph = 'graph LR\n  a["/alpha-one"] --> a2["/alpha-one"]\n';
+    const graph = 'graph LR\n  a["/alpha-one"] --> a\n';
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(
       /missing a node for 'beta-two'/,
+    );
+  });
+
+  test("rejects two aliases labeling the same skill", () => {
+    // The reverse half of the bijection: without it, a rename could leave a
+    // stale duplicate node behind and every skill would still "appear".
+    const graph = `${goodGraph}  a2["/alpha-one"] --> b\n`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(
+      /both label '\/alpha-one'/,
     );
   });
 

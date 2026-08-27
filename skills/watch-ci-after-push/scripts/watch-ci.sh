@@ -270,22 +270,6 @@ if [ -z "$run_ids" ]; then
   exit 2
 fi
 
-# "Every discovered workflow passed" is vacuous when the workflow that
-# carries the required gate is not among the discovered runs at all.
-# Recompute against the final snapshot (a gate that registered mid-watch
-# heals here); absence is missing evidence and exits 2 below, never a pass.
-compute_missing
-if [ -n "$missing" ]; then
-  found_list=""
-  while IFS= read -r found; do
-    [ -n "$found" ] || continue
-    found_list="${found_list:+$found_list, }$found"
-  done <<EOF
-$discovered_names
-EOF
-  echo "expected workflow(s) not found for $sha: $missing; discovered only: ${found_list:-nothing}. The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch> (or override the expectation with --expect-workflow <name>)" >&2
-fi
-
 # Run outcome (fail) and gh health (gherr) are tracked separately so an
 # auth/network failure is never reported as a red pipeline, and vice versa.
 # Every selected run was already watched to completion above, so this loop
@@ -392,6 +376,24 @@ fi
 # current, so release them.
 cat "$judgment_out"
 cat "$judgment_err" >&2
+
+# "Every discovered workflow passed" is vacuous when the workflow that
+# carries the required gate is not among the discovered runs at all. Computed
+# only after the stability re-check, against the freshest snapshot, so a gate
+# workflow that registered mid-watch (or during a conclusion-retry wait)
+# heals here and a stability refusal never carries a stale "not found";
+# absence is missing evidence and exits 2 below, never a pass.
+compute_missing
+if [ -n "$missing" ]; then
+  found_list=""
+  while IFS= read -r found; do
+    [ -n "$found" ] || continue
+    found_list="${found_list:+$found_list, }$found"
+  done <<EOF
+$discovered_names
+EOF
+  echo "expected workflow(s) not found for $sha: $missing; discovered only: ${found_list:-nothing}. The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch> (or override the expectation with --expect-workflow <name>)" >&2
+fi
 
 # A real red run outranks a missing expected workflow, which outranks a gh
 # hiccup; only a fully-evidenced green exits 0.

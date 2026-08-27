@@ -131,8 +131,8 @@ export function checkReadmeSkillList(readmeText: string, skillNames: ReadonlySet
 // checks above (fenced block), so nothing else keeps it honest: a retired
 // skill's node, a dangling edge, or a new skill missing from the graph would
 // all render fine and drift silently. Bijection plus referential integrity:
-// every node label resolves to a published skill, every published skill has a
-// node, and every edge endpoint names a defined node.
+// every node label resolves to a published skill, one node per skill, every
+// published skill has a node, and every edge endpoint names a defined node.
 export function checkReadmeMermaidGraph(readmeText: string, skillNames: ReadonlySet<string>): void {
   const fence = /```mermaid\n([\s\S]*?)```/.exec(readmeText);
   if (fence === null) fail("README.md: missing the mermaid skill-reference graph");
@@ -155,6 +155,10 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
     aliases.set(alias, name);
   }
 
+  // Bijection, both directions: every label resolves to a published skill,
+  // one node per skill (a second alias for the same skill is drift from a
+  // rename or a stale duplicate), and every published skill has a node.
+  const aliasBySkill = new Map<string, string>();
   for (const [alias, name] of aliases) {
     if (!skillNames.has(name)) {
       fail(
@@ -162,10 +166,17 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
           ` skills/${name}/ folder -- remove the stale node or restore the folder`,
       );
     }
+    const prior = aliasBySkill.get(name);
+    if (prior !== undefined && prior !== alias) {
+      fail(
+        `README.md: mermaid nodes '${prior}' and '${alias}' both label '/${name}'` +
+          " -- one skill, one node",
+      );
+    }
+    aliasBySkill.set(name, alias);
   }
-  const labeled = new Set(aliases.values());
   for (const name of skillNames) {
-    if (!labeled.has(name)) {
+    if (!aliasBySkill.has(name)) {
       fail(`README.md: the mermaid skill-reference graph is missing a node for '${name}'`);
     }
   }

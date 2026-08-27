@@ -269,6 +269,36 @@ describe("watch-ci.sh exit matrix", () => {
     expect(readFileSync(calls, "utf-8")).toBe("3");
   });
 
+  test("a stability refusal carries no stale missing-workflow diagnostic", () => {
+    // The expected gate ("CI") is absent from every pre-refusal snapshot: a
+    // bystander is the only run until the conclusion retry's wait, during
+    // which run 2 (the gate, a different workflow) registers. The stability
+    // re-check refuses the stale selection; the refusal must not also claim
+    // the gate workflow "was not found" when the freshest snapshot has it.
+    const calls = join(binDir, "list-calls-stale-missing");
+    const r = run(
+      {
+        GH_LIST_IDS: "1",
+        GH_LIST_IDS7: "2 1",
+        GH_LIST_CALLS: calls,
+        GH_VIEW_1: "EMPTYONCE",
+        GH_ONCE_MARKER: join(binDir, "stale-missing-marker"),
+        GH_WF_1: "77",
+        GH_WF_2: "88",
+        GH_NAME_1: "Bystander",
+        GH_NAME_2: "CI",
+      },
+      [],
+    );
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("retriggered while the conclusion retries waited");
+    expect(r.stderr).not.toContain("expected workflow(s) not found");
+    expect(r.stdout).not.toContain("pass:");
+    // 5 registration polls (gate absent), post-watch re-discovery, and the
+    // stability re-check that reveals the late gate run.
+    expect(readFileSync(calls, "utf-8")).toBe("7");
+  });
+
   test("an unconcluded run (watch aborted early) exits 2", () => {
     const r = run({ GH_LIST_IDS: "1", GH_VIEW_1: "EMPTY", GH_WATCH_EXIT: "7" });
     expect(r.code).toBe(2);
