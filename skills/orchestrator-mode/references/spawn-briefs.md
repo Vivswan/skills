@@ -76,7 +76,7 @@ Messages cross constantly in a fleet: a directive can arrive twice, arrive late,
 
 Idempotency covers repeats, not ordering. A stale directive applied once can still overwrite newer intent (a late "add X" undoes a newer "remove X" even though both are individually idempotent). So a late arrival is also checked against the newest directive on the same subject: when a newer one supersedes it, the worker reports it as superseded and does not apply it.
 
-The exception class is named, never assumed: genuinely non-idempotent operations (version bumps, counters, anything append-only) are called out in the brief and coordinated through the lead. Production shape: two stacked builders each bumped the same manifest version by one; the double bump was absorbed only because a later rebase happened to collapse the two edits. The brief clause makes that coordination explicit instead of lucky.
+The exception class is named, never assumed: genuinely non-idempotent operations (version bumps, counters, anything append-only) are called out in the brief and coordinated through the lead. Their directives state the target postcondition (bump to 1.7.0, never bump by one), so a repeat or late arrival verifies the postcondition and no-ops instead of redoing. Production shape: two stacked builders each bumped the same manifest version by one; the double bump was absorbed only because a later rebase happened to collapse the two edits. The brief clause makes that coordination explicit instead of lucky.
 
 ## The TODO Ban
 
