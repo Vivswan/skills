@@ -94,6 +94,37 @@ describe("install-hooks", () => {
     }
   });
 
+  test("an EMPTY local hooksPath value aborts the install untouched", () => {
+    // An empty value is a real configuration state (it disables hooks
+    // entirely) and it is not husky's; it must abort like any other foreign
+    // value instead of vanishing in a filter and passing vacuously.
+    const repo = makeRepo();
+    try {
+      expect(sh(repo, "git", "config", "core.hooksPath", "").code).toBe(0);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("something this repo did not write");
+      expect(sh(repo, "git", "config", "--get-all", "core.hooksPath").code).toBe(0); // still set
+      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a husky value plus an empty value still aborts", () => {
+    const repo = makeRepo();
+    try {
+      expect(sh(repo, "git", "config", "core.hooksPath", ".husky/_").code).toBe(0);
+      expect(sh(repo, "git", "config", "--add", "core.hooksPath", "").code).toBe(0);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("something this repo did not write");
+      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("a pre-existing hook not written by this repo aborts the install untouched", () => {
     // husky's core.hooksPath BYPASSED an existing .git/hooks/pre-commit; the
     // migration must not DELETE it.

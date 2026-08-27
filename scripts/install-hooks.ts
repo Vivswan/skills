@@ -63,13 +63,15 @@ if (git("rev-parse", "--git-dir").code !== 0) {
 const local = git("config", "--local", "--get-all", "core.hooksPath");
 if (local.code === 0) {
   // Untrimmed, line-exact values: trimming would launder " .husky/_" into
-  // the recognized form. Recognized husky shapes are exactly ".husky/_" and
-  // ABSOLUTE paths ending "/.husky/_" (husky writes both); a relative
-  // "custom/.husky/_" is not ours.
-  const values = local.raw.split("\n").filter((line) => line.length > 0);
+  // the recognized form, and only the OUTPUT TERMINATOR is dropped - an
+  // empty line before it is a real, EMPTY hooksPath value, which is not
+  // husky's and must abort like any other foreign value (filtering all
+  // empties would let it pass the every() vacuously and be deleted).
+  const values = local.raw.split("\n");
+  if (values.at(-1) === "") values.pop();
   const isHusky = (value: string) =>
     value === ".husky/_" || (isAbsolute(value) && value.endsWith("/.husky/_"));
-  if (!values.every(isHusky)) {
+  if (values.length === 0 || !values.every(isHusky)) {
     console.error(
       `install-hooks: local core.hooksPath is set to something this repo did not write:\n  ${values.join("\n  ")}\n` +
         "Migrate it yourself (git config --local --unset-all core.hooksPath), then rerun 'bun install'.",
