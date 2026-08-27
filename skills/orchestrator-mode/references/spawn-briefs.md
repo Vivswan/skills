@@ -14,7 +14,7 @@ Every brief includes:
 6. **The comment rules and the TODO ban** (below). Comments only for what code cannot show; where the `/code-standards` skill is installed, the brief points builders at it for the full house standards.
 7. **The out-of-territory rule:** anything broken or wrong found outside the agent's file whitelist is reported in the completion signal, never fixed silently. A silent out-of-territory edit collides with another agent's territory, and a silently dropped finding is lost.
 8. **The inbox-reconciliation rule** (below): the final signal enumerates every lead message received, with one line of evidence per directive.
-9. **The idempotency rule** (below): every directive and every briefed step is safe to arrive twice, late, or after the fact; genuinely non-idempotent operations are named in the brief.
+9. **The idempotency rule** (below): every directive and every briefed step is safe to arrive twice, late, or after the fact; a late arrival is also checked for supersession before acting, and genuinely non-idempotent operations are named in the brief.
 10. **For long-running service agents (the fleet monitor, long-horizon watchers): the standing-state channel.** The brief names the session ledger as where standing state arrives (re-read it every sweep) and requires every lead directive received as a message to be acknowledged in the agent's NEXT report. The delivery rule and its lead side live in `references/fleet-monitor.md`, Reporting Discipline.
 11. **Scratch files go to /tmp, never the worktree.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
 
@@ -72,7 +72,9 @@ The lead's side of the same rule: verify a signal against the directives actuall
 
 ## Directives and Steps Are Idempotent
 
-Messages cross constantly in a fleet: a directive can arrive twice, arrive late, or arrive after the worker already did the thing. Idempotency is what makes that harmless. Every directive and every briefed step is written to be safe on re-arrival: the worker checks current state before acting, and an already-applied directive is a no-op to report ("already done, see Y"), never an error and never a redo.
+Messages cross constantly in a fleet: a directive can arrive twice, arrive late, or arrive after the worker already did the thing. Every directive and every briefed step is therefore written to be safe on re-arrival: the worker checks current state before acting, and an already-applied directive is a no-op to report ("already done, see Y"), never an error and never a redo.
+
+Idempotency covers repeats, not ordering. A stale directive applied once can still overwrite newer intent (a late "add X" undoes a newer "remove X" even though both are individually idempotent). So a late arrival is also checked against the newest directive on the same subject: when a newer one supersedes it, the worker reports it as superseded and does not apply it.
 
 The exception class is named, never assumed: genuinely non-idempotent operations (version bumps, counters, anything append-only) are called out in the brief and coordinated through the lead. Production shape: two stacked builders each bumped the same manifest version by one; the double bump was absorbed only because a later rebase happened to collapse the two edits. The brief clause makes that coordination explicit instead of lucky.
 
