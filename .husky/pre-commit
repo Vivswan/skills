@@ -19,10 +19,15 @@ for git_env_var in $(env | LC_ALL=C sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); 
 	unset "$git_env_var"
 done
 
-# Same incident class, second line of defense: the checks must leave
-# .git/config byte-identical. Snapshot it, run the checks capturing their
-# status so the comparison happens even when a check fails, and block the
-# commit if the config changed. --git-path resolves the shared config in
+# Same incident class, second line of defense: the checks must not corrupt
+# the leakage-signature keys in .git/config - core.bare and the repo-level
+# identity (user.name/user.email), the keys the incident actually overwrote.
+# Snapshot the file, run the checks capturing their status so the comparison
+# happens even when a check fails, and block the commit if any guarded key
+# changed. Whole-file byte comparison is deliberately NOT used: in
+# multi-worktree sessions a sibling worktree's `git push -u` legitimately
+# appends [branch]/[remote] sections to the shared config mid-check, and
+# that must never block the commit. --git-path resolves the shared config in
 # linked worktrees too.
 git_config="$(git rev-parse --git-path config)"
 git_config_snapshot="$(mktemp)"
@@ -32,8 +37,40 @@ check_status=0
 # The full gates CI also runs; catch failures before they leave the machine.
 bun run check || check_status=$?
 
-if ! cmp -s "$git_config" "$git_config_snapshot"; then
-	echo "FATAL: $git_config changed while 'bun run check' ran." >&2
+# A deleted config is corruption, not "all keys unset": git config exits 1
+# for a missing file, the same status as an unset key, so presence needs an
+# explicit check.
+if [ ! -f "$git_config" ]; then
+	echo "FATAL: $git_config disappeared while 'bun run check' ran." >&2
+	echo "A spawned test mutated the real repository; pre-check snapshot kept at $git_config_snapshot." >&2
+	exit 1
+fi
+
+# Each key is compared as NUL-delimited files, never through command
+# substitution: substitution strips trailing newlines, which would let
+# distinct states collide (value "x" versus values "x" and "", or one
+# multi-line value versus two values). An unset key yields an empty file
+# and an empty value yields one NUL byte, so presence is preserved too.
+guard_before="$(mktemp)"
+guard_after="$(mktemp)"
+guard_status=0
+for guard_key in core.bare user.name user.email; do
+	before_status=0
+	git config --file "$git_config_snapshot" -z --get-all "$guard_key" >"$guard_before" 2>/dev/null || before_status=$?
+	after_status=0
+	git config --file "$git_config" -z --get-all "$guard_key" >"$guard_after" 2>/dev/null || after_status=$?
+	# Exit status 1 is "key unset" (an empty dump); anything higher means the
+	# file became malformed or unreadable - treat that as corruption too.
+	if [ "$before_status" -gt 1 ] || [ "$after_status" -gt 1 ]; then
+		guard_status=1
+		echo "FATAL: could not read $guard_key from $git_config while 'bun run check' ran." >&2
+	elif ! cmp -s "$guard_before" "$guard_after"; then
+		guard_status=1
+		echo "FATAL: $guard_key in $git_config changed while 'bun run check' ran." >&2
+	fi
+done
+rm -f "$guard_before" "$guard_after"
+if [ "$guard_status" -ne 0 ]; then
 	echo "A spawned test mutated the real repository; pre-check snapshot kept at $git_config_snapshot." >&2
 	exit 1
 fi

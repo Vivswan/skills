@@ -10,9 +10,13 @@ import { ROOT } from "../scripts/lib";
 // repository (fixture commits landed on real branches; core.bare/identity
 // overwrites corrupted the shared .git/config). The hook owns the fix: it
 // must scrub every GIT_* variable before running checks, and block the
-// commit if .git/config is not byte-identical afterwards. A fake `bun` on
-// PATH stands in for the check pipeline; scratch repos in tmp stand in for
-// the real repository ("victim") and a test fixture.
+// commit if any leakage-signature key in .git/config (core.bare, repo-level
+// user.name/user.email) changed afterwards. The guard is key-scoped, not
+// byte-scoped, because in multi-worktree sessions a sibling worktree's
+// `git push -u` legitimately appends [branch] sections to the shared config
+// mid-check and must not block an innocent commit. A fake `bun` on PATH
+// stands in for the check pipeline; scratch repos in tmp stand in for the
+// real repository ("victim") and a test fixture.
 
 const SCRIPT = join(ROOT, ".husky", "pre-commit");
 
@@ -33,6 +37,26 @@ case "\${HOOK_BUN_MODE:-ok}" in
     ;;
   corrupt-config)
     git config core.bare true
+    ;;
+  corrupt-identity)
+    git config user.name evil
+    ;;
+  identity-multivar)
+    # Degenerate leakage shape: an empty SECOND user.name value. Joined with
+    # newlines through command substitution this compares equal to the
+    # original single value, because trailing newlines get stripped.
+    git config --add user.name ""
+    ;;
+  malform-config)
+    printf '[core\n' > "$(git rev-parse --git-path config)"
+    ;;
+  delete-config)
+    rm "$(git rev-parse --git-path config)"
+    ;;
+  branch-append)
+    # What a sibling worktree's \`git push -u\` does to the shared config.
+    git config branch.feature.remote origin
+    git config branch.feature.merge refs/heads/feature
     ;;
   fail)
     exit 3
@@ -133,13 +157,78 @@ describe("pre-commit hook git-env scrub", () => {
     expect(readFileSync(join(victim, ".git", "config"), "utf-8")).toBe(victimConfig);
   });
 
-  test("a check that mutates .git/config blocks the commit", () => {
+  test("a check that flips core.bare blocks the commit", () => {
     const hookRepo = makeRepo();
     mkdirSync(join(hookRepo, "node_modules"));
     const r = runHook(hookRepo, { HOOK_BUN_MODE: "corrupt-config" });
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("FATAL");
+    expect(r.stderr).toContain("core.bare");
     expect(r.stderr).toContain("changed while 'bun run check' ran");
+  });
+
+  test("a repo-level identity write blocks the commit", () => {
+    const hookRepo = makeRepo();
+    mkdirSync(join(hookRepo, "node_modules"));
+    const r = runHook(hookRepo, { HOOK_BUN_MODE: "corrupt-identity" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("FATAL");
+    expect(r.stderr).toContain("user.name");
+    expect(r.stderr).toContain("changed while 'bun run check' ran");
+  });
+
+  test("appending an empty second identity value still blocks the commit", () => {
+    // Newline-joined --get-all output read through command substitution
+    // strips trailing newlines, so user.name "x" and user.name values
+    // ["x", ""] would compare equal; the NUL-delimited file comparison in
+    // the hook must still catch this shape.
+    const hookRepo = makeRepo();
+    mkdirSync(join(hookRepo, "node_modules"));
+    git("-C", hookRepo, "config", "user.name", "x");
+    const r = runHook(hookRepo, { HOOK_BUN_MODE: "identity-multivar" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("FATAL");
+    expect(r.stderr).toContain("user.name");
+  });
+
+  test("making the config file unreadable blocks the commit", () => {
+    // git config exits above 1 for a malformed file; the guard must treat a
+    // read failure as corruption, not as "all keys unset".
+    const hookRepo = makeRepo();
+    mkdirSync(join(hookRepo, "node_modules"));
+    const r = runHook(hookRepo, { HOOK_BUN_MODE: "malform-config" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("FATAL");
+    expect(r.stderr).toContain("could not read");
+  });
+
+  test("deleting the config file blocks the commit", () => {
+    // git config exits 1 for a MISSING file - the same status as an unset
+    // key - so a deleted config with unset guard keys would otherwise
+    // compare equal; the hook must check presence explicitly.
+    const hookRepo = makeRepo();
+    mkdirSync(join(hookRepo, "node_modules"));
+    const r = runHook(hookRepo, { HOOK_BUN_MODE: "delete-config" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("FATAL");
+    expect(r.stderr).toContain("disappeared");
+  });
+
+  test("a concurrent [branch] append to the shared config does not block the commit", () => {
+    // The false-positive incident: while the checks ran, a sibling worktree's
+    // `git push -u` appended a [branch ...] section to the SHARED .git/config.
+    // That is not leakage; the guard must ignore it.
+    const hookRepo = makeRepo();
+    mkdirSync(join(hookRepo, "node_modules"));
+    const configBefore = readFileSync(join(hookRepo, ".git", "config"), "utf-8");
+    const r = runHook(hookRepo, { HOOK_BUN_MODE: "branch-append" });
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain("FATAL");
+    // Prove the append really happened, so a pass means the guard ignored a
+    // changed file rather than comparing two identical ones.
+    const configAfter = readFileSync(join(hookRepo, ".git", "config"), "utf-8");
+    expect(configAfter).not.toBe(configBefore);
+    expect(configAfter).toContain('[branch "feature"]');
   });
 
   test("the config guard resolves the shared config from a linked worktree", () => {
