@@ -24,7 +24,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/worktree-hygie
 
 ## What It Does
 
-- Gates every worktree removal on two fresh checks (clean by status codes, no live writer) and every branch deletion on a verified landing
+- Gates every worktree removal on three fresh checks (clean by status codes, HEAD on a durable ref, no live writer) and every branch deletion on preserved work
 - Treats `git branch -d` verdicts as noise: `-d` tests the branch's configured upstream (or HEAD), which need not be your mainline, so landing is verified by ancestry or content first, then deleted with `-D`
 - Makes handovers explicit ownership transfers, with the stop-the-predecessor rule and the hash-sleep-hash live-writer probe
 - Names the shared-`.git` hazards (config, identity, branches and tags, hooks) that let concurrent actors sabotage each other silently
