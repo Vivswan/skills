@@ -142,11 +142,13 @@ git config branch.track-3.depTip "$(git rev-parse track-2)"
 #                                      a third link (track-3, where the chain has one) transplants
 #                                      onto the rewritten track-2, never onto the mainline, and so
 #                                      on up the chain
-# postcondition BEFORE the push: the next layer's merge-base contains the merged
-# mainline commit (the squash sha is an ancestor of the restacked successor).
-# Checked here, while the remote is still untouched, so a bad transplant stops
-# the flow before any push or retarget builds on it:
+# postcondition BEFORE the push, per successor (mirroring the pre-publish checks):
+# the next layer's merge-base contains the merged mainline commit (the squash sha
+# is an ancestor of the restacked successor), and every higher link contains its
+# rewritten dependency's tip. Checked here, while the remote is still untouched,
+# so a bad transplant stops the flow before any push or retarget builds on it:
 git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before pushing anything
+git merge-base --is-ancestor "$(git rev-parse track-2)" track-3 || exit 1
 git push --force-with-lease --atomic origin track-2 track-3   # every rewritten link, in ONE
 #                                      transactional push: an unpushed restack leaves a stale PR
 #                                      whose CI never covered what will actually merge, and the
