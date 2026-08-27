@@ -16,9 +16,11 @@ const DISPATCHER = readFileSync(join(ROOT, ".githooks", "pre-commit"), "utf-8");
 
 function sh(cwd: string, ...cmd: string[]) {
   const result = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+  const raw = result.stdout.toString();
   return {
     code: result.exitCode,
-    stdout: result.stdout.toString().trim(),
+    stdout: raw.trim(),
+    raw,
     stderr: result.stderr.toString(),
   };
 }
@@ -118,14 +120,17 @@ describe("install-hooks", () => {
       expect(sh(repo, "git", "config", "--add", "core.hooksPath", "").code).toBe(0);
       const before = sh(repo, "git", "config", "--get-all", "core.hooksPath");
       expect(before.code).toBe(0);
+      // Untrimmed: the empty value is a trailing blank line that .trim()
+      // would erase, making a comparison blind to exactly the value whose
+      // survival this test exists to prove.
+      expect(before.raw).toBe(".husky/_\n\n");
       const r = install(repo);
       expect(r.code).toBe(1);
       expect(r.stderr).toContain("something this repo did not write");
       // The mixed configuration survives the aborted install untouched.
       const after = sh(repo, "git", "config", "--get-all", "core.hooksPath");
       expect(after.code).toBe(0);
-      expect(after.stdout).toBe(before.stdout);
-      expect(before.stdout).toContain(".husky/_");
+      expect(after.raw).toBe(before.raw);
       expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
