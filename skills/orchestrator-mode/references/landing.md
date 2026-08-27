@@ -61,6 +61,8 @@ git config remote.pushDefault origin # multi-remote repos (fork checkouts) need 
 git checkout -b track-1 <mainline>
 git checkout -b track-2 track-1  # one layer per track, in dependency order, each off its dependency's branch
 git config branch.track-2.depTip "$(git rev-parse track-1)"
+git checkout -b track-3 track-2  # a deeper chain continues the same two-line pattern per link
+git config branch.track-3.depTip "$(git rev-parse track-2)"
 #                                  record the dependency tip each layer branched from. The boundary
 #                                  is MAINTAINED, not set-once (the direct gate's dependent-track
 #                                  rule above): re-record it after every restack of the layer. A
@@ -74,19 +76,24 @@ git checkout <mainline>              # release the layer branches for the builde
 # would publish EMPTY layer PRs.
 # Restack each successor onto its dependency's collected work, bottom-up:
 # track-2 was branched before track-1's commits existed. Transplant only the
-# delta past the recorded boundary, then move the boundary:
+# delta past the recorded boundary, then move the boundary; track-3 follows
+# onto the restacked track-2 the same way:
 git rebase --onto track-1 "$(git config branch.track-2.depTip)" track-2 < /dev/null
 git config branch.track-2.depTip "$(git rev-parse track-1)"
+git rebase --onto track-2 "$(git config branch.track-3.depTip)" track-3 < /dev/null
+git config branch.track-3.depTip "$(git rev-parse track-2)"
 # postcondition before publishing, per successor: its base contains the dependency's current tip
 git merge-base --is-ancestor "$(git rev-parse track-1)" track-2 || exit 1  # STOP and reconcile; never continue to publish
+git merge-base --is-ancestor "$(git rev-parse track-2)" track-3 || exit 1
 # Publish: push each layer branch, then open one draft PR per link with the base
 # set EXPLICITLY (gh defaults --base to the repo default branch): the dependency's
 # branch for a stacked link, the mainline for an independent track. The opener
 # authors each title and body directly, per the repo's title convention and the
 # visualization-first format (/pr-and-issue-discipline), so the PR is born prepared:
-git push -u origin track-1 track-2
+git push -u origin track-1 track-2 track-3
 gh pr create --draft --head track-1 --base <mainline> --title "<repo-convention title>" --body-file <file>
 gh pr create --draft --head track-2 --base track-1 --title "<repo-convention title>" --body-file <file>
+gh pr create --draft --head track-3 --base track-2 --title "<repo-convention title>" --body-file <file>
 # per converged layer, bottom-up:
 gh pr ready <num> --undo             # BEFORE the lower link is even OFFERED as ready to merge
 #                                      (or merged, in the delegated path): flip every dependent
@@ -111,20 +118,31 @@ gh pr merge <pr> --squash            # DELEGATED PATH ONLY: this line runs when 
 #                                      before the commits reach the mainline - enqueue is not
 #                                      landed. WATCH until the PR is actually merged (mergedAt
 #                                      set, the commit on the mainline) before restacking.
-# After the lower link merges, per successor bottom-up. Transplant only the delta:
-# a squash merge rewrites history, so the dependency's commits are not ancestors of
-# the squash commit, and a whole-branch rebase would replay the dependency's changes:
+# After the lower link merges, the restack CASCADES bottom-up, one link at a time,
+# and each link transplants onto ITS OWN dependency's new tip: only the IMMEDIATE
+# successor moves onto the mainline; every higher link follows its REWRITTEN
+# dependency (repeating the mainline command for a higher link would flatten the
+# chain). Transplant only the delta: a squash merge rewrites history, so the
+# dependency's commits are not ancestors of the squash commit, and a whole-branch
+# rebase would replay the dependency's changes:
 git fetch origin <mainline>          # the squash landed on the REMOTE mainline; fetch first, or
 #                                      the transplant targets a stale pre-merge tip
 git rebase --onto origin/<mainline> "$(git config branch.track-2.depTip)" track-2 < /dev/null
 git config branch.track-2.depTip "$(git rev-parse origin/<mainline>)"   # the base moved: re-record it
+git rebase --onto track-2 "$(git config branch.track-3.depTip)" track-3 < /dev/null
+git config branch.track-3.depTip "$(git rev-parse track-2)"
+#                                      a third link (track-3, where the chain has one) transplants
+#                                      onto the rewritten track-2, never onto the mainline, and so
+#                                      on up the chain
 git push --force-with-lease origin track-2   # an unpushed restack leaves a stale PR whose CI
 #                                      never covered what will actually merge, and the shared
 #                                      re-gate rule (item 3 above) applies to every
-#                                      content-changed link
-gh pr edit <num> --base <mainline>   # retarget to the mainline (or the next surviving
-#                                      dependency) AFTER the restack, never before
-#                                      (restack-then-retarget, above)
+#                                      content-changed link; push each higher restacked link the
+#                                      same way
+gh pr edit <num> --base <mainline>   # retarget the IMMEDIATE successor's PR to the mainline (or
+#                                      the next surviving dependency) AFTER the restack, never
+#                                      before (restack-then-retarget, above). Higher links keep
+#                                      their PR base: their dependency branch still exists
 # postcondition before continuing: the next layer's merge-base contains the merged
 # mainline commit (the squash sha is an ancestor of the restacked successor)
 git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before re-flipping anything
