@@ -76,16 +76,19 @@ describe("install-hooks", () => {
 
   test("a local hooksPath this repo did not write aborts the install untouched", () => {
     // Only the known husky value is ours to migrate; anything else is the
-    // contributor's intentional configuration.
+    // contributor's intentional configuration. Sneaky near-husky shapes -
+    // relative paths merely ENDING in /.husky/_ - are not ours either.
     const repo = makeRepo();
     try {
-      expect(sh(repo, "git", "config", "core.hooksPath", "my-custom-hooks").code).toBe(0);
-      const r = install(repo);
-      expect(r.code).toBe(1);
-      expect(r.stderr).toContain("something this repo did not write");
-      expect(r.stderr).toContain("my-custom-hooks");
-      expect(sh(repo, "git", "config", "core.hooksPath").stdout).toBe("my-custom-hooks");
-      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+      for (const value of ["my-custom-hooks", "custom/.husky/_", "../.husky/_"]) {
+        expect(sh(repo, "git", "config", "core.hooksPath", value).code).toBe(0);
+        const r = install(repo);
+        expect(r.code).toBe(1);
+        expect(r.stderr).toContain("something this repo did not write");
+        expect(r.stderr).toContain(value);
+        expect(sh(repo, "git", "config", "core.hooksPath").stdout).toBe(value);
+        expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+      }
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

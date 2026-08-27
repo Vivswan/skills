@@ -26,13 +26,22 @@ import { ROOT } from "./lib";
 // Known limits of the scratch cwd: flags that WRITE repo-relative outputs
 // (--coverage-dir, reporter files) or discover the repo from the cwd
 // (--changed) would need absolute paths; nothing in this repo uses them.
-const args = process.argv
-  .slice(2)
-  .map((arg) => (existsSync(resolve(ROOT, arg)) ? resolve(ROOT, arg) : arg));
-// Only a positional argument replaces the default target; an option-only
-// invocation (`bun run test --bail`) would otherwise run zero tests from the
-// empty scratch cwd and report success.
-if (!args.some((arg) => !arg.startsWith("-"))) args.push(join(ROOT, "tests"));
+// Only an argument naming a real path counts as a target: bun test ORs
+// positional filters together, and a bare word can be an option's value
+// (--test-name-pattern baz) just as well as a name filter, so anything that
+// is not a real path gets the default target appended - over-running is
+// safe, a scratch-cwd invocation left with no target is not (bun exits 1 on
+// zero tests found, but --pass-with-no-tests would turn that into success).
+let hasPathTarget = false;
+const args = process.argv.slice(2).map((arg) => {
+  const resolved = resolve(ROOT, arg);
+  if (existsSync(resolved)) {
+    hasPathTarget = true;
+    return resolved;
+  }
+  return arg;
+});
+if (!hasPathTarget) args.push(join(ROOT, "tests"));
 
 const scratch = mkdtempSync(join(tmpdir(), "hermetic-tests-"));
 let status: number;

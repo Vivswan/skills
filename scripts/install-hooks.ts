@@ -47,7 +47,8 @@ for (const [key, value] of Object.entries(process.env)) {
 
 function git(...args: string[]) {
   const result = Bun.spawnSync(["git", ...args], { env, stdout: "pipe", stderr: "pipe" });
-  return { code: result.exitCode, stdout: result.stdout.toString().trim() };
+  const raw = result.stdout.toString();
+  return { code: result.exitCode, stdout: raw.trim(), raw };
 }
 
 if (git("rev-parse", "--git-dir").code !== 0) {
@@ -61,8 +62,13 @@ if (git("rev-parse", "--git-dir").code !== 0) {
 // no environment or option can retarget it.
 const local = git("config", "--local", "--get-all", "core.hooksPath");
 if (local.code === 0) {
-  const values = local.stdout.split("\n").filter((line) => line.length > 0);
-  const isHusky = (value: string) => value === ".husky/_" || value.endsWith("/.husky/_");
+  // Untrimmed, line-exact values: trimming would launder " .husky/_" into
+  // the recognized form. Recognized husky shapes are exactly ".husky/_" and
+  // ABSOLUTE paths ending "/.husky/_" (husky writes both); a relative
+  // "custom/.husky/_" is not ours.
+  const values = local.raw.split("\n").filter((line) => line.length > 0);
+  const isHusky = (value: string) =>
+    value === ".husky/_" || (isAbsolute(value) && value.endsWith("/.husky/_"));
   if (!values.every(isHusky)) {
     console.error(
       `install-hooks: local core.hooksPath is set to something this repo did not write:\n  ${values.join("\n  ")}\n` +
