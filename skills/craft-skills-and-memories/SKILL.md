@@ -23,8 +23,15 @@ Scope:
   - Structure each entry specimen-first: what happened and where, then the rule it taught, then the boundary or exceptions.
   - Keep a short verbatim phrase only when the exact wording IS the directive (a ban, a naming rule). Otherwise paraphrase into the rule.
   - When touching an old quote-led entry, retrofit it.
-- **Descriptions are triggers**: short, "Use when ...", stating when the thing should fire.
+- **Descriptions are triggers**: short, "Use when ...", stating the one moment the thing should fire, never summarizing contents. A summary-shaped description is an activation bug.
 - **Skills** carry runnable copy-paste blocks and worked examples a cold agent can follow.
+- **A skill roster stays lean and disjoint.** The design conditions for creating, combining, and splitting skills:
+  - Every firing moment has exactly one home: a skill states its specific moments, and triggers across the roster are pairwise disjoint. An overlap is a defect, resolved by combining or sharpening, never tolerated (this skill's create-and-fix lifecycle is such a combination: its moments share one home, one reader).
+  - Fewer skills beats more: combine two skills that serve the same reader at the same moment.
+  - No skill becomes extremely complex or big: split by firing moment when one grows. A complex skill never absorbs a sibling even when triggers overlap; sharpen the descriptions instead.
+  - Skimmable throughout: short front-loaded paragraphs, no text blobs (the example-led rule above governs content order); readability for the reader outranks style rules, and accuracy rules always bind.
+  - Form follows the change in any section: no mandated format beyond this bar, never a visual plus prose re-explaining it, programmer register (the `/natural-writing` bullet below states when that skill applies to prose).
+  - No backwards compatibility, folders included: splits, merges, and retirements are normal changes, and every deletion maps to a successor or a named cut. A compatibility contract the hosting repo declares (such as published install paths) still binds folder moves there.
 - **Memories** hold one fact per file, record the why, convert relative dates to absolute, and link related memories. A wrong memory gets deleted, not patched around.
 - When rewriting prose, apply the `/natural-writing` skill if it is present and invocable. If your harness lets only the user invoke it, suggest they run `/natural-writing` rather than silently skipping the step.
 
@@ -33,7 +40,7 @@ Scope:
 Creating:
 
 - "Save this as a memory" / "make this a skill" / "remember this"
-- A lesson, correction, or workflow emerges that future sessions will need
+- The decision is made to encode a lesson or workflow for future sessions (deciding the response to a correction is `/never-twice`'s job; its rung 3 hands off here)
 
 Fixing:
 

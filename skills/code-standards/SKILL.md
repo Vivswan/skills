@@ -1,6 +1,6 @@
 ---
 name: code-standards
-description: Use when writing or reviewing code changes, assembling a reviewer prompt, or asked to apply house code standards.
+description: Use when writing code changes or asked to apply house code standards.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -10,26 +10,17 @@ metadata:
 
 House standards for code and the artifacts around it. Apply them while writing; check them while reviewing.
 
-Where a standard has a canonical case (the specimen that set the rule), it is stated with it: the concrete case recalls better than the rule. The `references/` file named under each standard carries the full detail: the why, the how-to-apply list, and the boundaries and exceptions.
+Where a standard has a canonical case (the specimen that set the rule), it is stated inline or in the standard's `references/` file: the concrete case recalls better than the rule. The `references/` file named under each standard carries the full detail: the why, the how-to-apply list, and the boundaries and exceptions.
 
 ## The Standards
 
 ### Fix the class, not the instance
 
-A systemic problem gets a root fix that makes recurrence impossible (a workflow change, a shared test, tooling, a stronger type), never only a fix of the case at hand.
-
-Specimen (the case that set the rule): every Dependabot PR in a repo failed CI because a committed bundle drifted after dependency bumps. Hand-rebuilding the bundle on each PR fixes five PRs today and none tomorrow; the accepted fix was a CI workflow that rebuilds the bundle on every PR and pushes the regeneration commit automatically.
-
-Full detail: `references/design.md`.
+A systemic problem gets a root fix that makes recurrence impossible, never only a fix of the case at hand: the `/never-twice` skill owns this rule and its response ladder; specimen and full detail in `references/design.md`.
 
 ### Guard recurring problems with tests
 
-Add a guard when a problem recurs or you judge it likely to recur: a test or tripwire that catches it at the source, or a pipeline fix that makes it impossible.
-
-- Triggers: the same problem a second or third time, a drift-prone copy, a negligence-prone manual step, an easy-to-forget pipeline.
-- Guard outside your reach (another repo, CI you cannot edit): tell the user what needs fixing and how, instead of silently absorbing the recurrence.
-
-Full detail: `references/design.md`.
+A problem that recurs, or plausibly will, ships with a test, tripwire, or pipeline fix that catches it at the source: rung 2 of the `/never-twice` ladder; full detail, including the guard-outside-your-reach case, in `references/design.md`.
 
 ### General-purpose over special-case
 
