@@ -116,9 +116,16 @@ describe("install-hooks", () => {
     try {
       expect(sh(repo, "git", "config", "core.hooksPath", ".husky/_").code).toBe(0);
       expect(sh(repo, "git", "config", "--add", "core.hooksPath", "").code).toBe(0);
+      const before = sh(repo, "git", "config", "--get-all", "core.hooksPath");
+      expect(before.code).toBe(0);
       const r = install(repo);
       expect(r.code).toBe(1);
       expect(r.stderr).toContain("something this repo did not write");
+      // The mixed configuration survives the aborted install untouched.
+      const after = sh(repo, "git", "config", "--get-all", "core.hooksPath");
+      expect(after.code).toBe(0);
+      expect(after.stdout).toBe(before.stdout);
+      expect(before.stdout).toContain(".husky/_");
       expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
