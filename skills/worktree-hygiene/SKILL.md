@@ -23,7 +23,7 @@ metadata:
 
 Verify all three before `git worktree remove`, freshly, in this order:
 
-1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain` and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinator's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work.
+1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain -uall` (`-uall` overrides a `status.showUntrackedFiles=no` config that would silently hide untracked files) and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinator's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work.
    - A clean tree loses nothing TRACKED on removal; its commits survive on their ref.
    - IGNORED files are invisible to plain status yet die with the tree. When a worktree may hold valuable ignored artifacts (a local database, captured data), list them with `git status --porcelain --ignored` first.
 2. **On a durable ref.** A DETACHED worktree's unique commits can be reachable only through its private HEAD, which removal deletes, reflog included. `git -C <tree> symbolic-ref -q HEAD` exiting non-zero means detached: put a branch or tag on `git -C <tree> rev-parse HEAD` before removing, or prove that commit reachable from a durable ref.
@@ -48,10 +48,10 @@ Removing a tree that sits on a branch keeps that branch. Delete the branch itsel
     set -o pipefail                                # a masked failure must never read as "landed"
     base=$(git merge-base FETCH_HEAD <branch>) && [ -n "$base" ] || exit 1
     git diff --no-renames --name-only -z "$base" <branch> \
-      | xargs -0 git diff --no-ext-diff --no-textconv --no-renames FETCH_HEAD <branch> --
+      | GIT_LITERAL_PATHSPECS=1 xargs -0 git diff --no-ext-diff --no-textconv --no-renames FETCH_HEAD <branch> --
     ```
 
-    Landed means empty output AND a zero exit status; any output or any failing step blocks the deletion. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
+    Landed means empty output AND a zero exit status; any output or any failing step blocks the deletion. `GIT_LITERAL_PATHSPECS=1` keeps a filename like `:(top)foo` a filename instead of pathspec magic. A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
 
 ### Auto-removal can destroy a live workspace
 
