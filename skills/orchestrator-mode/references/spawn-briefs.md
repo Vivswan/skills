@@ -99,8 +99,9 @@ Handoff: commit finished work to wt/rate-limit (do not push). Signal the
   signal that omits a pending directive is not a final signal.
 Rules: no TODO/FIXME markers; do the work or escalate it. Comments only
   for what code cannot show. Directives and your own steps must be safe
-  to arrive or run twice: check current state before acting, and report
-  an already-applied one as a no-op. Never stop to "wait" for background
-  children: after fanning out, your next action on wake is reading their
-  output. The only permitted stop is your final signal.
+  to arrive or run twice or late: check current state first, report an
+  already-applied one as a no-op, and report one superseded by a newer
+  directive as stale instead of applying it. Never stop to "wait" for
+  background children: after fanning out, your next action on wake is
+  reading their output. The only permitted stop is your final signal.
 ```
