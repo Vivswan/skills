@@ -40,8 +40,12 @@ scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; age
 
 ## How
 
-- extend the probe deadline while a build lock exists, instead of a fixed timeout
-- deadline math moved into one function; the sweep and the probe both call it
+```text
+before: probe start -> fixed 120s -> timeout -> agent marked dead (mid-build)
+after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live verdict
+```
+
+One deadline function; the sweep and the probe both call it.
 
 ## Proof
 
@@ -50,7 +54,7 @@ scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; age
 ````
 
 - The opening blocks are actual commands and actual output, complete enough to stand alone.
-- `## How` is a FEW short bullets; the diff carries the detail, so never re-narrate it.
+- `## How` takes whatever form reads fastest for the change: a mermaid diagram, an ascii flow, numbered steps, a small table, or a few bullets - visualization preferred over prose, the same principle as the opening blocks. Two abstract prose bullets fall flat where a tiny before/after flow carries the change instantly. The diff carries the detail; never re-narrate it.
 - `## Proof` is numbers: tests, gates, review rounds. Cut any sentence the blocks already show.
 
 **Redact before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.

@@ -2,7 +2,7 @@
 
 `/pr-and-issue-discipline` fires when an agent opens or updates a pull request, writes an issue, or decides who merges. It holds every PR and issue to the same shape:
 
-- **Visualization first**: the body leads with real captured before/after output that stands alone, then a few `## How` bullets, then `## Proof` numbers; secrets stripped and machine paths genericized before publishing
+- **Visualization first**: the body leads with real captured before/after output that stands alone, then `## How` in whatever form reads fastest (a diagram, an ascii flow, a table, steps, or bullets), then `## Proof` numbers; secrets stripped and machine paths genericized before publishing
 - **Issues too**: what breaks (shown), a minimal repro, expected vs actual, environment only when it matters
 - **Draft discipline**: open as draft, flip ready the moment the PR converges, flip back to draft the moment new commit-requiring work appears
 - **Comment convergence**: every review round triaged the same cycle - valid findings fixed, invalid ones replied to and resolved - with thread state read via GraphQL `isResolved`, never inferred from timestamps
