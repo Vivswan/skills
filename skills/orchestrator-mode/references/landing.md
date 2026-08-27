@@ -50,6 +50,8 @@ set -e                               # every step below is load-bearing: a faile
 #                                      or check stops the flow HERE, before anything (a boundary
 #                                      re-record, a push, a retarget) builds on the failure
 export GIT_TERMINAL_PROMPT=0         # a credential prompt would hang the block; fail loudly instead
+export GIT_SSH_COMMAND="ssh -oBatchMode=yes"  # the same for SSH remotes, which GIT_TERMINAL_PROMPT
+#                                      does not cover: no passphrase or host-key prompts
 git config rerere.enabled true       # record conflict resolutions once and replay them on later
 #                                      restacks, in place of a hand-resolve (or a prompt) each time
 git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push target; adjust origin to the writable remote
