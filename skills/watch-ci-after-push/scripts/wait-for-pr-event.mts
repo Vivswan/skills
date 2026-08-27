@@ -612,12 +612,12 @@ async function main(): Promise<never> {
       }
       last = current;
     }
-    // The read after a deadline-truncated sleep was the FINAL one: it keeps
-    // the closing snapshot current and catches a delta landing in the last
-    // window; past it the timeout is honored, never another interval. When
-    // that read failed, there is no current final evidence to report, and a
-    // stale snapshot labeled final would be a lie: that is tooling trouble.
-    if (finalRead) {
+    // The deadline is reached via the final-read flag (a sleep truncated to
+    // it) or the clock (a slow poll crossing it). Either way the timeout
+    // report must stand on the CURRENT read: a successful one exits 3 with
+    // fresh evidence, a failed one exits 2 - a stale snapshot must never be
+    // labeled final.
+    if (finalRead || Date.now() >= deadline) {
       if (current === null) {
         toolingError(
           "the final read at the deadline failed; refusing to report a stale snapshot as the final evidence",
@@ -626,7 +626,6 @@ async function main(): Promise<never> {
       exitTimeout();
     }
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) exitTimeout();
     const waitSeconds = consecutiveFailures > 0 ? POLL_RETRY_SECONDS : options.intervalSeconds;
     const sleepMs = Math.min(waitSeconds * 1000, remainingMs);
     await sleep(sleepMs);

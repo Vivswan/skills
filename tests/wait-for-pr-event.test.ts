@@ -33,6 +33,7 @@ serve() {
 case "$1" in
   api)
     n="$(next gql)"
+    case " \${STUB_SLEEP_GQL_CALLS:-} " in *" $n "*) sleep "\${STUB_SLEEP_GQL_SECONDS:-2}";; esac
     if [ "\${STUB_FAIL_GQL:-0}" = "1" ]; then echo "gh: graphql boom" >&2; exit 1; fi
     if [ -n "\${STUB_FAIL_GQL_AFTER:-}" ] && [ "$n" -gt "\${STUB_FAIL_GQL_AFTER}" ]; then
       echo "gh: graphql boom" >&2; exit 1
@@ -497,6 +498,19 @@ describe("wait-for-pr-event.mts", () => {
     expect(r.stderr).toContain("final read at the deadline failed");
     expect(r.stdout).not.toContain("no watched change");
   });
+
+  test("a slow poll failing across the deadline also exits 2, not 3 with stale evidence", () => {
+    // The failing poll is NOT flagged as final: it sleeps past the deadline
+    // and then errors, so only the clock says the wait is over.
+    const r = run(
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      { "gql-1": gql({ comments: 3 }), "pr-1": prView() },
+      { STUB_SLEEP_GQL_CALLS: "2", STUB_FAIL_GQL_CALLS: "2" },
+    );
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("refusing to report a stale snapshot");
+    expect(r.stdout).not.toContain("no watched change");
+  }, 15000);
 
   test("without --repo the current repo is resolved via gh repo view", () => {
     const r = run(["7"], {
