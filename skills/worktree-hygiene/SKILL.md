@@ -42,7 +42,7 @@ Removing a tree that sits on a branch keeps that branch. Delete the branch itsel
 
 - **Deleting only the LOCAL branch** is safe once the server holds its tip. Prove it against the server, not a possibly stale remote-tracking ref: `git fetch <remote> <topic>`, then compare the branch tip with `FETCH_HEAD`.
 - **Never trust `git branch -d`.** It only tests merge into the branch's configured upstream (or into HEAD when none is set), and the usual upstream is the branch's own `origin/<topic>`, not your mainline. It can succeed on unlanded work and refuse on landed work; neither verdict proves anything.
-- **Retiring the branch everywhere requires a verified LANDING**, then `git branch -D`. Verify like this:
+- **Retiring the branch everywhere requires a verified LANDING**, then `git branch -D` plus `git push <remote> --delete <topic>` for the server-side ref. Verify like this:
   - Check ancestry first, against a ref the fetch just wrote: `git fetch <remote> <mainline>` followed by `git merge-base --is-ancestor <branch> FETCH_HEAD`. Test `FETCH_HEAD`, not `<remote>/<mainline>`: whether the fetch updates the remote-tracking ref depends on the remote's configured fetch mapping, and a stale local ref proves nothing once the remote moved ahead.
   - A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Whenever ancestry fails, require exact content equivalence at the fetched tip, for every path the branch touched (NUL-safe; renames split into their delete and add halves so a missing source deletion cannot hide; external diff and textconv disabled so no filter can suppress a difference):
 
