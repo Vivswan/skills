@@ -10,7 +10,7 @@ metadata:
 
 House standards for code and the artifacts around it. Apply them while writing; check them while reviewing.
 
-Most standards state their canonical case (the specimen that set the rule) inline: the concrete case recalls better than the rule. The `references/` file named under each standard carries the full detail: the why, the how-to-apply list, and the boundaries and exceptions.
+Where a standard has a canonical case (the specimen that set the rule), it is stated inline or in the standard's `references/` file: the concrete case recalls better than the rule. The `references/` file named under each standard carries the full detail: the why, the how-to-apply list, and the boundaries and exceptions.
 
 ## The Standards
 

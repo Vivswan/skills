@@ -113,7 +113,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - If a finding conflicts with an explicit user decision, follow the user and record that the issue was intentionally skipped.
 - Re-validate after each batch of fixes (typecheck / lint / tests) before re-reviewing.
 
-### 7. Re-review until it converges, before committing
+### 7. Re-review until it converges
 
 - After applying fixes, **re-run the review** on the updated state, one review per section, not a single overall pass.
 - Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable. Treat that convergence as the gate; the `/review-before-commit` skill owns holding the commit until it opens.
@@ -127,4 +127,4 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - Fix the skill only where you can edit its canonical source: in the authoring repo, edit the affected skill sources directly (`SKILL.md`, `references/`, or `scripts/`).
   - From an installed or vendored copy, or when you're not authorized to write, report the defect and your proposed fix to the user instead.
 - Fold the root cause into the relevant step rather than appending a one-off note, and keep the copy-paste blocks runnable as written.
-- A skill edit is a working-tree change like any other: finish the review with the corrected instructions, and put the edit through the same validate, review, and converge gate (steps 6 and 7) before it is committed.
+- A skill edit is a working-tree change like any other: finish the review with the corrected instructions, and put the edit through the same validate, review, and converge gate (steps 6 and 7).
