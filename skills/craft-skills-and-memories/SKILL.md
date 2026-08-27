@@ -28,7 +28,7 @@ Scope:
 - **A skill roster stays lean and disjoint.** The design conditions for creating, combining, and splitting skills:
   - Every firing moment has exactly one home: a skill states its specific moments, and triggers across the roster are pairwise disjoint. An overlap is a defect, resolved by combining or sharpening, never tolerated (this skill's create-and-fix lifecycle is such a combination: its moments share one home, one reader).
   - Fewer skills beats more: combine two skills that serve the same reader at the same moment.
-  - No skill extremely complex or big: split by firing moment when one grows. A complex skill never absorbs a sibling even when triggers overlap; sharpen the descriptions instead.
+  - No skill becomes extremely complex or big: split by firing moment when one grows. A complex skill never absorbs a sibling even when triggers overlap; sharpen the descriptions instead.
   - Skimmable throughout: short front-loaded paragraphs, no text blobs (the example-led rule above governs content order); readability for the reader outranks style rules, and accuracy rules always bind.
   - Form follows the change in any section: no mandated format beyond this bar, never a visual plus prose re-explaining it, programmer register (the `/natural-writing` bullet below states when that skill applies to prose).
   - No backwards compatibility, folders included: splits, merges, and retirements are normal changes, and every deletion maps to a successor or a named cut. A compatibility contract the hosting repo declares (such as published install paths) still binds folder moves there.
