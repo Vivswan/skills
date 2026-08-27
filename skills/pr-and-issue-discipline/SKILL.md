@@ -59,6 +59,8 @@ scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; age
 
 What breaks, shown first; then the minimum around it. Short and skimmable, no walls of text.
 
+A repository's own issue templates are authoritative: fill their fields, applying this principle inside them. The shape below is the fallback when no template exists.
+
 ````markdown
 ## What breaks
 
@@ -78,7 +80,7 @@ installed: SKILL.md, README.md          (metadata.json silently missing)
 - Actual: `metadata.json` dropped without a warning
 ````
 
-Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not.
+Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not. The redaction rule above applies unchanged: issues publish captured output too.
 
 ## Draft Discipline
 
@@ -117,7 +119,7 @@ Production shape of one round:
 
 ## Who Merges
 
-The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges. Two standing exceptions, each only when the user has granted it:
+The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges. Where a merge queue owns the ordering, the author's prepared action is enqueueing the converged PR; enqueue is not merged, so watch until the commit actually lands. Two standing exceptions, each only when the user has granted it:
 
 - **A trivial mechanical fix.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) merges directly once its gates are green; the human gate is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
 - **A pipeline blocked on a merge.** When a converged PR gates queued work and the human is not acting, merge it and say so in the next report. Waiting idle on a merge the author could perform is the defect; the notification preserves the human's oversight.

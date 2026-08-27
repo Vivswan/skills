@@ -5,7 +5,7 @@
 - **Visualization first**: the body leads with real captured before/after output that stands alone, then a few `## How` bullets, then `## Proof` numbers; secrets stripped and machine paths genericized before publishing
 - **Issues too**: what breaks (shown), a minimal repro, expected vs actual, environment only when it matters
 - **Draft discipline**: open as draft, flip ready the moment the PR converges, flip back to draft the moment new commit-requiring work appears
-- **Comment convergence**: every review round triaged the same cycle - valid findings fixed, invalid ones replied-to and resolved - with thread state read via GraphQL `isResolved`, never inferred from timestamps
+- **Comment convergence**: every review round triaged the same cycle - valid findings fixed, invalid ones replied to and resolved - with thread state read via GraphQL `isResolved`, never inferred from timestamps
 - **Who merges**: the human by default; a trivial mechanical fix and a pipeline blocked on a merge are the only standing exceptions, and every landing is exit-conditioned on the gate's own verdict, never chained onto a command that displayed a log
 
 ## Install
