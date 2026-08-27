@@ -44,15 +44,163 @@ jobs:
   checks:
     uses: ./.github/workflows/checks.yml
 
-  # Informational, deliberately NOT in all-green's needs: a red run flags
-  # template-convention drift (usually local edits to managed files), but
-  # it never blocks this repository's merges - the next sync PR heals it.
+  # TWO checks, one job, different consequences.
+  #
+  # INTEGRITY (the action) validates the tree against the state it was
+  # stamped with. A failure means managed content changed out of band, so it
+  # BLOCKS - on pull requests and on main pushes alike, because a red gate is
+  # the owner's signal that something edited files the next sync will
+  # overwrite. Restore the file from history, or run a recovery sync.
+  #
+  # FRESHNESS (below) is only "how far behind the template is this repo",
+  # which is never the repository's fault and never its blocker - the next
+  # sync PR closes it. It is one ref compare, no copier and no render, and
+  # its OWN failures (network, an operator repo this token cannot read) skip
+  # with a notice rather than going red.
+  #
+  # The findings are posted BEFORE the job fails, so a blocking result is
+  # readable in the PR conversation instead of only in the run log.
   validate-template:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # Only for the sticky comment, and only on this job.
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
+      # continue-on-error defers the verdict to the last step; it does not
+      # discard it. The action's own exit code is untouched, so the operator
+      # repo and the sync pipeline still block on it directly.
       - uses: Vivswan/repo-platform/actions/validate-template@main
+        id: integrity
+        continue-on-error: true
+        with:
+          findings-file: ${{ runner.temp }}/validate-findings.md
+          advisories-file: ${{ runner.temp }}/validate-advisories.md
+      - name: Check how far behind the template this repo is
+        id: freshness
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEMPLATE_REPO: Vivswan/repo-platform
+          FRESHNESS: ${{ runner.temp }}/freshness.md
+        run: |
+          set -uo pipefail
+          : > "$FRESHNESS"
+          note() { echo "::notice::$1 Skipping the freshness check."; echo "state=skipped" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          recorded="$(sed -n 's/^_commit: *//p' .copier-answers.yml | head -n 1 | tr -d "\"' ")"
+          [ -n "$recorded" ] || note "No _commit is recorded in .copier-answers.yml."
+          tip="$(timeout 20 gh api "repos/$TEMPLATE_REPO/branches/template" --jq '.commit.sha')" ||
+            note "Could not read $TEMPLATE_REPO's template branch (network, or a private operator repo this token cannot read)."
+          [ -n "$tip" ] || note "$TEMPLATE_REPO's template branch reported no commit."
+
+          # The recorded value is copier's short sha, so match on prefix.
+          case "$tip" in
+            "$recorded"*)
+              echo "state=fresh" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          # One more call for the distance. It is presentation only: a failed
+          # compare still reports "behind", just without the number.
+          ahead="$(timeout 20 gh api "repos/$TEMPLATE_REPO/compare/$recorded...$tip" --jq '.ahead_by')" || ahead=""
+          case "$ahead" in
+            ''|*[!0-9]*) distance="behind the template branch" ;;
+            *) distance="behind the template branch by $ahead commit(s)" ;;
+          esac
+          # shellcheck disable=SC2016  # the backticks are markdown code spans
+          printf '#### Freshness\n\nThis repository is %s (recorded `%s`, tip `%s`). The next sync PR updates the managed files; nothing to do here.\n' \
+            "$distance" "$recorded" "${tip:0:7}" > "$FRESHNESS"
+          echo "state=behind" >> "$GITHUB_OUTPUT"
+      - name: Report the findings
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FINDINGS: ${{ runner.temp }}/validate-findings.md
+          ADVISORIES: ${{ runner.temp }}/validate-advisories.md
+          FRESHNESS: ${{ runner.temp }}/freshness.md
+          FRESHNESS_STATE: ${{ steps.freshness.outputs.state }}
+          INTEGRITY: ${{ steps.integrity.outcome }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Identifies our own comment across runs. Keep it stable: changing
+          # it strands every comment already posted under the old one.
+          MARKER: "<!-- repo-platform:validate-template -->"
+        run: |
+          set -uo pipefail
+          # An absent findings file means the action never got far enough to
+          # write one, which is a setup failure, not a clean tree.
+          if [ ! -f "$FINDINGS" ]; then
+            integrity="#### Integrity"$'\n\n'"The validator exited before reporting. See the [run log]($RUN_URL)."
+            blocking=true
+          elif [ -s "$FINDINGS" ]; then
+            integrity="#### Integrity"$'\n\n'"$(cat "$FINDINGS")"$'\n'"Managed content changed outside a sync. Restore the file from git history, or run a recovery sync. This FAILS the check."
+            blocking=true
+          else
+            integrity="#### Integrity"$'\n\n'"Passed - this repository matches the state it was stamped with."
+            blocking=false
+          fi
+
+          # Advisories never gate - they are the action's own non-failing
+          # stream, and folding them into the integrity verdict would have a
+          # clean repository reading as blocked.
+          advice=""
+          if [ -s "$ADVISORIES" ]; then
+            advice=$'\n\n'"$(cat "$ADVISORIES")"
+          fi
+
+          case "$FRESHNESS_STATE" in
+            behind) freshness="$(cat "$FRESHNESS")" ;;
+            fresh) freshness="#### Freshness"$'\n\n'"Up to date with the template branch." ;;
+            *) freshness="#### Freshness"$'\n\n'"Not checked this run; see the run log for why." ;;
+          esac
+
+          body="$MARKER"$'\n'"### Template check"$'\n\n'"$integrity$advice"$'\n\n'"$freshness"
+          printf '%s\n' "$body" >> "$GITHUB_STEP_SUMMARY"
+
+          # A comment is worth making only when something needs saying. A
+          # clean, fresh repository leaves no new comment - but it does clear
+          # one a previous run left behind.
+          worth_saying=false
+          if [ "$blocking" = true ] || [ "$FRESHNESS_STATE" = behind ] || [ -n "$advice" ]; then
+            worth_saying=true
+          fi
+
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            exit 0
+          fi
+
+          # --paginate: on a long PR our marker comment sits past the first page,
+          # and a lookup that misses it POSTS A NEW ONE on every push. --slurp
+          # yields one array per page, so flatten before searching.
+          existing="$(timeout 20 gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq 'add // [] | map(select(.body | contains(env.MARKER))) | last | .id // empty')" || {
+            echo "::warning::could not list PR comments; the findings are in the job summary instead."
+            exit 0
+          }
+
+          if [ "$worth_saying" = false ] && [ -z "$existing" ]; then
+            exit 0
+          fi
+
+          if [ -n "$existing" ]; then
+            timeout 20 gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+              -f body="$body" --silent ||
+              echo "::warning::could not update the findings comment; the findings are in the job summary instead."
+          else
+            timeout 20 gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              -f body="$body" --silent ||
+              echo "::warning::could not post the findings comment; the findings are in the job summary instead."
+          fi
+      # Last, so the comment above is already posted when the gate goes red.
+      - name: Fail on an integrity finding
+        if: steps.integrity.outcome == 'failure'
+        run: |
+          echo "::error::validate-template found managed content that changed outside a sync; see the findings on this PR (or the job summary) and the step log above."
+          exit 1
 
   typography:
     runs-on: ubuntu-latest
@@ -149,6 +297,159 @@ jobs:
       actions: read
 
 
+  # Copilot's automatic PR review must have ARRIVED before the gate goes
+  # green - but only when Copilot is actually involved in the PR. ONE SHOT,
+  # fail-fast: when the review is expected (the base branch's
+  # copilot_code_review rule - the fleet ruleset sets it, so this is the
+  # normal path - or a live involvement signal) but has not posted yet, this
+  # job fails in seconds instead of burning billed runner time waiting, and
+  # rerun-copilot-gate.yml re-runs just this job the moment the review lands.
+  # Any review conclusion counts: the ruleset's required review thread
+  # resolution polices the content, this job only polices the timing. It sits
+  # inside the gate because a ruleset-side required check cannot express it -
+  # Copilot's check suite never appears in PR merge-box rollups, so requiring
+  # that context there hangs the merge box forever.
+  #
+  # With no rule and no involvement signal this job passes non-blocking,
+  # logging that Copilot is not a reviewer - but on a settings-sync repo the
+  # rule comes from the fleet override layer, which is applied last and cannot
+  # be dropped from this repository (a hand-deleted rule returns on the next
+  # nightly apply). Not selecting settings-sync, or a repos.yml exclusion, is
+  # what opts a repo out; changing the override itself is a fleet-wide
+  # decision. Failures are closed, never silent - an API probe that did not
+  # come back is treated as "cannot tell", not as "not involved".
+  #
+  # No checkout and no toolchain: three or four `gh api` reads and no sleeps,
+  # so the job costs seconds of runner time. That is why it stays its own job
+  # on private repositories instead of joining base-checks - the job name is
+  # what rerun-copilot-gate.yml re-runs, and folding it in would make every
+  # re-arm replay all five base checks. Non-PR events have no review to await,
+  # so the step skips; the job itself stays unconditional for the strict gate.
+  copilot-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: read
+    steps:
+      - name: Check that the Copilot review arrived
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          # Copilot's identity, spelled once: the check run it creates on the
+          # head sha, and (suffixed with [bot]) the login its review posts
+          # under. It is REQUESTED as the plain "Copilot" login.
+          COPILOT_CHECK: copilot-pull-request-reviewer
+        run: |
+          set -euo pipefail
+          # Each probe records whether its call CAME BACK, because a read that
+          # failed must never count as "Copilot is not involved". Every call
+          # carries a hard deadline and the job never sleeps. jq takes
+          # HEAD_SHA and COPILOT_CHECK from the environment, so the only
+          # thing ever spliced into a jq program is the static $defs prelude
+          # below - no response data reaches jq as source text.
+          api() { timeout 20 gh api "$1"; }
+          api_paginated() { timeout 20 gh api --paginate --slurp "$1"; }
+          # Answers strictly: anything that is not a bare true/false - jq
+          # erroring on a malformed body, or yielding nothing at all on an
+          # empty one - is a MISSING answer, and the caller clears the same
+          # flag a failed call would.
+          ask() {
+            local answer
+            answer="$(jq -r "$2" <<< "$1")" || return 1
+            case "$answer" in
+              true|false) printf '%s' "$answer" ;;
+              *) return 1 ;;
+            esac
+          }
+          # The jq prelude, spliced into every probe below.
+          #
+          # `arr` is load-bearing, not decoration. jq iterates an OBJECT's
+          # values happily, so a body like `{}` (a plain error payload gh
+          # still exits 0 on) makes an unguarded `[.[] | select(...)] |
+          # length > 0` answer a confident `false`, and the gate then passes
+          # as "not a reviewer" on a response it never actually read. Every
+          # probe therefore asserts its shape first and errors out otherwise,
+          # which `ask` turns into a cleared flag and a fail-closed exit.
+          #
+          # `is_copilot` is Copilot's identity in ONE place: it posts reviews
+          # under the "<check>[bot]" login and is requested as the plain
+          # "Copilot" login, and either spelling can turn up in either place.
+          defs='def arr: if type == "array" then . else error("expected an array") end; def pages: arr | map(arr) | add // []; def is_copilot: ascii_downcase | . == "copilot" or . == (env.COPILOT_CHECK + "[bot]"); def mine: [.[] | select(.user != null) | select(.user.login | is_copilot)];'
+
+          rules_ok=1
+          rules="$(api "repos/$GITHUB_REPOSITORY/rules/branches/$BASE_BRANCH")" || rules_ok=0
+          checks_ok=1
+          checks="$(api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs?check_name=$COPILOT_CHECK&filter=latest")" || checks_ok=0
+          reviews_ok=1
+          # --paginate: GitHub returns reviews oldest-first, so a single page
+          # shows only the STALEST 100 on a busy PR and Copilot's latest review
+          # would be invisible. --slurp yields one array per page; `pages`
+          # flattens them. The deadline wraps the whole paginated read, exactly
+          # as the operator twin budgets it.
+          reviews="$(api_paginated "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100")" || reviews_ok=0
+
+          # An unreadable body is a missing answer too, so a jq failure clears
+          # the same flag a failed call would.
+          check_done=false check_seen=false
+          if [ "$checks_ok" = 1 ]; then
+            check_done="$(ask "$checks" "$defs"'.check_runs | arr | map(select(.status == "completed")) | length > 0')" || checks_ok=0
+            check_seen="$(ask "$checks" "$defs"'.check_runs | arr | length > 0')" || checks_ok=0
+          fi
+          review_at_head=false review_seen=false
+          if [ "$reviews_ok" = 1 ]; then
+            review_at_head="$(ask "$reviews" "$defs"'pages | mine | map(select(.commit_id == env.HEAD_SHA)) | length > 0')" || reviews_ok=0
+            review_seen="$(ask "$reviews" "$defs"'pages | mine | length > 0')" || reviews_ok=0
+          fi
+          rule_expects=false
+          if [ "$rules_ok" = 1 ]; then
+            rule_expects="$(ask "$rules" "$defs"'arr | map(select(.type == "copilot_code_review")) | length > 0')" || rules_ok=0
+          fi
+
+          # Names the human action on purpose: there is no API that triggers
+          # a Copilot review, so "wait and hope" is not a complete
+          # instruction when the auto-request never fired.
+          awaiting="::error::waiting for Copilot review at $HEAD_SHA (no completed '$COPILOT_CHECK' check run and no posted review yet). Copilot is usually requested automatically when you push; if nothing appears after a few minutes, request it by hand from the PR sidebar under Reviewers -> Copilot (a draft PR or an exhausted review quota suppresses the automatic request). This job re-runs itself when the review posts; if it does not, open this CI run and pick Re-run jobs, then Re-run failed jobs."
+
+          # 1. Arrived, whatever it concluded.
+          if [ "$check_done" = true ] || [ "$review_at_head" = true ]; then
+            echo "Copilot's review ($COPILOT_CHECK) arrived at $HEAD_SHA."
+            exit 0
+          fi
+          # 2. Expected by configuration: the base branch carries the rule.
+          if [ "$rule_expects" = true ]; then
+            echo "$BASE_BRANCH's rules include copilot_code_review: the review is expected by configuration."
+            echo "$awaiting"
+            exit 1
+          fi
+          # 3. No rule: probe live involvement. GitHub CONSUMES the reviewer
+          #    request once the review posts, so an OLDER sha's review counts
+          #    as involvement - the re-review is awaited - not as arrival.
+          pull_ok=1
+          pull="$(api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")" || pull_ok=0
+          requested=false
+          if [ "$pull_ok" = 1 ]; then
+            requested="$(ask "$pull" "$defs"'.requested_reviewers | arr | map(select(.login | is_copilot)) | length > 0')" || pull_ok=0
+          fi
+          if [ "$check_seen" = true ] || [ "$review_seen" = true ] || [ "$requested" = true ]; then
+            echo "$awaiting"
+            exit 1
+          fi
+          # 4. Only four clean answers may declare Copilot uninvolved: a failed
+          #    probe may have hidden the rule or a signal, so anything less
+          #    fails closed and a re-run resolves it.
+          if [ "$rules_ok" = 1 ] && [ "$checks_ok" = 1 ] && [ "$reviews_ok" = 1 ] && [ "$pull_ok" = 1 ]; then
+            echo "copilot is not a reviewer on this PR"
+            exit 0
+          fi
+          echo "::error::cannot rule Copilot's involvement in PR #$PR_NUMBER out: at least one API probe failed. Not a verdict on the commit - re-run this job."
+          exit 1
+
   # Conventional Commit PR title, checked inside the gate so branch
   # protection blocks on it. PRs are squash-merged, so the PR title becomes
   # the commit subject and drives release-please versioning: `feat:` (minor),
@@ -178,6 +479,8 @@ jobs:
       - gitleaks
       - yamllint
       - dependency-review
+      - copilot-review
+      - validate-template
       - codeql-javascript
       - pr-title
     runs-on: ubuntu-latest
