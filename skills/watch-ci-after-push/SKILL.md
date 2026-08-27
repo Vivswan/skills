@@ -68,6 +68,38 @@ In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins t
 - All green: one line ("CI passed: <workflow names>").
 - Any failure: the failing workflow and job names, the log excerpt that shows the actual error, and the run URL. Excerpt, not the full log.
 
+## Sleeping on PR Activity
+
+Waiting for a review, a reply, or a merge after the push? Never poll the PR from the session: every poll spends tokens on "nothing changed yet". Run the bundled waiter as a background shell command (same pattern as the CI watcher above) and act when it exits:
+
+```bash
+bun "<skill-dir>/scripts/wait-for-pr-event.mts" <pr-number> --repo <owner/name> > /tmp/pr-wait.out 2>&1
+```
+
+- `--until` picks the watched events from `comment,review,checks,merge` (default: `comment,review`).
+- `--interval` sets seconds between polls (default 45, minimum 15); `--timeout` sets seconds before giving up (default 1800).
+- The waiter reads a complete baseline first (comment, thread-reply, and review-thread counts via GraphQL `isResolved`, the latest review, per-check conclusions, merged state) and exits 2 instead of waiting when that read fails.
+- At the deadline it makes one final bounded read, so the closing snapshot is current and a delta landing in the last window still exits 0.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | a watched event happened; the output names it (`new review by <login>`, `unresolved threads 0 -> 2`, `check <name> -> failure`, merged) |
+| 1 | the PR merged or closed while that outcome was not watched; the wait's job ended |
+| 2 | usage or tooling error (bad args, gh missing or failing); it never retries forever |
+| 3 | timeout with no watched change; the baseline and final snapshots are in the output |
+
+Worked example, babysitting a PR between review rounds:
+
+```bash
+bun "<skill-dir>/scripts/wait-for-pr-event.mts" 123 --until comment,review --timeout 3600 > /tmp/pr-123-wait.out 2>&1
+# read /tmp/pr-123-wait.out when it exits:
+#   exit 0 -> handle the named event (reply, fix, push, re-request review)
+#   exit 1 -> the PR merged or closed; stop babysitting
+#   exit 3 -> no activity this hour; re-arm the waiter or escalate to the user
+```
+
+The drift test also pins this waiter's invocation, its `--until` set, and all four exit codes to `scripts/wait-for-pr-event.mts`.
+
 ## Fallback Without gh
 
 - `gh` unavailable or unauthenticated: report the push and give the commit's checks URL (`https://github.com/<owner>/<repo>/commit/<sha>/checks`). Do not silently skip the watch.
