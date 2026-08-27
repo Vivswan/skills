@@ -75,7 +75,7 @@ function validateRootPluginManifest(): void {
   }
 }
 
-function validateSkillDir(skillDir: string): void {
+export function validateSkillDir(skillDir: string): void {
   const skillMd = join(skillDir, "SKILL.md");
   const readme = join(skillDir, "README.md");
   const pluginJson = join(skillDir, ".codex-plugin", "plugin.json");
@@ -103,6 +103,19 @@ function validateSkillDir(skillDir: string): void {
   }
   if (description.length > MAX_DESCRIPTION_LENGTH) {
     fail(`${rel(skillMd)}: description exceeds ${MAX_DESCRIPTION_LENGTH} characters`);
+  }
+
+  // The npx skills CLI silently drops metadata.internal skills from installs
+  // and listings: on a published skill the key makes it vanish for consumers
+  // while every repo gate stays green. Only template/ carries it (required
+  // there, see validateTemplate).
+  const metadata = frontmatter.metadata;
+  if (isRecord(metadata) && "internal" in metadata) {
+    fail(
+      `${rel(skillMd)}: metadata.internal is not allowed on a published skill --` +
+        " the npx skills CLI silently drops internal skills at install time" +
+        " (only template/SKILL.md carries it)",
+    );
   }
 
   const plugin = loadJsonObject(pluginJson);
@@ -147,4 +160,7 @@ function main(): void {
   console.log(`Skill validation passed (${dirs.length} skill(s) checked).`);
 }
 
-runChecks(main);
+// Importable for tests (tests/validate-skills.test.ts exercises
+// validateSkillDir on fixtures); run the full validation only as the entry
+// point.
+if (import.meta.main) runChecks(main);

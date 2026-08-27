@@ -19,9 +19,9 @@ import { ROOT } from "../scripts/lib";
 // overwrites corrupted the shared .git/config). The hook must scrub every
 // GIT_* variable before running the checks. The old snapshot guard over
 // .git/config is gone: the hermetic test environment (see
-// tests/git-isolation.test.ts) makes the repository unreachable from tests
-// by construction, so the hook only scrubs, runs the checks, and propagates
-// their exit status.
+// tests/git-isolation.test.ts) blocks accidental (cwd- or env-based)
+// discovery of the repository from tests - not deliberate targeting - so the
+// hook only scrubs, runs the checks, and propagates their exit status.
 //
 // A fake `bun` on PATH stands in for the check pipeline; scratch repos in
 // tmp stand in for the real repository ("victim") and a test fixture. The

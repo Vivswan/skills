@@ -8,7 +8,8 @@
  * commits landing on real branches, core.bare/identity overwrites in the
  * shared .git/config). The previous pre-commit hook answered with a config
  * snapshot guard - detection after the fact. This environment replaces it
- * structurally: tests cannot reach the real repository in the first place.
+ * structurally: accidental (cwd- or env-based) discovery of the real
+ * repository is blocked; deliberate targeting of its path is not.
  *
  * Built by scripts/run-tests.ts BEFORE the test process starts, because Bun
  * hands children spawned without an explicit `env` the environ snapshot
