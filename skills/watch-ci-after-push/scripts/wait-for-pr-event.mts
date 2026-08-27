@@ -625,7 +625,10 @@ async function main(): Promise<never> {
       }
       exitTimeout();
     }
-    const remainingMs = deadline - Date.now();
+    // Clamp: the clock may cross the deadline between the gate above and
+    // here, and a negative delay must not reach the timer. Zero remaining
+    // still marks the next read as final.
+    const remainingMs = Math.max(deadline - Date.now(), 0);
     const waitSeconds = consecutiveFailures > 0 ? POLL_RETRY_SECONDS : options.intervalSeconds;
     const sleepMs = Math.min(waitSeconds * 1000, remainingMs);
     await sleep(sleepMs);
