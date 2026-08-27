@@ -26,6 +26,17 @@ import { ROOT } from "./lib";
 // Known limits of the scratch cwd: flags that WRITE repo-relative outputs
 // (--coverage-dir, reporter files) or discover the repo from the cwd
 // (--changed) would need absolute paths; nothing in this repo uses them.
+// --pass-with-no-tests would turn the zero-test failure mode into silent
+// success - the exact state this launcher exists to prevent (an option
+// value that happens to name a real path can suppress the default target;
+// harmless while zero tests still exit 1, fatal combined with this flag).
+if (process.argv.includes("--pass-with-no-tests")) {
+  console.error(
+    "run-tests: --pass-with-no-tests is not supported; zero tests must stay a failure.",
+  );
+  process.exit(1);
+}
+
 // Only an argument naming a real path counts as a target: bun test ORs
 // positional filters together, and a bare word can be an option's value
 // (--test-name-pattern baz) just as well as a name filter, so anything that

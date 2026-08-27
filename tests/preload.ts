@@ -16,7 +16,6 @@
  */
 
 import { hermeticGitEnv } from "../scripts/hermetic-git-env";
-import { ROOT } from "../scripts/lib";
 
 function refuse(reason: string): never {
   throw new Error(
@@ -46,26 +45,34 @@ if (discovery.exitCode === 0) {
   );
 }
 
-// Probe 2: the machine's global and system git config must be masked for
-// default-env children (so fixtures neither depend on nor write through to
-// the real configuration), and the discovery ceiling must cover the
-// repository root - probe 1 alone cannot tell "ceiling in place" from "this
-// run merely started outside any repository", and only the ceiling contains
-// a later child given an explicit cwd inside the repository's subtree.
-const probe = Bun.spawnSync(
-  [
-    "/bin/sh",
-    "-c",
-    'printf "%s\\n%s\\n%s" "$GIT_CONFIG_GLOBAL" "$GIT_CONFIG_SYSTEM" "$GIT_CEILING_DIRECTORIES"',
-  ],
-  { stdout: "pipe" },
-);
-const [configGlobal, configSystem, ceiling] = probe.stdout.toString().split("\n");
-if (configGlobal !== "/dev/null" || configSystem !== "/dev/null") {
-  refuse("GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM are not masked for child processes");
+// Probe 2: the child-visible GIT_* surface must be EXACTLY the hermetic set
+// the launcher builds - same keys, same values, nothing extra. Spot-checking
+// a few variables would miss redirects the discovery probe cannot see (a
+// stray GIT_CONFIG pointing at the real .git/config, say: discovery still
+// fails from a scratch cwd, yet a default-env `git config` write would land
+// in the real file). Measured with env -0 so multi-line values cannot split.
+const dump = Bun.spawnSync(["env", "-0"], { stdout: "pipe" });
+const childGit = new Map<string, string>();
+for (const entry of dump.stdout.toString().split("\0")) {
+  const eq = entry.indexOf("=");
+  if (eq === -1) continue;
+  const key = entry.slice(0, eq);
+  if (key.toUpperCase().startsWith("GIT_")) childGit.set(key, entry.slice(eq + 1));
 }
-if (!(ceiling ?? "").split(":").includes(ROOT)) {
-  refuse("GIT_CEILING_DIRECTORIES does not cover the repository root for child processes");
+const expectedGit = new Map(
+  Object.entries(hermeticGitEnv({})).filter(([key]) => key.startsWith("GIT_")),
+);
+for (const [key, value] of expectedGit) {
+  if (childGit.get(key) !== value) {
+    refuse(
+      `child-visible ${key} is ${JSON.stringify(childGit.get(key))}, expected ${JSON.stringify(value)}`,
+    );
+  }
+}
+for (const key of childGit.keys()) {
+  if (!expectedGit.has(key)) {
+    refuse(`child-visible environment carries an unexpected git variable: ${key}`);
+  }
 }
 
 const env = hermeticGitEnv(process.env);

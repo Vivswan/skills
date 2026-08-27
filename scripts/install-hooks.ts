@@ -11,17 +11,30 @@
  * switching to one). The installed dispatcher fails closed instead: it
  * refuses the commit when the checkout carries no hook logic.
  *
- * The install never destroys configuration or hooks it does not own: only
- * the known husky hooksPath is migrated away, any other local value or any
- * value in an outer scope (global, system, include, worktree) aborts the
- * install loudly, and a pre-existing hooks/pre-commit file not written by
- * this script is left untouched (also aborting the install).
+ * Ordering invariant: every abort condition is checked BEFORE anything is
+ * mutated, so a refused install leaves the previous hook wiring fully
+ * intact - never a state where husky is unwired but the dispatcher is not
+ * yet installed. The install never destroys what it does not own: only the
+ * known husky hooksPath is migrated, any other value in any scope aborts,
+ * and a pre-existing hooks/pre-commit (file, symlink, or anything else) not
+ * written by this script is left untouched.
  *
  * Outside a git repository (an exported tarball, say) there is nothing to
- * wire, and installs must not fail there.
+ * wire, and installs must not fail there - but a directory that HAS a .git
+ * entry which git cannot read is a broken checkout, not a tarball, and
+ * skipping it would recreate the silent no-hook state.
  */
 
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { ROOT } from "./lib";
 
@@ -51,65 +64,78 @@ function git(...args: string[]) {
   return { code: result.exitCode, stdout: raw.trim(), raw };
 }
 
+function fail(message: string): never {
+  console.error(`install-hooks: ${message}`);
+  process.exit(1);
+}
+
+/** Untrimmed, line-exact output values: only the OUTPUT TERMINATOR (the
+ * empty element a trailing newline leaves after split) is dropped - an empty
+ * line before it is a real, EMPTY configuration value and must be judged
+ * like any other. Trimming would launder " .husky/_" into the recognized
+ * form. */
+function lines(raw: string): string[] {
+  const result = raw.split("\n");
+  if (result.at(-1) === "") result.pop();
+  return result;
+}
+
+// --- Checks: nothing below this line mutates anything until they all pass.
+
 if (git("rev-parse", "--git-dir").code !== 0) {
+  // No repository is fine (tarball install); a .git entry git cannot read
+  // is a broken checkout and must not silently end up hook-less.
+  if (statSync(join(process.cwd(), ".git"), { throwIfNoEntry: false })) {
+    fail(
+      "a .git entry exists but git cannot read the repository; fix the checkout, then rerun 'bun install'.",
+    );
+  }
   console.error("install-hooks: not inside a git repository; skipping hook installation.");
   process.exit(0);
 }
 
-// Migrate ONLY the known husky hooksPath (".husky/_", relative or absolute).
-// Any other local value is someone's intentional configuration: abort
-// instead of silently deleting it. The edit is pinned to the LOCAL scope so
-// no environment or option can retarget it.
+// Local hooksPath: only the known husky shapes are ours to migrate - the
+// exact relative ".husky/_" or an ABSOLUTE path ending "/.husky/_" (husky
+// writes both). Anything else, including an empty value, is someone's
+// intentional configuration and aborts.
 const local = git("config", "--local", "--get-all", "core.hooksPath");
-if (local.code === 0) {
-  // Untrimmed, line-exact values: trimming would launder " .husky/_" into
-  // the recognized form, and only the OUTPUT TERMINATOR is dropped - an
-  // empty line before it is a real, EMPTY hooksPath value, which is not
-  // husky's and must abort like any other foreign value (filtering all
-  // empties would let it pass the every() vacuously and be deleted).
-  const values = local.raw.split("\n");
-  if (values.at(-1) === "") values.pop();
-  const isHusky = (value: string) =>
-    value === ".husky/_" || (isAbsolute(value) && value.endsWith("/.husky/_"));
-  if (values.length === 0 || !values.every(isHusky)) {
-    console.error(
-      `install-hooks: local core.hooksPath is set to something this repo did not write:\n  ${values.join("\n  ")}\n` +
-        "Migrate it yourself (git config --local --unset-all core.hooksPath), then rerun 'bun install'.",
-    );
-    process.exit(1);
-  }
-  const unset = git("config", "--local", "--unset-all", "core.hooksPath");
-  if (unset.code !== 0) {
-    console.error(
-      `install-hooks: could not remove the husky core.hooksPath (git exited ${unset.code}).`,
-    );
-    process.exit(1);
-  }
-} else if (local.code !== 1) {
-  console.error(`install-hooks: could not read local core.hooksPath (git exited ${local.code}).`);
-  process.exit(1);
+if (local.code !== 0 && local.code !== 1) {
+  fail(`could not read local core.hooksPath (git exited ${local.code}).`);
+}
+const localValues = local.code === 0 ? lines(local.raw) : [];
+const isHusky = (value: string) =>
+  value === ".husky/_" || (isAbsolute(value) && value.endsWith("/.husky/_"));
+if (local.code === 0 && (localValues.length === 0 || !localValues.every(isHusky))) {
+  fail(
+    `local core.hooksPath is set to something this repo did not write:\n  ${localValues.join("\n  ")}\n` +
+      "Migrate it yourself (git config --local --unset-all core.hooksPath), then rerun 'bun install'.",
+  );
 }
 
-// If an EFFECTIVE hooksPath survives (global/system/include/worktree scope),
-// refuse: the default hooks directory would be shadowed at commit time, and
-// writing into the configured location could clobber a user-wide hook.
-const effective = git("config", "--show-scope", "--get-all", "core.hooksPath");
-if (effective.code === 0) {
-  console.error(
-    `install-hooks: core.hooksPath is still set outside the repository scope:\n  ${effective.stdout}\n` +
+// hooksPath in any OTHER scope (global/system/include/worktree) aborts, and
+// it aborts BEFORE the local unset: the default hooks directory would be
+// shadowed at commit time, and writing into the configured location could
+// clobber a user-wide hook. Exit 1 is "no such key"; anything above it is an
+// unreadable configuration, which fails closed instead of reading as unset.
+const scoped = git("config", "--show-scope", "--get-all", "core.hooksPath");
+if (scoped.code !== 0 && scoped.code !== 1) {
+  fail(`could not enumerate core.hooksPath scopes (git exited ${scoped.code}).`);
+}
+const outer = (scoped.code === 0 ? lines(scoped.raw) : []).filter(
+  (line) => !line.startsWith("local\t"),
+);
+if (outer.length > 0) {
+  fail(
+    `core.hooksPath is still set outside the repository scope:\n  ${outer.join("\n  ")}\n` +
       "Remove it (git config --unset in that scope), then rerun 'bun install'.",
   );
-  process.exit(1);
 }
 
 // The common hooks directory, resolved independently of configuration
 // (`--git-path hooks` would honor a hooksPath; `--git-common-dir` cannot).
 const commonDir = git("rev-parse", "--git-common-dir");
 if (commonDir.code !== 0) {
-  console.error(
-    `install-hooks: could not resolve the common git directory (git exited ${commonDir.code}).`,
-  );
-  process.exit(1);
+  fail(`could not resolve the common git directory (git exited ${commonDir.code}).`);
 }
 const hooksDir = join(
   isAbsolute(commonDir.stdout) ? commonDir.stdout : resolve(commonDir.stdout),
@@ -118,19 +144,41 @@ const hooksDir = join(
 const target = join(hooksDir, "pre-commit");
 
 // Overwrite only our own previous installs (recognized by the dispatcher's
-// self-description); a pre-existing hook this script did not write is
-// user- or tool-managed and must not be destroyed.
-const existing = statSync(target, { throwIfNoEntry: false })?.isFile()
-  ? readFileSync(target, "utf-8")
-  : undefined;
-if (existing !== undefined && !existing.includes("scripts/install-hooks.ts")) {
-  console.error(
-    `install-hooks: ${target} already exists and was not installed by this repo; refusing to overwrite it.\n` +
+// self-description). lstat, not stat: a symlink here - even a dangling one -
+// is someone else's wiring, and following it would judge (and later write)
+// a file OUTSIDE the hooks directory.
+const existing = lstatSync(target, { throwIfNoEntry: false });
+if (existing && !existing.isFile()) {
+  fail(
+    `${target} exists and is not a regular file (symlink or otherwise); refusing to touch it.\n` +
       "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
   );
-  process.exit(1);
+}
+if (existing?.isFile() && !readFileSync(target, "utf-8").includes("scripts/install-hooks.ts")) {
+  fail(
+    `${target} already exists and was not installed by this repo; refusing to overwrite it.\n` +
+      "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
+  );
 }
 
+// --- Mutations: every abort condition has passed.
+
+if (local.code === 0) {
+  const unset = git("config", "--local", "--unset-all", "core.hooksPath");
+  if (unset.code !== 0) {
+    fail(`could not remove the husky core.hooksPath (git exited ${unset.code}).`);
+  }
+}
+
+// Atomic replacement: a plain copy TRUNCATES the live shared hook first, so
+// a commit racing the install would execute an empty file and pass
+// unchecked. Write-then-rename swaps complete content for complete content.
 mkdirSync(hooksDir, { recursive: true });
-copyFileSync(join(ROOT, ".githooks", "pre-commit"), target);
-chmodSync(target, 0o755);
+const staging = join(hooksDir, `.pre-commit.installing.${process.pid}`);
+try {
+  writeFileSync(staging, readFileSync(join(ROOT, ".githooks", "pre-commit")));
+  chmodSync(staging, 0o755);
+  renameSync(staging, target);
+} finally {
+  rmSync(staging, { force: true });
+}

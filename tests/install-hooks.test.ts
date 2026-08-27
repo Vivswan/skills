@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
@@ -150,6 +159,59 @@ describe("install-hooks", () => {
       expect(readFileSync(target, "utf-8")).toBe("#!/bin/sh\necho user-managed hook\n");
     } finally {
       rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("an abort AFTER validation leaves the husky wiring fully intact", () => {
+    // Ordering invariant: a checkout with a migratable husky hooksPath AND a
+    // foreign pre-existing hook must abort with the hooksPath STILL SET -
+    // unsetting first would leave husky unwired with no dispatcher
+    // installed, a hook-less state from a refused install.
+    const repo = makeRepo();
+    try {
+      expect(sh(repo, "git", "config", "core.hooksPath", ".husky/_").code).toBe(0);
+      const target = join(repo, ".git", "hooks", "pre-commit");
+      writeFileSync(target, "#!/bin/sh\necho user-managed hook\n");
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("refusing to overwrite");
+      expect(sh(repo, "git", "config", "core.hooksPath").stdout).toBe(".husky/_");
+      expect(readFileSync(target, "utf-8")).toBe("#!/bin/sh\necho user-managed hook\n");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a symlinked pre-commit aborts without following it", () => {
+    // lstat, not stat: a DANGLING symlink looks absent through stat, and a
+    // copy would follow it and create the linked-to file outside the hooks
+    // directory.
+    const repo = makeRepo();
+    try {
+      const target = join(repo, ".git", "hooks", "pre-commit");
+      const linkedTo = join(repo, "somewhere-else");
+      symlinkSync(linkedTo, target);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("not a regular file");
+      expect(lstatSync(target).isSymbolicLink()).toBe(true);
+      expect(existsSync(linkedTo)).toBe(false); // never created through the link
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a .git entry git cannot read fails the install instead of skipping", () => {
+    // Skipping is only for genuine non-repositories (tarball installs); a
+    // broken checkout skipped silently would end up with no hook at all.
+    const dir = mkdtempSync(join(tmpdir(), "install-hooks-broken-"));
+    try {
+      writeFileSync(join(dir, ".git"), "not a gitdir pointer\n");
+      const r = install(dir);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("git cannot read the repository");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
