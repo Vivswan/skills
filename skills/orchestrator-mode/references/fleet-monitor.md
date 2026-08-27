@@ -147,7 +147,7 @@ Two disaster-shaped non-disasters:
   - An order with no dedicated shape (the hold-silent order above, say) is recorded as a standing `flag` on the target worker (`flag` takes arbitrary text) and retracted when lifted.
 
   So no standing state ever lives only in message history.
-- **An unacknowledged directive is undelivered.** A directive sent as a message is in force only once acknowledged; until then the sender treats it as not delivered and re-sends it (or writes it to the ledger, where the next sweep must read it). The monitor's half: acknowledge every lead directive in its next report. Re-sending is safe because every directive is written idempotent, per `references/spawn-briefs.md`, Directives and Steps Are Idempotent.
+- **An unacknowledged directive is undelivered.** A directive sent as a message is in force only once acknowledged; until then the sender treats it as not delivered and re-sends it (or writes it to the ledger, where the next sweep must read it). The monitor's half: acknowledge every lead directive in its next report. Re-sending is safe because every directive is written to be idempotent, per `references/spawn-briefs.md`, Directives and Steps Are Idempotent.
 - Never re-send an unchanged strict call or an unchanged flag: it is narration, and it trains the lead to skim the next one.
 - Retract the moment a call goes void (**a standing flag that is void is worse than no flag**), and re-measure immediately before sending a call or its retraction alike, because both are equally perishable (a dirty state once lasted under 43 seconds, spanning the two commands of a single sweep).
 - When messages cross, answer "already sent at HH:MM" rather than staying silent; silence reads as an unmet obligation (seven crossings in one shift).

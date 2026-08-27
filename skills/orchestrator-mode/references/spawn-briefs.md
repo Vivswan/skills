@@ -96,9 +96,9 @@ Handoff: commit finished work to wt/rate-limit (do not push). Signal the
   line per lead message you received. Re-read your FULL inbox first: a
   signal that omits a pending directive is not a final signal.
 Rules: no TODO/FIXME markers; do the work or escalate it. Comments only
-  for what code cannot show. Directives can arrive twice or late: check
-  current state first; report an already-applied one as a no-op. Never
-  stop to "wait" for background children: after fanning out, your next
-  action on wake is reading their output. The only permitted stop is
-  your final signal.
+  for what code cannot show. Directives and your own steps must be safe
+  to arrive or run twice: check current state before acting, and report
+  an already-applied one as a no-op. Never stop to "wait" for background
+  children: after fanning out, your next action on wake is reading their
+  output. The only permitted stop is your final signal.
 ```
