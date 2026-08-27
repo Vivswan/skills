@@ -26,7 +26,7 @@ Scope:
 - **Descriptions are triggers**: short, "Use when ...", stating the one moment the thing should fire, never summarizing contents. A summary-shaped description is an activation bug.
 - **Skills** carry runnable copy-paste blocks and worked examples a cold agent can follow.
 - **A skill roster stays lean and disjoint.** The design conditions for creating, combining, and splitting skills:
-  - One specific firing moment per skill, all triggers pairwise disjoint: an overlap is a defect, resolved by combining or sharpening, never tolerated (this skill's create-and-fix pairing is such a combination: one home, one reader).
+  - Every firing moment has exactly one home: a skill states its specific moments, and triggers across the roster are pairwise disjoint. An overlap is a defect, resolved by combining or sharpening, never tolerated (this skill's create-and-fix lifecycle is such a combination: its moments share one home, one reader).
   - Fewer skills beats more: combine two skills that serve the same reader at the same moment.
   - No skill extremely complex or big: split by firing moment when one grows. A complex skill never absorbs a sibling even when triggers overlap; sharpen the descriptions instead.
   - Skimmable throughout: short front-loaded paragraphs, no text blobs (the example-led rule above governs content order); readability for the reader outranks style rules, and accuracy rules always bind.
