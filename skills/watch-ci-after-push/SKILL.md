@@ -76,7 +76,7 @@ In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins t
 
 ## After a Merge
 
-A merge is a push to the mainline by other hands, and nothing above covers it by accident: after `gh pr merge`, `git rev-parse HEAD` in the checkout still names the TOPIC branch's tip, while the squash or merge commit is a new SHA that exists only on the mainline. A watcher started on the topic tip proves nothing about the merged pipeline. Resolve the mainline tip first, then run the same workflow (discovery, background watch, report) on that SHA:
+A merge is a push to the mainline by other hands, and nothing above covers it by accident: after `gh pr merge`, `git rev-parse HEAD` in the checkout still names the TOPIC branch's tip, while the squash or merge commit is a new SHA that exists only on the mainline. A watcher started on the topic tip proves nothing about the merged pipeline. With a merge queue, `gh pr merge` can return success on ENQUEUE, before the commits reach the mainline; wait until the PR is actually merged (`mergedAt` set) before fetching, or the fetch grabs the pre-merge tip. Then resolve the mainline tip and run the same workflow (discovery, background watch, report) on that SHA:
 
 ```bash
 git fetch <base-remote> <mainline>    # origin in a plain clone; in a fork checkout, the
