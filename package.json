@@ -4,7 +4,7 @@
   "license": "SEE LICENSE IN LICENSE.md",
   "type": "module",
   "scripts": {
-    "prepare": "git config core.hooksPath .githooks",
+    "prepare": "bun scripts/install-hooks.ts",
     "typecheck": "tsc -p .",
     "validate": "bun scripts/validate-skills.ts",
     "link": "bun scripts/link-agents.ts",

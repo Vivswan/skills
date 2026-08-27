@@ -1,22 +1,32 @@
 #!/usr/bin/env bun
 /**
- * Pre-commit hook logic, run by the .githooks/pre-commit shim with the
- * repository root as the working directory (githooks(5): pre-commit runs at
- * the top of the working tree).
+ * Pre-commit hook logic, invoked by the dispatcher that
+ * scripts/install-hooks.ts installs into the shared hooks directory. The
+ * dispatcher runs with the repository root as the working directory
+ * (githooks(5): pre-commit runs at the top of the working tree).
  *
- * The old .husky/pre-commit additionally guarded .git/config against
- * mutation by leaky tests; that guard is gone because tests/preload.ts now
- * makes the real repository unreachable from every test by construction.
+ * The previous hook additionally guarded .git/config against mutation by
+ * leaky tests; that guard is gone because the hermetic test environment
+ * (scripts/hermetic-git-env.ts) makes the real repository unreachable from
+ * every test by construction.
  */
 
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
+import { constants } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
 
+function entry(path: string) {
+  return statSync(path, { throwIfNoEntry: false });
+}
+
 // Manual invocation from a subdirectory would run the checks in the wrong
-// place; git itself always provides the repository root as the cwd.
-if (!existsSync(join(root, ".git"))) {
+// place; git itself always provides the repository root as the cwd. A .git
+// directory is the main checkout, a .git file a linked worktree - both are
+// repository roots.
+const dotGit = entry(join(root, ".git"));
+if (!dotGit?.isDirectory() && !dotGit?.isFile()) {
   console.error(
     `pre-commit: ${root} is not a repository root; run from the top of the working tree.`,
   );
@@ -24,7 +34,7 @@ if (!existsSync(join(root, ".git"))) {
 }
 
 // Refuse to mutate the repo during commits. Dependencies should already exist.
-if (!existsSync(join(root, "node_modules"))) {
+if (!entry(join(root, "node_modules"))?.isDirectory()) {
   console.error("Dependencies are missing. Run 'bun install' before committing.");
   process.exit(1);
 }
@@ -47,4 +57,7 @@ const check = Bun.spawnSync(["bun", "run", "check"], {
   stdout: "inherit",
   stderr: "inherit",
 });
-process.exit(check.exitCode ?? 1);
+if (check.exitCode !== null) process.exit(check.exitCode);
+// Shell-style status when the check dies by signal (e.g. 143 for SIGTERM).
+const signalNumber = check.signalCode ? constants.signals[check.signalCode] : undefined;
+process.exit(signalNumber !== undefined ? 128 + signalNumber : 1);

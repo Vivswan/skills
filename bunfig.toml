@@ -1,6 +1,6 @@
-# [test].preload refuses any bun test run whose OS environment was not built
-# by the scripts/run-tests.ts launcher (`bun run test`), and pins process.env
-# to the same hermetic git environment; see tests/preload.ts.
+# [test].preload verifies - by spawning probe children - that any bun test
+# run started here has a hermetic git birth environment, and refuses the run
+# otherwise; the canonical entry point is `bun run test`. See tests/preload.ts.
 
 [test]
 preload = ["./tests/preload.ts"]

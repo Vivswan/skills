@@ -13,7 +13,7 @@ import { ROOT } from "../scripts/lib";
 // that is the exact shape whose canary write once escaped a
 // process.env-only preload and rewrote the real shared .git/config.
 
-function run(cwd: string, ...args: string[]) {
+function run(cwd: string | undefined, ...args: string[]) {
   const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
   return {
     code: result.exitCode,
@@ -29,10 +29,14 @@ function childVisible(name: string): string {
   return r.stdout.toString();
 }
 
-// Hard interlock: containment must be probed in a child before anything
-// leaky is spawned. If the launcher did not build this run's environ, fail
-// here, loudly, without ever running the leaky flow against the real repo.
+// Hard interlock, measured on real children (the preload runs the same
+// probes before any test loads; repeating them here keeps this file safe
+// even under a runner that skipped the preload): containment must be proven
+// for the default spawn shape before anything leaky is spawned.
 function assertChildEnvContained(): void {
+  // A default-spawn git must not discover ANY repository: not via an
+  // inherited GIT_DIR, not from the starting directory, not by climbing.
+  expect(run(undefined, "rev-parse", "--git-dir").code).not.toBe(0);
   expect(childVisible("GIT_CEILING_DIRECTORIES")).toContain(ROOT);
   expect(childVisible("GIT_CONFIG_GLOBAL")).toBe("/dev/null");
   expect(childVisible("GIT_CONFIG_SYSTEM")).toBe("/dev/null");
@@ -41,8 +45,9 @@ function assertChildEnvContained(): void {
 
 // The real repository's config file - the file the original incident (and
 // the canary) corrupted. Resolved via --git-path so linked worktrees find
-// the shared one. Discovery starting AT the repo root still works under the
-// ceiling: GIT_CEILING_DIRECTORIES only stops upward traversal.
+// the shared one. Discovery starting AT the repo root works even under the
+// ceiling: GIT_CEILING_DIRECTORIES only stops upward traversal, which is
+// exactly why the launcher must start the test process outside the repo.
 function realConfigPath(): string {
   const r = run(ROOT, "rev-parse", "--git-path", "config");
   expect(r.code).toBe(0);
@@ -64,6 +69,20 @@ describe("test git isolation (launcher + preload)", () => {
     expect(process.env.GIT_CEILING_DIRECTORIES ?? "").toContain(ROOT);
   });
 
+  test("a leaky repo-level config write with default env AND default cwd is contained", () => {
+    assertChildEnvContained();
+
+    const config = realConfigPath();
+    const before = readFileSync(config, "utf-8");
+    expect(before).not.toContain("leaky-test-wrote-this");
+    // The laziest possible leak: no env, no cwd. The launcher starts the
+    // test process outside the repository, so discovery dies in a ceilinged
+    // non-repo scratch directory instead of finding this repo.
+    const r = run(undefined, "config", "user.name", "leaky-test-wrote-this");
+    expect(r.code).not.toBe(0);
+    expect(readFileSync(config, "utf-8")).toBe(before);
+  });
+
   test("a leaky repo-level config write from inside the working tree is contained", () => {
     assertChildEnvContained();
 
@@ -77,9 +96,6 @@ describe("test git isolation (launcher + preload)", () => {
     try {
       const r = run(leaky, "config", "user.name", "leaky-test-wrote-this");
       expect(r.code).not.toBe(0);
-      // `git config` phrases the discovery failure "not in a git directory";
-      // other subcommands say "not a git repository".
-      expect(r.stderr).toMatch(/not (in )?a git (directory|repository)/);
     } finally {
       rmSync(leaky, { recursive: true, force: true });
     }

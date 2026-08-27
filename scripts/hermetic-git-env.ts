@@ -6,7 +6,7 @@
  * fixture git operation in a test with no env hygiene of its own then
  * mutates the real repository instead of its fixture (observed: fixture
  * commits landing on real branches, core.bare/identity overwrites in the
- * shared .git/config). The old .husky/pre-commit answered with a config
+ * shared .git/config). The previous pre-commit hook answered with a config
  * snapshot guard - detection after the fact. This environment replaces it
  * structurally: tests cannot reach the real repository in the first place.
  *
@@ -22,10 +22,6 @@
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { ROOT } from "./lib";
-
-/** Present (as "1") only in environments built by hermeticGitEnv at process
- * launch; tests/preload.ts refuses to run without it. */
-export const HERMETIC_GIT_ENV_MARKER = "HERMETIC_GIT_ENV";
 
 /** Pure: builds a child environment from a base; never mutates the input. */
 export function hermeticGitEnv(base: NodeJS.ProcessEnv): Record<string, string> {
@@ -60,6 +56,5 @@ export function hermeticGitEnv(base: NodeJS.ProcessEnv): Record<string, string> 
   env.GIT_COMMITTER_NAME = "fixture";
   env.GIT_COMMITTER_EMAIL = "fixture@example.com";
 
-  env[HERMETIC_GIT_ENV_MARKER] = "1";
   return env;
 }
