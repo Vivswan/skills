@@ -31,7 +31,7 @@ Verify all three before `git worktree remove`, freshly, in this order:
 
 After removing:
 
-- **Remove with `git worktree remove`, never a bare `rm -rf`.** Manual deletion leaves the worktree's administrative entry in the shared git dir, so git keeps treating its branch as checked out (and blocks deleting it) until the entry is pruned (`git worktree prune`; git also expires stale entries on its own per `gc.worktreePruneExpire`, but never count on that timing). After a deletion that already happened manually, prune explicitly.
+- **Remove with `git worktree remove`, never a bare `rm -rf`.** Manual deletion leaves the worktree's administrative entry in the shared git dir, so git keeps treating its branch as checked out (and blocks deleting it) until the entry is pruned (`git worktree prune`; git also expires stale entries on its own per `gc.worktreePruneExpire`, but never count on that timing). After a deletion that already happened manually, prune explicitly, but anchor first: pruning deletes each swept entry's private HEAD and reflog, and it sweeps EVERY missing unlocked tree in one pass, not just yours. For each prunable entry (`git worktree list --porcelain` marks them), read its recorded tip from `.git/worktrees/<name>/HEAD` and put a branch or tag on any detached commit (rule 2) before running the prune.
 - **Removal does not kill survivors.** A finished actor's wedged test chain can outlive its deleted directory for hours. Re-check and kill any process whose cwd names the deleted path.
 
 ### Deleting the branch too
