@@ -30,6 +30,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -94,6 +95,21 @@ if (git("rev-parse", "--git-dir").code !== 0) {
     );
   }
   console.error("install-hooks: not inside a git repository; skipping hook installation.");
+  process.exit(0);
+}
+
+// Discovery also succeeds from a package directory merely NESTED inside an
+// unrelated repository (a tarball or git-dependency install of this package
+// into a consumer project); installing there would write the dispatcher
+// into the consumer's hooks directory. Proceed only when the repository's
+// top level IS this working directory - a mismatch (or a bare repository,
+// where --show-toplevel fails) takes the skip path. realpath both sides:
+// macOS tempdirs reach the same directory through /var and /private/var.
+const toplevel = git("rev-parse", "--show-toplevel");
+if (toplevel.code !== 0 || realpathSync(toplevel.stdout) !== realpathSync(process.cwd())) {
+  console.error(
+    "install-hooks: this directory is not the repository's top level (nested install?); skipping hook installation.",
+  );
   process.exit(0);
 }
 

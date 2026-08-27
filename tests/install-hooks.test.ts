@@ -3,6 +3,7 @@ import {
   chmodSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -409,6 +410,22 @@ describe("install-hooks", () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
       rmSync(decoyDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a package directory nested inside an unrelated repository skips untouched", () => {
+    // A tarball or git-dependency install of this package inside a consumer
+    // project must never write the dispatcher into the CONSUMER's hooks.
+    const outer = makeRepo();
+    try {
+      const nested = join(outer, "vendor", "skills-pkg");
+      mkdirSync(nested, { recursive: true });
+      const r = install(nested);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain("not the repository's top level");
+      expect(existsSync(join(outer, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
     }
   });
 
