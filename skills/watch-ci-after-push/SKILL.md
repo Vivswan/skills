@@ -45,10 +45,11 @@ report its full output. Exit 0: all green (skipped runs count as
 pass). Say so in one line. Exit 1: some workflow's latest run ended
 with any non-success, non-skipped conclusion (e.g.
 failure/cancelled/timed_out). Include the FAIL lines and the log
-excerpts. Exit 2: discovery or gh itself failed. Report that as
-tooling trouble, NEVER as a red pipeline. Report even on success;
-never go silent. You watch and report ONLY: never fix, commit, or
-push from this role.
+excerpts. Exit 2: discovery or gh itself failed, or the expected
+workflow (default: the one named "CI") never registered a run on
+the SHA. Report that as tooling trouble, NEVER as a red pipeline.
+Report even on success; never go silent. You watch and report ONLY:
+never fix, commit, or push from this role.
 ```
 
 Fallback without subagents: run the bundled `scripts/watch-ci.sh` as a background shell command. It does discovery, watching, and the failure report in one command. The path is relative to the installed skill folder, not the repo under review. Redirect its output to a file, and read that file when it exits:
@@ -58,10 +59,12 @@ bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.o
 # exit 0: latest run per workflow green (older re-triggered runs are reported
 # as superseded, not judged); 1: some latest run ended with a non-success,
 # non-skipped conclusion (log excerpts in the file); 2: no runs registered or
-# gh failed
+# gh failed, or the expected workflow never registered a run
 ```
 
-In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the exit semantics, the superseded/FAIL/skip lines) to `scripts/watch-ci.sh`. A rename on either side fails CI until doc and script move together.
+The script refuses a vacuous green: the expected workflow - by default the one named `CI` - must be among the discovered runs, or it exits 2 naming what it did find. A repo whose gate workflow has a different name passes `--expect-workflow <name>` (repeatable or comma-separated) before the SHA; names match exactly and case-sensitively, so a comma or newline can never be part of an expected name. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`.
+
+In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the exit semantics, the expected-workflow gate, the superseded/FAIL/skip lines) to `scripts/watch-ci.sh`. A rename on either side fails CI until doc and script move together.
 
 ### 3. Report
 

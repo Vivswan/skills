@@ -11,8 +11,10 @@ import { ROOT } from "../scripts/lib";
 // workflow: only the latest run per workflow is judged (re-decided by a
 // capped wait/re-discover fixed-point loop, so mid-watch retriggers
 // supersede rather than FAIL), and older re-triggered runs are reported as
-// superseded without affecting the exit code. A fake `sleep` keeps the
-// discovery-retry scenarios instant.
+// superseded without affecting the exit code. The expected-workflow gate
+// (default "CI", overridden by --expect-workflow) turns an absent gate
+// workflow into exit 2 with evidence, never a vacuous pass. A fake `sleep`
+// keeps the discovery-retry scenarios instant.
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.sh");
 
@@ -88,10 +90,13 @@ chmodSync(join(binDir, "sleep"), 0o755);
 afterAll(() => rmSync(binDir, { recursive: true, force: true }));
 
 let scenario = 0;
-function run(env: Record<string, string>) {
+// `args` precede the SHA on the command line; the default expectation pins
+// the fixture's default workflow name so each scenario keeps testing its own
+// branch, not the expected-workflow gate (which has dedicated tests below).
+function run(env: Record<string, string>, args: string[] = ["--expect-workflow", "CI-1"]) {
   scenario += 1;
   const violations = join(binDir, `violations-${scenario}`);
-  const result = Bun.spawnSync(["bash", SCRIPT, "deadbeef"], {
+  const result = Bun.spawnSync(["bash", SCRIPT, ...args, "deadbeef"], {
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
@@ -183,14 +188,17 @@ describe("watch-ci.sh exit matrix", () => {
     // superseded run instead of skipping it, the cancelled conclusion would
     // surface as FAIL and exit 1.
     const name = "CI *?[x]";
-    const r = run({
-      GH_LIST_IDS: "9 100",
-      GH_WF_9: "77",
-      GH_WF_100: "77",
-      GH_NAME_9: name,
-      GH_NAME_100: name,
-      GH_VIEW_9: "cancelled",
-    });
+    const r = run(
+      {
+        GH_LIST_IDS: "9 100",
+        GH_WF_9: "77",
+        GH_WF_100: "77",
+        GH_NAME_9: name,
+        GH_NAME_100: name,
+        GH_VIEW_9: "cancelled",
+      },
+      ["--expect-workflow", name],
+    );
     expect(r.code).toBe(0);
     expect(r.stdout).toContain(`superseded: ${name} (9)`);
     expect(r.stdout).toContain(`pass: ${name} (100)`);
@@ -209,14 +217,17 @@ describe("watch-ci.sh exit matrix", () => {
     // Tab is IFS whitespace, so an unguarded empty middle field would shift
     // the name into the id slot and same-name runs would supersede each
     // other; the sentinel-prefixed field must keep both runs judged.
-    const r = run({
-      GH_LIST_IDS: "1 2",
-      GH_WF_1: "",
-      GH_WF_2: "",
-      GH_NAME_1: "CI",
-      GH_NAME_2: "CI",
-      GH_VIEW_1: "cancelled",
-    });
+    const r = run(
+      {
+        GH_LIST_IDS: "1 2",
+        GH_WF_1: "",
+        GH_WF_2: "",
+        GH_NAME_1: "CI",
+        GH_NAME_2: "CI",
+        GH_VIEW_1: "cancelled",
+      },
+      ["--expect-workflow", "CI"],
+    );
     expect(r.code).toBe(1);
     expect(r.stdout).toContain("FAIL(cancelled): CI (1)");
     expect(r.stdout).toContain("pass: CI (2)");
@@ -228,17 +239,22 @@ describe("watch-ci.sh exit matrix", () => {
     // workflow) appears while the script waits. The post-watch re-discovery
     // must re-select run 2 and demote run 1 to superseded instead of
     // reporting its concurrency cancellation as FAIL.
+    // No --expect-workflow here: the runs are named "CI", so this scenario
+    // also pins the script's default expectation.
     const calls = join(binDir, "list-calls");
-    const r = run({
-      GH_LIST_IDS: "1",
-      GH_LIST_IDS2: "2 1",
-      GH_LIST_CALLS: calls,
-      GH_WF_1: "77",
-      GH_WF_2: "77",
-      GH_NAME_1: "CI",
-      GH_NAME_2: "CI",
-      GH_VIEW_1: "cancelled",
-    });
+    const r = run(
+      {
+        GH_LIST_IDS: "1",
+        GH_LIST_IDS2: "2 1",
+        GH_LIST_CALLS: calls,
+        GH_WF_1: "77",
+        GH_WF_2: "77",
+        GH_NAME_1: "CI",
+        GH_NAME_2: "CI",
+        GH_VIEW_1: "cancelled",
+      },
+      [],
+    );
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("superseded: CI (1)");
     expect(r.stdout).toContain("pass: CI (2)");
@@ -251,20 +267,23 @@ describe("watch-ci.sh exit matrix", () => {
     // loop must keep re-selecting until the selection is stable and judge
     // only run 3, with runs 1 and 2 demoted to superseded.
     const calls = join(binDir, "list-calls-batch2");
-    const r = run({
-      GH_LIST_IDS: "1",
-      GH_LIST_IDS2: "2 1",
-      GH_LIST_IDS3: "3 2 1",
-      GH_LIST_CALLS: calls,
-      GH_WF_1: "77",
-      GH_WF_2: "77",
-      GH_WF_3: "77",
-      GH_NAME_1: "CI",
-      GH_NAME_2: "CI",
-      GH_NAME_3: "CI",
-      GH_VIEW_1: "cancelled",
-      GH_VIEW_2: "cancelled",
-    });
+    const r = run(
+      {
+        GH_LIST_IDS: "1",
+        GH_LIST_IDS2: "2 1",
+        GH_LIST_IDS3: "3 2 1",
+        GH_LIST_CALLS: calls,
+        GH_WF_1: "77",
+        GH_WF_2: "77",
+        GH_WF_3: "77",
+        GH_NAME_1: "CI",
+        GH_NAME_2: "CI",
+        GH_NAME_3: "CI",
+        GH_VIEW_1: "cancelled",
+        GH_VIEW_2: "cancelled",
+      },
+      [],
+    );
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("superseded: CI (2)");
     expect(r.stdout).toContain("superseded: CI (1)");
@@ -303,5 +322,82 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("skip: CI-1 (1)");
     expect(r.stdout).not.toContain("FAIL");
+  });
+
+  test("green bystanders with the expected workflow absent exit 2, never 0", () => {
+    // THE hole this gate closes: the push's event fails to register the CI
+    // run, discovery finds only other workflows on the SHA, and all of them
+    // pass. No flag, so the default expectation "CI" applies; the runs are
+    // named CI-1 and CI-2, which must NOT satisfy it.
+    const r = run({ GH_LIST_IDS: "1 2" }, []);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("expected workflow(s) not found for deadbeef: CI;");
+    expect(r.stderr).toContain("discovered only: CI-1, CI-2");
+    expect(r.stderr).toContain("gh workflow run ci.yml --ref <branch>");
+    expect(r.stdout).toContain("pass: CI-1 (1)");
+  });
+
+  test("a red run outranks a missing expected workflow: exits 1, message still printed", () => {
+    const r = run({ GH_LIST_IDS: "1", GH_VIEW_1: "failure" }, []);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("FAIL(failure): CI-1 (1)");
+    expect(r.stderr).toContain("expected workflow(s) not found");
+  });
+
+  test("--expect-workflow overrides the default expectation", () => {
+    const r = run({ GH_LIST_IDS: "1", GH_NAME_1: "Build" }, ["--expect-workflow", "Build"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pass: Build (1)");
+  });
+
+  test("comma-separated expectations each must be present", () => {
+    const r = run({ GH_LIST_IDS: "1", GH_NAME_1: "Build" }, ["--expect-workflow", "Build,Deploy"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("expected workflow(s) not found for deadbeef: Deploy;");
+    expect(r.stdout).toContain("pass: Build (1)");
+  });
+
+  test("repeatable --expect-workflow flags accumulate", () => {
+    const r = run({ GH_LIST_IDS: "1 2", GH_NAME_1: "Build", GH_NAME_2: "Deploy" }, [
+      "--expect-workflow",
+      "Build",
+      "--expect-workflow",
+      "Deploy",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pass: Build (1)");
+    expect(r.stdout).toContain("pass: Deploy (2)");
+  });
+
+  test("--expect-workflow with an empty name is a usage error", () => {
+    const r = run({}, ["--expect-workflow", ""]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("--expect-workflow requires a workflow name");
+  });
+
+  test("delimiter-only and trailing-comma expectations are usage errors, never a disabled gate", () => {
+    // A value that splits to zero names ("," here) would otherwise leave
+    // nothing to check and let green bystanders exit 0 - the exact hole the
+    // gate exists to close, reopened through its own flag.
+    for (const value of [",", "Build,", ",Build", "Build,,Deploy"]) {
+      const r = run({ GH_LIST_IDS: "1" }, ["--expect-workflow", value]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain(
+        `--expect-workflow requires a workflow name (empty entry in "${value}")`,
+      );
+      expect(r.stdout).not.toContain("pass:");
+    }
+  });
+
+  test("newlines in an expectation are usage errors, never a shrunken gate", () => {
+    // The expectation list is matched line-by-line and command substitution
+    // strips trailing newlines, so "\n" would empty the set, "CI\n" would
+    // silently become "CI", and "A\nB" would become two expectations.
+    for (const value of ["\n", "CI\n", "\nCI", "A\nB"]) {
+      const r = run({ GH_LIST_IDS: "1" }, ["--expect-workflow", value]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("--expect-workflow value must not contain newlines");
+      expect(r.stdout).not.toContain("pass:");
+    }
   });
 });

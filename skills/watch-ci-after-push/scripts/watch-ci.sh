@@ -2,13 +2,61 @@
 # Watch all CI runs for a commit: discover them (with registration-lag
 # polling), wait for the latest run of each workflow, report pass/fail with
 # failing-job log excerpts.
-# Usage: watch-ci.sh [<full-sha>]   (defaults to HEAD)
-# Exit 0: the latest run of every workflow passed (event-condition skips
-# count as pass; older re-triggered runs are reported as superseded, never
-# judged). 1: at least one workflow's latest run ended with any non-success,
-# non-skipped conclusion (e.g. failure/cancelled/timed_out). 2: no runs
-# registered, or gh itself failed (discovery or status checks).
+# Usage: watch-ci.sh [--expect-workflow <name>]... [<full-sha>]   (SHA defaults to HEAD)
+# Exit 0: the latest run of every workflow passed AND every expected workflow
+# (default "CI"; --expect-workflow overrides, repeatable or comma-separated)
+# is among the discovered runs (event-condition skips count as pass; older
+# re-triggered runs are reported as superseded, never judged). 1: at least
+# one workflow's latest run ended with any non-success, non-skipped
+# conclusion (e.g. failure/cancelled/timed_out). 2: no runs registered, gh
+# itself failed (discovery or status checks), or an expected workflow never
+# registered a run on the SHA.
 set -euo pipefail
+
+# The workflow carrying the required gate can silently fail to register on a
+# push (a dropped push/synchronize event), leaving only bystander workflows
+# on the SHA - all green, gate absent. A missing reading must never read as
+# green, so the script refuses to exit 0 unless every expected workflow name
+# is among the discovered runs.
+expected_csv=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --expect-workflow)
+      if [ "$#" -lt 2 ]; then
+        echo "--expect-workflow requires a workflow name" >&2
+        exit 2
+      fi
+      # Reject newlines and empty entries ("", ",", "A,", "A,,B"): the list
+      # is split on commas and matched line-by-line, so either would shrink
+      # the expectation set - a value splitting to zero names would silently
+      # disable the gate this flag configures. Names match the discovered
+      # workflowName exactly and case-sensitively, so a comma or newline can
+      # never be part of an expected name.
+      case "$2" in
+        *$'\n'*)
+          echo "--expect-workflow value must not contain newlines" >&2
+          exit 2
+          ;;
+      esac
+      case ",$2," in
+        *,,*)
+          echo "--expect-workflow requires a workflow name (empty entry in \"$2\")" >&2
+          exit 2
+          ;;
+      esac
+      expected_csv="${expected_csv:+$expected_csv,}$2"
+      shift 2
+      ;;
+    --*)
+      echo "unknown flag: $1 (usage: watch-ci.sh [--expect-workflow <name>]... [<full-sha>])" >&2
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+[ -n "$expected_csv" ] || expected_csv="CI"
 
 # Full SHA required: gh run list --commit silently matches nothing for short SHAs.
 sha="${1:-$(git rev-parse HEAD)}"
@@ -137,6 +185,33 @@ if [ -z "$run_ids" ]; then
   exit 2
 fi
 
+# "Every discovered workflow passed" is vacuous when the workflow that
+# carries the required gate is not among the discovered runs at all. Check
+# every expected name against the final snapshot; absence is missing
+# evidence and exits 2 below, never a pass. The quoted "$want" in the case
+# pattern keeps glob metacharacters in workflow names literal.
+discovered_names="$(printf '%s\n' "$run_lines" | cut -f4- | sort -u)"
+missing=""
+while IFS= read -r want; do
+  [ -n "$want" ] || continue
+  case $'\n'"$discovered_names"$'\n' in
+    *$'\n'"$want"$'\n'*) ;;
+    *) missing="${missing:+$missing, }$want" ;;
+  esac
+done <<EOF
+$(printf '%s\n' "$expected_csv" | tr ',' '\n')
+EOF
+if [ -n "$missing" ]; then
+  found_list=""
+  while IFS= read -r found; do
+    [ -n "$found" ] || continue
+    found_list="${found_list:+$found_list, }$found"
+  done <<EOF
+$discovered_names
+EOF
+  echo "expected workflow(s) not found for $sha: $missing; discovered only: ${found_list:-nothing}. The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch> (or override the expectation with --expect-workflow <name>)" >&2
+fi
+
 # Run outcome (fail) and gh health (gherr) are tracked separately so an
 # auth/network failure is never reported as a red pipeline, and vice versa.
 # Every selected run was already watched to completion above, so this loop
@@ -182,7 +257,9 @@ for id in $run_ids; do
   esac
 done
 
-# A real red run outranks a gh hiccup; a gh hiccup outranks "all green".
+# A real red run outranks a missing expected workflow, which outranks a gh
+# hiccup; only a fully-evidenced green exits 0.
 [ "$fail" -eq 1 ] && exit 1
+[ -n "$missing" ] && exit 2
 [ "$gherr" -eq 1 ] && exit 2
 exit 0
