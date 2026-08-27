@@ -1,0 +1,37 @@
+{
+  "name": "pr-and-issue-discipline",
+  "description": "Visualization-first PR bodies and issues, draft state that tracks convergence, same-cycle review-comment triage, and a human hand on the merge by default.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/pr-and-issue-discipline",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "pull-requests",
+    "issues",
+    "code-review",
+    "draft-prs",
+    "merge-discipline",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "PR and Issue Discipline",
+    "shortDescription": "PRs and issues that show the change before telling it.",
+    "longDescription": "Fires when an agent opens or updates a pull request or writes an issue: bodies lead with real captured before/after output, drafts flip with convergence in both directions, every review round is triaged the same cycle with thread state read via GraphQL, and the human merges by default with two narrow standing exceptions.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write", "Review"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/pr-and-issue-discipline",
+    "defaultPrompt": [
+      "Open a draft PR for this branch with a visualization-first body.",
+      "A review round just landed on the PR; triage it to convergence.",
+      "The PR is converged and green. Who merges it?"
+    ],
+    "brandColor": "#0E7490"
+  }
+}

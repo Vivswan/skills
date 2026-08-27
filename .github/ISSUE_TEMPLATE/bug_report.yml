@@ -15,6 +15,7 @@ body:
         - natural-writing
         - orchestrator-mode
         - never-twice
+        - pr-and-issue-discipline
         - review-before-commit
         - rubber-duck-review
         - watch-ci-after-push

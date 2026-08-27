@@ -34,8 +34,7 @@ The lead owns architecture, overall consistency, integration, and long-term dire
 Before creating the board or spawning anything, ask the user these in ONE message. Skip any the invocation already answered. Propose a default for each so a one-word reply suffices. Confirm what the repo itself answers (branch protection implies the landing mode; CI config implies the gates) instead of asking open-ended.
 
 1. **Landing mode**: the GATE, chosen once. Direct commits to the mainline (which branch?), or a PR before it?
-   - With PRs, also settle WHO MERGES. Default: the user. A PR exists to put a human gate before the mainline, so the lead only prepares each PR (push, gates, a "ready to merge" report) and the user merges.
-   - The lead merges only on the user's explicit delegation, when a merge queue owns the ordering, or under the two standing exceptions in the Land section (a trivial mechanical fix; a pipeline blocked on a merge).
+   - With PRs, also settle WHO MERGES. The default (the user) and the two standing exceptions are defined in the `/pr-and-issue-discipline` skill; the lead merges only on the user's explicit delegation, when a merge queue owns the ordering, or under those exceptions.
    - A user delegating merges wholesale should be offered direct commits instead: lead-merged PRs are direct commits with extra steps, worth keeping only where branch protection or a merge queue forces the PR mechanism.
    - Each track's BASE is not asked; it follows the dependency graph (the mainline for independent tracks, the dependency's branch for tracks building on unlanded content; see `references/landing.md`).
    - Infer the likely gate from branch protection, CONTRIBUTING docs, and recent history. When unsure, propose PRs (the safer guess on a protected repo).
@@ -76,26 +75,9 @@ Before creating the board or spawning anything, ask the user these in ONE messag
 
 ## 5. Babysit Every PR to Comment Convergence
 
-An open PR is live work until it merges: bot reviewers (e.g. Copilot code review) and humans leave comments on every push. Each round is handled the same cycle it appears, not batched for later. Per PR, loop until quiescent:
+Every open PR in the session runs the babysit loop from the `/pr-and-issue-discipline` skill: every review round triaged the same cycle, thread state read via GraphQL `isResolved`, and the draft flip in both directions (ready on convergence, back to draft on commit-requiring work). Fixes route per Review Loops (4). What the fleet adds on top:
 
-1. Every push gets a CI watcher (see Land, below).
-2. When a review lands, triage EVERY comment:
-   - A valid finding is fixed by the OWNING builder (routed back, never patched by the lead in the builder's tree).
-   - An invalid or not-valid-here comment gets a reply stating why and its thread resolved.
-   - A comment whose fix belongs to another track's territory is replied-and-resolved with the routing named, and the receiving track's brief carries it.
-3. A fix push restarts the loop: new CI watch, re-gate on changed content, and the bot may re-review.
-
-**Converged** means: CI green, every thread resolved (fixed or answered), and the latest review round raised nothing new and valid.
-
-- **Read thread state via GraphQL**: `reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage endCursor } }`, paginating with `after: <endCursor>` while `hasNextPage` is true, because a fixed first page is not the full set. Never infer handled-ness from comment timestamps: a thread with no new comments can still be unresolved.
-- **Draft state tracks convergence in BOTH directions, immediately.** The moment a PR converges it flips to ready-for-review (never batched, never held back). The moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding) it flips BACK to draft before the fix round starts. A PR is open for the merging hand's review exactly when no commits are pending, and only converged PRs are offered for merge.
-- **Bot reviews that do not fire automatically on drafts are requested explicitly** (e.g. add Copilot as a reviewer on the draft; prefer balanced or high reasoning where the repo exposes the setting).
-
-Production shape of one round:
-
-- "empty manifest passes vacuously": valid. Routed to the owning builder, fixed with a regression test in the same cycle.
-- "script not wired into the docs": sequencing by design. Replied with the plan (a docs track wires all scripts post-merge) and resolved.
-- "symlink following": split. The leaf-fidelity half fixed after the builder confirmed it empirically; the escape half declined with the recorded design rationale.
+- **A comment whose fix belongs to another track's territory** is replied-and-resolved with the routing named, and the receiving track's brief carries it.
 
 ## 6. Land
 
@@ -108,15 +90,9 @@ A landing is two independent choices:
 
 The per-mode procedures, including the gh-stack loop and the worktree rules around it, live in `references/landing.md`. What stays constant under either gate:
 
-- **Trivial mechanical fixes bypass the human gate when the user grants it.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) is lead-merged directly once its gates are green. The merging hand's review is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
-- **A pipeline BLOCKED on a merge is the second standing exception.** When a converged PR gates queued work and the user is not acting, the lead merges it and informs the user in the next report. Waiting idle on a merge the lead could perform is the defect; the notification preserves the user's oversight.
-- **PR descriptions LEAD WITH VISUALIZATION, not text.**
-  - The opening section (`## The bug this kills` / `## What this adds`) is real captured output in fenced before/after blocks: actual commands, actual output, complete enough to stand alone. A reader must get the change from the blocks without reading a paragraph.
-  - Redact before publishing: strip secrets, tokens, and credentials, and genericize machine-specific absolute paths and usernames (a captured sweep row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase; the command and output structure stay verbatim.
-  - Then `## How` as a FEW short bullets (the diff carries the detail; do not re-narrate it), then `## Proof` (numbers: tests, gates, review rounds). Minimize prose everywhere; cut any sentence the blocks already show.
+- **Who merges (the human by default), the two standing exceptions, visualization-first PR bodies with redaction, and the exit-conditioned landing** are defined in the `/pr-and-issue-discipline` skill. In the PR gate all of them apply; in direct mode there is no PR body or merging hand, so what carries over is the exit-conditioned landing.
 - **Review before landing, never after**: findings must be able to block the landing. Where installed, the `/review-before-commit` skill defines this gate (green tree first, independent background reviews, triage, convergence).
 - **After every push or merge** (a direct landing, a PR update, or a PR merge), spawn a background CI watcher that reports pass/fail with failing-job logs. Never fire-and-forget a push, and never watch CI inline. Where installed, the `/watch-ci-after-push` skill defines the watcher (run discovery, the full-SHA gotcha, the report format).
-- **The landing action itself is exit-conditioned, never chained.** Read the gate result and STOP; then merge and push in a separate command only after the gate itself reports green. Green means the gate's own exit code AND its verdict, not the exit status of whatever command displayed the log, and a review gate is green only when its findings are triaged, not merely when its process exits 0. A compound `tail gate.log; git merge && push` ships a red-gated commit regardless of what the tail showed, because `&&` chains on the tail's exit status, not the gate's.
 - **Every rebase gets the shared-file content check** ("the rebase is the risk, not the intent"): a clean replay can silently drop a prior landing's lines in files both tracks edit, with no conflict marker to warn anyone. The check is executable, not a prose token recipe: `scripts/baseline.mts pin`/`check` for whole-file ownership, `scripts/probe.mts tokens` for specific-line claims in shared files. Wiring in `references/fleet-monitor.md`, Verifying a Landing.
 
 After each landing on the mainline, and again over the combined delta once all streams land, spawn a review pass looking specifically for integration issues between the merged pieces. Per-stream reviews are blind to cross-stream seams; this pass catches high-severity findings every per-stream round misses. Never skip it.
