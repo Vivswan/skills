@@ -262,6 +262,22 @@ interface ReviewerHooks {
   onDone: (status: string) => void;
 }
 
+/** writeSync may write FEWER bytes than asked (pipes and signal interruption
+ * make short writes legal); dropping the remainder would tear the captured
+ * stream, and a torn error line can then parse as a clean review. Loop until
+ * every byte lands. The injectable `write` exists for the unit test, which
+ * cannot force a real partial write deterministically. */
+export function writeAllSync(
+  fd: number,
+  chunk: Buffer,
+  write: (fd: number, chunk: Buffer, offset: number, length: number) => number = writeSync,
+): void {
+  let offset = 0;
+  while (offset < chunk.length) {
+    offset += write(fd, chunk, offset, chunk.length - offset);
+  }
+}
+
 function runReviewer(
   tool: Tool,
   delivery: Delivery,
@@ -304,10 +320,10 @@ function runReviewer(
       sawLife = true;
       hooks.onLife?.();
     }
-    writeSync(outFd, chunk);
+    writeAllSync(outFd, chunk);
   });
   child.stderr!.on("data", (chunk: Buffer) => {
-    writeSync(errFd, chunk);
+    writeAllSync(errFd, chunk);
   });
   // A spawn failure emits 'error' and may still emit 'close'; settle once.
   let settled = false;
@@ -543,8 +559,11 @@ function main(): void {
   runForeground(tool, delivery, scratch);
 }
 
-try {
-  main();
-} catch (error) {
-  if (!(error instanceof SilentExit)) throw error;
+// Guarded so importing the exported helpers (unit tests) runs nothing.
+if (import.meta.main) {
+  try {
+    main();
+  } catch (error) {
+    if (!(error instanceof SilentExit)) throw error;
+  }
 }

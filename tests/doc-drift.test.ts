@@ -259,6 +259,11 @@ const SURFACES: Record<string, Surface> = {
           '[ "$fail" -eq 1 ] && exit 1\n[ -n "$missing" ] && exit 2\n[ "$gherr" -eq 1 ] && exit 2\nexit 0',
       },
       {
+        doc: "a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2)",
+        script:
+          '[ "$fail" -eq 1 ] && exit 1\n[ -n "$missing" ] && exit 2\n[ "$gherr" -eq 1 ] && exit 2',
+      },
+      {
         doc: "Exit 0: all green (skipped runs count as\npass)",
         script: 'echo "skip: $name ($id)"',
       },
@@ -326,6 +331,10 @@ const SURFACES: Record<string, Surface> = {
       {
         doc: "default 45, minimum 15",
         script: "const MIN_INTERVAL_SECONDS = 15;",
+      },
+      {
+        doc: "a failed poll retries after 2 seconds",
+        script: "const POLL_RETRY_SECONDS = 2;",
       },
       {
         doc: "(default 1800)",

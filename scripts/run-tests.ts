@@ -26,23 +26,16 @@ import { ROOT } from "./lib";
 // Known limits of the scratch cwd: flags that WRITE repo-relative outputs
 // (--coverage-dir, reporter files) or discover the repo from the cwd
 // (--changed) would need absolute paths; nothing in this repo uses them.
-// --pass-with-no-tests would turn the zero-test failure mode into silent
-// success - the exact state this launcher exists to prevent (an option
-// value that happens to name a real path can suppress the default target;
-// harmless while zero tests still exit 1, fatal combined with this flag).
-if (process.argv.includes("--pass-with-no-tests")) {
-  console.error(
-    "run-tests: --pass-with-no-tests is not supported; zero tests must stay a failure.",
-  );
-  process.exit(1);
-}
+// The zero-test guard below is the fail-closed backstop for every flag that
+// can shrink the run to nothing (--pass-with-no-tests, --only with no .only
+// tests, an option value that happens to name a real path and suppresses
+// the default target).
 
 // Only an argument naming a real path counts as a target: bun test ORs
 // positional filters together, and a bare word can be an option's value
 // (--test-name-pattern baz) just as well as a name filter, so anything that
 // is not a real path gets the default target appended - over-running is
-// safe, a scratch-cwd invocation left with no target is not (bun exits 1 on
-// zero tests found, but --pass-with-no-tests would turn that into success).
+// safe, a scratch-cwd invocation left with no target is not.
 let hasPathTarget = false;
 const args = process.argv.slice(2).map((arg) => {
   const resolved = resolve(ROOT, arg);
@@ -56,19 +49,54 @@ if (!hasPathTarget) args.push(join(ROOT, "tests"));
 
 const scratch = mkdtempSync(join(tmpdir(), "hermetic-tests-"));
 let status: number;
+let summary = "";
 try {
-  const result = Bun.spawnSync(
+  const child = Bun.spawn(
     ["bun", "test", "--preload", join(ROOT, "tests", "preload.ts"), ...args],
     {
       cwd: scratch,
       env: hermeticGitEnv(process.env),
       stdin: "inherit",
       stdout: "inherit",
-      stderr: "inherit",
+      stderr: "pipe",
     },
   );
-  status = result.exitCode ?? 1;
+  // Tee stderr (where bun test reports results) while keeping a copy: the
+  // zero-test check below needs the "Ran N tests" summary line.
+  const decoder = new TextDecoder();
+  for await (const chunk of child.stderr) {
+    process.stderr.write(chunk);
+    summary += decoder.decode(chunk, { stream: true });
+  }
+  summary += decoder.decode();
+  status = await child.exited;
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
-process.exit(status);
+// A run of zero tests must fail HOWEVER it was reached: bun exits 1 when no
+// test file matches, but exits 0 with "Ran 0 tests" for --pass-with-no-tests
+// and for --only with no .only test - a vacuous green from a test launcher.
+// ANSI color sequences are stripped first (under FORCE_COLOR bun wraps the
+// summary's timing bracket in SGR codes, which would hide a genuine summary
+// and fail a passing run). The match is anchored to a full line-start
+// summary with bun's timing suffix, and the LAST one wins: bun echoes CLI
+// values mid-line in its own diagnostics (-t "Ran 1 test across " appears
+// inside an "error: regex ..." line), so an unanchored search could be
+// spoofed into seeing tests that never ran. A missing summary on exit 0
+// fails too, so a bun wording change breaks loudly here instead of silently
+// disarming the guard.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the ESC escape is exactly what is being stripped
+const plain = summary.replace(/\u001b\[[0-9;]*m/g, "");
+const ran = [...plain.matchAll(/(?:^|\n)Ran (\d+) tests? across \d+ files?\. \[/g)].at(-1);
+if (status === 0 && (ran === undefined || Number(ran[1]) === 0)) {
+  console.error(
+    ran === undefined
+      ? "run-tests: bun test exited 0 without a 'Ran N tests' summary; refusing to report success."
+      : "run-tests: zero tests ran; a run that tests nothing must not pass.",
+  );
+  status = 1;
+}
+// exitCode, not process.exit(): an explicit exit can truncate stdio still
+// draining to pipes (large failure output), and nothing here holds the event
+// loop open once the child has exited.
+process.exitCode = status;

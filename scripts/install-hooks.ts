@@ -11,13 +11,17 @@
  * switching to one). The installed dispatcher fails closed instead: it
  * refuses the commit when the checkout carries no hook logic.
  *
- * Ordering invariant: every abort condition is checked BEFORE anything is
- * mutated, so a refused install leaves the previous hook wiring fully
- * intact - never a state where husky is unwired but the dispatcher is not
- * yet installed. The install never destroys what it does not own: only the
- * known husky hooksPath is migrated, any other value in any scope aborts,
- * and a pre-existing hooks/pre-commit (file, symlink, or anything else) not
- * written by this script is left untouched.
+ * Ordering invariant: every abort condition but one is checked BEFORE
+ * anything is mutated, so a refused install leaves the previous hook wiring
+ * fully intact - never a state where husky is unwired but the dispatcher is
+ * not yet installed. The one verify-AFTER-mutate exception is the post-unset
+ * re-read of the local hooksPath (an include-carried husky value is only
+ * detectable once the unset has run); by then the dispatcher is already
+ * published, so failing there still leaves commits checked. The install
+ * never destroys what it does not own: only the known husky hooksPath is
+ * migrated, any other value in any scope aborts, and a pre-existing
+ * hooks/pre-commit (file, symlink, or anything else) not written by this
+ * script is left untouched.
  *
  * Outside a git repository (an exported tarball, say) there is nothing to
  * wire, and installs must not fail there - but a directory that HAS a .git
@@ -71,13 +75,14 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-/** Untrimmed, line-exact output values: only the OUTPUT TERMINATOR (the
- * empty element a trailing newline leaves after split) is dropped - an empty
- * line before it is a real, EMPTY configuration value and must be judged
- * like any other. Trimming would launder " .husky/_" into the recognized
- * form. */
-function lines(raw: string): string[] {
-  const result = raw.split("\n");
+/** Value-exact splitting of `git config -z` output: values are
+ * NUL-terminated, and NUL - unlike newline - can never appear inside a
+ * config value, so a value CONTAINING a newline arrives as one entry instead
+ * of laundering into two plausible-looking lines. Only the output
+ * terminator's trailing empty element is dropped - an empty value is a real,
+ * EMPTY configuration value and must be judged like any other. */
+function nulValues(raw: string): string[] {
+  const result = raw.split("\0");
   if (result.at(-1) === "") result.pop();
   return result;
 }
@@ -121,16 +126,16 @@ if (toplevel.code !== 0 || realpathSync(toplevel.stdout) !== realpathSync(proces
 // included foreign hooksPath would otherwise slip past validation (the
 // all-scope check below labels included values "local" too, which this
 // validation must therefore cover).
-const local = git("config", "--local", "--includes", "--get-all", "core.hooksPath");
+const local = git("config", "-z", "--local", "--includes", "--get-all", "core.hooksPath");
 if (local.code !== 0 && local.code !== 1) {
   fail(`could not read local core.hooksPath (git exited ${local.code}).`);
 }
-const localValues = local.code === 0 ? lines(local.raw) : [];
+const localValues = local.code === 0 ? nulValues(local.raw) : [];
 const isHusky = (value: string) =>
   value === ".husky/_" || (isAbsolute(value) && value.endsWith("/.husky/_"));
 if (local.code === 0 && (localValues.length === 0 || !localValues.every(isHusky))) {
   fail(
-    `local core.hooksPath is set to something this repo did not write:\n  ${localValues.join("\n  ")}\n` +
+    `local core.hooksPath is set to something this repo did not write:\n  ${localValues.map((value) => JSON.stringify(value)).join("\n  ")}\n` +
       "Migrate it yourself (git config --local --unset-all core.hooksPath), then rerun 'bun install'.",
   );
 }
@@ -140,13 +145,23 @@ if (local.code === 0 && (localValues.length === 0 || !localValues.every(isHusky)
 // shadowed at commit time, and writing into the configured location could
 // clobber a user-wide hook. Exit 1 is "no such key"; anything above it is an
 // unreadable configuration, which fails closed instead of reading as unset.
-const scoped = git("config", "--show-scope", "--get-all", "core.hooksPath");
+const scoped = git("config", "-z", "--show-scope", "--get-all", "core.hooksPath");
 if (scoped.code !== 0 && scoped.code !== 1) {
   fail(`could not enumerate core.hooksPath scopes (git exited ${scoped.code}).`);
 }
-const outer = (scoped.code === 0 ? lines(scoped.raw) : []).filter(
-  (line) => !line.startsWith("local\t"),
-);
+// With -z, --show-scope emits alternating NUL-terminated fields: scope,
+// value, scope, value... An unpaired field means the output shape changed;
+// fail closed rather than guess which field is which.
+const scopedFields = scoped.code === 0 ? nulValues(scoped.raw) : [];
+if (scopedFields.length % 2 !== 0) {
+  fail("could not parse core.hooksPath scopes (unpaired scope/value fields from git config -z).");
+}
+const outer: string[] = [];
+for (let i = 0; i < scopedFields.length; i += 2) {
+  const scope = scopedFields[i] as string;
+  const value = scopedFields[i + 1] as string;
+  if (scope !== "local") outer.push(`${scope}\t${JSON.stringify(value)}`);
+}
 if (outer.length > 0) {
   fail(
     `core.hooksPath is still set outside the repository scope:\n  ${outer.join("\n  ")}\n` +
@@ -230,11 +245,14 @@ if (local.code === 0) {
   // direct value alongside it the unset even exits 0 - the one state the
   // pre-checks cannot rule out. The dispatcher is already published, so
   // failing here leaves the surviving husky path wired and commits checked.
-  const remaining = git("config", "--local", "--includes", "--get-all", "core.hooksPath");
+  const remaining = git("config", "-z", "--local", "--includes", "--get-all", "core.hooksPath");
   if (remaining.code !== 1) {
     fail(
-      `core.hooksPath still resolves in the local scope after migration (an include.path file?):\n  ${lines(remaining.raw).join("\n  ")}\n` +
-        "Remove it from the included file, then rerun 'bun install'.",
+      `core.hooksPath still resolves in the local scope after migration (an include.path file?):\n  ${nulValues(
+        remaining.raw,
+      )
+        .map((value) => JSON.stringify(value))
+        .join("\n  ")}\n` + "Remove it from the included file, then rerun 'bun install'.",
     );
   }
 }

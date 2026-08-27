@@ -200,6 +200,30 @@ describe("flags", () => {
     const entry = shown.json.flags.find((f: { hash: string }) => f.hash === hash);
     expect(entry.status).toBe("standing");
     expect(entry.retractedAt).toBeUndefined();
+    // The superseded cycle is archived, not erased: retraction stays a
+    // recorded transition across the re-flag.
+    expect(entry.history).toEqual([
+      { at: flagged.json.at, retractedAt: retracted.json.retractedAt },
+    ]);
+  });
+
+  test("every completed flag->retract cycle accumulates in history", () => {
+    const file = freshFile();
+    run(file, "init");
+    const first = runJson(file, "flag", "builder-a", "hot path regression");
+    const hash: string = first.json.hash;
+    const retract1 = runJson(file, "retract", hash.slice(0, 12));
+    const second = runJson(file, "flag", "builder-a", "hot path regression");
+    const retract2 = runJson(file, "retract", hash.slice(0, 12));
+    expect(runJson(file, "flag", "builder-a", "hot path regression").code).toBe(0);
+
+    const entry = runJson(file, "show").json.flags.find((f: { hash: string }) => f.hash === hash);
+    expect(entry.status).toBe("standing");
+    expect(entry.retractedAt).toBeUndefined();
+    expect(entry.history).toEqual([
+      { at: first.json.at, retractedAt: retract1.json.retractedAt },
+      { at: second.json.at, retractedAt: retract2.json.retractedAt },
+    ]);
   });
 
   test("a prefix matching no flag exits 1", () => {
@@ -328,6 +352,32 @@ describe("corrupt ledger files", () => {
       {
         workers: { a: { state: "active", grants: [{ wording: "w", globs: ["   "], at: "t" }] } },
         flags: [],
+      },
+      // retractedAt travels with the retracted status and only with it; a
+      // hand-edit that decouples them (or a malformed history cycle) would
+      // corrupt the archive on the next re-flag.
+      {
+        workers: {},
+        flags: [
+          { hash: "h", worker: "w", text: "t", status: "standing", at: "t", retractedAt: "r" },
+        ],
+      },
+      {
+        workers: {},
+        flags: [{ hash: "h", worker: "w", text: "t", status: "retracted", at: "t" }],
+      },
+      {
+        workers: {},
+        flags: [
+          {
+            hash: "h",
+            worker: "w",
+            text: "t",
+            status: "standing",
+            at: "t",
+            history: [{ at: "t" }],
+          },
+        ],
       },
     ]) {
       const file = freshFile();

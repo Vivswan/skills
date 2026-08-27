@@ -2,7 +2,8 @@
 # Watch all CI runs for a commit: discover them (with registration-lag
 # polling), wait for the latest run of each workflow, report pass/fail with
 # failing-job log excerpts.
-# Usage: watch-ci.sh [--expect-workflow <name>]... [<full-sha>]   (SHA defaults to HEAD)
+# Usage: watch-ci.sh [--expect-workflow <name>]... [<full-sha>]   (SHA defaults
+# to HEAD; flags go before the SHA, and anything after the SHA is an error)
 # Exit 0: the latest run of every workflow passed AND every expected workflow
 # (default "CI"; --expect-workflow overrides, repeatable or comma-separated)
 # is among the discovered runs (event-condition skips count as pass; older
@@ -60,6 +61,15 @@ done
 
 # Full SHA required: gh run list --commit silently matches nothing for short SHAs.
 sha="${1:-$(git rev-parse HEAD)}"
+# The flag loop stops at the first non-flag word, so anything after the SHA
+# (a misplaced --expect-workflow, a typo) would otherwise be dropped silently
+# - and a dropped expectation flag lets a green bystander run read as the
+# gate, the exact vacuous green that flag exists to prevent.
+if [ "$#" -gt 1 ]; then
+  shift
+  echo "unexpected argument(s) after the SHA: $* (usage: watch-ci.sh [--expect-workflow <name>]... [<full-sha>])" >&2
+  exit 2
+fi
 
 # --limit 100: the default page is 20 runs, and heavy retriggering can fill
 # it with one workflow, pushing another workflow off the page so it would
@@ -69,8 +79,14 @@ sha="${1:-$(git rev-parse HEAD)}"
 # The "=" prefixes keep the attempt and workflow-id fields non-empty: tab is
 # IFS whitespace, so read would otherwise collapse an empty field and shift
 # the later fields into the wrong slots, silently mis-grouping the runs.
+# A failed gh call prints NOTHING, even when gh emitted partial output before
+# dying: a partial snapshot judged as complete would leave the omitted runs
+# unmeasured, so every call site's emptiness check must see failure as "no
+# output" - retried during registration polling, exit 2 at judgment time.
 discover() {
-  gh run list --commit "$sha" --limit 100 --json databaseId,attempt,workflowDatabaseId,workflowName --jq '.[] | "\(.databaseId)\t=\(.attempt)\t=\(.workflowDatabaseId)\t\(.workflowName)"'
+  local listed
+  listed="$(gh run list --commit "$sha" --limit 100 --json databaseId,attempt,workflowDatabaseId,workflowName --jq '.[] | "\(.databaseId)\t=\(.attempt)\t=\(.workflowDatabaseId)\t\(.workflowName)"')" || return 1
+  printf '%s\n' "$listed"
 }
 
 # Sets `missing` to the comma-joined expected names absent from run_lines,
@@ -195,11 +211,28 @@ for round in 1 2 3 4 5; do
   fi
 done
 
+# A selection that never converged is only as fresh as the last discovery: a
+# run registering after that snapshot would never be judged, so a failing
+# newest run could read as green. Watch the current selection out, then
+# re-discover ONCE more immediately before judgment; only a confirmed-stable
+# selection is judged, anything else refuses - never a verdict on a snapshot
+# known to be stale.
 if [ "$converged" -ne 1 ]; then
-  echo "note: retriggering was still active after 5 discovery rounds; judging the current selection, which may itself already be superseded"
   for id in $run_ids; do
     gh run watch "$id" >/dev/null 2>&1 || true
   done
+  run_lines="$(discover || true)"
+  if [ -z "$run_lines" ]; then
+    echo "re-discovery after the watch returned nothing for $sha (gh failed, or the runs vanished); refusing to judge a stale snapshot" >&2
+    exit 2
+  fi
+  prev_sig="$run_sig"
+  select_latest 0
+  if [ "$run_sig" != "$prev_sig" ]; then
+    echo "retriggering was still active after 5 discovery rounds and the final re-discovery changed the selection again; refusing to judge a stale snapshot - re-run once the retriggering settles" >&2
+    exit 2
+  fi
+  echo "note: retriggering was still active after 5 discovery rounds; the final re-discovery confirmed the judged selection"
 fi
 
 # Re-runs the selection on the final snapshot purely to print each older run

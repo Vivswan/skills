@@ -37,6 +37,10 @@ const USAGE = [
   "  probe tokens <table.json> <root>    run a token table against a tree",
 ].join("\n");
 
+// Same bound as sweep.mts: a child git on a stalled mount must fail loudly
+// instead of hanging the probe with no JSON.
+const COMMAND_TIMEOUT_MS = 15_000;
+
 function emit(result: Record<string, unknown>, code: number): never {
   // process.stdout.write buffers asynchronously to pipes and process.exit
   // can truncate it mid-flush, mangling large evidence payloads into invalid
@@ -362,17 +366,28 @@ function git(root: string, args: string[]): { stdout: string; stderr: string } {
   // outside the documented `git rev-parse --local-env-vars` set, such as
   // GIT_INTERNAL_SUPER_PREFIX - that would redirect or break the
   // measurement, and user/system config can reshape output. Strip ALL GIT_*
-  // and pin config to /dev/null; every behavior the probe depends on is
-  // requested by explicit flags instead.
+  // (case-insensitively: Windows environment names are) and pin config to
+  // /dev/null; every behavior the probe depends on is requested by explicit
+  // flags instead.
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !key.startsWith("GIT_")) {
+    if (value !== undefined && !key.toUpperCase().startsWith("GIT_")) {
       env[key] = value;
     }
   }
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_SYSTEM = "/dev/null";
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8", env });
+  // A probe must not take index.lock or refresh worktree indexes - that
+  // contends with the very workers being observed.
+  env.GIT_OPTIONAL_LOCKS = "0";
+  // Explicit timeout: a stalled mount would otherwise hang the spawn forever,
+  // and a probe that never returns is as silent as one that reads 0. Expiry
+  // sets result.error, which fails loudly as {ok:false,error} below.
+  const result = spawnSync("git", ["-C", root, ...args], {
+    encoding: "utf-8",
+    env,
+    timeout: COMMAND_TIMEOUT_MS,
+  });
   if (result.error) {
     fail(`git ${args.join(" ")}: ${result.error.message}`);
   }

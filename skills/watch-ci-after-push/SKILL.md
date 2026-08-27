@@ -64,6 +64,8 @@ bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.o
 
 The script refuses a vacuous green: the expected workflow - by default the one named `CI` - must be among the discovered runs, or it exits 2 naming what it did find. A repo whose gate workflow has a different name passes `--expect-workflow <name>` (repeatable or comma-separated) before the SHA; names match exactly and case-sensitively, so a comma or newline can never be part of an expected name. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`.
 
+The exit codes are ranked, not independent: a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2). A missing gate workflow plus a red bystander therefore exits 1, with the missing-workflow message still printed - clear the red run, then watch again for the gate.
+
 In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the exit semantics, the expected-workflow gate, the superseded/FAIL/skip lines) to `scripts/watch-ci.sh`. A rename on either side fails CI until doc and script move together.
 
 ### 3. Report
@@ -80,7 +82,7 @@ bun "<skill-dir>/scripts/wait-for-pr-event.mts" <pr-number> --repo <owner/name> 
 ```
 
 - `--until` picks the watched events from `comment,review,checks,merge` (default: `comment,review`).
-- `--interval` sets seconds between polls (default 45, minimum 15); `--timeout` sets seconds before giving up (default 1800).
+- `--interval` sets seconds between polls (default 45, minimum 15), but a failed poll retries after 2 seconds instead of waiting the full interval; `--timeout` sets seconds before giving up (default 1800).
 - The waiter reads a complete baseline first (comment, thread-reply, and review-thread counts via GraphQL `isResolved`, the latest review, per-check conclusions, merged state) and exits 2 instead of waiting when that read fails.
 - At the deadline it makes one final bounded read, so the closing snapshot is current and a delta landing in the last window still exits 0.
 

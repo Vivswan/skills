@@ -42,6 +42,14 @@ interface WorkerEntry {
   grants: Grant[];
 }
 
+/** One completed flag->retract cycle, preserved when the same flag is raised
+ * again: retraction is a recorded transition, so a re-flag must archive the
+ * cycle it supersedes, never erase it. */
+interface FlagCycle {
+  at: string;
+  retractedAt: string;
+}
+
 interface FlagEntry {
   hash: string;
   worker: string;
@@ -49,6 +57,7 @@ interface FlagEntry {
   status: "standing" | "retracted";
   at: string;
   retractedAt?: string;
+  history?: FlagCycle[];
 }
 
 interface Ledger {
@@ -113,6 +122,14 @@ function isWorkerEntry(value: unknown): value is WorkerEntry {
   );
 }
 
+function isFlagCycle(value: unknown): value is FlagCycle {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+  const cycle = value as Record<string, unknown>;
+  return isString(cycle.at) && isString(cycle.retractedAt);
+}
+
 function isFlagEntry(value: unknown): value is FlagEntry {
   if (value === null || typeof value !== "object") {
     return false;
@@ -122,9 +139,14 @@ function isFlagEntry(value: unknown): value is FlagEntry {
     isString(flag.hash) &&
     isString(flag.worker) &&
     isString(flag.text) &&
-    (flag.status === "standing" || flag.status === "retracted") &&
+    // retractedAt travels with the retracted status and only with it: a
+    // standing flag carrying one (or a retracted flag missing one) is a
+    // hand-edit this code never writes, and reading it would corrupt the
+    // history archive on the next re-flag.
+    ((flag.status === "standing" && flag.retractedAt === undefined) ||
+      (flag.status === "retracted" && isString(flag.retractedAt))) &&
     isString(flag.at) &&
-    (flag.retractedAt === undefined || isString(flag.retractedAt))
+    (flag.history === undefined || (Array.isArray(flag.history) && flag.history.every(isFlagCycle)))
   );
 }
 
@@ -501,6 +523,16 @@ function main(file: string, command: string, rest: string[]): never {
       }
       const at = new Date().toISOString();
       if (existing) {
+        // Re-raising must not erase the retraction it supersedes: the
+        // completed cycle is archived, so retraction stays a recorded
+        // transition across re-flags.
+        if (existing.retractedAt === undefined) {
+          throw new Error("unreachable: a retracted flag always records retractedAt");
+        }
+        existing.history = [
+          ...(existing.history ?? []),
+          { at: existing.at, retractedAt: existing.retractedAt },
+        ];
         existing.status = "standing";
         existing.at = at;
         delete existing.retractedAt;
