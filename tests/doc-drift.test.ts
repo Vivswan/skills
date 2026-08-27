@@ -20,8 +20,9 @@ import { basename, join } from "node:path";
  * - skills/watch-ci-after-push/SKILL.md <-> its scripts/watch-ci.sh: the
  *   invocation shape (one full-SHA argument, defaulting to HEAD), the
  *   full-SHA discovery command, the exit-code 0/1/2 semantics at their exit
- *   sites, the failing-log excerpt command, and the superseded/FAIL/skip
- *   reporting literals.
+ *   sites, the expected-workflow gate (its --expect-workflow override, its
+ *   missing-evidence message, and the manual-dispatch hint), the failing-log
+ *   excerpt command, and the superseded/FAIL/skip reporting literals.
  * - skills/watch-ci-after-push/SKILL.md <-> its
  *   scripts/wait-for-pr-event.mts: the invocation shape, the --until event
  *   set with its default, the interval defaults and floor, the
@@ -254,7 +255,8 @@ const SURFACES: Record<string, Surface> = {
       },
       {
         doc: "exit 0: latest run per workflow green",
-        script: '[ "$fail" -eq 1 ] && exit 1\n[ "$gherr" -eq 1 ] && exit 2\nexit 0',
+        script:
+          '[ "$fail" -eq 1 ] && exit 1\n[ -n "$missing" ] && exit 2\n[ "$gherr" -eq 1 ] && exit 2\nexit 0',
       },
       {
         doc: "Exit 0: all green (skipped runs count as\npass)",
@@ -285,6 +287,18 @@ const SURFACES: Record<string, Surface> = {
       {
         doc: "Exit 2: discovery or gh itself failed",
         script: '[ "$gherr" -eq 1 ] && exit 2',
+      },
+      {
+        doc: "`--expect-workflow <name>` (repeatable or comma-separated)",
+        script: "    --expect-workflow)",
+      },
+      {
+        doc: "or it exits 2 naming what it did find",
+        script: 'echo "expected workflow(s) not found for $sha: $missing; discovered only:',
+      },
+      {
+        doc: "dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`",
+        script: "dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch>",
       },
     ],
   },
