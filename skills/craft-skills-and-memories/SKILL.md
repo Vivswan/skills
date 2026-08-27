@@ -80,7 +80,7 @@ Work around the broken step to complete what the user actually asked for. The fi
 
 ### 4. Fold the fix in, don't append a note
 
-Rewrite the affected step so it is correct as written and meets the quality bar. Keep copy-paste blocks runnable. A one-off warning bolted to the end leaves the broken instructions in place.
+Rewrite the affected step so it is correct as written and meets the quality bar. Keep copy-paste blocks runnable. A one-off warning bolted to the end leaves the broken instructions in place. A rewrite that deletes rules follows the deletion audit in the `/never-twice` skill (Deleting a Guard): every removed rule maps to a successor or a named deliberate cut.
 
 **Code first for mechanical failures.** Where each kind of fix lands:
 

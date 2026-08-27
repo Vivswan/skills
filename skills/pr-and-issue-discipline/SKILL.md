@@ -104,6 +104,8 @@ An open PR is live work until it merges: bot reviewers (e.g. Copilot code review
    - An invalid or not-valid-here comment gets a reply stating why, and its thread resolved.
 3. A fix push restarts the loop: new CI watch, re-gate on the changed content, and the bot may re-review.
 
+When the loop yields a single finding round after round (around ten rounds in), stop reacting: sweep that finding's whole class across the change in one pass, then resume the loop. One 35-round convergence collapsed to a few batch sweeps once the finding classes were enumerated.
+
 Read thread state via GraphQL, never from comment timestamps (a thread with no new comments can still be unresolved):
 
 ```text
