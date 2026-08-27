@@ -52,6 +52,8 @@ set -e                               # every step below is load-bearing: a faile
 export GIT_TERMINAL_PROMPT=0         # a credential prompt would hang the block; fail loudly instead
 export GIT_SSH_COMMAND="ssh -oBatchMode=yes"  # the same for SSH remotes, which GIT_TERMINAL_PROMPT
 #                                      does not cover: no passphrase or host-key prompts
+export GH_PROMPT_DISABLED=1          # and for the gh commands below, which prompt on a TTY
+#                                      independently of git's settings
 git config rerere.enabled true       # record conflict resolutions once and replay them on later
 #                                      restacks, in place of a hand-resolve (or a prompt) each time
 git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push target; adjust origin to the writable remote
@@ -126,9 +128,15 @@ gh pr merge <pr> --squash            # DELEGATED PATH ONLY: this line runs when 
 # dependency's commits are not ancestors of the squash commit, and a whole-branch
 # rebase would replay the dependency's changes:
 git fetch origin <mainline>          # the squash landed on the REMOTE mainline; fetch first, or
-#                                      the transplant targets a stale pre-merge tip
-git rebase --onto origin/<mainline> "$(git config branch.track-2.depTip)" track-2 < /dev/null
-git config branch.track-2.depTip "$(git rev-parse origin/<mainline>)"   # the base moved: re-record it
+#                                      the transplant targets a stale pre-merge tip. The steps
+#                                      below use FETCH_HEAD, the ref this fetch just wrote:
+#                                      whether the fetch also updates origin/<mainline> depends
+#                                      on the remote's configured fetch mapping (the same
+#                                      distinction as in the /worktree-hygiene skill), and a
+#                                      stale remote-tracking ref would transplant onto a
+#                                      pre-merge tip and record that stale boundary
+git rebase --onto FETCH_HEAD "$(git config branch.track-2.depTip)" track-2 < /dev/null
+git config branch.track-2.depTip "$(git rev-parse FETCH_HEAD)"   # the base moved: re-record it
 git rebase --onto track-2 "$(git config branch.track-3.depTip)" track-3 < /dev/null
 git config branch.track-3.depTip "$(git rev-parse track-2)"
 #                                      a third link (track-3, where the chain has one) transplants
