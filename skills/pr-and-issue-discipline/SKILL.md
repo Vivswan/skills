@@ -52,7 +52,7 @@ after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live ver
 ````
 
 - The opening blocks are actual commands and actual output, complete enough to stand alone.
-- `## How` has no mandated form. Pick whatever carries THIS change fastest: sometimes three terse bullets, sometimes a diagram, a table, or two sentences. The test is reading speed, not format. Never a visual plus prose re-explaining it - if the diagram needs a paragraph after it, the diagram failed; pick one carrier.
+- `## How` has no mandated form. Pick whatever carries THIS change fastest: sometimes three terse bullets, sometimes a diagram, a table, or two sentences. The test is reading speed, not format. Never a visual plus prose re-explaining it: if the diagram needs a paragraph after it, the diagram failed; pick one carrier.
 - The register is programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary. No executive-summary tone, no benefits-narration. The diff carries the detail; never re-narrate it.
 - `## Proof` is numbers: tests, gates, review rounds. Cut any sentence the blocks already show.
 
@@ -92,7 +92,7 @@ Include environment only when it matters: a version-specific parser bug names th
 - Flip BACK TO DRAFT the moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding), before the fix round starts.
 - Draft state tracks pending commits; CONVERGENCE gates the merge offer. A fresh comment needing only a reply does not bounce a ready PR back to draft (its reply-and-resolve lands the same cycle, no commit), but a PR is offered for merge only while the full converged definition below holds.
 
-**Converged** means: CI fully green, every review thread resolved (fixed or answered), and the latest review round raised nothing new and valid. Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes.
+**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition: no valid blocking findings remain, and every non-blocking finding is handled, a skip with its reason recorded included), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes.
 
 ## Babysit to Comment Convergence
 
@@ -114,7 +114,7 @@ reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage endCurso
 
 Paginate with `after: <endCursor>` while `hasNextPage` is true; a fixed first page is not the full set.
 
-Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft; prefer balanced or high reasoning where the repo exposes the setting). Between rounds, never poll: where the `/watch-ci-after-push` skill is installed, sleep on its `wait-for-pr-event` script, a background waiter whose exit wakes the session and names what changed.
+Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft; prefer balanced or high reasoning where the repo exposes the setting). Requesting a Copilot review via the REST reviewers endpoint takes the reviewer login `Copilot`, exactly: `copilot-pull-request-reviewer[bot]` silently no-ops (a 201 response with empty `requested_reviewers`), and GraphQL `reviewRequests` hides a pending Copilot request either way, so the issue timeline is the only confirmation the request registered. Between rounds, never poll: where the `/watch-ci-after-push` skill is installed, sleep on its `wait-for-pr-event` script, a background waiter whose exit wakes the session and names what changed.
 
 Production shape of one round:
 
@@ -139,5 +139,5 @@ tail gate.log && git merge && git push  # WRONG: && conditions on tail printing 
 
 ## Companion Gates
 
-- After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it.
-- Before anything lands, an independent review that can block the landing, scoped to the exact content being landed - the branch or PR diff (`base...HEAD`) once committed, the staged diff before that - not the working tree; where installed, the `/rubber-duck-review` skill defines that review and its convergence.
+- After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it. A MERGE is watched the same way, on the mainline tip's SHA (fetch the mainline from the remote the PR merged into and watch `FETCH_HEAD`): after `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
+- Before anything lands, an independent review that can block the landing, scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.

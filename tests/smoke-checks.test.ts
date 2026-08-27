@@ -4,6 +4,7 @@ import {
   checkDescriptionTriggerForm,
   checkExplicitInvocationPairing,
   checkReadmeInvocationGrouping,
+  checkReadmeMermaidGraph,
   checkReadmeSkillList,
 } from "../scripts/smoke-checks";
 
@@ -150,6 +151,79 @@ describe("checkReadmeSkillList", () => {
 
   test("rejects a README without the section", () => {
     expect(() => checkReadmeSkillList("# Skills\n", names)).toThrow(/Available Skills/);
+  });
+});
+
+describe("checkReadmeMermaidGraph", () => {
+  const names: ReadonlySet<string> = new Set(["alpha-one", "beta-two"]);
+  function withGraph(graphBody: string): string {
+    return `# Skills\n\ntext\n\n\`\`\`mermaid\n${graphBody}\`\`\`\n\n## Installation\n`;
+  }
+  const goodGraph = 'graph LR\n  a["/alpha-one"] --> b["/beta-two"]\n';
+
+  test("accepts a consistent graph", () => {
+    expect(() => checkReadmeMermaidGraph(withGraph(goodGraph), names)).not.toThrow();
+  });
+
+  test("accepts a bare alias used before its labeled definition", () => {
+    const graph = 'graph LR\n  a["/alpha-one"] --> b\n  b["/beta-two"] --> a\n';
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
+  });
+
+  test("negative control: a dangling edge endpoint fails", () => {
+    const graph = `${goodGraph}  a --> ghost\n`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/dangling/);
+  });
+
+  test("rejects a node labeling a skill with no folder", () => {
+    const graph = `${goodGraph}  g["/gamma-three"] --> a\n`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/no skills\//);
+  });
+
+  test("rejects a graph missing a node for a published skill", () => {
+    const graph = 'graph LR\n  a["/alpha-one"] --> a2["/alpha-one"]\n';
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(
+      /missing a node for 'beta-two'/,
+    );
+  });
+
+  test("rejects one alias defined with two different labels", () => {
+    const graph = 'graph LR\n  a["/alpha-one"] --> a["/beta-two"]\n  b["/beta-two"] --> a\n';
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/defined twice/);
+  });
+
+  test("rejects an unparseable edge endpoint instead of skipping it", () => {
+    const graph = `${goodGraph}  a --> b & c\n`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
+  });
+
+  test("negative control: a standalone node with a non-skill label fails", () => {
+    // A label without the leading slash never enters the alias map, so
+    // without full line parsing this orphan would pass every check silently.
+    const graph = `${goodGraph}  orphan["retired"]\n`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
+  });
+
+  test("negative control: a bare standalone alias fails", () => {
+    const graph = `${goodGraph}  orphan\n`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
+  });
+
+  test("accepts a standalone '/skill'-labeled node line", () => {
+    const graph = 'graph LR\n  a["/alpha-one"]\n  a --> b["/beta-two"]\n';
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
+  });
+
+  test("negative control: a malformed edge on the graph-header line still fails", () => {
+    // The header exemption must be exact: 'graph LR --> ghost' is an edge
+    // with a dangling endpoint, not a header, and must not ride the
+    // /^graph/ prefix past endpoint validation.
+    const graph = 'graph LR --> ghost\n  a["/alpha-one"] --> b["/beta-two"]\n';
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
+  });
+
+  test("rejects a README without a mermaid block", () => {
+    expect(() => checkReadmeMermaidGraph("# Skills\n", names)).toThrow(CheckFailure);
   });
 });
 

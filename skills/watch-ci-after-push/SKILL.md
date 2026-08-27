@@ -1,6 +1,6 @@
 ---
 name: watch-ci-after-push
-description: Use when pushing commits to a remote with CI, or when asked whether a pipeline passed, so every push gets a background watcher.
+description: Use when pushing commits to a remote with CI, merging a PR, or when asked whether a pipeline passed, so every push and merge gets a background watcher.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -13,6 +13,7 @@ Every push gets a **background watcher** that reports pass/fail with failing-job
 ## When to Apply
 
 - A `git push` just ran (any branch with CI)
+- A PR just merged (watch the mainline tip, not the topic HEAD; recipe below)
 - "did CI pass?" / "watch the pipeline" / "check the build"
 
 ## Workflow
@@ -62,9 +63,9 @@ bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.o
 # gh failed, or the expected workflow never registered a run
 ```
 
-The script refuses a vacuous green: the expected workflow - by default the one named `CI` - must be among the discovered runs, or it exits 2 naming what it did find. A repo whose gate workflow has a different name passes `--expect-workflow <name>` (repeatable or comma-separated) before the SHA; names match exactly and case-sensitively, so a comma or newline can never be part of an expected name. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`.
+The script refuses a vacuous green: the expected workflow (by default the one named `CI`) must be among the discovered runs, or it exits 2 naming what it did find. A repo whose gate workflow has a different name passes `--expect-workflow <name>` (repeatable or comma-separated) before the SHA; names match exactly and case-sensitively, so a comma or newline can never be part of an expected name. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`. Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything; only a persistent failure exits 2.
 
-The exit codes are ranked, not independent: a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2). A missing gate workflow plus a red bystander therefore exits 1, with the missing-workflow message still printed - clear the red run, then watch again for the gate.
+The exit codes are ranked, not independent: a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2). A missing gate workflow plus a red bystander therefore exits 1, with the missing-workflow message still printed; clear the red run, then watch again for the gate.
 
 In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the exit semantics, the expected-workflow gate, the superseded/FAIL/skip lines) to `scripts/watch-ci.sh`. A rename on either side fails CI until doc and script move together.
 
@@ -72,6 +73,16 @@ In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins t
 
 - All green: one line ("CI passed: <workflow names>").
 - Any failure: the failing workflow and job names, the log excerpt that shows the actual error, and the run URL. Excerpt, not the full log.
+
+## After a Merge
+
+A merge is a push to the mainline by other hands, and nothing above covers it by accident: after `gh pr merge`, `git rev-parse HEAD` in the checkout still names the TOPIC branch's tip, while the squash or merge commit is a new SHA that exists only on the mainline. A watcher started on the topic tip proves nothing about the merged pipeline. Resolve the mainline tip first, then run the same workflow (discovery, background watch, report) on that SHA:
+
+```bash
+git fetch <base-remote> <mainline>    # origin in a plain clone; in a fork checkout, the
+#                                       canonical remote the PR merged into, never the fork
+sha="$(git rev-parse FETCH_HEAD)"     # the merged mainline tip, not the topic HEAD
+```
 
 ## Sleeping on PR Activity
 

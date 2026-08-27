@@ -87,6 +87,8 @@ A `tokens` table is a JSON object mapping tree-relative files to token lists, ea
 
 Per-locale content needs per-locale tokens: two locales can share a script and still differ in WORDS, so a claim verified against zh-cn wording says nothing about zh-tw. Each locale's file gets its own entry in the table. And the token-boundary guarantee is ASCII-only (word characters are `[A-Za-z0-9_-]`): for CJK or accented content boundaries are NOT enforced, so a short literal embedded in a longer word still matches. Make per-locale tokens distinctive by CONTENT (longer spans, punctuation anchors) rather than relying on word boundaries.
 
+Pin each token to a stable PREFIX of its line, never through the line's terminal punctuation: a sentence extended in place turns its period into a comma, which breaks a through-punctuation token while the content it pinned survives (two production false positives had exactly this shape).
+
 The judgment that stays with the operator:
 
 - **A count is a pointer to go look; it is never a finding.** The probe attaches per-match evidence (the start line's text and the line range) precisely so you read it before flagging; for a match spanning lines, open the file at the range to see the full text. Three textbook alarms in one shift dissolved on printing the actual lines, among them dirty generated files whose generated rows were byte-identical.

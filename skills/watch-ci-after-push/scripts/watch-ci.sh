@@ -11,7 +11,9 @@
 # one workflow's latest run ended with any non-success, non-skipped
 # conclusion (e.g. failure/cancelled/timed_out). 2: no runs registered, gh
 # itself failed (discovery or status checks), or an expected workflow never
-# registered a run on the SHA.
+# registered a run on the SHA. Transient gh/network errors between the watch
+# and the verdict are retried (3 attempts, short backoff) before any exit-2
+# conclusion.
 set -euo pipefail
 
 # The workflow carrying the required gate can silently fail to register on a
@@ -108,6 +110,27 @@ $(printf '%s\n' "$expected_csv" | tr ',' '\n')
 EOF
 }
 
+# Transient gh/network errors mid-watch (a dropped connection, a rate-limit
+# blip) must not conclude anything from a single failed read, so the gh calls
+# between the watch and the verdict get a bounded retry: 3 attempts with a
+# short backoff. All exit semantics are preserved - a persistent failure
+# still lands in the same exit-2 paths with the same messages; only the
+# single-blip false conclusion is retired.
+discover_with_retry() {
+  local attempt out=""
+  for attempt in 1 2 3; do
+    if out="$(discover)" && [ -n "$out" ]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    out=""
+    [ "$attempt" -lt 3 ] && sleep 2
+  done
+  # Still nothing after the retries: emit the empty reading and let the call
+  # site's stale-snapshot check refuse it, exactly as before.
+  printf '%s\n' "$out"
+}
+
 # The unit of judgment is the workflow, not the run: re-triggers (e.g. a
 # pull_request `edited` event) stack several runs of one workflow on the same
 # SHA and a concurrency group cancels all but the newest, so judging every
@@ -197,8 +220,9 @@ for round in 1 2 3 4 5; do
   done
   # A failed or empty re-discovery is tooling trouble, same as at first
   # discovery; silently judging the stale snapshot instead could re-report a
-  # now-superseded cancellation as a real FAIL.
-  run_lines="$(discover || true)"
+  # now-superseded cancellation as a real FAIL. Retried (bounded, above)
+  # before it is allowed to conclude.
+  run_lines="$(discover_with_retry)"
   if [ -z "$run_lines" ]; then
     echo "re-discovery after the watch returned nothing for $sha (gh failed, or the runs vanished); refusing to judge a stale snapshot" >&2
     exit 2
@@ -221,7 +245,7 @@ if [ "$converged" -ne 1 ]; then
   for id in $run_ids; do
     gh run watch "$id" >/dev/null 2>&1 || true
   done
-  run_lines="$(discover || true)"
+  run_lines="$(discover_with_retry)"
   if [ -z "$run_lines" ]; then
     echo "re-discovery after the watch returned nothing for $sha (gh failed, or the runs vanished); refusing to judge a stale snapshot" >&2
     exit 2
@@ -265,17 +289,55 @@ fi
 # Run outcome (fail) and gh health (gherr) are tracked separately so an
 # auth/network failure is never reported as a red pipeline, and vice versa.
 # Every selected run was already watched to completion above, so this loop
-# only classifies; another wait here would reopen the supersession race the
-# fixed-point loop just closed.
+# only classifies; a blanket re-wait here would reopen the supersession race
+# the fixed-point loop just closed. The bounded retry below re-watches a
+# single run only after a transient read failure, and because ANY wait
+# reopens that race, a retried judgment must survive the selection-stability
+# re-check after this loop before it stands.
 fail=0
 gherr=0
+rewatched=0
+# Judgment output is buffered and released only after the selection-stability
+# re-check below: a conclusion retry can re-watch (a wait), a retrigger during
+# that wait voids these verdict lines, and a report must never carry a verdict
+# about a superseded selection - a stability refusal exits 2 with no verdict
+# lines at all. The trap is installed before the mktemp calls so a failed
+# second mktemp cannot strand the first file.
+judgment_out=""
+judgment_err=""
+trap 'rm -f "$judgment_out" "$judgment_err"' EXIT
+judgment_out="$(mktemp)"
+judgment_err="$(mktemp)"
 for id in $run_ids; do
-  if ! line="$(gh run view "$id" --json name,conclusion --jq '"\(.conclusion)\t\(.name)"' 2>/dev/null)"; then
+  # The conclusion read gets the same bounded retry as re-discovery: a failed
+  # view is re-read, and a missing conclusion (the watch was cut short) is
+  # re-watched first so a re-read cannot judge a still-running attempt. Only
+  # a failure that survives all 3 attempts reaches the gherr paths below.
+  line=""
+  conclusion=""
+  viewfail=0
+  for attempt in 1 2 3; do
+    if [ "$attempt" -gt 1 ]; then
+      sleep 2
+      gh run watch "$id" >/dev/null 2>&1 || true
+      rewatched=1
+    fi
+    if ! line="$(gh run view "$id" --json name,conclusion --jq '"\(.conclusion)\t\(.name)"' 2>/dev/null)"; then
+      viewfail=1
+      continue
+    fi
+    viewfail=0
+    conclusion="${line%%$'\t'*}"
+    case "$conclusion" in
+      "" | null) ;;
+      *) break ;;
+    esac
+  done
+  if [ "$viewfail" -eq 1 ]; then
     echo "gh failed while checking run $id (auth or network?)" >&2
     gherr=1
     continue
   fi
-  conclusion="${line%%$'\t'*}"
   name="${line#*$'\t'}"
   case "$conclusion" in
     success)
@@ -287,7 +349,7 @@ for id in $run_ids; do
       echo "skip: $name ($id)"
       ;;
     "" | null)
-      # The run has no conclusion although its watch returned: the watch was
+      # Still no conclusion after the bounded re-watch retries: the watch was
       # cut short. gh normalizes a null conclusion to "" in --json output;
       # "null" guards any path where jq renders the raw JSON null instead.
       echo "run $id ($name) is not concluded; the watch aborted early (gh or network?)" >&2
@@ -305,7 +367,31 @@ for id in $run_ids; do
       gh run view "$id" --log-failed 2>&1 | tail -80 || true
       ;;
   esac
-done
+done > "$judgment_out" 2> "$judgment_err"
+
+# A retry above re-watched a run, and ANY wait can let a retrigger supersede
+# the judged selection - the same stale-selection race the fixed-point loop
+# closes. Re-discover once and require the selection unchanged before any
+# verdict built on it is allowed to stand; a red verdict on a superseded run
+# is exactly the misreport the fixed-point loop exists to prevent.
+if [ "$rewatched" -eq 1 ]; then
+  run_lines="$(discover_with_retry)"
+  if [ -z "$run_lines" ]; then
+    echo "re-discovery after the conclusion retries returned nothing for $sha (gh failed, or the runs vanished); refusing to judge a stale snapshot" >&2
+    exit 2
+  fi
+  prev_sig="$run_sig"
+  select_latest 0
+  if [ "$run_sig" != "$prev_sig" ]; then
+    echo "a run was retriggered while the conclusion retries waited; refusing to judge a stale snapshot - re-run once the retriggering settles" >&2
+    exit 2
+  fi
+fi
+
+# The selection stood (or nothing waited): the buffered verdict lines are
+# current, so release them.
+cat "$judgment_out"
+cat "$judgment_err" >&2
 
 # A real red run outranks a missing expected workflow, which outranks a gh
 # hiccup; only a fully-evidenced green exits 0.

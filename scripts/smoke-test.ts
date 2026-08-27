@@ -15,6 +15,8 @@
  *   - listing drift: plugin.json skills[] entries without a skill folder, and
  *     README skill-list entries and bug-form dropdown options kept in exact
  *     correspondence with the skill folders (stale and missing both fail)
+ *   - README mermaid graph drift: a node labeling a retired skill, a skill
+ *     with no node, or an edge endpoint no node definition labels
  *   - author, license, and homepage copies disagreeing with their canonical
  *     .claude-plugin/plugin.json fields
  *   - interface drift: the SKILL.md H1 title, the codex manifest's
@@ -56,6 +58,7 @@ import {
   checkDescriptionTriggerForm,
   checkExplicitInvocationPairing,
   checkReadmeInvocationGrouping,
+  checkReadmeMermaidGraph,
   checkReadmeSkillList,
 } from "./smoke-checks";
 
@@ -848,6 +851,7 @@ function main(): void {
   checkManifestEntriesHaveFolders(manifest, skillNames);
   const readmeText = readTextFile(join(ROOT, "README.md"));
   checkReadmeSkillList(readmeText, skillNames);
+  checkReadmeMermaidGraph(readmeText, skillNames);
   checkReadmeInvocationGrouping(
     readmeText,
     skillFrontmatters.map(({ path, frontmatter }) => ({

@@ -82,6 +82,8 @@ $ tail -1 AGENTS.md
 Log timestamps are ISO 8601 (2026-08-26T14:03:00Z), never epoch.
 ```
 
+How to write the rule (where it lives, its trigger, its quality bar) is the `/craft-skills-and-memories` skill's job: this rung decides THAT a loaded rule is the response, then hands off there.
+
 ## Workflow
 
 1. **Name the class** in one sentence: "any new Event member can ship without a roster entry." If you cannot, it is not a class yet: fix the instance and move on.

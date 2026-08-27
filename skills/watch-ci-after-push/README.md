@@ -1,6 +1,6 @@
 # Watch CI After Push
 
-`/watch-ci-after-push` makes every push end with a **background CI watcher** that reports pass/fail with failing-job logs. Never fire-and-forget a push. Never watch CI inline.
+`/watch-ci-after-push` makes every push and every PR merge end with a **background CI watcher** that reports pass/fail with failing-job logs. Never fire-and-forget a push. Never watch CI inline. After a merge, the watched SHA is the mainline tip, not the topic branch's HEAD.
 
 ## Install
 
@@ -26,7 +26,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-ci-after
 ## Layout
 
 - [`SKILL.md`](./SKILL.md): the watch workflow
-- [`scripts/watch-ci.sh`](./scripts/watch-ci.sh): discovery + watch + report in one command (exit 0 green, 1 failures, 2 no runs, gh failure, or the expected workflow - default "CI", `--expect-workflow <name>` overrides - never registered a run)
+- [`scripts/watch-ci.sh`](./scripts/watch-ci.sh): discovery + watch + report in one command (exit 0 green, 1 failures, 2 no runs, gh failure, or a missing expected workflow, which defaults to "CI" and is overridden with `--expect-workflow <name>`)
 
 ## Plugin-Ready Layout
 

@@ -51,6 +51,13 @@ if [ "$1 $2" = "run list" ]; then
       k=$((k + 1))
     done
   fi
+  # Transient-failure injection: fail (exit 4, no output) on exactly the
+  # listed discovery-call numbers, succeeding on every other call.
+  if [ -n "\${GH_LIST_FAIL_CALLS:-}" ]; then
+    for fc in \${GH_LIST_FAIL_CALLS}; do
+      if [ "\${c:-1}" -eq "$fc" ]; then exit 4; fi
+    done
+  fi
   for entry in $ids; do
     lid="\${entry%%@*}"
     att=1; case "$entry" in *@*) att="\${entry#*@}";; esac
@@ -83,6 +90,14 @@ if [ "$1 $2" = "run view" ]; then
   name="\${!nvar:-CI-$id}"
   case "$spec" in
     FAILCMD) exit 4;;
+    FAILONCE)
+      # Fails the first view of this id (exit 4, no output), succeeds after.
+      if [ ! -f "\${GH_ONCE_MARKER}-$id" ]; then : > "\${GH_ONCE_MARKER}-$id"; exit 4; fi
+      printf 'success\\t%s\\n' "$name"; exit 0;;
+    EMPTYONCE)
+      # First view returns no conclusion (watch cut short), then concludes.
+      if [ ! -f "\${GH_ONCE_MARKER}-$id" ]; then : > "\${GH_ONCE_MARKER}-$id"; printf '\\t%s\\n' "$name"; exit 0; fi
+      printf 'success\\t%s\\n' "$name"; exit 0;;
     EMPTY) printf '\\t%s\\n' "$name"; exit 0;;
     *) printf '%s\\t%s\\n' "$spec" "$name"; exit 0;;
   esac
@@ -176,6 +191,82 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("gh failed while checking run 1");
     expect(r.stdout).toContain("pass: CI-2 (2)");
+  });
+
+  test("a transient view failure heals on the bounded retry: exits 0, never 2", () => {
+    // The stub gh fails the first conclusion read of run 1 and succeeds on
+    // the retry. Before the bounded retry this single blip concluded
+    // "gh failed while checking run 1" and exit 2.
+    const r = run({
+      GH_LIST_IDS: "1",
+      GH_VIEW_1: "FAILONCE",
+      GH_ONCE_MARKER: join(binDir, "view-once-heals"),
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pass: CI-1 (1)");
+    expect(r.stderr).not.toContain("gh failed");
+  });
+
+  test("a watch cut short once (no conclusion) heals on re-watch and re-read", () => {
+    // First read returns an empty conclusion (the watch aborted mid-run);
+    // the retry re-watches and reads the settled conclusion. Before the
+    // bounded retry this exited 2 with "run not concluded".
+    const r = run({
+      GH_LIST_IDS: "1",
+      GH_VIEW_1: "EMPTYONCE",
+      GH_ONCE_MARKER: join(binDir, "empty-once-heals"),
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pass: CI-1 (1)");
+    expect(r.stderr).not.toContain("not concluded");
+  });
+
+  test("a transient re-discovery failure heals on the bounded retry", () => {
+    // Discovery call 1 registers the run; the post-watch re-discovery (call
+    // 2) dies; its retry (call 3) succeeds with the same snapshot, so the
+    // selection converges and is judged instead of exiting 2.
+    const calls = join(binDir, "list-calls-transient-rediscovery");
+    const r = run({
+      GH_LIST_IDS: "1",
+      GH_LIST_CALLS: calls,
+      GH_LIST_FAIL_CALLS: "2",
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pass: CI-1 (1)");
+    expect(r.stderr).not.toContain("re-discovery after the watch returned nothing");
+    expect(readFileSync(calls, "utf-8")).toBe("3");
+  });
+
+  test("a run retriggered during a conclusion-retry wait is refused, never judged stale", () => {
+    // The retry's re-watch is a wait like any other: run 2 (same workflow)
+    // appears while it waits, so the judged selection (run 1) is stale by
+    // verdict time. The selection-stability re-check must refuse with exit 2
+    // instead of letting run 1's green stand for a superseded selection.
+    const calls = join(binDir, "list-calls-retry-race");
+    const r = run(
+      {
+        GH_LIST_IDS: "1",
+        GH_LIST_IDS3: "2 1",
+        GH_LIST_CALLS: calls,
+        GH_VIEW_1: "EMPTYONCE",
+        GH_ONCE_MARKER: join(binDir, "retry-race-marker"),
+        GH_WF_1: "77",
+        GH_WF_2: "77",
+        GH_NAME_1: "CI",
+        GH_NAME_2: "CI",
+      },
+      [],
+    );
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("retriggered while the conclusion retries waited");
+    expect(r.stderr).toContain("refusing to judge a stale snapshot");
+    // The refusal must carry NO verdict about the superseded selection: the
+    // judgment output is buffered and dropped, so run 1's healed green (or a
+    // red and its logs) never reaches the report.
+    expect(r.stdout).not.toContain("pass:");
+    expect(r.stdout).not.toContain("FAIL");
+    // Registration, post-watch re-discovery, and the stability re-check.
+    expect(readFileSync(calls, "utf-8")).toBe("3");
   });
 
   test("an unconcluded run (watch aborted early) exits 2", () => {
