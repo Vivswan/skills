@@ -116,7 +116,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 ### 7. Re-review until it converges
 
 - After applying fixes, **re-run the review** on the updated state, one review per section, not a single overall pass.
-- Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable. That convergence IS the gate: nothing commits or lands until the review has converged on the exact final content of the change being landed (the staged diff at commit time - Git commits the index, not the tree; the branch or PR diff at merge time).
+- Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable. That convergence IS the gate: nothing commits or lands until the review has converged on the exact final content of the change being landed (the staged diff at commit time, since Git commits the index, not the tree; the branch or PR diff at merge time). This is the single definition of review convergence; skills that gate on it (e.g. `/pr-and-issue-discipline`'s Converged) point here rather than restating it.
 
 ### 8. If these instructions don't work, fix the skill
 

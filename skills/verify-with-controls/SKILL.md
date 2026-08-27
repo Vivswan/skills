@@ -1,6 +1,6 @@
 ---
 name: verify-with-controls
-description: Use when about to report a zero or absent reading, an alarming finding, a success claim, or stillness from a probe or status read - so the reading is evidence-bearing and controlled first.
+description: Use when about to report a zero or absent reading, an alarming finding, a success claim, or stillness from a probe or status read, so the reading is evidence-bearing and controlled first.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -45,7 +45,16 @@ ERROR: no trustworthy reading (instrument error above, or pathspec at neither en
 
 The broken zero becomes a loud, non-zero error. On a pathspec present at either endpoint (including one the branch deleted entirely) the same probe prints the matched paths and exits 0, so a pass carries its evidence too, and only then is an empty diff a reading. Non-zero readings report their matched lines the same way, never the count alone.
 
-Corollary: every narrowed variant of a working probe is a NEW probe. Prove the narrowed form returns non-empty on a case that must match before trusting its empty.
+Corollary: every narrowed variant of a working probe is a NEW probe. Prove the narrowed form returns non-empty on a case that must match before trusting its empty. Worked example: a stash was probed for work under one path by narrowing a command that had just worked:
+
+```bash
+$ git stash show --numstat 'stash@{0}'                          # works: prints the stash's files
+$ files=$(git stash show --numstat 'stash@{0}' -- docs/ 2>/dev/null)
+$ echo "${files:-nothing under docs/}"
+nothing under docs/
+```
+
+The stash DID hold work under `docs/`. `git stash show` takes no pathspec, so the narrowed command measures nothing; its complaint went to the discarded stderr, and the captured stdout was empty either way. The control that exposes it: run the narrowed form on a path the stash MUST contain, and watch it read empty there too, before its empty means anything.
 
 ## 2. Positive control: one reading that must be non-zero
 
@@ -102,7 +111,7 @@ Both messages are honest about the wrong thing. The claim you need is about the 
 $ git fetch origin main && git merge-base --is-ancestor "$sha" FETCH_HEAD && echo landed
 ```
 
-Is the ref actually where it must be? That is the postcondition. The log only ever approximates it. (Test `FETCH_HEAD`, the ref the fetch just wrote: whether `origin/main` itself updates depends on the remote's configured fetch mapping, and a stale remote-tracking ref approximates the same way a log does.) Ancestry is conclusive only when the landing preserves commit ids: squash, rebase, and cherry-pick landings all rewrite `$sha`, so there a failed ancestry check proves nothing by itself. For those, the postcondition is the content itself at `FETCH_HEAD` - the changed files' exact content present at the fetched tip - with a subject match used at most to locate the landing, never as the check (a squash can rewrite the subject too).
+Is the ref actually where it must be? That is the postcondition. The log only ever approximates it. (Test `FETCH_HEAD`, the ref the fetch just wrote: whether `origin/main` itself updates depends on the remote's configured fetch mapping, and a stale remote-tracking ref approximates the same way a log does.) Ancestry is conclusive only when the landing preserves commit ids: squash, rebase, and cherry-pick landings all rewrite `$sha`, so there a failed ancestry check proves nothing by itself. For those, the postcondition is the content itself at `FETCH_HEAD` (the changed files' exact content present at the fetched tip), with a subject match used at most to locate the landing, never as the check (a squash can rewrite the subject too).
 
 ## 5. Two observations before a flag, re-measure before sending
 

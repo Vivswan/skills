@@ -305,6 +305,14 @@ const SURFACES: Record<string, Surface> = {
         doc: "dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`",
         script: "dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch>",
       },
+      {
+        doc: "Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything",
+        script: "discover_with_retry() {",
+      },
+      {
+        doc: "Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything",
+        script: "viewfail=1\n      continue\n    fi\n    viewfail=0",
+      },
     ],
   },
   "watch-ci-after-push/SKILL.md <-> wait-for-pr-event.mts": {

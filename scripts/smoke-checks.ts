@@ -127,6 +127,107 @@ export function checkReadmeSkillList(readmeText: string, skillNames: ReadonlySet
   }
 }
 
+// The README's mermaid skill-reference graph is stripped out of the list
+// checks above (fenced block), so nothing else keeps it honest: a retired
+// skill's node, a dangling edge, or a new skill missing from the graph would
+// all render fine and drift silently. Bijection plus referential integrity:
+// every node label resolves to a published skill, one node per skill, every
+// published skill has a node, and every edge endpoint names a defined node.
+export function checkReadmeMermaidGraph(readmeText: string, skillNames: ReadonlySet<string>): void {
+  const fence = /```mermaid\n([\s\S]*?)```/.exec(readmeText);
+  if (fence === null) fail("README.md: missing the mermaid skill-reference graph");
+  const body = fence[1] ?? "";
+
+  // Node definitions may appear standalone or inline inside an edge; collect
+  // them all first so a bare alias used before its labeled definition still
+  // resolves (mermaid allows that order).
+  const aliases = new Map<string, string>();
+  for (const def of body.matchAll(/([A-Za-z0-9_]+)\["\/([^"\]]*)"\]/g)) {
+    const alias = def[1] ?? "";
+    const name = def[2] ?? "";
+    const existing = aliases.get(alias);
+    if (existing !== undefined && existing !== name) {
+      fail(
+        `README.md: mermaid node '${alias}' is defined twice with different labels` +
+          ` ('/${existing}' vs '/${name}')`,
+      );
+    }
+    aliases.set(alias, name);
+  }
+
+  // Bijection, both directions: every label resolves to a published skill,
+  // one node per skill (a second alias for the same skill is drift from a
+  // rename or a stale duplicate), and every published skill has a node.
+  const aliasBySkill = new Map<string, string>();
+  for (const [alias, name] of aliases) {
+    if (!skillNames.has(name)) {
+      fail(
+        `README.md: mermaid node '${alias}' labels '/${name}', which has no` +
+          ` skills/${name}/ folder -- remove the stale node or restore the folder`,
+      );
+    }
+    const prior = aliasBySkill.get(name);
+    if (prior !== undefined && prior !== alias) {
+      fail(
+        `README.md: mermaid nodes '${prior}' and '${alias}' both label '/${name}'` +
+          " -- one skill, one node",
+      );
+    }
+    aliasBySkill.set(name, alias);
+  }
+  for (const name of skillNames) {
+    if (!aliasBySkill.has(name)) {
+      fail(`README.md: the mermaid skill-reference graph is missing a node for '${name}'`);
+    }
+  }
+
+  // Every line must be something this checker understands. The FIRST
+  // non-empty line must be exactly one valid flowchart header (mermaid
+  // cannot render the block without one, and `graph XX` is not a
+  // direction); every later line is an edge or a standalone
+  // '/skill'-labeled node. Anything else (a second header, a bare alias, a
+  // node whose label lacks the leading slash, syntax this parser does not
+  // know) fails loudly instead of slipping past the guarantees above
+  // unparsed. Edges are matched first so a malformed line starting with
+  // `graph` cannot ride the header rule past endpoint validation.
+  const lines = body
+    .split("\n")
+    .map((rawLine) => rawLine.trim())
+    .filter((line) => line !== "");
+  const header = lines[0] ?? "";
+  if (!/^graph (LR|RL|TB|TD|BT)$/.test(header)) {
+    fail(
+      "README.md: the mermaid skill-reference graph must open with a" +
+        ` 'graph <LR|RL|TB|TD|BT>' header, found '${header}'`,
+    );
+  }
+  for (const line of lines.slice(1)) {
+    if (line.includes("-->")) {
+      for (const rawEndpoint of line.split("-->")) {
+        const endpoint = rawEndpoint.trim();
+        const parsed = /^([A-Za-z0-9_]+)(\["\/[^"\]]*"\])?$/.exec(endpoint);
+        if (parsed === null) {
+          fail(`README.md: cannot parse mermaid edge endpoint '${endpoint}' in '${line}'`);
+        }
+        const alias = parsed[1] ?? "";
+        if (!aliases.has(alias)) {
+          fail(
+            `README.md: mermaid edge '${line}' references '${alias}', which no node` +
+              " definition labels -- a dangling endpoint",
+          );
+        }
+      }
+      continue;
+    }
+    if (!/^[A-Za-z0-9_]+\["\/[^"\]]*"\]$/.test(line)) {
+      fail(
+        `README.md: cannot parse mermaid graph line '${line}' -- expected an edge` +
+          " or a node labeled '/skill-name' (the header belongs on the first line only)",
+      );
+    }
+  }
+}
+
 export interface InvocationGroupingEntry {
   readonly name: string;
   readonly disabled: boolean;

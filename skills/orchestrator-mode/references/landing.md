@@ -59,11 +59,13 @@ export GH_REPO=<base-repo>           # pin every gh command to the BASE reposito
 #                                      remotes and can pick the fork, where PRs cannot target
 #                                      the canonical mainline (item 1 above)
 git config rerere.enabled true       # record conflict resolutions once and replay them on later
-#                                      restacks, in place of a hand-resolve (or a prompt) each time
-git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push
-#                                      target; adjust origin to the writable remote. For a stacked
-#                                      chain that remote must belong to the BASE repository
-#                                      (item 1 above): PR base branches live there
+#                                      restacks, in place of a hand-resolve (or a prompt) each time.
+#                                      A repo-wide config write shared with every sibling worktree
+#                                      (the /worktree-hygiene skill's shared-config rule) -
+#                                      deliberate here, since replayed resolutions are wanted
+#                                      session-wide. Every push below names its remote explicitly
+#                                      (and GH_REPO pins the gh commands), so no pushDefault-style
+#                                      write is needed here
 # Chain setup, before spawning builders. Branch the bottom link off the DESIGNATED
 # mainline explicitly - the interviewed one, not the repo default branch, which is
 # wrong for a session targeting develop/release - and off its CURRENT remote tip,
@@ -152,15 +154,18 @@ git fetch <base-remote> <mainline>   # from the remote the PR MERGES INTO: origi
 #                                      in the /worktree-hygiene skill), and a stale
 #                                      remote-tracking ref would transplant onto a pre-merge tip
 #                                      and record that stale boundary
-exp2=$(git rev-parse refs/remotes/origin/track-2)   # expected remote tips, captured BEFORE the
-exp3=$(git rev-parse refs/remotes/origin/track-3)   # rewrite: the push below leases against these
-#                                      exact values. A bare --force-with-lease leases on the
-#                                      shared remote-tracking refs, which another worktree's fetch
-#                                      can advance mid-flow (/worktree-hygiene), so a racing
-#                                      remote edit could be overwritten while still satisfying
-#                                      the lease
+exp2=$(git rev-parse track-2)        # expected remote tips, captured BEFORE the rewrite from the
+exp3=$(git rev-parse track-3)        # LOCAL branch tips - the lead's own last-published values,
+#                                      which nothing but this checkout can move: the push below
+#                                      leases against these exact values. A bare --force-with-lease
+#                                      leases on the shared remote-tracking refs instead, which
+#                                      another worktree's fetch can advance mid-flow
+#                                      (/worktree-hygiene) - the fetch would launder a racing
+#                                      remote edit into a satisfied lease
 git rebase --onto FETCH_HEAD "$(git config branch.track-2.depTip)" track-2 < /dev/null
-git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before recording or pushing anything
+git merge-base --is-ancestor FETCH_HEAD track-2 || exit 1  # STOP: reconcile before recording or pushing anything.
+#                                      FETCH_HEAD is the merged mainline tip the fetch above wrote,
+#                                      so the postcondition needs no hand-supplied commit id
 git config branch.track-2.depTip "$(git rev-parse FETCH_HEAD)"   # the base moved and the check passed: re-record it
 git rebase --onto track-2 "$(git config branch.track-3.depTip)" track-3 < /dev/null
 git merge-base --is-ancestor "$(git rev-parse track-2)" track-3 || exit 1

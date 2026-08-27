@@ -21,7 +21,7 @@ The agent applies these on its own when the task matches:
 - [/pr-and-issue-discipline](./skills/pr-and-issue-discipline/) - Visualization-first PRs and issues, draft discipline, human-gated merges
 - [/rubber-duck-review](./skills/rubber-duck-review/) - Cross-model, read-only second-opinion code review
 - [/verify-with-controls](./skills/verify-with-controls/) - Controls and evidence before a zero, alarm, success claim, or stillness becomes a conclusion
-- [/watch-ci-after-push](./skills/watch-ci-after-push/) - Background CI watcher after every push
+- [/watch-ci-after-push](./skills/watch-ci-after-push/) - Background CI watcher after every push or merge
 - [/worktree-hygiene](./skills/worktree-hygiene/) - Safe worktree removal, explicit handovers, shared-repo rules
 
 ### Invoked by you
@@ -43,16 +43,20 @@ graph LR
   pid --> wca
   pid --> rdr
   cs --> rdr
+  cs --> nt
   rdr --> cs
   rdr --> nis["/no-invalid-states"]
   rdr --> nt
+  rdr --> vwc
   nis --> rdr
   cs --> nis
   nt["/never-twice"] --> rdr
   nt --> nis
+  nt --> csm
   om --> vwc["/verify-with-controls"]
   vwc --> rdr
   csm["/craft-skills-and-memories"] --> nw["/natural-writing"]
+  csm --> nt
 ```
 
 ## Installation
@@ -133,4 +137,4 @@ That runs the TypeScript typecheck, the Biome lint, YAML and JSON schema lints, 
 
 ## License
 
-Individual and Small Organization License 1.0.0 - see [LICENSE.md](./LICENSE.md).
+Individual and Small Organization License 1.0.0; see [LICENSE.md](./LICENSE.md).
