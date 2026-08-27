@@ -133,6 +133,27 @@ describe("install-hooks", () => {
     }
   });
 
+  test("an inherited GIT_CONFIG_NOSYSTEM cannot hide a system hooksPath", () => {
+    // GIT_CONFIG_NOSYSTEM=1 makes git ignore the system scope; inherited, it
+    // would blind the survivor check while later git invocations (without
+    // it) still resolve the system hooksPath and shadow the dispatcher. The
+    // installer must scrub it and refuse on the system-scope survivor.
+    const repo = makeRepo();
+    const sysDir = mkdtempSync(join(tmpdir(), "install-hooks-system-"));
+    const sysConfig = join(sysDir, "gitconfig");
+    try {
+      writeFileSync(sysConfig, "[core]\n\thooksPath = /system/hooks\n");
+      const r = install(repo, { GIT_CONFIG_SYSTEM: sysConfig, GIT_CONFIG_NOSYSTEM: "1" });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("core.hooksPath is still set outside the repository scope");
+      expect(r.stderr).toContain("system");
+      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(sysDir, { recursive: true, force: true });
+    }
+  });
+
   test("outside a git repository it skips without failing the install", () => {
     const dir = mkdtempSync(join(tmpdir(), "install-hooks-norepo-"));
     try {

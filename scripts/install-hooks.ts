@@ -25,33 +25,22 @@ import { ROOT } from "./lib";
 
 // The repository is the one containing the working directory (`bun install`
 // runs prepare at the package root); the dispatcher source always comes from
-// this checkout. Variables that would point git spawns AWAY from this
-// repository or its real configuration are dropped: GIT_DIR and friends
-// redirect the repository itself, GIT_CONFIG points `git config` at an
-// arbitrary file (like --file) - inherited, it would make the unset below
-// edit an unrelated user file and blind the survivor check - and
-// GIT_CONFIG_COUNT/GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n inject transient
-// entries the same way. GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM stay visible:
-// they select which real global/system files apply.
-function redirectsGit(key: string): boolean {
-  const k = key.toUpperCase();
-  return (
-    [
-      "GIT_DIR",
-      "GIT_WORK_TREE",
-      "GIT_INDEX_FILE",
-      "GIT_COMMON_DIR",
-      "GIT_OBJECT_DIRECTORY",
-      "GIT_CONFIG",
-      "GIT_CONFIG_COUNT",
-    ].includes(k) ||
-    k.startsWith("GIT_CONFIG_KEY_") ||
-    k.startsWith("GIT_CONFIG_VALUE_")
-  );
-}
+// this checkout. git spawns get a minimal GIT_* surface: EVERY GIT_*
+// variable is dropped except the two real-config file selectors, which the
+// survivor check must see (and which tests inject fixtures through).
+// Unknown GIT_* variables default to scrubbed (fail-safe), not inherited
+// (fail-open): an inherited GIT_CONFIG once blinded the survivor check by
+// retargeting `git config` at an arbitrary file, GIT_CONFIG_NOSYSTEM could
+// hide a system hooksPath, GIT_CONFIG_COUNT/KEY_n/VALUE_n and
+// GIT_CONFIG_PARAMETERS inject transient entries, GIT_DIR redirects the
+// repository itself - a blocklist loses this game one variable at a time.
+const KEEP = new Set(["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"]);
 const env: Record<string, string> = {};
 for (const [key, value] of Object.entries(process.env)) {
-  if (value !== undefined && !redirectsGit(key)) env[key] = value;
+  if (value === undefined) continue;
+  const upper = key.toUpperCase();
+  if (upper.startsWith("GIT_") && !KEEP.has(upper)) continue;
+  env[key] = value;
 }
 
 function git(...args: string[]) {
