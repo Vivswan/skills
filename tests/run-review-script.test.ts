@@ -1,8 +1,17 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ROOT } from "../scripts/lib";
+import { writeAllSync } from "../skills/rubber-duck-review/scripts/run-review.mts";
 
 // Contract tests for the run-review helper: stub reviewer binaries on PATH
 // drive every exit path, pinning the traps the script encapsulates - the
@@ -470,5 +479,39 @@ describe("run-review.mts", () => {
     expect(extracted.code).toBe(1);
     expect(extracted.stderr).toContain("no exit status recorded");
     rmSync(pendingDir, { recursive: true, force: true });
+  });
+});
+
+describe("writeAllSync", () => {
+  test("a short-writing fd still receives every byte, exactly once, in order", () => {
+    // writeSync may legally write fewer bytes than asked; dropping the
+    // remainder tears the captured stream, and a torn error line then parses
+    // as a clean review. The stub write caps each call at 3 bytes to force
+    // the loop through many short writes.
+    const chunk = Buffer.from('{"type":"error","message":"stream disconnected"}\n');
+    const landed: Buffer[] = [];
+    writeAllSync(7, chunk, (_fd, buf, offset, length) => {
+      const n = Math.min(3, length);
+      landed.push(Buffer.from(buf.subarray(offset, offset + n)));
+      return n;
+    });
+    expect(Buffer.concat(landed).toString()).toBe(chunk.toString());
+  });
+
+  test("with the real writeSync, a file receives the chunk byte-identically", () => {
+    const dir = mkdtempSync(join(tmpdir(), "write-all-"));
+    try {
+      const file = join(dir, "out");
+      const fd = openSync(file, "w");
+      const chunk = Buffer.from("review body\n");
+      try {
+        writeAllSync(fd, chunk);
+      } finally {
+        closeSync(fd);
+      }
+      expect(readFileSync(file)).toEqual(chunk);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

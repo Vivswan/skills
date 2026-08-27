@@ -23,8 +23,9 @@ const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.
 // that is the guaranteed detection channel, since the script normalizes some
 // list/view failures to exit 2 and deliberately ignores the watch exit
 // status. list/view mismatches also exit 64 as a secondary signal.
-// GH_LIST_IDS entries are "id" or "id@attempt" (attempt defaults to 1);
-// GH_LIST_IDS2/GH_LIST_IDS3 swap in later discovery snapshots.
+// GH_LIST_IDS entries are "id" or "id@attempt" (attempt defaults to 1); with
+// GH_LIST_CALLS set, GH_LIST_IDS<n> swaps in the snapshot served from the
+// n-th discovery call onward.
 const FAKE_GH = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${GH_VIOLATIONS}"; }
 jq_view='"\\(.conclusion)\\t\\(.name)"'
@@ -40,11 +41,15 @@ if [ "$1 $2" = "run list" ]; then
     [ "$n" -lt "\${GH_LIST_READY_AFTER}" ] && exit 0
   fi
   ids="\${GH_LIST_IDS:-}"
-  if [ -n "\${GH_LIST_IDS2+x}" ]; then
+  if [ -n "\${GH_LIST_CALLS:-}" ]; then
     c=0; [ -f "\${GH_LIST_CALLS}" ] && c="$(cat "\${GH_LIST_CALLS}")"
     c=$((c + 1)); printf '%s' "$c" > "\${GH_LIST_CALLS}"
-    [ "$c" -ge 2 ] && ids="\${GH_LIST_IDS2}"
-    if [ -n "\${GH_LIST_IDS3+x}" ] && [ "$c" -ge 3 ]; then ids="\${GH_LIST_IDS3}"; fi
+    k=2
+    while [ "$k" -le "$c" ]; do
+      v="GH_LIST_IDS$k"
+      if [ -n "\${!v+x}" ]; then ids="\${!v}"; fi
+      k=$((k + 1))
+    done
   fi
   for entry in $ids; do
     lid="\${entry%%@*}"
@@ -53,6 +58,11 @@ if [ "$1 $2" = "run list" ]; then
     wvar="GH_WF_\${lid}"
     printf '%s\\t=%s\\t=%s\\t%s\\n' "$lid" "$att" "\${!wvar-wf-$lid}" "\${!nvar:-CI-$lid}"
   done
+  # Partial-then-fail: rows above were already printed, then gh dies. Fires
+  # from the second discovery call on (the first must register the runs).
+  if [ -n "\${GH_LIST_EXIT_AFTER_OUTPUT:-}" ] && [ "\${c:-1}" -ge 2 ]; then
+    exit "\${GH_LIST_EXIT_AFTER_OUTPUT}"
+  fi
   exit 0
 fi
 if [ "$1 $2" = "run watch" ]; then
@@ -90,13 +100,14 @@ chmodSync(join(binDir, "sleep"), 0o755);
 afterAll(() => rmSync(binDir, { recursive: true, force: true }));
 
 let scenario = 0;
-// `args` precede the SHA on the command line; the default expectation pins
-// the fixture's default workflow name so each scenario keeps testing its own
-// branch, not the expected-workflow gate (which has dedicated tests below).
-function run(env: Record<string, string>, args: string[] = ["--expect-workflow", "CI-1"]) {
+// Spawns the script with the given argv exactly; run() below is the common
+// flags-then-SHA shape. The default expectation pins the fixture's default
+// workflow name so each scenario keeps testing its own branch, not the
+// expected-workflow gate (which has dedicated tests below).
+function runArgv(env: Record<string, string>, argv: string[]) {
   scenario += 1;
   const violations = join(binDir, `violations-${scenario}`);
-  const result = Bun.spawnSync(["bash", SCRIPT, ...args, "deadbeef"], {
+  const result = Bun.spawnSync(["bash", SCRIPT, ...argv], {
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
@@ -118,6 +129,10 @@ function run(env: Record<string, string>, args: string[] = ["--expect-workflow",
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
   };
+}
+
+function run(env: Record<string, string>, args: string[] = ["--expect-workflow", "CI-1"]) {
+  return runArgv(env, [...args, "deadbeef"]);
 }
 
 describe("watch-ci.sh exit matrix", () => {
@@ -234,6 +249,86 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.stdout).not.toContain("superseded");
   });
 
+  test("anything after the SHA is a usage error, never silently dropped", () => {
+    // The flag loop breaks at the first non-flag word, so a flag placed
+    // after the SHA used to be dropped without a trace: watch-ci.sh <sha>
+    // --expect-workflow Deploy left the default expectation in force and
+    // could exit 0 green off a bystander run - the vacuous green the flag
+    // exists to prevent.
+    for (const trailing of [["--expect-workflow", "Deploy"], ["oops"]]) {
+      const r = runArgv({ GH_LIST_IDS: "1" }, ["deadbeef", ...trailing]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("unexpected argument(s) after the SHA");
+      expect(r.stderr).toContain(trailing.join(" "));
+      expect(r.stdout).not.toContain("pass:");
+    }
+  });
+
+  test("never-settling retriggers are refused after a final re-discovery, never judged stale", () => {
+    // Every discovery snapshot reveals a newer run of the same workflow, so
+    // the capped fixed-point loop ends without converging. The judgment must
+    // then be gated on one more re-discovery: here it reveals run 7, whose
+    // FAILURE the stale selection (green run 6) would have hidden behind an
+    // exit 0. The script must refuse with exit 2 instead.
+    const calls = join(binDir, "list-calls-never-converge");
+    const names: Record<string, string> = {};
+    for (const id of ["1", "2", "3", "4", "5", "6", "7"]) {
+      names[`GH_NAME_${id}`] = "CI";
+      names[`GH_WF_${id}`] = "77";
+    }
+    const r = run(
+      {
+        GH_LIST_IDS: "1",
+        GH_LIST_IDS2: "2 1",
+        GH_LIST_IDS3: "3 2 1",
+        GH_LIST_IDS4: "4 3 2 1",
+        GH_LIST_IDS5: "5 4 3 2 1",
+        GH_LIST_IDS6: "6 5 4 3 2 1",
+        GH_LIST_IDS7: "7 6 5 4 3 2 1",
+        GH_LIST_CALLS: calls,
+        ...names,
+        GH_VIEW_7: "failure",
+      },
+      [],
+    );
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("refusing to judge a stale snapshot");
+    expect(r.stdout).not.toContain("pass:");
+    // 1 registration poll + 5 fixed-point rounds + the final re-discovery.
+    expect(readFileSync(calls, "utf-8")).toBe("7");
+  });
+
+  test("a non-converged selection confirmed by the final re-discovery is judged", () => {
+    // Same churn through the 5 capped rounds, but the final re-discovery
+    // returns the identical snapshot: the selection is confirmed stable at
+    // judgment time and run 6 is judged normally.
+    const calls = join(binDir, "list-calls-late-converge");
+    const names: Record<string, string> = {};
+    for (const id of ["1", "2", "3", "4", "5", "6"]) {
+      names[`GH_NAME_${id}`] = "CI";
+      names[`GH_WF_${id}`] = "77";
+    }
+    const r = run(
+      {
+        GH_LIST_IDS: "1",
+        GH_LIST_IDS2: "2 1",
+        GH_LIST_IDS3: "3 2 1",
+        GH_LIST_IDS4: "4 3 2 1",
+        GH_LIST_IDS5: "5 4 3 2 1",
+        GH_LIST_IDS6: "6 5 4 3 2 1",
+        GH_LIST_IDS7: "6 5 4 3 2 1",
+        GH_LIST_CALLS: calls,
+        ...names,
+      },
+      [],
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("final re-discovery confirmed");
+    expect(r.stdout).toContain("pass: CI (6)");
+    expect(r.stdout).toContain("superseded: CI (5)");
+    expect(readFileSync(calls, "utf-8")).toBe("7");
+  });
+
   test("a run cancelled by a mid-watch retrigger is superseded after re-discovery", () => {
     // The first discovery sees only run 1; the retrigger (run 2, same
     // workflow) appears while the script waits. The post-watch re-discovery
@@ -294,6 +389,23 @@ describe("watch-ci.sh exit matrix", () => {
   test("a failed or empty re-discovery exits 2, never judges the stale snapshot", () => {
     const calls = join(binDir, "list-calls-refresh");
     const r = run({ GH_LIST_IDS: "1", GH_LIST_IDS2: "", GH_LIST_CALLS: calls });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("re-discovery after the watch returned nothing");
+    expect(r.stdout).not.toContain("pass:");
+  });
+
+  test("a re-discovery failing AFTER partial output exits 2, never judges the fragment", () => {
+    // gh can die mid-stream after printing some rows; a fragment accepted as
+    // a complete snapshot would judge a selection with runs missing from it.
+    // discover must turn partial-then-fail into "no output", which the
+    // stale-snapshot check refuses.
+    const calls = join(binDir, "list-calls-partial-fail");
+    const r = run({
+      GH_LIST_IDS: "1",
+      GH_LIST_IDS2: "2 1",
+      GH_LIST_CALLS: calls,
+      GH_LIST_EXIT_AFTER_OUTPUT: "3",
+    });
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("re-discovery after the watch returned nothing");
     expect(r.stdout).not.toContain("pass:");

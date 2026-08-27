@@ -1,0 +1,72 @@
+import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { ROOT } from "../scripts/lib";
+
+// The launcher's zero-test guard: an invocation that runs zero tests must
+// fail HOWEVER it was reached. bun test itself exits 0 with "Ran 0 tests"
+// for --only with no .only test and for --pass-with-no-tests, so the
+// launcher is the backstop that keeps `bun run test <anything>` from ever
+// reporting a vacuous green.
+
+const LAUNCHER = join(ROOT, "scripts", "run-tests.ts");
+// The suite's smallest fast file; every scenario here nests a real bun test
+// run, so the target must stay cheap.
+const TARGET = join("tests", "lib.test.ts");
+
+function run(...args: string[]) {
+  return runWithEnv({}, ...args);
+}
+
+function runWithEnv(env: Record<string, string>, ...args: string[]) {
+  const result = Bun.spawnSync(["bun", LAUNCHER, ...args], {
+    cwd: ROOT,
+    env: { ...process.env, ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return { code: result.exitCode, stderr: result.stderr.toString() };
+}
+
+describe("run-tests zero-test guard", () => {
+  test("--only with no .only test fails instead of passing on zero tests", () => {
+    const r = run("--only", TARGET);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("Ran 0 tests");
+    expect(r.stderr).toContain("zero tests ran");
+  });
+
+  test("--pass-with-no-tests cannot turn a zero-test run into success", () => {
+    // In this shape bun exits 0 while printing an "error: regex ... matched
+    // 0 tests" line INSTEAD of the "Ran N tests" summary - the guard's
+    // missing-summary branch is what catches it.
+    const r = run("--pass-with-no-tests", "-t", "zzNoSuchTestAnywhere", TARGET);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("refusing to report success");
+  });
+
+  test("bun's echo of a summary-shaped CLI value cannot spoof the guard", () => {
+    // bun prints `error: regex "Ran 1 test across " matched 0 tests` - an
+    // unanchored search would read that mid-line echo as a real summary and
+    // let --pass-with-no-tests exit 0 on zero tests.
+    const r = run("--pass-with-no-tests", "-t", "Ran 1 test across ", TARGET);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("refusing to report success");
+  });
+
+  test("a run with real tests still passes: the guard's summary parse matches bun", () => {
+    // Positive control: if bun rewords the "Ran N tests" summary, the guard
+    // fails THIS run loudly instead of silently disarming.
+    const r = run(TARGET);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain("zero tests ran");
+  });
+
+  test("a forced-color summary still counts: ANSI codes cannot hide a real run", () => {
+    // Under FORCE_COLOR bun wraps the summary's timing bracket in SGR codes;
+    // an ANSI-blind parse would misread the passing run as summary-less and
+    // fail it.
+    const r = runWithEnv({ FORCE_COLOR: "1" }, TARGET);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain("refusing to report success");
+  });
+});

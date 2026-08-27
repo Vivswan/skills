@@ -40,6 +40,10 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const MANIFEST_NAME = "manifest.json";
 const CONTENT_DIR = "content";
+// Same bound as sweep.mts: a git diff on a stalled mount must fail loudly
+// (through the throw below, rendered as an ok:false summary) instead of
+// hanging the check with no output.
+const COMMAND_TIMEOUT_MS = 15_000;
 
 const USAGE = [
   "usage:",
@@ -123,20 +127,28 @@ async function gitDiffNoIndex(baselineFile: string, treeFile: string): Promise<D
     await execFileAsync(
       "git",
       ["diff", "--no-index", "--no-color", "--no-ext-diff", "--", baselineFile, treeFile],
-      { maxBuffer: 64 * 1024 * 1024, env: scrubbedGitEnv() },
+      { maxBuffer: 64 * 1024 * 1024, timeout: COMMAND_TIMEOUT_MS, env: scrubbedGitEnv() },
     );
     return { identical: true, diff: "" };
   } catch (error) {
-    const failure = error as { code?: number | string; stdout?: string; stderr?: string };
+    const failure = error as {
+      code?: number | string;
+      killed?: boolean;
+      signal?: string | null;
+      stdout?: string;
+      stderr?: string;
+    };
     // git diff exits 1 when the files differ; that is the drift signal,
     // not an operational failure.
     if (failure.code === 1 && typeof failure.stdout === "string") {
       return { identical: false, diff: failure.stdout };
     }
-    throw new Error(
-      `git diff --no-index failed for ${baselineFile} vs ${treeFile}: ` +
-        `${failure.stderr ?? String(error)}`,
-    );
+    // A timeout kill leaves no exit code and often no stderr; name it, so the
+    // summary reads as a stalled measurement rather than an empty mystery.
+    const detail = failure.killed
+      ? `timed out after ${COMMAND_TIMEOUT_MS}ms (killed with ${failure.signal ?? "a signal"})`
+      : failure.stderr || String(error);
+    throw new Error(`git diff --no-index failed for ${baselineFile} vs ${treeFile}: ${detail}`);
   }
 }
 

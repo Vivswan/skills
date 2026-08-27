@@ -134,6 +134,27 @@ describe("install-hooks", () => {
     }
   });
 
+  test("a local hooksPath value CONTAINING a newline aborts as ONE foreign value", () => {
+    // Line-splitting laundered this single non-husky value into two
+    // valid-looking ".husky/_" lines and migrated it, defeating the
+    // value-exact parsing claim; the -z read must see one foreign value and
+    // abort with everything untouched.
+    const repo = makeRepo();
+    try {
+      const value = ".husky/_\n.husky/_";
+      expect(sh(repo, "git", "config", "core.hooksPath", value).code).toBe(0);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("something this repo did not write");
+      const after = sh(repo, "git", "config", "--get-all", "core.hooksPath");
+      expect(after.code).toBe(0);
+      expect(after.raw).toBe(`${value}\n`);
+      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("a husky value plus an empty value still aborts", () => {
     const repo = makeRepo();
     try {
