@@ -1,0 +1,36 @@
+{
+  "name": "verify-with-controls",
+  "description": "Controls before a zero or absent reading, an alarming finding, a success claim, or stillness becomes a conclusion: evidence-bearing probes, positive and negative controls, second derivations, postconditions over logs, and a re-measure at the moment of sending.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/verify-with-controls",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "verification",
+    "measurement",
+    "controls",
+    "epistemics",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Verify With Controls",
+    "shortDescription": "No conclusion from an uncontrolled reading.",
+    "longDescription": "Fires when an agent is about to report a zero or absent reading, an alarming finding, a success claim, or stillness from a probe or status read, and holds the reading to six controls: evidence-or-error probes, a positive control before any trusted zero, a second derivation for alarming readings, postconditions over logs, two observations then a re-measure before sending, and a negative control proving every checker can fail.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Bash", "Verify"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/verify-with-controls",
+    "defaultPrompt": [
+      "Before you report that zero, run a positive control through the same instrument.",
+      "The tool said success; verify the postcondition, not the log.",
+      "Has this checker ever been seen failing?"
+    ],
+    "brandColor": "#1D4ED8"
+  }
+}
