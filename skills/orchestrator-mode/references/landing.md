@@ -38,58 +38,77 @@ The PR's BASE is a per-track choice inside this one mode, set by the dependency 
 
 Everything above still applies; this subsection only adds what is stack-specific.
 
-1. Tracks whose bases chain onto each other form a stack: each branch bases on its predecessor, so reviewers see only that track's delta. Where the `/gh-stack` skill is installed, it owns the mechanics (creation, restack, submit, merge); otherwise maintain the chain with plain git branch-on-branch plus one PR per link, each PR's base set to its predecessor's branch.
+1. Tracks whose bases chain onto each other form a stack: each branch bases on its predecessor, so reviewers see only that track's delta. The chain is git branch-on-branch plus one PR per link, each PR's base set to its predecessor's branch (an independent track's PR bases on the mainline). A PR's base branch must exist in the BASE repository, so a stacked chain requires push access there: every layer branch is pushed to a writable remote of the base repository. When only a fork is writable, dependent tracks land serially instead (branch-on-branch builds, one PR at a time against the mainline, the next opened after its dependency merges).
 2. The lead owns the stack: builders develop in their own worktrees against the agreed base branch and never restack. The lead integrates each converged branch into the chain, restacks successors, and pushes; the shared re-gate rule (item 3 above) applies to every link whose content a restack changed.
 3. For a chain, the shared serial-merge rule takes its order from the chain: bottom-up, one link at a time; the whole chain never merges in one shot.
 4. Parallel building is still fine: builders on later links start from the current state of the link below (or from the mainline plus an interface stub the brief names) and accept that their diff gets rebased when earlier links land. The shared-file content check from `references/fleet-monitor.md` applies to every restack.
 
-With gh-stack, the lead's loop looks like this (all commands non-interactive per that skill's flag table: `--json`, `--auto`, `--yes`):
+The lead's loop, top to bottom. Nothing in the block may prompt: no interactive rebase, and any command that could open a prompt gets stdin closed (`< /dev/null`).
 
 ```bash
-git config rerere.enabled true       # init prompts for this on a first TTY run; pre-enable to stay non-interactive
-git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push target; adjust origin to the writable remote
-SYNC_OUT=$(mktemp)                   # per-run capture for the sync verdicts below: a fixed /tmp
-#                                      path can be a pre-planted symlink (redirection follows
-#                                      it) or be overwritten by a concurrent session before
-#                                      its verdict is read
-gh stack init track-1 --base <mainline>  # bottom of the chain, before spawning builders.
-#                                  --base pins the trunk to the interviewed mainline: without
-#                                  it init bases the chain on the repo DEFAULT branch, wrong
-#                                  for a session targeting develop/release
-gh stack add  track-2            # one layer per track, in dependency order
-# STOP: switch the main checkout back to the mainline, spawn the builders,
-# and let them commit each layer's work. When a layer's builder signals done,
-# stop it and REMOVE its worktree (Worktree interplay, below): a branch
-# checked out in ANY worktree cannot be checked out elsewhere, so every step
-# below fails "already used by worktree" while a builder still holds its
-# layer. Submitting before the layers carry the collected commits would
-# publish EMPTY layer PRs.
-git checkout track-1             # stack commands error (ErrNotInStack) from the mainline;
-#                                  the bottom layer is the natural anchor to run them from
-gh stack sync < /dev/null > "$SYNC_OUT" 2>&1
-SYNC_STATUS=$?                       # capture immediately - nothing after the fact recovers $?
-#                                  restack upper layers onto the collected work first: submit
-#                                  only pushes, it does not cascade-rebase, and track-2 was
-#                                  branched before track-1's commits existed. The redirects
-#                                  keep sync non-TTY: it has no prompt-suppression flag, and
-#                                  on a terminal it opens a divergence wizard that blocks
-#                                  automation instead of printing the "Sync aborted" text
-#                                  the verdict check below reads.
-{ grep -qE "Stack synced|Branches synced" "$SYNC_OUT" && ! grep -qE "Push failed|Sync aborted" "$SYNC_OUT"; } || SYNC_STATUS=1
-#                                  BOTH conditions required: gh-stack prints its final success
-#                                  verdict unconditionally, even after logging "Push failed",
-#                                  so presence-of-success and absence-of-failure each catch
-#                                  what the other misses - neither alone suffices (and neither
-#                                  can false-fail on branch names containing "error")
-[ "$SYNC_STATUS" -ne 0 ] && exit 1   # STOP and reconcile (verdict rule below); never continue to submit
-# postcondition before submit: each successor's base contains the lower layer's current tip
-gh stack submit --auto           # push all layers, open one draft PR each
-# submit derives titles and bodies automatically (no body flag; a multi-commit
-# layer's TITLE gets humanized from the branch name, which can violate title
-# gates such as Conventional Commits) - rewrite BOTH into the repo's convention
-# and the visualization-first format (/pr-and-issue-discipline) before treating
-# the PR as prepared:
-gh pr edit <num> --title "<repo-convention title>" --body-file <file>  # once per PR submit just opened
+set -e                               # every step below is load-bearing: a failed rebase, push,
+#                                      or check stops the flow HERE, before anything (a boundary
+#                                      re-record, a push, a retarget) builds on the failure
+export GIT_TERMINAL_PROMPT=0         # a credential prompt would hang the block; fail loudly instead
+export GIT_SSH_COMMAND="ssh -oBatchMode=yes"  # the same for SSH remotes, which GIT_TERMINAL_PROMPT
+#                                      does not cover: no passphrase or host-key prompts
+export GH_PROMPT_DISABLED=1          # and for the gh commands below, which prompt on a TTY
+#                                      independently of git's settings
+export GH_REPO=<base-repo>           # pin every gh command to the BASE repository (owner/name):
+#                                      in a multi-remote checkout gh infers its target from the
+#                                      remotes and can pick the fork, where PRs cannot target
+#                                      the canonical mainline (item 1 above)
+git config rerere.enabled true       # record conflict resolutions once and replay them on later
+#                                      restacks, in place of a hand-resolve (or a prompt) each time
+git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push
+#                                      target; adjust origin to the writable remote. For a stacked
+#                                      chain that remote must belong to the BASE repository
+#                                      (item 1 above): PR base branches live there
+# Chain setup, before spawning builders. Branch the bottom link off the DESIGNATED
+# mainline explicitly - the interviewed one, not the repo default branch, which is
+# wrong for a session targeting develop/release - and off its CURRENT remote tip,
+# not a possibly stale local branch (the same FETCH_HEAD rule as the post-merge
+# fetch below):
+git fetch <base-remote> <mainline>
+git checkout -b track-1 FETCH_HEAD
+git checkout -b track-2 track-1  # one layer per track, in dependency order, each off its dependency's branch
+git config branch.track-2.depTip "$(git rev-parse track-1)"
+git checkout -b track-3 track-2  # a deeper chain continues the same two-line pattern per link
+git config branch.track-3.depTip "$(git rev-parse track-2)"
+#                                  record the dependency tip each layer branched from. The boundary
+#                                  is MAINTAINED, not set-once (the direct gate's dependent-track
+#                                  rule above): re-record it after every restack of the layer. A
+#                                  stale recording replays later or rewritten dependency commits.
+git checkout <mainline>              # release the layer branches for the builders' worktrees
+# STOP: spawn the builders and let them commit each layer's work. When a layer's
+# builder signals done, stop it and REMOVE its worktree (Worktree interplay,
+# below): a branch checked out in ANY worktree cannot be checked out elsewhere,
+# so every step below fails "already used by worktree" while a builder still
+# holds its layer. Publishing before the layers carry the collected commits
+# would publish EMPTY layer PRs.
+# Restack each successor onto its dependency's collected work, bottom-up:
+# track-2 was branched before track-1's commits existed. Per link: transplant
+# only the delta past the recorded boundary, VALIDATE the postcondition (the
+# link's base contains the dependency's current tip), and only then move the
+# boundary - a boundary recorded before its check passes would, on a failed
+# transplant, point at a dependency the branch never inherited, and a retry
+# from it omits or replays commits. track-3 follows onto the restacked
+# track-2 the same way:
+git rebase --onto track-1 "$(git config branch.track-2.depTip)" track-2 < /dev/null
+git merge-base --is-ancestor "$(git rev-parse track-1)" track-2 || exit 1  # STOP and reconcile; never continue to publish
+git config branch.track-2.depTip "$(git rev-parse track-1)"
+git rebase --onto track-2 "$(git config branch.track-3.depTip)" track-3 < /dev/null
+git merge-base --is-ancestor "$(git rev-parse track-2)" track-3 || exit 1
+git config branch.track-3.depTip "$(git rev-parse track-2)"
+# Publish: push each layer branch, then open one draft PR per link with the base
+# set EXPLICITLY (gh defaults --base to the repo default branch): the dependency's
+# branch for a stacked link, the mainline for an independent track. The opener
+# authors each title and body directly, per the repo's title convention and the
+# visualization-first format (/pr-and-issue-discipline), so the PR is born prepared:
+git push -u origin track-1 track-2 track-3
+gh pr create --draft --head track-1 --base <mainline> --title "<repo-convention title>" --body-file <file>
+gh pr create --draft --head track-2 --base track-1 --title "<repo-convention title>" --body-file <file>
+gh pr create --draft --head track-3 --base track-2 --title "<repo-convention title>" --body-file <file>
 # per converged layer, bottom-up:
 gh pr ready <num> --undo             # BEFORE the lower link is even OFFERED as ready to merge
 #                                      (or merged, in the delegated path): flip every dependent
@@ -100,7 +119,7 @@ gh pr ready <num> --undo             # BEFORE the lower link is even OFFERED as 
 #                                      and un-regated. One successor draft span per link merge,
 #                                      from offer to reconvergence (/pr-and-issue-discipline's
 #                                      both-directions draft rule, applied at the restack site).
-gh stack merge <pr> --yes --squash   # DELEGATED PATH ONLY: this line runs when the interview
+gh pr merge <pr> --squash            # DELEGATED PATH ONLY: this line runs when the interview
 #                                      delegated merging to the lead, a merge queue owns the
 #                                      ordering, or a standing /pr-and-issue-discipline
 #                                      exception applies.
@@ -113,33 +132,78 @@ gh stack merge <pr> --yes --squash   # DELEGATED PATH ONLY: this line runs when 
 #                                      With a merge queue, merge returns success on ENQUEUE,
 #                                      before the commits reach the mainline - enqueue is not
 #                                      landed. WATCH until the PR is actually merged (mergedAt
-#                                      set, the commit on the mainline) before the sync below:
-#                                      same logs-vs-postcondition principle as the sync check.
-gh stack sync --prune < /dev/null > "$SYNC_OUT" 2>&1   # restack the remainder, drop merged
-SYNC_STATUS=$?                       # same executable gate as the pre-submit sync
-{ grep -qE "Stack synced|Branches synced" "$SYNC_OUT" && ! grep -qE "Push failed|Sync aborted" "$SYNC_OUT"; } || SYNC_STATUS=1
-[ "$SYNC_STATUS" -ne 0 ] && exit 1   # STOP: reconcile before pushing or re-flipping anything
-# postcondition before continuing: the next layer's merge-base contains the merged mainline commit
-gh stack submit --auto               # push the restacked remainder so successor PRs update:
-#                                      an unpushed restack leaves stale PRs whose CI never
-#                                      covered what will actually merge, and the shared re-gate
-#                                      rule (item 3 above) applies to every content-changed link
+#                                      set, the commit on the mainline) before restacking.
+# After the lower link merges, the restack CASCADES bottom-up, one link at a time,
+# and each link transplants onto ITS OWN dependency's new tip: only the IMMEDIATE
+# successor moves onto the mainline; every higher link follows its REWRITTEN
+# dependency (repeating the mainline command for a higher link would flatten the
+# chain). Transplant only the delta: a squash merge rewrites history, so the
+# dependency's commits are not ancestors of the squash commit, and a whole-branch
+# rebase would replay the dependency's changes:
+git fetch <base-remote> <mainline>   # from the remote the PR MERGES INTO: origin in a plain
+#                                      clone, the canonical remote (not the writable fork remote)
+#                                      in a fork checkout - a fork's mainline can lag the base
+#                                      repository's and would fail every ancestry gate below. The
+#                                      squash landed on the REMOTE mainline; fetch first, or the
+#                                      transplant targets a stale pre-merge tip. The steps below
+#                                      use FETCH_HEAD, the ref this fetch just wrote: whether the
+#                                      fetch also updates the remote-tracking ref depends on the
+#                                      remote's configured fetch mapping (the same distinction as
+#                                      in the /worktree-hygiene skill), and a stale
+#                                      remote-tracking ref would transplant onto a pre-merge tip
+#                                      and record that stale boundary
+exp2=$(git rev-parse refs/remotes/origin/track-2)   # expected remote tips, captured BEFORE the
+exp3=$(git rev-parse refs/remotes/origin/track-3)   # rewrite: the push below leases against these
+#                                      exact values. A bare --force-with-lease leases on the
+#                                      shared remote-tracking refs, which another worktree's fetch
+#                                      can advance mid-flow (/worktree-hygiene), so a racing
+#                                      remote edit could be overwritten while still satisfying
+#                                      the lease
+git rebase --onto FETCH_HEAD "$(git config branch.track-2.depTip)" track-2 < /dev/null
+git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before recording or pushing anything
+git config branch.track-2.depTip "$(git rev-parse FETCH_HEAD)"   # the base moved and the check passed: re-record it
+git rebase --onto track-2 "$(git config branch.track-3.depTip)" track-3 < /dev/null
+git merge-base --is-ancestor "$(git rev-parse track-2)" track-3 || exit 1
+git config branch.track-3.depTip "$(git rev-parse track-2)"
+#                                      a third link (track-3, where the chain has one) transplants
+#                                      onto the rewritten track-2, never onto the mainline, and so
+#                                      on up the chain. Per link, the same rebase-validate-record
+#                                      order as pre-publish: the postcondition (merged mainline
+#                                      commit an ancestor of the immediate successor; each higher
+#                                      link containing its rewritten dependency's tip) runs while
+#                                      the remote is still untouched, BEFORE the boundary
+#                                      re-record and the push, so a bad transplant stops the flow
+#                                      with nothing built on it
+git push --atomic origin \
+  --force-with-lease=refs/heads/track-2:"$exp2" \
+  --force-with-lease=refs/heads/track-3:"$exp3" \
+  track-2 track-3                    # every rewritten link, in ONE transactional push, each
+#                                      leased against its captured pre-rewrite tip: an unpushed
+#                                      restack leaves a stale PR whose CI never covered what will
+#                                      actually merge, and the shared re-gate rule (item 3 above)
+#                                      applies to every content-changed link. --atomic makes a
+#                                      failed lease on ANY ref reject the WHOLE cascade; without
+#                                      it git can update one branch before rejecting another,
+#                                      leaving the PR branches at mixed restack generations
+gh pr edit <num> --base <mainline>   # retarget the IMMEDIATE successor's PR to the mainline (or
+#                                      the next surviving dependency) AFTER the restack, never
+#                                      before (restack-then-retarget, above). Higher links keep
+#                                      their PR base: their dependency branch still exists
 # re-gate and reconverge each content-changed successor, then flip it ready again
-git checkout <mainline>              # back to the mainline once stack operations are done
+git checkout <mainline>              # back to the mainline once stack operations are done...
+git merge --ff-only FETCH_HEAD       # ...and fast-forward it: the fetch above wrote FETCH_HEAD,
+#                                      not the local branch, which still sits at its pre-merge
+#                                      tip - a later track branched from it would omit the commit
+#                                      that just landed
 ```
 
-Judge `gh stack sync` by ALL its signals, at both sync sites (the pre-submit restack and the post-merge sync):
-
-- The exit code catches hard failures (nonzero on rebase conflicts and API failures).
-- The capture in `"$SYNC_OUT"` must contain one of sync's documented SUCCESS verdicts ("Stack synced" or "Branches synced") AND no explicit failure marker ("Push failed", "Sync aborted"). gh-stack prints its final verdict unconditionally, even after logging a failure, so presence-of-success and absence-of-failure each catch what the other misses. Matching these exact strings cannot false-fail on branch names that merely contain "error".
-- Any signal failing (a nonzero exit, a missing success verdict, or a failure marker present) stops the flow to reconcile first.
-- Then, because a verdict line is still only a log, verify the POSTCONDITION sync existed to produce before continuing, per site. The pre-submit sync is verified by each successor's base containing the LOWER LAYER'S CURRENT TIP. The post-merge sync is verified by the next layer's merge-base containing the MERGED MAINLINE COMMIT (or the stack status view showing the chain clean). Logs approximate; the postcondition is the truth, the same family as the exit-code lesson.
+A failed step in this loop is loud on its own: a rebase stops on a conflict with a nonzero exit, and `--force-with-lease` refuses to push over a branch that moved under you. The block's `set -e` turns that loudness into a full stop, so no later step (a boundary re-record, a push, a retarget) builds on a failure. What still needs explicit verification is the POSTCONDITION each step exists to produce, per site: before publishing, each successor's base contains the dependency's current tip; after a merge, the next layer's merge-base contains the merged mainline commit (both `merge-base --is-ancestor` checks in the block). Logs approximate; the postcondition is the truth (`/verify-with-controls` rule 4).
 
 Worktree interplay: git refuses to check out a branch already checked out in a worktree (the `/worktree-hygiene` skill's one-branch-one-worktree rule), and builders hold their layer branches in theirs.
 
-- After `init`/`add` create the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree.
-- The lead runs `rebase --upstack`/`sync`/`merge` from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live.
+- After the chain setup creates the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree.
+- The lead runs restacks and merges from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live.
 - Removal itself is destructive: run the removal checks in the `/worktree-hygiene` skill (fresh status codes, no live processes with cwd inside the tree) before deleting anything.
 - Collection is a HANDOFF: stopping a builder and removing its worktree transfers ownership of that layer branch to the lead's stack operations only. Review fixes on a collected layer ALWAYS go to a FRESH builder in a NEW worktree, with no collection exception to the skill's findings-go-to-a-builder rule, and never by resurrecting the removed builder (a message to a stopped agent resumes it, into a directory that no longer exists; see the `/worktree-hygiene` skill on handovers).
-- For a layer the main checkout itself holds (the bottom-layer anchor in the block above), release the branch first with `git checkout <mainline>` before creating the fix worktree, then recollect and re-anchor on a stack branch before the next stack command: the same one-branch-one-worktree rule this section opens with.
-- Until collection, layer commits happen only on that layer's branch in its builder's worktree; the lead's stack operations are the only cross-layer writes.
+- For a layer the main checkout itself holds (a rebase in the block above ends with that layer's branch checked out), release the branch first with `git checkout <mainline>` before creating the fix worktree, then recollect before the next restack touches that layer: the same one-branch-one-worktree rule this section opens with.
+- Until collection, layer commits happen only on that layer's branch in its builder's worktree; the lead's restacks are the only cross-layer writes.
