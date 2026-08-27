@@ -399,8 +399,8 @@ function checkLicenseIdentity(
     }
   }
 
-  // template/ is excluded from the identity checks above (its author and
-  // placeholders are unfilled), but its license field seeds every future
+  // template/ stays out of the frontmatter loop above (skillFrontmatters
+  // holds only published skills), but its license field seeds every future
   // skill, so pin it here.
   const templateSkill = join(ROOT, "template", "SKILL.md");
   if (parseFrontmatter(templateSkill).license !== license) {
@@ -835,11 +835,14 @@ function main(): void {
   }
   // template/ keeps a codex manifest and a SKILL.md too; the identity guards
   // and both halves of the version ban cover the template, even though it is
-  // not a published skill (its frontmatter legitimately lacks the identity
-  // and license fields, so it stays out of skillFrontmatters).
+  // not a published skill. Its frontmatter pre-fills metadata.author (so the
+  // copy step cannot forget it) and is held to the canonical author below,
+  // but it stays out of skillFrontmatters: the README and interface checks
+  // must not demand entries for the template.
   const templateCodex = loadCodexManifest(join(ROOT, "template"));
+  const templateSkillMd = loadSkillFrontmatter(join(ROOT, "template"));
   checkCodexManifestVersionBan(templateCodex);
-  checkFrontmatterVersionBan(loadSkillFrontmatter(join(ROOT, "template")));
+  checkFrontmatterVersionBan(templateSkillMd);
   codexManifests.push(templateCodex);
 
   checkManifestEntriesHaveFolders(manifest, skillNames);
@@ -853,7 +856,13 @@ function main(): void {
     })),
   );
   checkIssueTemplateOptionsMatchFolders(skillNames);
-  checkAuthorIdentity(marketplace, manifest, codexManifests, skillFrontmatters);
+  // The metadata.author loop is the only consumer of the frontmatter list in
+  // checkAuthorIdentity, so appending the template holds its pre-filled
+  // author to the canonical one without joining any other per-skill check.
+  checkAuthorIdentity(marketplace, manifest, codexManifests, [
+    ...skillFrontmatters,
+    templateSkillMd,
+  ]);
   checkLicenseIdentity(manifest, codexManifests, skillFrontmatters);
   checkHomepageIdentity(marketplace, manifest, codexManifests);
   checkPlaceholderMarkersStillInTemplate();

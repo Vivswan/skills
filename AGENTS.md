@@ -54,6 +54,10 @@ skills/
 template/            starter files for the next skill
 scripts/             repo check scripts (TypeScript, run with bun)
 tests/               repo test files (bun run test); new tests go here
+  preload.ts         hermetic git interlock, loaded before any test runs
+.githooks/           pre-commit dispatcher + hook logic (scripts/install-hooks.ts installs it)
+docs/                authoring.md: the shared skill-core plus plugin-layer model
+bunfig.toml          wires tests/preload.ts into any direct `bun test` run
 ```
 
 ### Creating a new skill
@@ -67,6 +71,12 @@ tests/               repo test files (bun run test); new tests go here
 - If a skill uses MCP, `SKILL.md` must still explain how to complete the task when the MCP server is unavailable.
 - Treat `npx skills add ...` and the plain skill content as the compatibility baseline for Claude Code, Codex, and GitHub Copilot.
 - List the new skill in `.claude-plugin/plugin.json` (`skills`) and add a linked entry to the root `README.md` Available Skills list. The smoke test fails the build if either is missing.
+- Put the README entry under the matching heading: "Invoked by you" when `disable-model-invocation: true`, "Automatic" otherwise.
+- Ship a byte-identical copy of the root `LICENSE.md` inside the skill folder (the smoke test compares bytes).
+- Set frontmatter `metadata.author` to the first name of the `.claude-plugin/plugin.json` author. Never set `metadata.internal` on a published skill; the CLI silently drops internal skills from installs.
+- Keep frontmatter within Claude Code's limits: `name` matches the folder and stays <= 64 characters, `description` <= 1024 characters.
+- Codex manifest conventions: `homepage` is `<repository>/tree/main/skills/<name>` and `keywords` is non-empty; `agents/openai.yaml` `interface.short_description` is 25-64 characters.
+- Add the skill to the `skill` dropdown in `.github/ISSUE_TEMPLATE/bug_report.yml`.
 - Follow `docs/authoring.md` for the shared skill-core plus plugin-layer model.
 
 ### Publishing hygiene
@@ -74,7 +84,7 @@ tests/               repo test files (bun run test); new tests go here
 - Update the root `README.md` whenever you add, rename, or remove a skill.
 - Keep the files in `template/` useful as the starter for the next skill.
 - Run `bun run check` before publishing or opening a PR (also enforced by the pre-commit hook and CI).
-- Renaming, merging, or retiring a skill folder is a normal change; consumers re-add from main. Update every reference (README, manifests, cross-skill pointers) in the same change.
+- Renaming, merging, or retiring a skill folder is a normal change, but not transparent to existing installs: non-interactive updates keep the stale copy and never add the new name, so consumers must re-add from main deliberately. Update every reference (README, manifests, cross-skill pointers) in the same change.
 - Never add a file named `metadata.json` inside a skill folder; the `npx skills` CLI silently drops it at install time.
 
 ### Releases

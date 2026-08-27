@@ -3,6 +3,7 @@ name: template-skill
 description: Replace with a short trigger stating when the skill should fire, starting with "Use when ...".
 license: SEE LICENSE IN LICENSE.md
 metadata:
+  author: Vivswan
   internal: true
 ---
 

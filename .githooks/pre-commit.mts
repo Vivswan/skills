@@ -7,8 +7,8 @@
  *
  * The previous hook additionally guarded .git/config against mutation by
  * leaky tests; that guard is gone because the hermetic test environment
- * (scripts/hermetic-git-env.ts) makes the real repository unreachable from
- * every test by construction.
+ * (scripts/hermetic-git-env.ts) blocks accidental (cwd- or env-based)
+ * discovery of the real repository from tests - not deliberate targeting.
  */
 
 import { statSync } from "node:fs";
