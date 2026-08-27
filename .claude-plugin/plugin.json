@@ -19,7 +19,6 @@
     "./skills/orchestrator-mode",
     "./skills/never-twice",
     "./skills/pr-and-issue-discipline",
-    "./skills/review-before-commit",
     "./skills/rubber-duck-review",
     "./skills/verify-with-controls",
     "./skills/watch-ci-after-push",

@@ -140,4 +140,4 @@ tail gate.log && git merge && git push  # WRONG: && conditions on tail printing 
 ## Companion Gates
 
 - After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it.
-- Before anything lands, an independent review that can block the landing; where installed, the `/review-before-commit` skill defines that gate.
+- Before anything lands, an independent review that can block the landing, scoped to the exact content being landed - the branch or PR diff (`base...HEAD`) once committed, the staged diff before that - not the working tree; where installed, the `/rubber-duck-review` skill defines that review and its convergence.
