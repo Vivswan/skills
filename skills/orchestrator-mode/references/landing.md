@@ -134,11 +134,10 @@ git config branch.track-3.depTip "$(git rev-parse track-2)"
 #                                      a third link (track-3, where the chain has one) transplants
 #                                      onto the rewritten track-2, never onto the mainline, and so
 #                                      on up the chain
-git push --force-with-lease origin track-2   # an unpushed restack leaves a stale PR whose CI
-#                                      never covered what will actually merge, and the shared
-#                                      re-gate rule (item 3 above) applies to every
-#                                      content-changed link; push each higher restacked link the
-#                                      same way
+git push --force-with-lease origin track-2 track-3   # every rewritten link, in one push: an
+#                                      unpushed restack leaves a stale PR whose CI never covered
+#                                      what will actually merge, and the shared re-gate rule
+#                                      (item 3 above) applies to every content-changed link
 gh pr edit <num> --base <mainline>   # retarget the IMMEDIATE successor's PR to the mainline (or
 #                                      the next surviving dependency) AFTER the restack, never
 #                                      before (restack-then-retarget, above). Higher links keep
