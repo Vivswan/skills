@@ -65,7 +65,7 @@ Removing a tree that sits on a branch keeps that branch. Delete the branch itsel
 
 Harnesses that auto-clean isolation worktrees remove them when their actor completes with a clean tree. An actor that stops "to wait" before anything is written, while others still work in its tree, leaves them working in a deleted directory.
 
-- An actor coordinating others inside its own isolation worktree dirties the tree IMMEDIATELY on start; one untracked marker file at the worktree root is enough (e.g. `.orchestrator-keepalive`). Verify the marker actually shows as `??` in `git status --porcelain`: an ignore rule can hide it, and a hidden marker protects nothing; pick another name when it does. The marker is never staged or committed (removal rule 1 names it the one disposable `??`), and it is deleted before the final signal or handoff.
+- An actor coordinating others inside its own isolation worktree dirties the tree IMMEDIATELY on start; one untracked marker file at the worktree root is enough (e.g. `.orchestrator-keepalive`). Verify the marker actually shows as `??` in `git status --porcelain -uall` (`-uall` here too, or a `status.showUntrackedFiles=no` config hides the very evidence this check needs): an ignore rule can hide it, and a hidden marker protects nothing; pick another name when it does. The marker is never staged or committed (removal rule 1 names it the one disposable `??`), and it is deleted before the final signal or handoff.
 - Before resuming any actor that stopped clean in an isolation worktree, verify the worktree still exists. Respawn fresh when it does not.
 
 ## Handing Over a Worktree
