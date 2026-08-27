@@ -38,7 +38,7 @@ The PR's BASE is a per-track choice inside this one mode, set by the dependency 
 
 Everything above still applies; this subsection only adds what is stack-specific.
 
-1. Tracks whose bases chain onto each other form a stack: each branch bases on its predecessor, so reviewers see only that track's delta. The chain is git branch-on-branch plus one PR per link, each PR's base set to its predecessor's branch (an independent track's PR bases on the mainline).
+1. Tracks whose bases chain onto each other form a stack: each branch bases on its predecessor, so reviewers see only that track's delta. The chain is git branch-on-branch plus one PR per link, each PR's base set to its predecessor's branch (an independent track's PR bases on the mainline). A PR's base branch must exist in the BASE repository, so a stacked chain requires push access there: every layer branch is pushed to a writable remote of the base repository. When only a fork is writable, dependent tracks land serially instead (branch-on-branch builds, one PR at a time against the mainline, the next opened after its dependency merges).
 2. The lead owns the stack: builders develop in their own worktrees against the agreed base branch and never restack. The lead integrates each converged branch into the chain, restacks successors, and pushes; the shared re-gate rule (item 3 above) applies to every link whose content a restack changed.
 3. For a chain, the shared serial-merge rule takes its order from the chain: bottom-up, one link at a time; the whole chain never merges in one shot.
 4. Parallel building is still fine: builders on later links start from the current state of the link below (or from the mainline plus an interface stub the brief names) and accept that their diff gets rebased when earlier links land. The shared-file content check from `references/fleet-monitor.md` applies to every restack.
@@ -56,7 +56,10 @@ export GH_PROMPT_DISABLED=1          # and for the gh commands below, which prom
 #                                      independently of git's settings
 git config rerere.enabled true       # record conflict resolutions once and replay them on later
 #                                      restacks, in place of a hand-resolve (or a prompt) each time
-git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push target; adjust origin to the writable remote
+git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push
+#                                      target; adjust origin to the writable remote. For a stacked
+#                                      chain that remote must belong to the BASE repository
+#                                      (item 1 above): PR base branches live there
 # Chain setup, before spawning builders. Branch the bottom link off the DESIGNATED
 # mainline explicitly - the interviewed one, not the repo default branch, which is
 # wrong for a session targeting develop/release:
