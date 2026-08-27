@@ -212,6 +212,40 @@ describe("install-hooks", () => {
     }
   });
 
+  test("a foreign hooksPath reached through a local include aborts untouched", () => {
+    // Scoped reads skip include.path by default, but commit-time git follows
+    // it: an included hooksPath that slipped past validation would shadow
+    // the dispatcher. The installer reads the local scope with --includes.
+    const repo = makeRepo();
+    try {
+      const included = join(repo, "included.gitconfig");
+      writeFileSync(included, "[core]\n\thooksPath = included-hooks\n");
+      expect(sh(repo, "git", "config", "include.path", included).code).toBe(0);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("something this repo did not write");
+      expect(r.stderr).toContain("included-hooks");
+      expect(readFileSync(included, "utf-8")).toContain("included-hooks");
+      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a dangling .git symlink fails the install instead of skipping", () => {
+    // stat follows symlinks into "no entry here"; a broken .git symlink is a
+    // broken checkout, not a tarball.
+    const dir = mkdtempSync(join(tmpdir(), "install-hooks-dangling-"));
+    try {
+      symlinkSync(join(dir, "missing-target"), join(dir, ".git"));
+      const r = install(dir);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("git cannot read the repository");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a .git entry git cannot read fails the install instead of skipping", () => {
     // Skipping is only for genuine non-repositories (tarball installs); a
     // broken checkout skipped silently would end up with no hook at all.

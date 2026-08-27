@@ -32,7 +32,6 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
@@ -86,8 +85,10 @@ function lines(raw: string): string[] {
 
 if (git("rev-parse", "--git-dir").code !== 0) {
   // No repository is fine (tarball install); a .git entry git cannot read
-  // is a broken checkout and must not silently end up hook-less.
-  if (statSync(join(process.cwd(), ".git"), { throwIfNoEntry: false })) {
+  // is a broken checkout and must not silently end up hook-less. lstat, not
+  // stat: a DANGLING .git symlink is such a broken entry, and stat would
+  // follow it into "no entry here".
+  if (lstatSync(join(process.cwd(), ".git"), { throwIfNoEntry: false })) {
     fail(
       "a .git entry exists but git cannot read the repository; fix the checkout, then rerun 'bun install'.",
     );
@@ -99,8 +100,12 @@ if (git("rev-parse", "--git-dir").code !== 0) {
 // Local hooksPath: only the known husky shapes are ours to migrate - the
 // exact relative ".husky/_" or an ABSOLUTE path ending "/.husky/_" (husky
 // writes both). Anything else, including an empty value, is someone's
-// intentional configuration and aborts.
-const local = git("config", "--local", "--get-all", "core.hooksPath");
+// intentional configuration and aborts. --includes: scoped reads skip
+// include.path files by default, but commit-time git follows them, so an
+// included foreign hooksPath would otherwise slip past validation (the
+// all-scope check below labels included values "local" too, which this
+// validation must therefore cover).
+const local = git("config", "--local", "--includes", "--get-all", "core.hooksPath");
 if (local.code !== 0 && local.code !== 1) {
   fail(`could not read local core.hooksPath (git exited ${local.code}).`);
 }
@@ -175,7 +180,11 @@ if (existing?.isFile() && !readFileSync(target, "utf-8").includes("scripts/insta
 mkdirSync(hooksDir, { recursive: true });
 const staging = join(hooksDir, `.pre-commit.installing.${process.pid}`);
 try {
-  writeFileSync(staging, readFileSync(join(ROOT, ".githooks", "pre-commit")));
+  // Exclusive create ("wx") after clearing any stale entry: writing through
+  // a pre-positioned symlink at the staging path would land the content
+  // outside the hooks directory before the rename.
+  rmSync(staging, { force: true });
+  writeFileSync(staging, readFileSync(join(ROOT, ".githooks", "pre-commit")), { flag: "wx" });
   chmodSync(staging, 0o755);
   renameSync(staging, target);
 } finally {
