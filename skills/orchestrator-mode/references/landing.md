@@ -142,19 +142,29 @@ git config branch.track-3.depTip "$(git rev-parse track-2)"
 #                                      a third link (track-3, where the chain has one) transplants
 #                                      onto the rewritten track-2, never onto the mainline, and so
 #                                      on up the chain
-git push --force-with-lease origin track-2 track-3   # every rewritten link, in one push: an
-#                                      unpushed restack leaves a stale PR whose CI never covered
-#                                      what will actually merge, and the shared re-gate rule
-#                                      (item 3 above) applies to every content-changed link
+# postcondition BEFORE the push: the next layer's merge-base contains the merged
+# mainline commit (the squash sha is an ancestor of the restacked successor).
+# Checked here, while the remote is still untouched, so a bad transplant stops
+# the flow before any push or retarget builds on it:
+git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before pushing anything
+git push --force-with-lease --atomic origin track-2 track-3   # every rewritten link, in ONE
+#                                      transactional push: an unpushed restack leaves a stale PR
+#                                      whose CI never covered what will actually merge, and the
+#                                      shared re-gate rule (item 3 above) applies to every
+#                                      content-changed link. --atomic makes a stale lease on ANY
+#                                      ref reject the WHOLE cascade; without it git can update
+#                                      one branch before rejecting another, leaving the PR
+#                                      branches at mixed restack generations
 gh pr edit <num> --base <mainline>   # retarget the IMMEDIATE successor's PR to the mainline (or
 #                                      the next surviving dependency) AFTER the restack, never
 #                                      before (restack-then-retarget, above). Higher links keep
 #                                      their PR base: their dependency branch still exists
-# postcondition before continuing: the next layer's merge-base contains the merged
-# mainline commit (the squash sha is an ancestor of the restacked successor)
-git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before re-flipping anything
 # re-gate and reconverge each content-changed successor, then flip it ready again
-git checkout <mainline>              # back to the mainline once stack operations are done
+git checkout <mainline>              # back to the mainline once stack operations are done...
+git merge --ff-only FETCH_HEAD       # ...and fast-forward it: the fetch above wrote FETCH_HEAD,
+#                                      not the local branch, which still sits at its pre-merge
+#                                      tip - a later track branched from it would omit the commit
+#                                      that just landed
 ```
 
 A failed step in this loop is loud on its own: a rebase stops on a conflict with a nonzero exit, and `--force-with-lease` refuses to push over a branch that moved under you. The block's `set -e` turns that loudness into a full stop, so no later step (a boundary re-record, a push, a retarget) builds on a failure. What still needs explicit verification is the POSTCONDITION each step exists to produce, per site: before publishing, each successor's base contains the dependency's current tip; after a merge, the next layer's merge-base contains the merged mainline commit (both `merge-base --is-ancestor` checks in the block). Logs approximate; the postcondition is the truth (`/verify-with-controls` rule 4).
