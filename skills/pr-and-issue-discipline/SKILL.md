@@ -45,8 +45,6 @@ before: probe start -> fixed 120s -> timeout -> agent marked dead (mid-build)
 after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live verdict
 ```
 
-One deadline function; the sweep and the probe both call it.
-
 ## Proof
 
 - 34 tests green (2 new), `bun run check` green, CI watched to completion
@@ -54,7 +52,8 @@ One deadline function; the sweep and the probe both call it.
 ````
 
 - The opening blocks are actual commands and actual output, complete enough to stand alone.
-- `## How` takes whatever form reads fastest for the change: a mermaid diagram, an ascii flow, numbered steps, a small table, or a few bullets - visualization preferred over prose, the same principle as the opening blocks. Two abstract prose bullets fall flat where a tiny before/after flow carries the change instantly. The diff carries the detail; never re-narrate it.
+- `## How` has no mandated form. Pick whatever carries THIS change fastest: sometimes three terse bullets, sometimes a diagram, a table, or two sentences. The test is reading speed, not format. Never a visual plus prose re-explaining it - if the diagram needs a paragraph after it, the diagram failed; pick one carrier.
+- The register is programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary. No executive-summary tone, no benefits-narration. The diff carries the detail; never re-narrate it.
 - `## Proof` is numbers: tests, gates, review rounds. Cut any sentence the blocks already show.
 
 **Redact before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
