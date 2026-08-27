@@ -14,8 +14,9 @@ Every brief includes:
 6. **The comment rules and the TODO ban** (below). Comments only for what code cannot show; where the `/code-standards` skill is installed, the brief points builders at it for the full house standards.
 7. **The out-of-territory rule:** anything broken or wrong found outside the agent's file whitelist is reported in the completion signal, never fixed silently. A silent out-of-territory edit collides with another agent's territory, and a silently dropped finding is lost.
 8. **The inbox-reconciliation rule** (below): the final signal enumerates every lead message received, with one line of evidence per directive.
-9. **For long-running service agents (the fleet monitor, long-horizon watchers): the standing-state channel.** The brief names the session ledger as where standing state arrives (re-read it every sweep) and requires every lead directive received as a message to be acknowledged in the agent's NEXT report. The delivery rule and its lead side live in `references/fleet-monitor.md`, Reporting Discipline.
-10. **Scratch files go to /tmp, never the worktree.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
+9. **The idempotency rule** (below): every directive and every briefed step is safe to arrive twice, late, or after the fact; a late arrival is also checked for supersession before acting, and genuinely non-idempotent operations are named in the brief.
+10. **For long-running service agents (the fleet monitor, long-horizon watchers): the standing-state channel.** The brief names the session ledger as where standing state arrives (re-read it every sweep) and requires every lead directive received as a message to be acknowledged in the agent's NEXT report. The delivery rule and its lead side live in `references/fleet-monitor.md`, Reporting Discipline.
+11. **Scratch files go to /tmp, never the worktree.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
 
 ## The Stop-and-Wait Ban
 
@@ -69,6 +70,14 @@ The rule every brief carries: a FINAL SIGNAL must re-read the full inbox first a
 
 The lead's side of the same rule: verify a signal against the directives actually sent, by probe, not by trusting the enumeration.
 
+## Directives and Steps Are Idempotent
+
+Messages cross constantly in a fleet: a directive can arrive twice, arrive late, or arrive after the worker already did the thing. Every directive and every briefed step is therefore written to be safe on re-arrival: the worker checks current state before acting, and an already-applied directive is a no-op to report ("already done, see Y"), never an error and never a redo.
+
+Idempotency covers repeats, not ordering. A stale directive applied once can still overwrite newer intent (a late "add X" undoes a newer "remove X" even though both are individually idempotent). So a late arrival is also checked against the newest directive on the same subject: when a newer one supersedes it, the worker reports it as superseded and does not apply it.
+
+The exception class is named, never assumed: genuinely non-idempotent operations (version bumps, counters, anything append-only) are called out in the brief and coordinated through the lead. Their directives state the target postcondition (bump to 1.7.0, never bump by one), so a repeat or late arrival verifies the postcondition and no-ops instead of redoing. Production shape: two stacked builders each bumped the same manifest version by one; the double bump was absorbed only because a later rebase happened to collapse the two edits. The brief clause makes that coordination explicit instead of lucky.
+
 ## The TODO Ban
 
 Builders may never leave TODO or FIXME markers. The work either happens in the same change or is surfaced as an escalation in the completion signal, for the lead to queue or put before the user. A TODO found in a diff at review time is a review finding.
@@ -89,7 +98,10 @@ Handoff: commit finished work to wt/rate-limit (do not push). Signal the
   line per lead message you received. Re-read your FULL inbox first: a
   signal that omits a pending directive is not a final signal.
 Rules: no TODO/FIXME markers; do the work or escalate it. Comments only
-  for what code cannot show. Never stop to "wait" for background
-  children: after fanning out, your next action on wake is reading their
-  output. The only permitted stop is your final signal.
+  for what code cannot show. Directives and your own steps must be safe
+  to arrive or run twice or late: check current state first, report an
+  already-applied one as a no-op, and report one superseded by a newer
+  directive as stale instead of applying it. Never stop to "wait" for
+  background children: after fanning out, your next action on wake is
+  reading their output. The only permitted stop is your final signal.
 ```

@@ -1,6 +1,6 @@
 ---
 name: never-twice
-description: Use when you just corrected an agent or fixed the same failure class twice.
+description: Use when you just corrected an agent or fixed the same failure class twice, or when a change removes a rule, guard, or check.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -99,6 +99,17 @@ Three answers:
 - It **fails loudly but late** (at runtime, after shipping): an instance guard, the class is still alive.
 - It **cannot recur**, at the rung that holds it: impossible to build (1), stopped in CI (2), caught by a loaded rule (3).
 
+## Deleting a Guard (Chesterton's Fence)
+
+The ladder erects guards; this rule governs removing them. Never remove a rule, guard, or check without being able to state why it was erected. Every such deletion in a change maps to one of two outcomes, or nothing lands:
+
+- a successor that covers its class: a script that embodies it, a stronger rung, a rewording that keeps the rule
+- a named deliberate cut, with the reason recorded in the change
+
+Worked example: a doc rewrite deleted 90 long-standing rule lines. Auditing each line into successor / rewording / named cut found exactly one unmapped real loss, restored before landing. The audit is the mechanism; this rule makes it the default for every deletion, not a salvage step after someone notices.
+
+The pairing is the point: aggressive rewrites stay allowed BECAUSE deletions are audited. The audit is what makes bold deletion safe, not a brake on it.
+
 ## Review Criteria
 
 Skills that run code reviews (such as `/rubber-duck-review`) expand this section into their reviewer prompt when this skill is installed. Ask the reviewer to flag:
@@ -106,5 +117,6 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
 - fixes that repeat an earlier fix of the same failure class; cite the evidence (the prior commit, doc line, or correction), not a hunch
 - for each, name the rung the fix sits on, propose a concrete more durable rung, and say why it is reachable within this change's scope (or why it is not)
 - apply the test to whatever ships: if a new member of the class appears tomorrow, is it impossible to build, stopped in CI, caught by a loaded rule, or silent?
+- deletions of rules, guards, or checks that map to neither a successor covering their class nor a deliberate cut with its reason recorded in the change (Deleting a Guard, above)
 
 Triage the resulting findings with the workflow above.

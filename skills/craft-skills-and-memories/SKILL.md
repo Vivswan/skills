@@ -31,7 +31,7 @@ Scope:
   - No skill becomes extremely complex or big: split by firing moment when one grows. A complex skill never absorbs a sibling even when triggers overlap; sharpen the descriptions instead.
   - Skimmable throughout: short front-loaded paragraphs, no text blobs (the example-led rule above governs content order); readability for the reader outranks style rules, and accuracy rules always bind.
   - Form follows the change in any section: no mandated format beyond this bar, never a visual plus prose re-explaining it, programmer register (the `/natural-writing` bullet below states when that skill applies to prose).
-  - No backwards compatibility, folders included: splits, merges, and retirements are normal changes, and every deletion maps to a successor or a named cut. A compatibility contract the hosting repo declares (such as published install paths) still binds folder moves there.
+  - No backwards compatibility, folders included: splits, merges, and retirements are normal changes, with every deletion audited per the `/never-twice` skill (Deleting a Guard). A compatibility contract the hosting repo declares (such as published install paths) still binds folder moves there.
 - **Memories** hold one fact per file, record the why, convert relative dates to absolute, and link related memories. A wrong memory gets deleted, not patched around.
 - When rewriting prose, apply the `/natural-writing` skill if it is present and invocable. If your harness lets only the user invoke it, suggest they run `/natural-writing` rather than silently skipping the step.
 
@@ -80,7 +80,7 @@ Work around the broken step to complete what the user actually asked for. The fi
 
 ### 4. Fold the fix in, don't append a note
 
-Rewrite the affected step so it is correct as written and meets the quality bar. Keep copy-paste blocks runnable. A one-off warning bolted to the end leaves the broken instructions in place.
+Rewrite the affected step so it is correct as written and meets the quality bar. Keep copy-paste blocks runnable. A one-off warning bolted to the end leaves the broken instructions in place. A rewrite that deletes rules follows the deletion audit in the `/never-twice` skill (Deleting a Guard).
 
 **Code first for mechanical failures.** Where each kind of fix lands:
 
