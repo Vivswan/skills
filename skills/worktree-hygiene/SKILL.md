@@ -1,6 +1,6 @@
 ---
 name: worktree-hygiene
-description: Use when creating, removing, or handing over git worktrees, or when several actors share one repository through worktrees.
+description: Use when creating, removing, or handing over git worktrees, or deleting their branches, or when several actors share one repository through worktrees.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -70,7 +70,7 @@ Harnesses that auto-clean isolation worktrees remove them when their actor compl
 
 ## Handing Over a Worktree
 
-Ownership transfers explicitly, never by inference: at any moment exactly one actor owns a worktree, and a handover is a named event (a stop plus a grant), not a guess from silence.
+Ownership transfers explicitly, never by inference: at any moment a worktree has exactly one owner, either a single actor or a coordinating actor that has granted disjoint per-file territories inside it (File Ownership, below), and a handover is a named event (a stop plus a grant), not a guess from silence.
 
 - **Stop the predecessor first.** A message sent to a completed or idle agent RESUMES it. An acknowledgment or thank-you sent after a handover wakes the predecessor, which resumes writing into the worktree its successor now owns (a live-writer clobber). The order is always: stop the actor first (TaskStop in Claude Code); any farewell after that is unnecessary.
 - **A successor checks for a live writer** before editing. Check for processes with cwd inside the tree first (the same lsof check as removal rule 3), then hash a hot file, wait, hash again (`shasum <file>; sleep 5; shasum <file>`). These checks gather evidence, never proof: a writer can be idle between edits or writing a different file. The ownership invariant stays the explicit stop-and-grant above.
