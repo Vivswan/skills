@@ -1,6 +1,6 @@
 ---
 name: pr-and-issue-discipline
-description: Use when opening or updating a pull request, writing an issue, or deciding who merges, when a PR flips draft state, or how review comments get triaged.
+description: Use when opening a pull request, changing its body, title, or draft state, triaging review comments, writing an issue, or deciding who merges.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
