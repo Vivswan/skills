@@ -13,5 +13,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["scripts", "tests", "skills/*/scripts"]
+  "include": [".githooks", "scripts", "tests", "skills/*/scripts"]
 }

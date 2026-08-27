@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pre-commit shim: all hook logic lives in the sibling pre-commit.mts.
+# git runs pre-commit hooks at the top of the working tree (githooks(5)), so
+# the repository root is already the working directory; only this script's
+# own location needs resolving, via $0 with shell builtins only, so the shim
+# still reaches its bun check even under a broken PATH.
+set -u
+
+case "$0" in
+	*/*) hooks_dir=${0%/*} ;;
+	*) hooks_dir=. ;;
+esac
+
+if ! command -v bun >/dev/null 2>&1; then
+	echo "pre-commit: bun not found on PATH; the hook cannot run." >&2
+	echo "Install it from https://bun.sh (curl -fsSL https://bun.sh/install | bash) and retry." >&2
+	exit 1
+fi
+
+exec bun "$hooks_dir/pre-commit.mts" "$@"

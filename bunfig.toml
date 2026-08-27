@@ -1,0 +1,6 @@
+# [test].preload refuses any bun test run whose OS environment was not built
+# by the scripts/run-tests.ts launcher (`bun run test`), and pins process.env
+# to the same hermetic git environment; see tests/preload.ts.
+
+[test]
+preload = ["./tests/preload.ts"]
