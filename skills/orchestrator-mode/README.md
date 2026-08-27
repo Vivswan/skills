@@ -18,10 +18,11 @@ Directly from this folder:
 npx skills add https://github.com/Vivswan/skills/tree/main/skills/orchestrator-mode -g
 ```
 
-The shared PR mechanics (body format, draft discipline, comment convergence, who merges) live in the companion [`/pr-and-issue-discipline`](../pr-and-issue-discipline/) skill; a single-skill install should add it too:
+The shared PR mechanics (body format, draft discipline, comment convergence, who merges) live in the companion [`/pr-and-issue-discipline`](../pr-and-issue-discipline/) skill, and the worktree rules (removal safety, handovers, shared trees) in [`/worktree-hygiene`](../worktree-hygiene/); a single-skill install should add both:
 
 ```bash
 npx skills add Vivswan/skills -g --skill pr-and-issue-discipline
+npx skills add Vivswan/skills -g --skill worktree-hygiene
 ```
 
 ## What It Does
