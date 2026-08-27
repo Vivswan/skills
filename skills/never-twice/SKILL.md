@@ -1,6 +1,6 @@
 ---
 name: never-twice
-description: Use when you just corrected an agent or fixed the same failure class twice.
+description: Use when you just corrected an agent or fixed the same failure class twice, or when a change removes a rule, guard, or check.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan

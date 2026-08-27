@@ -27,7 +27,7 @@ Run the project's gates (typecheck, lint, tests) before launching any review. Re
 
 - **Use `/rubber-duck-review`** when installed. It defines reviewer selection, read-only sandboxing, background launch with streaming, and verdict extraction.
 - **Independent reviewers**: prefer a different model than yourself. Two independent reviewers beat one when available.
-- **Defense in depth.** Independent gates exist because each catches a failure class the others are blind to: semantic drift, doc-truth gaps, mechanical breakage, rebase-time divergence. One gate passing never excuses another; skipping a gate requires naming which remaining gate covers its failure class, and "the other one passed" is not an answer. The shape in practice: reviewer A passes the diff, and reviewer B, reading docs against code, catches the drifted README that A structurally cannot see.
+- **Defense in depth.** The gates in this workflow are not redundancy: each catches a failure class the others are blind to. The project gates catch mechanical breakage; a semantic review catches drift the gates cannot type-check; a review of the final integrated state catches rebase-time divergence; a docs-against-code pass catches doc-truth gaps. One gate passing never excuses another; skipping a gate requires naming which remaining gate covers its failure class, and "the other one passed" is not an answer.
 - **Read-only, always.** Reviewers must run NON-WRITING (a read-only sandbox or plan mode). A writable reviewer has been seen:
   - writing a probe test file into the reviewed tree (it ran in the suite and inflated the pass count)
   - mutating source in place to check tests can fail, then restoring imperfectly
