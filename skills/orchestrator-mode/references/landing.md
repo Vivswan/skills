@@ -130,14 +130,25 @@ gh pr merge <pr> --squash            # DELEGATED PATH ONLY: this line runs when 
 # chain). Transplant only the delta: a squash merge rewrites history, so the
 # dependency's commits are not ancestors of the squash commit, and a whole-branch
 # rebase would replay the dependency's changes:
-git fetch origin <mainline>          # the squash landed on the REMOTE mainline; fetch first, or
-#                                      the transplant targets a stale pre-merge tip. The steps
-#                                      below use FETCH_HEAD, the ref this fetch just wrote:
-#                                      whether the fetch also updates origin/<mainline> depends
-#                                      on the remote's configured fetch mapping (the same
-#                                      distinction as in the /worktree-hygiene skill), and a
-#                                      stale remote-tracking ref would transplant onto a
-#                                      pre-merge tip and record that stale boundary
+git fetch <base-remote> <mainline>   # from the remote the PR MERGES INTO: origin in a plain
+#                                      clone, the canonical remote (not the writable fork remote)
+#                                      in a fork checkout - a fork's mainline can lag the base
+#                                      repository's and would fail every ancestry gate below. The
+#                                      squash landed on the REMOTE mainline; fetch first, or the
+#                                      transplant targets a stale pre-merge tip. The steps below
+#                                      use FETCH_HEAD, the ref this fetch just wrote: whether the
+#                                      fetch also updates the remote-tracking ref depends on the
+#                                      remote's configured fetch mapping (the same distinction as
+#                                      in the /worktree-hygiene skill), and a stale
+#                                      remote-tracking ref would transplant onto a pre-merge tip
+#                                      and record that stale boundary
+exp2=$(git rev-parse refs/remotes/origin/track-2)   # expected remote tips, captured BEFORE the
+exp3=$(git rev-parse refs/remotes/origin/track-3)   # rewrite: the push below leases against these
+#                                      exact values. A bare --force-with-lease leases on the
+#                                      shared remote-tracking refs, which another worktree's fetch
+#                                      can advance mid-flow (/worktree-hygiene), so a racing
+#                                      remote edit could be overwritten while still satisfying
+#                                      the lease
 git rebase --onto FETCH_HEAD "$(git config branch.track-2.depTip)" track-2 < /dev/null
 git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before recording or pushing anything
 git config branch.track-2.depTip "$(git rev-parse FETCH_HEAD)"   # the base moved and the check passed: re-record it
@@ -153,14 +164,17 @@ git config branch.track-3.depTip "$(git rev-parse track-2)"
 #                                      the remote is still untouched, BEFORE the boundary
 #                                      re-record and the push, so a bad transplant stops the flow
 #                                      with nothing built on it
-git push --force-with-lease --atomic origin track-2 track-3   # every rewritten link, in ONE
-#                                      transactional push: an unpushed restack leaves a stale PR
-#                                      whose CI never covered what will actually merge, and the
-#                                      shared re-gate rule (item 3 above) applies to every
-#                                      content-changed link. --atomic makes a stale lease on ANY
-#                                      ref reject the WHOLE cascade; without it git can update
-#                                      one branch before rejecting another, leaving the PR
-#                                      branches at mixed restack generations
+git push --atomic origin \
+  --force-with-lease=refs/heads/track-2:"$exp2" \
+  --force-with-lease=refs/heads/track-3:"$exp3" \
+  track-2 track-3                    # every rewritten link, in ONE transactional push, each
+#                                      leased against its captured pre-rewrite tip: an unpushed
+#                                      restack leaves a stale PR whose CI never covered what will
+#                                      actually merge, and the shared re-gate rule (item 3 above)
+#                                      applies to every content-changed link. --atomic makes a
+#                                      failed lease on ANY ref reject the WHOLE cascade; without
+#                                      it git can update one branch before rejecting another,
+#                                      leaving the PR branches at mixed restack generations
 gh pr edit <num> --base <mainline>   # retarget the IMMEDIATE successor's PR to the mainline (or
 #                                      the next surviving dependency) AFTER the restack, never
 #                                      before (restack-then-retarget, above). Higher links keep
