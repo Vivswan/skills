@@ -109,7 +109,7 @@ reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage endCurso
 
 Paginate with `after: <endCursor>` while `hasNextPage` is true; a fixed first page is not the full set.
 
-Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft; prefer balanced or high reasoning where the repo exposes the setting).
+Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft; prefer balanced or high reasoning where the repo exposes the setting). Between rounds, never poll: where the `/watch-ci-after-push` skill is installed, sleep on its `wait-for-pr-event` script, a background waiter whose exit wakes the session and names what changed.
 
 Production shape of one round:
 
