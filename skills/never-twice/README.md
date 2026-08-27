@@ -34,7 +34,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/never-twice -g
 - Names the failure class in one sentence; if it cannot be named, it is not a class yet
 - Finds the substrate that admits new members: convention-synced artifacts, strings where closed sets belong, state kept in prose, hand-typed rituals
 - Climbs as close to rung 1 as the task allows and ships it; a lower-rung fallback ships only with the more durable rung's gap named and tracked
-- Audits every deletion of a rule, guard, or check (Chesterton's Fence): each maps to a successor covering its class or a named deliberate cut, or nothing lands
+- Audits every deletion of a rule, guard, or check (Chesterton's Fence): each maps to a successor covering its class or a deliberate cut with its reason recorded in the change, or nothing lands
 - Pairs with [`/rubber-duck-review`](../rubber-duck-review/): its Review Criteria join every second-opinion pass and ask which rung a fix sits on and whether a more durable rung was reachable
 - Hands type-level mechanics (closed unions, branded types, typestate) to [`/no-invalid-states`](../no-invalid-states/)
 

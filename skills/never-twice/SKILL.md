@@ -117,6 +117,6 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
 - fixes that repeat an earlier fix of the same failure class; cite the evidence (the prior commit, doc line, or correction), not a hunch
 - for each, name the rung the fix sits on, propose a concrete more durable rung, and say why it is reachable within this change's scope (or why it is not)
 - apply the test to whatever ships: if a new member of the class appears tomorrow, is it impossible to build, stopped in CI, caught by a loaded rule, or silent?
-- deletions of rules, guards, or checks that map to neither a successor covering their class nor a named deliberate cut (Deleting a Guard, above)
+- deletions of rules, guards, or checks that map to neither a successor covering their class nor a deliberate cut with its reason recorded in the change (Deleting a Guard, above)
 
 Triage the resulting findings with the workflow above.
