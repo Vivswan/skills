@@ -1,6 +1,6 @@
 ---
 name: no-sleep-waiting-on-subagents
-description: Use when a background subagent, reviewer, or watcher is running and the next step looks like sleeping, polling, or waiting for it.
+description: Use when a background harness subagent or task, whose completion notification re-invokes the session, is running and the next step looks like sleeping, polling, or waiting for it (externally watched processes like CI runs belong to /watch-ci-after-push).
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan

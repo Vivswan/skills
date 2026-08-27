@@ -116,8 +116,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 ### 7. Re-review until it converges, before committing
 
 - After applying fixes, **re-run the review** on the updated state, one review per section, not a single overall pass.
-- Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable. Treat that convergence as the gate.
-- **Review before you commit, not after.** Run the review on the working-tree changes, apply/triage findings, *then* commit, so a flaw can't land (or push) before anyone looks at it. This matters most where commits go straight to the main branch.
+- Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable. Treat that convergence as the gate; the `/review-before-commit` skill owns holding the commit until it opens.
 
 ### 8. If these instructions don't work, fix the skill
 

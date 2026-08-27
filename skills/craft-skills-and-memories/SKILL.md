@@ -33,7 +33,7 @@ Scope:
 Creating:
 
 - "Save this as a memory" / "make this a skill" / "remember this"
-- A lesson, correction, or workflow emerges that future sessions will need
+- The decision is made to encode a lesson or workflow for future sessions (deciding the response to a correction is `/never-twice`'s job; its rung 3 hands off here)
 
 Fixing:
 
