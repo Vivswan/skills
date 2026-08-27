@@ -193,7 +193,21 @@ try {
 
 if (local.code === 0) {
   const unset = git("config", "--local", "--unset-all", "core.hooksPath");
-  if (unset.code !== 0) {
+  // Exit 5 is "nothing to unset": every husky value came in through an
+  // include, which the unset cannot touch; the verification below reports it.
+  if (unset.code !== 0 && unset.code !== 5) {
     fail(`could not remove the husky core.hooksPath (git exited ${unset.code}).`);
+  }
+  // Verify-after-mutate: a husky value living in an include.path file
+  // survives --unset-all (which edits only the main local file), and with a
+  // direct value alongside it the unset even exits 0 - the one state the
+  // pre-checks cannot rule out. The dispatcher is already published, so
+  // failing here leaves the surviving husky path wired and commits checked.
+  const remaining = git("config", "--local", "--includes", "--get-all", "core.hooksPath");
+  if (remaining.code !== 1) {
+    fail(
+      `core.hooksPath still resolves in the local scope after migration (an include.path file?):\n  ${lines(remaining.raw).join("\n  ")}\n` +
+        "Remove it from the included file, then rerun 'bun install'.",
+    );
   }
 }

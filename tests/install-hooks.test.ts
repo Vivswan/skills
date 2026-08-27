@@ -232,6 +232,27 @@ describe("install-hooks", () => {
     }
   });
 
+  test("a husky hooksPath living in an include survives the unset and fails the install", () => {
+    // The one state the pre-checks cannot rule out: direct .husky/_ plus an
+    // INCLUDED .husky/_ both pass validation, and --unset-all removes only
+    // the direct one and exits 0. The installer must verify after the unset
+    // and fail loudly; publish-first ordering means the surviving husky path
+    // keeps commits checked meanwhile.
+    const repo = makeRepo();
+    try {
+      const included = join(repo, "included.gitconfig");
+      writeFileSync(included, "[core]\n\thooksPath = .husky/_\n");
+      expect(sh(repo, "git", "config", "include.path", included).code).toBe(0);
+      expect(sh(repo, "git", "config", "core.hooksPath", ".husky/_").code).toBe(0);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("still resolves in the local scope after migration");
+      expect(readFileSync(included, "utf-8")).toContain(".husky/_"); // include untouched
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("a dangling .git symlink fails the install instead of skipping", () => {
     // stat follows symlinks into "no entry here"; a broken .git symlink is a
     // broken checkout, not a tarball.
