@@ -54,6 +54,10 @@ export GIT_SSH_COMMAND="ssh -oBatchMode=yes"  # the same for SSH remotes, which 
 #                                      does not cover: no passphrase or host-key prompts
 export GH_PROMPT_DISABLED=1          # and for the gh commands below, which prompt on a TTY
 #                                      independently of git's settings
+export GH_REPO=<base-repo>           # pin every gh command to the BASE repository (owner/name):
+#                                      in a multi-remote checkout gh infers its target from the
+#                                      remotes and can pick the fork, where PRs cannot target
+#                                      the canonical mainline (item 1 above)
 git config rerere.enabled true       # record conflict resolutions once and replay them on later
 #                                      restacks, in place of a hand-resolve (or a prompt) each time
 git config remote.pushDefault origin # multi-remote repos (fork checkouts) need an explicit push
@@ -62,8 +66,11 @@ git config remote.pushDefault origin # multi-remote repos (fork checkouts) need 
 #                                      (item 1 above): PR base branches live there
 # Chain setup, before spawning builders. Branch the bottom link off the DESIGNATED
 # mainline explicitly - the interviewed one, not the repo default branch, which is
-# wrong for a session targeting develop/release:
-git checkout -b track-1 <mainline>
+# wrong for a session targeting develop/release - and off its CURRENT remote tip,
+# not a possibly stale local branch (the same FETCH_HEAD rule as the post-merge
+# fetch below):
+git fetch <base-remote> <mainline>
+git checkout -b track-1 FETCH_HEAD
 git checkout -b track-2 track-1  # one layer per track, in dependency order, each off its dependency's branch
 git config branch.track-2.depTip "$(git rev-parse track-1)"
 git checkout -b track-3 track-2  # a deeper chain continues the same two-line pattern per link
