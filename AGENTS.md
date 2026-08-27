@@ -74,7 +74,7 @@ tests/               repo test files (bun test); new tests go here
 - Update the root `README.md` whenever you add, rename, or remove a skill.
 - Keep the files in `template/` useful as the starter for the next skill.
 - Run `bun run check` before publishing or opening a PR (also enforced by the pre-commit hook and CI).
-- Never rename or move a published skill folder: consumer lock files record the path, and `npx skills update` breaks for existing installs.
+- Renaming, merging, or retiring a skill folder is a normal change; consumers re-add from main. Update every reference (README, manifests, cross-skill pointers) in the same change.
 - Never add a file named `metadata.json` inside a skill folder; the `npx skills` CLI silently drops it at install time.
 
 ### Releases
