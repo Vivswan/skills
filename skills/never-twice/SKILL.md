@@ -101,7 +101,7 @@ Three answers:
 
 ## Deleting a Guard (Chesterton's Fence)
 
-The ladder erects guards; this rule governs removing them. Never remove a rule, guard, or check without being able to state why it was erected. Every deletion in a change maps to one of two outcomes, or nothing lands:
+The ladder erects guards; this rule governs removing them. Never remove a rule, guard, or check without being able to state why it was erected. Every such deletion in a change maps to one of two outcomes, or nothing lands:
 
 - a successor that covers its class: a script that embodies it, a stronger rung, a rewording that keeps the rule
 - a named deliberate cut, with the reason recorded in the change
