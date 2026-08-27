@@ -299,6 +299,25 @@ describe("install-hooks", () => {
     }
   });
 
+  test("a user hook QUOTING the marker inside another line survives", () => {
+    // The marker is matched as a whole line; embedded in a longer line it is
+    // a quotation, not ownership.
+    const repo = makeRepo();
+    try {
+      const target = join(repo, ".git", "hooks", "pre-commit");
+      const userHook =
+        "#!/bin/sh\n" +
+        'echo "replaces: # managed-by: Vivswan/skills scripts/install-hooks.ts - do not edit the installed copy"\n';
+      writeFileSync(target, userHook);
+      const r = install(repo);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("refusing to overwrite");
+      expect(readFileSync(target, "utf-8")).toBe(userHook);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("a previous install of our own dispatcher is overwritten (upgrade path)", () => {
     const repo = makeRepo();
     try {

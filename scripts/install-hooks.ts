@@ -167,16 +167,19 @@ const hooksDir = join(
 const target = join(hooksDir, "pre-commit");
 
 // Overwrite only our own previous installs, recognized by the dispatcher's
-// EXACT managed-by marker line - a mere mention of this script's path is
-// not ownership (a user hook that invokes or documents it must survive).
-// The source is self-checked for the marker so the two cannot drift apart.
-// lstat, not stat: a symlink here - even a dangling one - is someone else's
-// wiring, and following it would judge (and later write) a file OUTSIDE the
-// hooks directory.
-const MARKER = "# managed-by: Vivswan/skills scripts/install-hooks.ts";
+// managed-by marker: the COMPLETE line, matched as a whole line - neither a
+// mention of this script's path nor a quotation of the marker inside some
+// other line is ownership (a user hook that invokes or documents this
+// machinery must survive). The source is self-checked for the marker so the
+// two cannot drift apart. lstat, not stat: a symlink here - even a dangling
+// one - is someone else's wiring, and following it would judge (and later
+// write) a file OUTSIDE the hooks directory.
+const MARKER =
+  "# managed-by: Vivswan/skills scripts/install-hooks.ts - do not edit the installed copy";
+const hasMarkerLine = (content: string) => content.split("\n").includes(MARKER);
 const dispatcherSource = readFileSync(join(ROOT, ".githooks", "pre-commit"), "utf-8");
-if (!dispatcherSource.includes(MARKER)) {
-  fail(".githooks/pre-commit lost its managed-by marker; restore it before installing.");
+if (!hasMarkerLine(dispatcherSource)) {
+  fail(".githooks/pre-commit lost its managed-by marker line; restore it before installing.");
 }
 const existing = lstatSync(target, { throwIfNoEntry: false });
 if (existing && !existing.isFile()) {
@@ -185,7 +188,7 @@ if (existing && !existing.isFile()) {
       "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
   );
 }
-if (existing?.isFile() && !readFileSync(target, "utf-8").includes(MARKER)) {
+if (existing?.isFile() && !hasMarkerLine(readFileSync(target, "utf-8"))) {
   fail(
     `${target} already exists and was not installed by this repo; refusing to overwrite it.\n` +
       "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
