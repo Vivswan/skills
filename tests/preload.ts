@@ -16,6 +16,7 @@
  */
 
 import { hermeticGitEnv } from "../scripts/hermetic-git-env";
+import { ROOT } from "../scripts/lib";
 
 function refuse(reason: string): never {
   throw new Error(
@@ -46,14 +47,25 @@ if (discovery.exitCode === 0) {
 }
 
 // Probe 2: the machine's global and system git config must be masked for
-// default-env children, so fixtures neither depend on nor write through to
-// the real configuration.
-const masked = Bun.spawnSync(
-  ["/bin/sh", "-c", 'printf %s "$GIT_CONFIG_GLOBAL:$GIT_CONFIG_SYSTEM"'],
+// default-env children (so fixtures neither depend on nor write through to
+// the real configuration), and the discovery ceiling must cover the
+// repository root - probe 1 alone cannot tell "ceiling in place" from "this
+// run merely started outside any repository", and only the ceiling contains
+// a later child given an explicit cwd inside the repository's subtree.
+const probe = Bun.spawnSync(
+  [
+    "/bin/sh",
+    "-c",
+    'printf "%s\\n%s\\n%s" "$GIT_CONFIG_GLOBAL" "$GIT_CONFIG_SYSTEM" "$GIT_CEILING_DIRECTORIES"',
+  ],
   { stdout: "pipe" },
 );
-if (masked.stdout.toString() !== "/dev/null:/dev/null") {
+const [configGlobal, configSystem, ceiling] = probe.stdout.toString().split("\n");
+if (configGlobal !== "/dev/null" || configSystem !== "/dev/null") {
   refuse("GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM are not masked for child processes");
+}
+if (!(ceiling ?? "").split(":").includes(ROOT)) {
+  refuse("GIT_CEILING_DIRECTORIES does not cover the repository root for child processes");
 }
 
 const env = hermeticGitEnv(process.env);

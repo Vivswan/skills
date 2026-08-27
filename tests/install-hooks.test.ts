@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
@@ -29,8 +29,18 @@ function makeRepo(): string {
   return dir;
 }
 
-function install(cwd: string) {
-  return sh(cwd, process.execPath, SCRIPT);
+function install(cwd: string, env: Record<string, string> = {}) {
+  const result = Bun.spawnSync([process.execPath, SCRIPT], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    code: result.exitCode,
+    stdout: result.stdout.toString().trim(),
+    stderr: result.stderr.toString(),
+  };
 }
 
 describe("install-hooks", () => {
@@ -75,6 +85,26 @@ describe("install-hooks", () => {
       expect(readFileSync(join(repo, ".git", "hooks", "pre-commit"), "utf-8")).toBe(DISPATCHER);
     } finally {
       rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a hooksPath surviving in an outer scope aborts the install untouched", () => {
+    // A local unset cannot remove a global/system/include/worktree value;
+    // installing anyway would be shadowed at commit time - or clobber the
+    // user-wide hook location the config points at. The installer must
+    // refuse and name the survivor.
+    const repo = makeRepo();
+    const globalConfig = join(mkdtempSync(join(tmpdir(), "install-hooks-global-")), "gitconfig");
+    try {
+      writeFileSync(globalConfig, "[core]\n\thooksPath = /somewhere/user-hooks\n");
+      const r = install(repo, { GIT_CONFIG_GLOBAL: globalConfig });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("core.hooksPath is still set outside the repository scope");
+      expect(r.stderr).toContain("global");
+      expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(join(globalConfig, ".."), { recursive: true, force: true });
     }
   });
 

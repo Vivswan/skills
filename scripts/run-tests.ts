@@ -23,6 +23,9 @@ import { ROOT } from "./lib";
 
 // Path-like arguments are resolved against the repository root (the scratch
 // cwd contains no tests); flags and name filters pass through untouched.
+// Known limits of the scratch cwd: flags that WRITE repo-relative outputs
+// (--coverage-dir, reporter files) or discover the repo from the cwd
+// (--changed) would need absolute paths; nothing in this repo uses them.
 const args = process.argv
   .slice(2)
   .map((arg) => (existsSync(resolve(ROOT, arg)) ? resolve(ROOT, arg) : arg));
