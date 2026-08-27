@@ -77,16 +77,19 @@ git checkout <mainline>              # release the layer branches for the builde
 # holds its layer. Publishing before the layers carry the collected commits
 # would publish EMPTY layer PRs.
 # Restack each successor onto its dependency's collected work, bottom-up:
-# track-2 was branched before track-1's commits existed. Transplant only the
-# delta past the recorded boundary, then move the boundary; track-3 follows
-# onto the restacked track-2 the same way:
+# track-2 was branched before track-1's commits existed. Per link: transplant
+# only the delta past the recorded boundary, VALIDATE the postcondition (the
+# link's base contains the dependency's current tip), and only then move the
+# boundary - a boundary recorded before its check passes would, on a failed
+# transplant, point at a dependency the branch never inherited, and a retry
+# from it omits or replays commits. track-3 follows onto the restacked
+# track-2 the same way:
 git rebase --onto track-1 "$(git config branch.track-2.depTip)" track-2 < /dev/null
+git merge-base --is-ancestor "$(git rev-parse track-1)" track-2 || exit 1  # STOP and reconcile; never continue to publish
 git config branch.track-2.depTip "$(git rev-parse track-1)"
 git rebase --onto track-2 "$(git config branch.track-3.depTip)" track-3 < /dev/null
-git config branch.track-3.depTip "$(git rev-parse track-2)"
-# postcondition before publishing, per successor: its base contains the dependency's current tip
-git merge-base --is-ancestor "$(git rev-parse track-1)" track-2 || exit 1  # STOP and reconcile; never continue to publish
 git merge-base --is-ancestor "$(git rev-parse track-2)" track-3 || exit 1
+git config branch.track-3.depTip "$(git rev-parse track-2)"
 # Publish: push each layer branch, then open one draft PR per link with the base
 # set EXPLICITLY (gh defaults --base to the repo default branch): the dependency's
 # branch for a stacked link, the mainline for an independent track. The opener
@@ -136,19 +139,20 @@ git fetch origin <mainline>          # the squash landed on the REMOTE mainline;
 #                                      stale remote-tracking ref would transplant onto a
 #                                      pre-merge tip and record that stale boundary
 git rebase --onto FETCH_HEAD "$(git config branch.track-2.depTip)" track-2 < /dev/null
-git config branch.track-2.depTip "$(git rev-parse FETCH_HEAD)"   # the base moved: re-record it
+git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before recording or pushing anything
+git config branch.track-2.depTip "$(git rev-parse FETCH_HEAD)"   # the base moved and the check passed: re-record it
 git rebase --onto track-2 "$(git config branch.track-3.depTip)" track-3 < /dev/null
+git merge-base --is-ancestor "$(git rev-parse track-2)" track-3 || exit 1
 git config branch.track-3.depTip "$(git rev-parse track-2)"
 #                                      a third link (track-3, where the chain has one) transplants
 #                                      onto the rewritten track-2, never onto the mainline, and so
-#                                      on up the chain
-# postcondition BEFORE the push, per successor (mirroring the pre-publish checks):
-# the next layer's merge-base contains the merged mainline commit (the squash sha
-# is an ancestor of the restacked successor), and every higher link contains its
-# rewritten dependency's tip. Checked here, while the remote is still untouched,
-# so a bad transplant stops the flow before any push or retarget builds on it:
-git merge-base --is-ancestor <merged-mainline-commit> track-2 || exit 1  # STOP: reconcile before pushing anything
-git merge-base --is-ancestor "$(git rev-parse track-2)" track-3 || exit 1
+#                                      on up the chain. Per link, the same rebase-validate-record
+#                                      order as pre-publish: the postcondition (merged mainline
+#                                      commit an ancestor of the immediate successor; each higher
+#                                      link containing its rewritten dependency's tip) runs while
+#                                      the remote is still untouched, BEFORE the boundary
+#                                      re-record and the push, so a bad transplant stops the flow
+#                                      with nothing built on it
 git push --force-with-lease --atomic origin track-2 track-3   # every rewritten link, in ONE
 #                                      transactional push: an unpushed restack leaves a stale PR
 #                                      whose CI never covered what will actually merge, and the
