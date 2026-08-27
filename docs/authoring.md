@@ -35,9 +35,10 @@ This keeps the repo compatible with:
 4. Fill in `SKILL.md` with activation criteria, workflow steps, and fallback behavior. Keep the frontmatter `description` a short trigger ("Use when ..."), and lead with worked examples, scenarios, or concrete commands rather than abstract prose.
 5. Create `agents/openai.yaml` with an `interface` block mirroring the codex manifest (required; add `policy.allow_implicit_invocation: false` for explicit-invocation-only skills).
 6. Add a human-facing `README.md`.
-7. Update the root [`README.md`](../README.md) catalog.
+7. Update the root [`README.md`](../README.md) catalog: the Available Skills entry under the matching invocation heading, and a node in the mermaid skill-reference graph with edges only for hand-offs the skill's text actually makes.
 8. List the new skill in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json).
-9. Run `bun run check`.
+9. Add the skill to the `skill` dropdown in [`.github/ISSUE_TEMPLATE/bug_report.yml`](../.github/ISSUE_TEMPLATE/bug_report.yml).
+10. Run `bun run check`.
 
 ## Contributing Criteria to Reviews
 

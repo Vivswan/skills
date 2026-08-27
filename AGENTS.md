@@ -72,6 +72,7 @@ bunfig.toml          wires tests/preload.ts into any direct `bun test` run
 - Treat `npx skills add ...` and the plain skill content as the compatibility baseline for Claude Code, Codex, and GitHub Copilot.
 - List the new skill in `.claude-plugin/plugin.json` (`skills`) and add a linked entry to the root `README.md` Available Skills list. The smoke test fails the build if either is missing.
 - Put the README entry under the matching heading: "Invoked by you" when `disable-model-invocation: true`, "Automatic" otherwise.
+- Add a node for the skill to the root `README.md` mermaid skill-reference graph (the smoke test fails a graph without it), with edges only for hand-offs the skill's text actually makes.
 - Ship a byte-identical copy of the root `LICENSE.md` inside the skill folder (the smoke test compares bytes).
 - Set frontmatter `metadata.author` to the first name of the `.claude-plugin/plugin.json` author. Never set `metadata.internal` on a published skill; the CLI silently drops internal skills from installs.
 - Keep frontmatter within Claude Code's limits: `name` matches the folder and stays <= 64 characters, `description` <= 1024 characters.

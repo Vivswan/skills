@@ -1,5 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
@@ -297,6 +305,125 @@ describe("watch-ci.sh exit matrix", () => {
     // 5 registration polls (gate absent), post-watch re-discovery, and the
     // stability re-check that reveals the late gate run.
     expect(readFileSync(calls, "utf-8")).toBe("7");
+  });
+
+  test("a mktemp failure is tooling trouble: exits 2, never a red-pipeline 1", () => {
+    // The judgment-buffer mktemp calls run under set -e; unguarded, a full or
+    // unwritable tmpdir exited 1, which callers read as "red pipeline".
+    const mktempFailDir = join(binDir, "mktemp-fail-bin");
+    mkdirSync(mktempFailDir, { recursive: true });
+    writeFileSync(join(mktempFailDir, "mktemp"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(join(mktempFailDir, "mktemp"), 0o755);
+    const r = run({
+      GH_LIST_IDS: "1",
+      PATH: `${mktempFailDir}:${binDir}:${process.env.PATH ?? ""}`,
+    });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("mktemp failed");
+    expect(r.stdout).not.toContain("pass:");
+  });
+
+  test("a second-mktemp failure exits 2 and the EXIT trap reclaims the first file", () => {
+    // The first mktemp succeeds and hands out a real file; the second dies.
+    // The guard must still exit 2, and the EXIT trap (installed before the
+    // mktemp calls) must remove the file the first call created.
+    const scratch = join(binDir, "mktemp-second-fail");
+    const stubBin = join(scratch, "bin");
+    mkdirSync(stubBin, { recursive: true });
+    writeFileSync(
+      join(stubBin, "mktemp"),
+      '#!/usr/bin/env bash\nn=0; [ -f "$MKTEMP_COUNT" ] && n="$(cat "$MKTEMP_COUNT")"\n' +
+        'n=$((n + 1)); printf \'%s\' "$n" > "$MKTEMP_COUNT"\n' +
+        'if [ "$n" -ge 2 ]; then exit 1; fi\n' +
+        'f="$MKTEMP_DIR/judgment-$n"\n: > "$f"\nprintf \'%s\\n\' "$f"\n',
+    );
+    chmodSync(join(stubBin, "mktemp"), 0o755);
+    const r = run({
+      GH_LIST_IDS: "1",
+      MKTEMP_COUNT: join(scratch, "count"),
+      MKTEMP_DIR: scratch,
+      PATH: `${stubBin}:${binDir}:${process.env.PATH ?? ""}`,
+    });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("mktemp failed");
+    expect(r.stdout).not.toContain("pass:");
+    expect(existsSync(join(scratch, "judgment-1"))).toBe(false);
+  });
+
+  test("an unexpected internal tool failure exits 2 via the ERR trap, never 1", () => {
+    // sort is unguarded plumbing inside compute_missing: before the ERR trap,
+    // its failure rode set -e out as the script's raw exit status, which
+    // callers read as a red pipeline. Any future unguarded command joins the
+    // same class, so the trap, not a per-call guard, is the fix.
+    const sortFailDir = join(binDir, "sort-fail-bin");
+    mkdirSync(sortFailDir, { recursive: true });
+    writeFileSync(join(sortFailDir, "sort"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(join(sortFailDir, "sort"), 0o755);
+    const r = run({
+      GH_LIST_IDS: "1",
+      PATH: `${sortFailDir}:${binDir}:${process.env.PATH ?? ""}`,
+    });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("unexpected command failure");
+    expect(r.stdout).not.toContain("pass:");
+  });
+
+  test("a tr failure while splitting the expectations exits 2, never a vacuous green", () => {
+    // tr feeds the expected-workflow list. When it ran inside the heredoc's
+    // command substitution, its failure only exited that subshell: the
+    // expectation loop saw an empty list, computed missing="" and the run
+    // exited 0 - a tooling failure disabling the vacuous-green gate. The
+    // assignment form must route it to the ERR trap instead.
+    const trFailDir = join(binDir, "tr-fail-bin");
+    mkdirSync(trFailDir, { recursive: true });
+    writeFileSync(join(trFailDir, "tr"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(join(trFailDir, "tr"), 0o755);
+    const r = run({
+      GH_LIST_IDS: "1",
+      PATH: `${trFailDir}:${binDir}:${process.env.PATH ?? ""}`,
+    });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("unexpected command failure");
+    expect(r.stdout).not.toContain("pass:");
+  });
+
+  test("a transient re-discovery failure after the conclusion retries heals on the bounded retry", () => {
+    // Run 1's first view fails, so the conclusion retry re-watches (a wait)
+    // and the stability re-check must re-discover: that discovery (call 3)
+    // dies and its retry (call 4) returns the same snapshot, so the healed
+    // verdict stands instead of exiting 2.
+    const calls = join(binDir, "list-calls-retry-rediscovery-heal");
+    const r = run({
+      GH_LIST_IDS: "1",
+      GH_LIST_CALLS: calls,
+      GH_LIST_FAIL_CALLS: "3",
+      GH_VIEW_1: "FAILONCE",
+      GH_ONCE_MARKER: join(binDir, "retry-rediscovery-heal-marker"),
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pass: CI-1 (1)");
+    expect(r.stderr).not.toContain("re-discovery after the conclusion retries returned nothing");
+    // Registration, post-watch re-discovery, the failed stability re-check,
+    // and its healing retry.
+    expect(readFileSync(calls, "utf-8")).toBe("4");
+  });
+
+  test("a re-discovery failing outright after the conclusion retries exits 2 with no verdict leak", () => {
+    // All 3 attempts of the post-retry stability re-discovery die (calls
+    // 3-5): the buffered judgment about run 1 is dropped, so the refusal
+    // carries no verdict lines at all - not even the healed green.
+    const calls = join(binDir, "list-calls-retry-rediscovery-fail");
+    const r = run({
+      GH_LIST_IDS: "1",
+      GH_LIST_CALLS: calls,
+      GH_LIST_FAIL_CALLS: "3 4 5",
+      GH_VIEW_1: "FAILONCE",
+      GH_ONCE_MARKER: join(binDir, "retry-rediscovery-fail-marker"),
+    });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("re-discovery after the conclusion retries returned nothing");
+    expect(r.stdout).toBe("");
+    expect(readFileSync(calls, "utf-8")).toBe("5");
   });
 
   test("an unconcluded run (watch aborted early) exits 2", () => {

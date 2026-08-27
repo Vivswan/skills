@@ -10,11 +10,18 @@
 # re-triggered runs are reported as superseded, never judged). 1: at least
 # one workflow's latest run ended with any non-success, non-skipped
 # conclusion (e.g. failure/cancelled/timed_out). 2: no runs registered, gh
-# itself failed (discovery or status checks), or an expected workflow never
-# registered a run on the SHA. Transient gh/network errors between the watch
-# and the verdict are retried (3 attempts, short backoff) before any exit-2
-# conclusion.
-set -euo pipefail
+# itself failed (discovery or status checks), an expected workflow never
+# registered a run on the SHA, or any unexpected internal failure (routed
+# there by the ERR trap below, never to 1). Transient gh/network errors
+# between the watch and the verdict are retried (3 attempts, short backoff)
+# before any exit-2 conclusion.
+set -Eeuo pipefail
+
+# Exit 1 is reserved for a judged red pipeline, so an UNEXPECTED failure (a
+# command neither guarded nor part of a judged verdict) must never leak its
+# own status through set -e: route every unhandled failure to the tooling
+# exit 2. -E carries the trap into functions and command substitutions.
+trap 'echo "watch-ci.sh: unexpected command failure around line $LINENO; tooling trouble, not a pipeline verdict" >&2; exit 2' ERR
 
 # The workflow carrying the required gate can silently fail to register on a
 # push (a dropped push/synchronize event), leaving only bystander workflows
@@ -95,9 +102,15 @@ discover() {
 # and `discovered_names` to the unique names present. Used twice: to keep the
 # registration-lag polling alive while the gate workflow is still absent, and
 # to refuse a vacuous green at judgment time. The quoted "$want" in the case
-# pattern keeps glob metacharacters in workflow names literal.
+# pattern keeps glob metacharacters in workflow names literal. The expected
+# names are transformed in an assignment, never inline in the heredoc: a
+# substitution failing inside a heredoc only exits its own subshell, and the
+# silently empty expectation list would read as "nothing missing" - the
+# assignment routes the failure to the ERR trap instead.
 compute_missing() {
+  local expected_lines
   discovered_names="$(printf '%s\n' "$run_lines" | cut -f4- | sort -u)"
+  expected_lines="$(printf '%s\n' "$expected_csv" | tr ',' '\n')"
   missing=""
   while IFS= read -r want; do
     [ -n "$want" ] || continue
@@ -106,7 +119,7 @@ compute_missing() {
       *) missing="${missing:+$missing, }$want" ;;
     esac
   done <<EOF
-$(printf '%s\n' "$expected_csv" | tr ',' '\n')
+$expected_lines
 EOF
 }
 
@@ -143,6 +156,11 @@ discover_with_retry() {
 # records id:attempt per selected run: it is the convergence signature, since
 # a re-run changes only the attempt, never the id.
 select_latest() {
+  # Sorted in an assignment, not inline in the heredoc, for the same reason
+  # as compute_missing: a sort dying inside the heredoc substitution would
+  # silently select nothing instead of reaching the ERR trap.
+  local sorted_lines
+  sorted_lines="$(printf '%s\n' "$run_lines" | sort -rn)"
   run_ids=""
   run_sig=""
   seen_wfids=$'\n'
@@ -173,7 +191,7 @@ select_latest() {
         ;;
     esac
   done <<EOF
-$(printf '%s\n' "$run_lines" | sort -rn)
+$sorted_lines
 EOF
 }
 
@@ -286,12 +304,16 @@ rewatched=0
 # that wait voids these verdict lines, and a report must never carry a verdict
 # about a superseded selection - a stability refusal exits 2 with no verdict
 # lines at all. The trap is installed before the mktemp calls so a failed
-# second mktemp cannot strand the first file.
+# second mktemp cannot strand the first file. A mktemp failure is tooling
+# trouble, so it must exit 2 like every other tooling failure, never ride
+# set -e into the exit 1 that means "red pipeline".
 judgment_out=""
 judgment_err=""
 trap 'rm -f "$judgment_out" "$judgment_err"' EXIT
-judgment_out="$(mktemp)"
-judgment_err="$(mktemp)"
+if ! judgment_out="$(mktemp)" || ! judgment_err="$(mktemp)"; then
+  echo "mktemp failed while preparing the judgment buffer (tmpdir full or unwritable?); cannot judge safely" >&2
+  exit 2
+fi
 for id in $run_ids; do
   # The conclusion read gets the same bounded retry as re-discovery: a failed
   # view is re-read, and a missing conclusion (the watch was cut short) is
@@ -379,10 +401,12 @@ cat "$judgment_err" >&2
 
 # "Every discovered workflow passed" is vacuous when the workflow that
 # carries the required gate is not among the discovered runs at all. Computed
-# only after the stability re-check, against the freshest snapshot, so a gate
-# workflow that registered mid-watch (or during a conclusion-retry wait)
-# heals here and a stability refusal never carries a stale "not found";
-# absence is missing evidence and exits 2 below, never a pass.
+# only after the stability re-check, against the freshest snapshot: a gate
+# workflow that registered mid-watch heals here, while one registering during
+# a conclusion-retry wait changes the selection signature and trips the
+# stability refusal above (exit 2) before this check runs - either way a
+# refusal never carries a stale "not found". Absence is missing evidence and
+# exits 2 below, never a pass.
 compute_missing
 if [ -n "$missing" ]; then
   found_list=""

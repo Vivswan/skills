@@ -17,6 +17,9 @@
  *     correspondence with the skill folders (stale and missing both fail)
  *   - README mermaid graph drift: a node labeling a retired skill, a skill
  *     with no node, or an edge endpoint no node definition labels
+ *   - README invocation-grouping drift: the Automatic vs "Invoked by you"
+ *     headings and the Usage paragraph's explicit-invocation roster tracking
+ *     each skill's disable-model-invocation frontmatter
  *   - author, license, and homepage copies disagreeing with their canonical
  *     .claude-plugin/plugin.json fields
  *   - interface drift: the SKILL.md H1 title, the codex manifest's
@@ -57,9 +60,11 @@ import {
 import {
   checkDescriptionTriggerForm,
   checkExplicitInvocationPairing,
+  checkMarketplacePluginVersionBan,
   checkReadmeInvocationGrouping,
   checkReadmeMermaidGraph,
   checkReadmeSkillList,
+  checkReadmeUsageExplicitRoster,
 } from "./smoke-checks";
 
 // Strings that should only ever appear in template/, never in a published skill.
@@ -811,6 +816,7 @@ function main(): void {
   const skillNames: ReadonlySet<string> = new Set(dirs.map((dir) => basename(dir)));
 
   checkCatalogVersion(marketplace);
+  checkMarketplacePluginVersionBan(rel(marketplace.path), marketplace.plugins);
   checkRootManifestVersion(manifest);
   checkCatalogCoverage(manifest, dirs);
   checkMarketplaceAgainstManifest(marketplace, manifest);
@@ -852,13 +858,12 @@ function main(): void {
   const readmeText = readTextFile(join(ROOT, "README.md"));
   checkReadmeSkillList(readmeText, skillNames);
   checkReadmeMermaidGraph(readmeText, skillNames);
-  checkReadmeInvocationGrouping(
-    readmeText,
-    skillFrontmatters.map(({ path, frontmatter }) => ({
-      name: basename(dirname(path)),
-      disabled: frontmatter["disable-model-invocation"] === true,
-    })),
-  );
+  const groupingEntries = skillFrontmatters.map(({ path, frontmatter }) => ({
+    name: basename(dirname(path)),
+    disabled: frontmatter["disable-model-invocation"] === true,
+  }));
+  checkReadmeInvocationGrouping(readmeText, groupingEntries);
+  checkReadmeUsageExplicitRoster(readmeText, groupingEntries);
   checkIssueTemplateOptionsMatchFolders(skillNames);
   // The metadata.author loop is the only consumer of the frontmatter list in
   // checkAuthorIdentity, so appending the template holds its pre-filled

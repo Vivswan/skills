@@ -3,9 +3,11 @@ import { CheckFailure } from "../scripts/lib";
 import {
   checkDescriptionTriggerForm,
   checkExplicitInvocationPairing,
+  checkMarketplacePluginVersionBan,
   checkReadmeInvocationGrouping,
   checkReadmeMermaidGraph,
   checkReadmeSkillList,
+  checkReadmeUsageExplicitRoster,
 } from "../scripts/smoke-checks";
 
 function readme(listArea: string): string {
@@ -218,6 +220,13 @@ describe("checkReadmeMermaidGraph", () => {
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
   });
 
+  test("rejects 'end' as a node alias (reserved flowchart keyword)", () => {
+    // Mermaid silently breaks the rendering on an 'end' node instead of
+    // erroring, so without this check the graph passes and does not draw.
+    const graph = `${goodGraph}  end["/beta-two"]\n`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/reserved/);
+  });
+
   test("accepts a standalone '/skill'-labeled node line", () => {
     const graph = 'graph LR\n  a["/alpha-one"]\n  a --> b["/beta-two"]\n';
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
@@ -287,5 +296,121 @@ describe("checkReadmeInvocationGrouping", () => {
     expect(() =>
       checkReadmeInvocationGrouping(readme(fenced), [{ name: "alpha-one", disabled: false }]),
     ).not.toThrow();
+  });
+});
+
+describe("checkMarketplacePluginVersionBan", () => {
+  test("accepts plugins without a version field", () => {
+    expect(() =>
+      checkMarketplacePluginVersionBan(".claude-plugin/marketplace.json", [
+        { name: "vivswan-skills", source: "./" },
+      ]),
+    ).not.toThrow();
+  });
+
+  test("rejects a version on a plugins[] entry", () => {
+    // metadata.version is the catalog's single source of truth; a second
+    // version on the plugin entry passed every other check and only drifted.
+    expect(() =>
+      checkMarketplacePluginVersionBan(".claude-plugin/marketplace.json", [
+        { name: "vivswan-skills", source: "./", version: "9.9.9" },
+      ]),
+    ).toThrow(/single.*source of truth/s);
+  });
+});
+
+describe("checkReadmeUsageExplicitRoster", () => {
+  function usageReadme(roster: string): string {
+    return `# Skills\n\n## Usage\n\nSkills marked explicit-invocation-only (${roster}) load only when you invoke them (e.g. [\`/beta-two\`](./skills/beta-two/) in Claude Code).\n`;
+  }
+  const skills = [
+    { name: "alpha-one", disabled: false },
+    { name: "beta-two", disabled: true },
+  ];
+
+  test("accepts a roster naming exactly the disabled skills", () => {
+    expect(() =>
+      checkReadmeUsageExplicitRoster(usageReadme("[`/beta-two`](./skills/beta-two/)"), skills),
+    ).not.toThrow();
+  });
+
+  test("negative control: a roster missing a disabled skill fails", () => {
+    expect(() =>
+      checkReadmeUsageExplicitRoster(usageReadme("[`/alpha-one`](./skills/alpha-one/)"), [
+        { name: "alpha-one", disabled: true },
+        { name: "beta-two", disabled: true },
+      ]),
+    ).toThrow(/missing 'beta-two'/);
+  });
+
+  test("rejects a roster naming an automatic skill", () => {
+    expect(() =>
+      checkReadmeUsageExplicitRoster(
+        usageReadme("[`/alpha-one`](./skills/alpha-one/), [`/beta-two`](./skills/beta-two/)"),
+        skills,
+      ),
+    ).toThrow(/does not set disable-model-invocation/);
+  });
+
+  test("rejects a roster naming a skill that is not published", () => {
+    expect(() =>
+      checkReadmeUsageExplicitRoster(
+        usageReadme("[`/beta-two`](./skills/beta-two/), [`/gamma-three`](./skills/gamma-three/)"),
+        skills,
+      ),
+    ).toThrow(/not a published skill/);
+  });
+
+  test("rejects a README where the marker sentence was rewritten away", () => {
+    expect(() =>
+      checkReadmeUsageExplicitRoster("# Skills\n\n## Usage\n\nAll skills load lazily.\n", skills),
+    ).toThrow(/explicit-invocation-only/);
+  });
+
+  test("rejects unrecognized text inside the roster instead of ignoring it", () => {
+    // The link scan alone failed open: '**/ghost-skill**' is not a link, so
+    // it contributed nothing and the roster still passed. Every entry must
+    // parse or the check fails.
+    expect(() =>
+      checkReadmeUsageExplicitRoster(
+        usageReadme("[`/beta-two`](./skills/beta-two/), **/ghost-skill**"),
+        skills,
+      ),
+    ).toThrow(/cannot parse Usage explicit-invocation-only roster entry '\*\*\/ghost-skill\*\*'/);
+  });
+
+  test("rejects a roster link whose target names a different skill", () => {
+    expect(() =>
+      checkReadmeUsageExplicitRoster(usageReadme("[`/beta-two`](./skills/alpha-one/)"), skills),
+    ).toThrow(/cannot parse/);
+  });
+
+  test("ignores a marker sentence hidden inside a fenced block", () => {
+    const text =
+      "# Skills\n\n## Usage\n\nAll skills load lazily.\n\n```text\nSkills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/)) load only when you invoke them.\n```\n";
+    expect(() => checkReadmeUsageExplicitRoster(text, skills)).toThrow(/explicit-invocation-only/);
+  });
+
+  test("ignores a marker sentence hidden inside a tilde-fenced block", () => {
+    // CommonMark fences come in both flavors; stripping only backticks let a
+    // ~~~ block satisfy the check while the real Usage prose said anything.
+    const text =
+      "# Skills\n\n## Usage\n\nAll skills load lazily.\n\n~~~text\nSkills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/)) load only when you invoke them.\n~~~\n";
+    expect(() => checkReadmeUsageExplicitRoster(text, skills)).toThrow(/explicit-invocation-only/);
+  });
+
+  test("rejects a duplicate roster entry", () => {
+    expect(() =>
+      checkReadmeUsageExplicitRoster(
+        usageReadme("[`/beta-two`](./skills/beta-two/), [`/beta-two`](./skills/beta-two/)"),
+        skills,
+      ),
+    ).toThrow(/duplicate/);
+  });
+
+  test("rejects a marker sentence outside the Usage section", () => {
+    const text =
+      "# Skills\n\n## About\n\nSkills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/)) load only when you invoke them.\n\n## Usage\n\nAll skills load lazily.\n";
+    expect(() => checkReadmeUsageExplicitRoster(text, skills)).toThrow(/explicit-invocation-only/);
   });
 });

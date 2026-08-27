@@ -100,7 +100,7 @@ bun "<skill-dir>/scripts/wait-for-pr-event.mts" <pr-number> --repo <owner/name> 
 | Exit | Meaning |
 | --- | --- |
 | 0 | a watched event happened; the output names it (`new review by <login>`, `unresolved threads 0 -> 2`, `check <name> -> failure`, merged) |
-| 1 | the PR merged or closed while that outcome was not watched; the wait's job ended |
+| 1 | the PR merged or closed while that outcome was not watched; the wait's job ended - on a merge, watch the mainline tip per "After a Merge" above |
 | 2 | usage or tooling error (bad args, gh missing or failing); it never retries forever |
 | 3 | timeout with no watched change; the baseline and final snapshots are in the output |
 
@@ -110,7 +110,7 @@ Worked example, babysitting a PR between review rounds:
 bun "<skill-dir>/scripts/wait-for-pr-event.mts" 123 --until comment,review --timeout 3600 > /tmp/pr-123-wait.out 2>&1
 # read /tmp/pr-123-wait.out when it exits:
 #   exit 0 -> handle the named event (reply, fix, push, re-request review)
-#   exit 1 -> the PR merged or closed; stop babysitting
+#   exit 1 -> the PR merged or closed; stop babysitting (a merge still gets the "After a Merge" watch above)
 #   exit 3 -> no activity this hour; re-arm the waiter or escalate to the user
 ```
 

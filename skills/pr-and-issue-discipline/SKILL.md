@@ -92,7 +92,7 @@ Include environment only when it matters: a version-specific parser bug names th
 - Flip BACK TO DRAFT the moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding), before the fix round starts.
 - Draft state tracks pending commits; CONVERGENCE gates the merge offer. A fresh comment needing only a reply does not bounce a ready PR back to draft (its reply-and-resolve lands the same cycle, no commit), but a PR is offered for merge only while the full converged definition below holds.
 
-**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition: no valid blocking findings remain, and every non-blocking finding is handled, including a skip with its reason recorded), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes.
+**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes.
 
 ## Babysit to Comment Convergence
 
