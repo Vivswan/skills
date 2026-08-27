@@ -224,10 +224,25 @@ describe("checkReadmeMermaidGraph", () => {
   });
 
   test("negative control: a malformed edge on the graph-header line still fails", () => {
-    // The header exemption must be exact: 'graph LR --> ghost' is an edge
-    // with a dangling endpoint, not a header, and must not ride the
-    // /^graph/ prefix past endpoint validation.
+    // 'graph LR --> ghost' is not a valid header, and its dangling endpoint
+    // must not ride a header exemption past validation.
     const graph = 'graph LR --> ghost\n  a["/alpha-one"] --> b["/beta-two"]\n';
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/must open with/);
+  });
+
+  test("rejects a graph without the flowchart header", () => {
+    // Mermaid cannot render a block with no 'graph <direction>' declaration.
+    const graph = '  a["/alpha-one"] --> b["/beta-two"]\n';
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/must open with/);
+  });
+
+  test("rejects an invalid flowchart direction", () => {
+    const graph = 'graph XX\n  a["/alpha-one"] --> b["/beta-two"]\n';
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/must open with/);
+  });
+
+  test("rejects a second header line", () => {
+    const graph = `${goodGraph}graph TB\n`;
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
   });
 

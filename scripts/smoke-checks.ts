@@ -181,16 +181,27 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
     }
   }
 
-  // Every remaining line must be something this checker understands: an
-  // edge, the exact `graph <direction>` header, or a standalone
-  // '/skill'-labeled node. Anything else (a bare alias, a node whose label
-  // lacks the leading slash, syntax this parser does not know) fails loudly
-  // instead of slipping past the guarantees above unparsed. Edges are
-  // matched first so a malformed line starting with `graph` cannot ride the
-  // header exemption past endpoint validation.
-  for (const rawLine of body.split("\n")) {
-    const line = rawLine.trim();
-    if (line === "") continue;
+  // Every line must be something this checker understands. The FIRST
+  // non-empty line must be exactly one valid flowchart header (mermaid
+  // cannot render the block without one, and `graph XX` is not a
+  // direction); every later line is an edge or a standalone
+  // '/skill'-labeled node. Anything else (a second header, a bare alias, a
+  // node whose label lacks the leading slash, syntax this parser does not
+  // know) fails loudly instead of slipping past the guarantees above
+  // unparsed. Edges are matched first so a malformed line starting with
+  // `graph` cannot ride the header rule past endpoint validation.
+  const lines = body
+    .split("\n")
+    .map((rawLine) => rawLine.trim())
+    .filter((line) => line !== "");
+  const header = lines[0] ?? "";
+  if (!/^graph (LR|RL|TB|TD|BT)$/.test(header)) {
+    fail(
+      "README.md: the mermaid skill-reference graph must open with a" +
+        ` 'graph <LR|RL|TB|TD|BT>' header, found '${header}'`,
+    );
+  }
+  for (const line of lines.slice(1)) {
     if (line.includes("-->")) {
       for (const rawEndpoint of line.split("-->")) {
         const endpoint = rawEndpoint.trim();
@@ -208,11 +219,10 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
       }
       continue;
     }
-    if (/^graph [A-Z]{2}$/.test(line)) continue;
     if (!/^[A-Za-z0-9_]+\["\/[^"\]]*"\]$/.test(line)) {
       fail(
-        `README.md: cannot parse mermaid graph line '${line}' -- expected the graph` +
-          " header, an edge, or a node labeled '/skill-name'",
+        `README.md: cannot parse mermaid graph line '${line}' -- expected an edge` +
+          " or a node labeled '/skill-name' (the header belongs on the first line only)",
       );
     }
   }
