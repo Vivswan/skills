@@ -23,7 +23,7 @@ metadata:
 
 Verify all three before `git worktree remove`, freshly, in this order:
 
-1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain -uall` (`-uall` overrides a `status.showUntrackedFiles=no` config that would silently hide untracked files) and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinator's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work.
+1. **Clean, by fresh status codes.** Run a fresh `git -C <tree> status --porcelain -uall` (`-uall` overrides a `status.showUntrackedFiles=no` config that would silently hide untracked files) and read the STATUS CODES; never trust a prior report's dirty count. Counts cannot distinguish new files from removal-in-progress deletions; codes can. Every entry blocks the removal unless its exact path is positively identified as disposable: a removal-in-progress shows its own deletions as `D`, and a coordinating actor's keepalive marker (below) is a lone `??`. A `??`, `M`, or `D` entry not identified that way is real work.
    - A clean tree loses nothing TRACKED on removal; its commits survive on their ref.
    - IGNORED files are invisible to plain status yet die with the tree. When a worktree may hold valuable ignored artifacts (a local database, captured data), list them with `git status --porcelain --ignored` first.
 2. **On a durable ref.** A DETACHED worktree's unique commits can be reachable only through its private HEAD, which removal deletes, reflog included. `git -C <tree> symbolic-ref -q HEAD` exiting non-zero means detached: put a branch or tag on `git -C <tree> rev-parse HEAD` before removing, or prove that commit reachable from a durable ref.
@@ -31,7 +31,9 @@ Verify all three before `git worktree remove`, freshly, in this order:
 
 After removing:
 
-- **Remove with `git worktree remove`, never a bare `rm -rf`.** Manual deletion leaves the worktree's administrative entry in the shared git dir, so git keeps treating its branch as checked out (and blocks deleting it) until the entry is pruned (`git worktree prune`; git also expires stale entries on its own per `gc.worktreePruneExpire`, but never count on that timing). After a deletion that already happened manually, prune explicitly, but anchor first: pruning deletes each swept entry's private HEAD and reflog, and it sweeps EVERY missing unlocked tree in one pass, not just yours. For each prunable entry (`git worktree list --porcelain` marks them), read its recorded tip from `.git/worktrees/<name>/HEAD` and put a branch or tag on any detached commit (rule 2) before running the prune.
+- **Remove with `git worktree remove`, never a bare `rm -rf`.** Manual deletion leaves the worktree's administrative entry in the shared git dir, so git keeps treating its branch as checked out (and blocks deleting it) until the entry is pruned.
+  - `git worktree prune` clears stale entries; git also expires them on its own per `gc.worktreePruneExpire`, but never count on that timing.
+  - Anchor BEFORE pruning: a prune deletes each swept entry's private HEAD and reflog, and it sweeps EVERY missing unlocked tree in one pass, not just yours. For each prunable entry (`git worktree list --porcelain` marks them), read its recorded tip from `.git/worktrees/<name>/HEAD` and put a branch or tag on any detached commit (rule 2) first.
 - **Removal does not kill survivors.** A finished actor's wedged test chain can outlive its deleted directory for hours. Re-check and kill any process whose cwd names the deleted path.
 
 ### Deleting the branch too
