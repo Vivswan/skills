@@ -16,8 +16,8 @@ Skills: Installable, plugin-ready skills that give coding agents disciplined wor
 
 ## Conventions
 
-- PR titles and commit subjects must be Conventional Commits (`feat:`, `fix:`, `feat!:`, `chore:`, ...). PRs are squash-merged, so the PR title becomes the commit subject. CI validates both (the ci.yml pr-title job + validate-commit-names).
-- CI gates on a single required check named `all-green` in the managed `.github/workflows/ci.yml`. This repository's own test/lint jobs belong in `.github/workflows/checks.yml` (repo-owned, called inside the gate); do not edit ci.yml, template sync overwrites it.
+- PR titles and commit subjects must be Conventional Commits (`feat:`, `fix:`, `feat!:`, `chore:`, ...). PRs are squash-merged, so the PR title becomes the commit subject. CI validates both (the required pr-title check + validate-commit-names).
+- CI gates on the required check `all-green`: ci.yml's own `all-green` job needs the `checks` and `ci` caller jobs and fails unless each result is success or skipped, with at least one success (the gate jobs themselves run centrally through repo-platform's fleet-ci.yml; the `pr-title` check is required separately by its own ruleset). This repository's own test/lint jobs belong in `.github/workflows/checks.yml` (repo-owned, called inside the gate); do not edit ci.yml, template sync overwrites it.
 - No typographic look-alike characters (curly quotes, em-dashes, invisible unicode). CI enforces this with the check-typography action; use plain ASCII punctuation.
 
 ## Managed by repo-platform
