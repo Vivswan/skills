@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   apply:
-    uses: Vivswan/repo-platform/.github/workflows/reusable-apply-settings.yml@main
+    uses: Vivswan/repo-platform/.github/workflows/reusable-apply-settings.yml@build
     with:
       check_only: ${{ inputs.check_only || false }}
     secrets:
