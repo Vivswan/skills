@@ -1,7 +1,4 @@
 
-# BEGIN REPOSITORY LOCAL
-# Add repository-specific ignore patterns in this section only.
-
 # Consumer-side lock file from dogfood-installing this repo's own skills.
 skills-lock.json
 .agents/
@@ -9,12 +6,10 @@ skills-lock.json
 # Claude Code session state and in-repo worktrees.
 .claude/
 
-# END REPOSITORY LOCAL
-
 # BEGIN REPO-PLATFORM MANAGED
-# Generated from github/gitignore - do not edit; local patterns go in
-# the REPOSITORY LOCAL section above. Managed patterns deliberately
-# come last: last-match-wins makes them non-overridable.
+# Generated from github/gitignore - do not edit between the BEGIN/END
+# markers; repository-local patterns live outside the managed region
+# (above BEGIN, or below END where last-match-wins can override).
 
 ## Agent local state (repo-platform)
 .claude/worktrees/
