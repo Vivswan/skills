@@ -7,7 +7,7 @@ A landing is two independent choices:
 
 The two sections below are the gate's two values. The base choice exists in direct mode too: dependent tracks still build branch-on-branch, they just land serially instead of via stacked PRs.
 
-Who merges, the standing merge exceptions, visualization-first PR bodies, draft discipline, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-and-issue-discipline` skill. Review-before-landing and the CI watcher after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode; their definitions and defaults live there, not here.
+Who merges, the standing merge exceptions, show-the-change PR bodies, draft discipline, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-and-issue-discipline` skill. Review-before-landing and the CI watcher after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode; their definitions and defaults live there, not here.
 
 ## Direct Commits to the Mainline
 
@@ -106,7 +106,7 @@ git config branch.track-3.depTip "$(git rev-parse track-2)"
 # set EXPLICITLY (gh defaults --base to the repo default branch): the dependency's
 # branch for a stacked link, the mainline for an independent track. The opener
 # authors each title and body directly, per the repo's title convention and the
-# visualization-first format (/pr-and-issue-discipline), so the PR is born prepared:
+# PR-body shape (/pr-and-issue-discipline), so the PR is born prepared:
 git push -u origin track-1 track-2 track-3
 gh pr create --draft --head track-1 --base <mainline> --title "<repo-convention title>" --body-file <file>
 gh pr create --draft --head track-2 --base track-1 --title "<repo-convention title>" --body-file <file>

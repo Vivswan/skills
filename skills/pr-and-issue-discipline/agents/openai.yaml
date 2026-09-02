@@ -3,5 +3,5 @@
 # the SKILL.md H1; the smoke test keeps them identical.
 interface:
   display_name: "PR and Issue Discipline"
-  short_description: "PRs and issues that show the change before telling it."
+  short_description: "PRs and issues that show the change instead of describing it."
   brand_color: "#0E7490"

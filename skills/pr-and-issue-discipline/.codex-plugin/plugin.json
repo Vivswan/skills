@@ -1,6 +1,6 @@
 {
   "name": "pr-and-issue-discipline",
-  "description": "Visualization-first PR bodies and issues, draft state that tracks convergence, same-cycle review-comment triage, and a human hand on the merge by default.",
+  "description": "PR bodies and issues that show the change instead of describing it, draft state that tracks convergence, same-cycle review-comment triage, and a human hand on the merge by default.",
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",
@@ -21,14 +21,14 @@
   "skills": "./",
   "interface": {
     "displayName": "PR and Issue Discipline",
-    "shortDescription": "PRs and issues that show the change before telling it.",
-    "longDescription": "Fires when an agent opens or updates a pull request or writes an issue: bodies lead with real captured before/after output, drafts flip with convergence in both directions, every review round is triaged the same cycle with thread state read via GraphQL, and the human merges by default with two narrow standing exceptions.",
+    "shortDescription": "PRs and issues that show the change instead of describing it.",
+    "longDescription": "Fires when an agent opens or updates a pull request or writes an issue: bodies open with a block that shows the change (captured output where behavior is observable, a diagram or table where not) in the shape that fits it, drafts flip with convergence in both directions, every review round is triaged the same cycle with thread state read via GraphQL, and the human merges by default with two narrow standing exceptions.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
     "capabilities": ["Read", "Write", "Review"],
     "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/pr-and-issue-discipline",
     "defaultPrompt": [
-      "Open a draft PR for this branch with a visualization-first body.",
+      "Open a draft PR for this branch with a body that shows the change.",
       "A review round just landed on the PR; triage it to convergence.",
       "The PR is converged and green. Who merges it?"
     ],

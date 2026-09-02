@@ -8,7 +8,7 @@ metadata:
 
 # PR and Issue Discipline
 
-> Show the change before telling it: real captured output first, the fewest words after, drafts that flip ready on convergence and back on commit-requiring work, and a human hand on the merge by default.
+> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, in the shape that fits the change; keep draft state honest, converge reviews, and leave the merge to a human by default.
 
 These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session.
 
@@ -19,20 +19,46 @@ These rules apply to any session that opens or updates a PR or writes an issue. 
 - A review round just landed on an open PR
 - Deciding whether a PR merges, and by whose hand
 
-## PR Bodies: Visualization First
+## PR Bodies: Show the Change, Shaped to It
 
-The opening section is real captured output, not prose. A reader must get the change from the fenced blocks without reading a paragraph.
+Show the change rather than describe it. A PR body is text, so its picture is a fenced block: real captured output wherever behavior is observable, a diagram, table, or the contract's own shape where nothing runs. The reader skims the blocks and gets the change without reading a paragraph; prose only carries what no block can. Shape the body to the change; never force every PR through one template.
+
+The target repository's own PR template is authoritative: fill its fields, applying this principle inside them. On a third party's or someone else's repository this is not optional; use their template and follow their `CONTRIBUTING` guidance rather than the shapes below. The shapes below are the fallback when neither a template nor `CONTRIBUTING` guidance covers the body.
+
+### Additive feature
 
 ````markdown
-## The bug this kills          (or "## What this adds" for a feature)
+## What this adds
 
-Before:
+```text
+$ bun run shards --changed
+manifest build/image-sets.json v3: 5 contexts, files and dependencies validated against the checkout
+changed: api -> dependency closure {base, api} -> shards: [base, base+api]
+```
+
+## How
+
+The resolver validates the manifest against the checkout, closes changed contexts over their dependencies, and emits the GitHub Actions matrix.
+
+## Proof
+
+- Manifest validation and shard-resolution tests pass (2 new), `bun run check` green.
+````
+
+### Existing behavior change or bug fix
+
+Open with `Before` / `After` as real captured output; the comparison is the visualization. When nothing observable changes (a pure refactor), open with `## What this changes` and the same `## How` and `## Proof`.
+
+````markdown
+## Before
+
 ```text
 $ bun run check
 scripts/sweep.mts: probe timed out after 120s; agent marked dead (it was mid-build)
 ```
 
-After:
+## After
+
 ```text
 $ bun run check
 scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; agent alive
@@ -47,22 +73,49 @@ after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live ver
 
 ## Proof
 
-- 34 tests green (2 new), `bun run check` green, CI watched to completion
-- 2 review rounds, every thread resolved
+- 34 tests green (2 new), `bun run check` green
 ````
 
-- The opening blocks are actual commands and actual output, complete enough to stand alone.
-- `## How` has no mandated form. Pick whatever carries THIS change fastest: sometimes three terse bullets, sometimes a diagram, a table, or two sentences. The test is reading speed, not format. Never a visual plus prose re-explaining it: if the diagram needs a paragraph after it, the diagram failed; pick one carrier.
-- The register is programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary. No executive-summary tone, no benefits-narration. The diff carries the detail; never re-narrate it.
-- `## Proof` is numbers: tests, gates, review rounds. Cut any sentence the blocks already show.
+### Contract or documentation PR
 
-**Redact before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
+Use `## What this specifies` when the PR defines a contract rather than executable behavior. Nothing runs, so show the contract itself (its schema, table, or layout) in a block, not in prose.
+
+````markdown
+## What this specifies
+
+```text
+SKILL.md                    disable-model-invocation: true
+agents/openai.yaml          policy.allow_implicit_invocation: false   <- must pair with the line above
+
+agents/openai.yaml          .codex-plugin/plugin.json
+interface.display_name      == interface.displayName
+interface.short_description == interface.shortDescription   (25-64 chars)
+interface.brand_color       == interface.brandColor
+```
+
+## How
+
+The smoke test reads the three files per skill and fails the build on any drift.
+
+## Proof
+
+- Smoke-test cases for the mirrored block and the invocation pairing pass.
+````
+
+For every form:
+
+- Blocks show, prose tells. Where behavior is observable, the opening block is an actual command and its actual output, complete enough to stand alone; never manufacture output or add it only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
+- `## How` has no mandated carrier. Use terse bullets, a small diagram, a table, or two short paragraphs, whichever explains the mechanism fastest. One carrier per point: a diagram followed by a paragraph re-explaining it means the diagram failed.
+- `## Proof` names focused behavioral tests or stable checks, with numbers where they exist (tests, gates). Do not turn it into transient CI, approval, or review status.
+- Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary. Usually 200 to 400 words is enough. The diff carries the detail; do not narrate the implementation process, reduction history, line counts, status, future work, scope caveats, reviewer guidance, or the entire diff.
+
+**Redact captured output before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
 
 ## Issues: Same Principle
 
 What breaks, shown first; then the minimum around it. Short and skimmable, no walls of text.
 
-A repository's own issue templates are authoritative: fill their fields, applying this principle inside them. The shape below is the fallback when no template exists.
+The target repository's own issue templates are authoritative: fill their fields, applying this principle inside them. On a third party's or someone else's repository, use their template and follow their `CONTRIBUTING` guidance, not the shape below. The shape below is the fallback when neither a template nor `CONTRIBUTING` guidance covers the issue.
 
 ````markdown
 ## What breaks
@@ -83,7 +136,7 @@ installed: SKILL.md, README.md          (metadata.json silently missing)
 - Actual: `metadata.json` dropped without a warning
 ````
 
-Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not. The redaction rule above applies unchanged: issues publish captured output too.
+Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not. When an issue includes captured output, the redaction rule above applies unchanged.
 
 ## Draft Discipline
 
