@@ -23,7 +23,14 @@ These rules apply to any session that opens or updates a PR or writes an issue. 
 
 Show the change rather than describe it. A PR body is text, so its picture is a fenced block: real captured output wherever behavior is observable, a diagram, table, or the contract's own shape where nothing runs. The reader skims the blocks and gets the change without reading a paragraph; prose only carries what no block can. Shape the body to the change; never force every PR through one template.
 
-The target repository's own PR template is authoritative: fill its fields, applying this principle inside them. On a third party's or someone else's repository this is not optional; use their template and follow their `CONTRIBUTING` guidance rather than the shapes below. The shapes below are the fallback when neither a template nor `CONTRIBUTING` guidance covers the body.
+**Template check, once per session, at plan time.** Before the first PR or issue of the session, while still planning, resolve the choice once and reuse it for every PR and issue in that session:
+
+1. Look for templates in the target repository, case-insensitively and at any extension (`.md`, `.txt`, none): `pull_request_template*` and `PULL_REQUEST_TEMPLATE*` at the repository root, in `.github/`, and in `docs/`, plus `.github/PULL_REQUEST_TEMPLATE/` and `.github/ISSUE_TEMPLATE/`.
+2. None found: the shapes below apply directly. Do not ask.
+3. Any found: ask the user once, in these words, "Use this repository's templates, or this skill's shapes?" Name the repository, say whether it is theirs or someone else's, and list the templates found by filename. A user who installed this skill often prefers its shapes, and a third party's maintainers usually expect their own, so ask rather than assume either way.
+4. Carry the answer for the rest of the session, for every PR and every issue in it. Answer "the skill's shapes": use the shapes below throughout. Answer "the repository's templates": use the template whose purpose matches each artifact, without asking again; where the repository ships no template for that artifact (issue templates but no PR template, or the reverse), the shapes below fill the gap.
+
+Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: honor its rules on title conventions, required sections, and linked issues inside the body you write.
 
 ### Additive feature
 
@@ -115,7 +122,7 @@ For every form:
 
 What breaks, shown first; then the minimum around it. Short and skimmable, no walls of text.
 
-The target repository's own issue templates are authoritative: fill their fields, applying this principle inside them. On a third party's or someone else's repository, use their template and follow their `CONTRIBUTING` guidance, not the shape below. The shape below is the fallback when neither a template nor `CONTRIBUTING` guidance covers the issue.
+The session's template answer, resolved at plan time above, covers issues too: fill the chosen issue template's fields and apply this principle inside them, or use the shape below when the answer was the skill's shapes or no template exists.
 
 ````markdown
 ## What breaks
