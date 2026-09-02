@@ -3,3 +3,14 @@
 # repo's module selection - edit it and the next sync applies the change.
 
 modules: ["agents", "bun", "issue-templates", "pr-title", "auto-assign", "settings-sync"]
+
+# Mirror declarations: the sync copies the freshly rendered source over
+# every target after each render, so the bundled per-skill license copies
+# can never go stale against the root again (scripts/smoke-test.ts
+# enforces byte-equality; a standalone skill install copies only the
+# skill folder, so real copies are required, not links).
+mirrors:
+  - source: LICENSE.md
+    targets:
+      - template/LICENSE.md
+      - "skills/*/LICENSE.md"
