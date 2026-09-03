@@ -25,6 +25,17 @@ function tempFile(content: string, name = "SKILL.md"): string {
   return path;
 }
 
+function expectCheckFailure(run: () => unknown, message: RegExp): void {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(CheckFailure);
+  expect(errorMessage(thrown)).toMatch(message);
+}
+
 describe("parseFrontmatter", () => {
   test("parses top-level and nested keys with YAML types", () => {
     const path = tempFile(
@@ -57,26 +68,37 @@ describe("parseFrontmatter", () => {
     expect(parseFrontmatter(path)).toEqual({ description: "first line second line" });
   });
 
-  test("sees keys inside inline maps", () => {
+  test("parses inline maps to their nested values", () => {
     const path = tempFile("---\nmetadata: { version: 1.2.3 }\n---\n");
-    const metadata = parseFrontmatter(path).metadata as Record<string, unknown>;
-    expect("version" in metadata).toBe(true);
+    expect(parseFrontmatter(path)).toEqual({ metadata: { version: "1.2.3" } });
   });
 
   test("fails without a frontmatter start marker", () => {
-    expect(() => parseFrontmatter(tempFile("# no frontmatter\n"))).toThrow(CheckFailure);
+    expectCheckFailure(
+      () => parseFrontmatter(tempFile("# no frontmatter\n")),
+      /missing YAML frontmatter start/,
+    );
   });
 
   test("fails without a frontmatter end marker", () => {
-    expect(() => parseFrontmatter(tempFile("---\nname: x\n"))).toThrow(CheckFailure);
+    expectCheckFailure(
+      () => parseFrontmatter(tempFile("---\nname: x\n")),
+      /missing YAML frontmatter end/,
+    );
   });
 
   test("fails on invalid YAML", () => {
-    expect(() => parseFrontmatter(tempFile("---\nname: [unclosed\n---\n"))).toThrow(CheckFailure);
+    expectCheckFailure(
+      () => parseFrontmatter(tempFile("---\nname: [unclosed\n---\n")),
+      /invalid YAML frontmatter/,
+    );
   });
 
   test("fails when frontmatter is not a mapping", () => {
-    expect(() => parseFrontmatter(tempFile("---\n- just\n- a list\n---\n"))).toThrow(CheckFailure);
+    expectCheckFailure(
+      () => parseFrontmatter(tempFile("---\n- just\n- a list\n---\n")),
+      /frontmatter must be a YAML mapping/,
+    );
   });
 
   test("fails on a missing file", () => {
@@ -100,11 +122,14 @@ describe("loadJson", () => {
   });
 
   test("fails on invalid JSON", () => {
-    expect(() => loadJson(tempFile("{oops", "x.json"))).toThrow(CheckFailure);
+    expectCheckFailure(() => loadJson(tempFile("{oops", "x.json")), /x\.json: invalid JSON/);
   });
 
   test("fails on a missing file", () => {
-    expect(() => loadJson("/nonexistent/x.json")).toThrow(CheckFailure);
+    expectCheckFailure(
+      () => loadJson("/nonexistent/x.json"),
+      /nonexistent\/x\.json: cannot read file/,
+    );
   });
 });
 
@@ -201,8 +226,10 @@ describe("loadMarketplace", () => {
     expect(marketplace.raw.metadata).toEqual({ version: "1.0.0" });
   });
 
-  test("loads the repo marketplace", () => {
-    expect(loadMarketplace().plugins.length).toBeGreaterThan(0);
+  test("loads the repo marketplace from the default path", () => {
+    const marketplace = loadMarketplace();
+    expect(marketplace.path).toBe(join(ROOT, ".claude-plugin", "marketplace.json"));
+    expect(marketplace.plugins.map((plugin) => plugin.name)).toEqual([loadRootManifest().name]);
   });
 
   test("fails when the root is not an object", () => {
