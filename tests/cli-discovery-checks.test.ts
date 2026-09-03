@@ -115,18 +115,26 @@ describe("checkListing", () => {
   });
 
   test.each([
-    ["watch-ci-after-push", "named only inside another skill's description", true],
-    ["ghost-skill", "never mentioned anywhere, so the mention is not the cause", false],
-  ])("negative control: absent skill %s fails (%s)", (name, _reason, mentioned) => {
+    {
+      id: "watch-ci-after-push",
+      mentioned: true,
+      reason: "named only inside another skill's description",
+    },
+    {
+      id: "ghost-skill",
+      mentioned: false,
+      reason: "never mentioned anywhere, so the mention is not the cause",
+    },
+  ])("negative control: an absent skill fails: $id ($reason)", ({ id, mentioned }) => {
     // The whole-output boundary regex of the old check is what let a mentioned
     // skill pass; pinning it per case proves the fixture reproduces the
     // incident for the mention case and that the control case is unmentioned.
-    const oldCheck = new RegExp(`(^|[^a-z0-9-])${name}([^a-z0-9-]|$)`);
-    expect(oldCheck.test(VANISHED)).toBe(mentioned);
-    const expected = [...VANISHED_EXPECTED, name];
+    const oldCheck = new RegExp(`(^|[^a-z0-9-])${id}([^a-z0-9-]|$)`);
+    expect(oldCheck.test(VANISHED), id).toBe(mentioned);
+    const expected = [...VANISHED_EXPECTED, id];
     const run = () => checkListing(expected, GROUP, TEMPLATE, VANISHED);
-    expect(run).toThrow(CheckFailure);
-    expect(run).toThrow(new RegExp(`skill '${name}' missing from the CLI listing rows`));
+    expect(run, id).toThrow(CheckFailure);
+    expect(run, id).toThrow(new RegExp(`skill '${id}' missing from the CLI listing rows`));
   });
 
   test("skills under the wrong group heading fail even when a description mentions the title", () => {

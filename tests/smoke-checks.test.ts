@@ -31,11 +31,11 @@ describe("checkDescriptionTriggerForm", () => {
       reason: "a summary-shaped dodge that matches the prefix and says nothing",
     },
     { id: "missing description", frontmatter: {} },
-  ])("rejects a description that is not trigger-form: $id", ({ frontmatter, reason }) => {
+  ])("rejects a description that is not trigger-form: $id", ({ id, frontmatter }) => {
     expectCheckFailure(
       () => checkDescriptionTriggerForm("skills/x/SKILL.md", frontmatter),
       /skills\/x\/SKILL\.md: description must be trigger-form, starting with "Use when \.\.\."/,
-      reason,
+      id,
     );
   });
 });
@@ -218,12 +218,12 @@ describe("checkReadmeMermaidGraph", () => {
     { id: "a second header line", line: "graph TB" },
   ])(
     "negative control: an unparseable line fails instead of slipping past: $id",
-    ({ line, reason }) => {
+    ({ id, line }) => {
       const graph = `${goodGraph}  ${line}\n`;
       expectCheckFailure(
         () => checkReadmeMermaidGraph(withGraph(graph), names),
         `cannot parse mermaid graph line '${line}'`,
-        reason,
+        id,
       );
     },
   );
@@ -248,7 +248,7 @@ describe("checkReadmeMermaidGraph", () => {
     },
     { id: "no header at all", firstLine: "", reason: "mermaid cannot render without one" },
     { id: "an invalid direction", firstLine: "graph XX" },
-  ])("rejects a graph whose first line is $id", ({ firstLine, reason }) => {
+  ])("rejects a graph with a bad first line: $id", ({ id, firstLine }) => {
     // An empty first line is dropped as blank, so the edge itself gets judged
     // as the header and named in the message.
     const edge = 'a["/alpha-one"] --> b["/beta-two"]';
@@ -256,7 +256,7 @@ describe("checkReadmeMermaidGraph", () => {
     expectCheckFailure(
       () => checkReadmeMermaidGraph(withGraph(graph), names),
       `must open with a 'graph <LR|RL|TB|TD|BT>' header, found '${firstLine || edge}'`,
-      reason,
+      id,
     );
   });
 
@@ -394,11 +394,11 @@ describe("checkReadmeUsageExplicitRoster", () => {
       id: "the sentence is outside the Usage section",
       text: `# Skills\n\n## About\n\n${hiddenSentence}\n\n## Usage\n\nAll skills load lazily.\n`,
     },
-  ])("rejects a README where $id", ({ text, reason }) => {
+  ])("rejects a README missing the Usage marker sentence: $id", ({ id, text }) => {
     expectCheckFailure(
       () => checkReadmeUsageExplicitRoster(text, skills),
       /the Usage section is missing the sentence/,
-      reason,
+      id,
     );
   });
 

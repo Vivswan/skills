@@ -538,8 +538,8 @@ describe("lockfile attribution", () => {
       url: "git@github.com:Vivswan/skills.git",
       urlId: "git@github.com:vivswan/skills",
     },
-  ])("derives exactly the normalized URL and owner/repo slug ids: $id", ({ url, urlId }) => {
-    expect(repoSourceIds(url)).toEqual(new Set([urlId, "vivswan/skills"]));
+  ])("derives exactly the normalized URL and owner/repo slug ids: $id", ({ id, url, urlId }) => {
+    expect(repoSourceIds(url), id).toEqual(new Set([urlId, "vivswan/skills"]));
   });
 
   test("attributes by source slug or sourceUrl, case- and .git-insensitive", () => {

@@ -273,14 +273,15 @@ describe("run-review.mts", () => {
   });
 
   test("--stdin-prompt serves the prompt file as stdin for codex and claude", () => {
-    for (const [tool, verdict] of [
-      ["codex", "CODEX VERDICT: correct, no blocking findings\n"],
-      ["claude", "CLAUDE VERDICT: correct, no blocking findings\n"],
-    ] as const) {
+    const cases = [
+      { id: "codex", verdict: "CODEX VERDICT: correct, no blocking findings\n" },
+      { id: "claude", verdict: "CLAUDE VERDICT: correct, no blocking findings\n" },
+    ];
+    for (const { id: tool, verdict } of cases) {
       const r = run([tool, promptFile, "--stdin-prompt"]);
-      expect(r.code).toBe(0);
-      expect(r.stdout).toBe(verdict);
-      expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+      expect(r.code, tool).toBe(0);
+      expect(r.stdout, tool).toBe(verdict);
+      expect(readFileSync(r.promptCopy, "utf-8"), tool).toBe(PROMPT);
     }
   });
 
@@ -388,14 +389,18 @@ describe("run-review.mts", () => {
   });
 
   test("unknown reviewer or missing prompt file are usage errors: exit 2", () => {
-    const cases: [string[], string][] = [
-      [["gemini", promptFile], "unknown reviewer: gemini"],
-      [["codex"], "expected exactly one <prompt-file>"],
-      [["codex", join(binDir, "no-such-prompt.txt")], "cannot read prompt file"],
+    const cases = [
+      { id: "unknown-reviewer", args: ["gemini", promptFile], message: "unknown reviewer: gemini" },
+      { id: "no-prompt-file", args: ["codex"], message: "expected exactly one <prompt-file>" },
+      {
+        id: "unreadable-prompt-file",
+        args: ["codex", join(binDir, "no-such-prompt.txt")],
+        message: "cannot read prompt file",
+      },
     ];
-    for (const [args, message] of cases) {
+    for (const { id, args, message } of cases) {
       const r = run(args);
-      expectFailure(r, { code: 2, stderr: message }, args.join(" "));
+      expectFailure(r, { code: 2, stderr: message }, id);
     }
   });
 

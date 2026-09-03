@@ -311,19 +311,20 @@ describe("corrupt ledger files", () => {
     const garbage = "{ this is not json";
     writeFileSync(file, garbage);
 
-    for (const args of [
-      ["show"],
-      ["init"],
-      ["state", "builder-a", "active"],
-      ["flag", "builder-a", "text"],
-      ["retract", "abc"],
-      ["grant", "builder-a", "wording", "glob/**"],
-    ]) {
+    const cases = [
+      { id: "show", args: ["show"] },
+      { id: "init", args: ["init"] },
+      { id: "state", args: ["state", "builder-a", "active"] },
+      { id: "flag", args: ["flag", "builder-a", "text"] },
+      { id: "retract", args: ["retract", "abc"] },
+      { id: "grant", args: ["grant", "builder-a", "wording", "glob/**"] },
+    ];
+    for (const { id, args } of cases) {
       const r = runJson(file, ...args);
-      expect(r.code).toBe(1);
-      expect(r.json.ok).toBe(false);
-      expect(r.stderr).toContain("not valid JSON");
-      expect(readFileSync(file, "utf-8")).toBe(garbage);
+      expect(r.code, id).toBe(1);
+      expect(r.json.ok, id).toBe(false);
+      expect(r.stderr, id).toContain("not valid JSON");
+      expect(readFileSync(file, "utf-8"), id).toBe(garbage);
     }
   });
 
@@ -337,60 +338,76 @@ describe("corrupt ledger files", () => {
   });
 
   test("malformed nested entries are refused, not treated as empty", () => {
-    for (const bad of [
-      { workers: {}, flags: [null] },
-      { workers: {}, flags: [{ hash: "x" }] },
-      { workers: { a: { state: "bogus", grants: [] } }, flags: [] },
+    const activeWorker = (grant: Record<string, unknown>) => ({
+      a: { state: "active", grants: [grant] },
+    });
+    const cases = [
+      { id: "null-flag", ledger: { workers: {}, flags: [null] } },
+      { id: "flag-missing-fields", ledger: { workers: {}, flags: [{ hash: "x" }] } },
       {
-        workers: { a: { state: "active", grants: [{ wording: 1, globs: [], at: "t" }] } },
-        flags: [],
+        id: "unknown-worker-state",
+        ledger: { workers: { a: { state: "bogus", grants: [] } }, flags: [] },
       },
       {
-        workers: { a: { state: "active", grants: [{ wording: "w", globs: [], at: "t" }] } },
-        flags: [],
+        id: "grant-wording-not-string",
+        ledger: { workers: activeWorker({ wording: 1, globs: [], at: "t" }), flags: [] },
       },
       {
-        workers: { a: { state: "active", grants: [{ wording: "w", globs: [""], at: "t" }] } },
-        flags: [],
+        id: "grant-no-globs",
+        ledger: { workers: activeWorker({ wording: "w", globs: [], at: "t" }), flags: [] },
       },
       {
-        workers: { a: { state: "active", grants: [{ wording: "w", globs: ["   "], at: "t" }] } },
-        flags: [],
+        id: "grant-empty-glob",
+        ledger: { workers: activeWorker({ wording: "w", globs: [""], at: "t" }), flags: [] },
+      },
+      {
+        id: "grant-blank-glob",
+        ledger: { workers: activeWorker({ wording: "w", globs: ["   "], at: "t" }), flags: [] },
       },
       // retractedAt travels with the retracted status and only with it; a
       // hand-edit that decouples them (or a malformed history cycle) would
       // corrupt the archive on the next re-flag.
       {
-        workers: {},
-        flags: [
-          { hash: "h", worker: "w", text: "t", status: "standing", at: "t", retractedAt: "r" },
-        ],
+        id: "standing-flag-with-retractedAt",
+        ledger: {
+          workers: {},
+          flags: [
+            { hash: "h", worker: "w", text: "t", status: "standing", at: "t", retractedAt: "r" },
+          ],
+        },
       },
       {
-        workers: {},
-        flags: [{ hash: "h", worker: "w", text: "t", status: "retracted", at: "t" }],
+        id: "retracted-flag-without-retractedAt",
+        ledger: {
+          workers: {},
+          flags: [{ hash: "h", worker: "w", text: "t", status: "retracted", at: "t" }],
+        },
       },
       {
-        workers: {},
-        flags: [
-          {
-            hash: "h",
-            worker: "w",
-            text: "t",
-            status: "standing",
-            at: "t",
-            history: [{ at: "t" }],
-          },
-        ],
+        id: "history-entry-missing-fields",
+        ledger: {
+          workers: {},
+          flags: [
+            {
+              hash: "h",
+              worker: "w",
+              text: "t",
+              status: "standing",
+              at: "t",
+              history: [{ at: "t" }],
+            },
+          ],
+        },
       },
-    ]) {
+    ];
+    for (const { id, ledger } of cases) {
       const file = freshFile();
-      const raw = JSON.stringify(bad);
+      const raw = JSON.stringify(ledger);
       writeFileSync(file, raw);
       const r = runJson(file, "flag", "builder-a", "text");
-      expect(r.code).toBe(1);
-      expect(r.stderr).toContain("malformed");
-      expect(readFileSync(file, "utf-8")).toBe(raw);
+      expect(r.code, id).toBe(1);
+      expect(r.stderr, id).toContain("malformed");
+      expect(readFileSync(file, "utf-8"), id).toBe(raw);
     }
   });
 
@@ -400,14 +417,18 @@ describe("corrupt ledger files", () => {
     run(seeded, "flag", "builder-a", "text");
     const goodFlag = JSON.parse(readFileSync(seeded, "utf-8")).flags[0];
 
-    for (const flags of [[{ ...goodFlag, hash: "0".repeat(64) }], [goodFlag, goodFlag]]) {
+    const cases = [
+      { id: "hash-mismatch", flags: [{ ...goodFlag, hash: "0".repeat(64) }] },
+      { id: "duplicate-flag", flags: [goodFlag, goodFlag] },
+    ];
+    for (const { id, flags } of cases) {
       const file = freshFile();
       const raw = JSON.stringify({ workers: {}, flags });
       writeFileSync(file, raw);
       const r = runJson(file, "retract", goodFlag.hash.slice(0, 12));
-      expect(r.code).toBe(1);
-      expect(r.stderr).toContain("malformed");
-      expect(readFileSync(file, "utf-8")).toBe(raw);
+      expect(r.code, id).toBe(1);
+      expect(r.stderr, id).toContain("malformed");
+      expect(readFileSync(file, "utf-8"), id).toBe(raw);
     }
   });
 });
@@ -531,6 +552,7 @@ describe("ledger lock", () => {
 
   test("noncanonical lock content is never attributed to a dead holder", () => {
     for (const content of ["123junk\n", "123.5\n", "0\n", "123", "-4\n", ""]) {
+      const label = JSON.stringify(content);
       const file = freshFile();
       run(file, "init");
       const lock = `${file}.lock`;
@@ -541,23 +563,20 @@ describe("ledger lock", () => {
       const r = runJson(file, "flag", "builder-a", "must not happen", {
         LEDGER_LOCK_TIMEOUT_MS: "200",
       });
-      expect(r.code).toBe(1);
-      expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
-      expect(readFileSync(lock, "utf-8")).toBe(content);
+      expect(r.code, label).toBe(1);
+      expect(JSON.parse(readFileSync(file, "utf-8")).flags, label).toHaveLength(0);
+      expect(readFileSync(lock, "utf-8"), label).toBe(content);
     }
   });
 
   test("an orphaned break mutex gates acquisition: loud timeout, no steal, no lock created", () => {
-    for (const { id, staleLock } of [
-      {
-        id: "stale dead-holder lock present: the gate is taken before the break, so no steal",
-        staleLock: true,
-      },
-      {
-        id: "no lock present: the gate is taken before the create, so no lock appears",
-        staleLock: false,
-      },
-    ]) {
+    const cases = [
+      // The gate is taken before the break, so the stale lock is never stolen.
+      { id: "stale-dead-holder-lock", staleLock: true },
+      // The gate is taken before the create, so no lock appears.
+      { id: "no-lock", staleLock: false },
+    ];
+    for (const { id, staleLock } of cases) {
       const file = freshFile();
       run(file, "init");
       const lock = `${file}.lock`;
@@ -638,13 +657,13 @@ describe("ledger lock", () => {
       const file = freshFile();
       run(file, "init");
       const r = runJson(file, "flag", "builder-a", "text", { LEDGER_LOCK_TIMEOUT_MS: bad });
-      expect(r.code).toBe(1);
-      expect(r.stderr).toContain("positive integer");
-      expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
+      expect(r.code, bad).toBe(1);
+      expect(r.stderr, bad).toContain("positive integer");
+      expect(JSON.parse(readFileSync(file, "utf-8")).flags, bad).toHaveLength(0);
 
       const s = runJson(file, "flag", "builder-a", "text", { LEDGER_LOCK_STALE_MS: bad });
-      expect(s.code).toBe(1);
-      expect(s.stderr).toContain("positive integer");
+      expect(s.code, bad).toBe(1);
+      expect(s.stderr, bad).toContain("positive integer");
     }
   });
 

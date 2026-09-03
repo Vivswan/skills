@@ -131,8 +131,8 @@ describe("loadJsonObject", () => {
   test("fails when the root is not an object", () => {
     for (const content of ["[1]", '"text"', "null", "3"]) {
       const run = () => loadJsonObject(tempFile(content, "x.json"));
-      expect(run).toThrow(CheckFailure);
-      expect(run).toThrow(/x\.json: root must be an object/);
+      expect(run, content).toThrow(CheckFailure);
+      expect(run, content).toThrow(/x\.json: root must be an object/);
     }
   });
 
@@ -177,16 +177,16 @@ describe("loadRootManifest", () => {
       '{"name": "Not Kebab", "skills": ["./skills/a"]}',
     ]) {
       const run = () => loadRootManifest(tempFile(content, "plugin.json"));
-      expect(run).toThrow(CheckFailure);
-      expect(run).toThrow(/plugin\.json: name .* must be kebab-case/);
+      expect(run, content).toThrow(CheckFailure);
+      expect(run, content).toThrow(/plugin\.json: name .* must be kebab-case/);
     }
   });
 
   test("fails when skills is missing or empty", () => {
     for (const content of ['{"name": "my-plugin"}', '{"name": "my-plugin", "skills": []}']) {
       const run = () => loadRootManifest(tempFile(content, "plugin.json"));
-      expect(run).toThrow(CheckFailure);
-      expect(run).toThrow(/plugin\.json: skills must be a non-empty array/);
+      expect(run, content).toThrow(CheckFailure);
+      expect(run, content).toThrow(/plugin\.json: skills must be a non-empty array/);
     }
   });
 
@@ -231,8 +231,8 @@ describe("loadMarketplace", () => {
   test("fails when plugins is missing or empty", () => {
     for (const content of ["{}", '{"plugins": []}']) {
       const run = () => loadMarketplace(tempFile(content, "marketplace.json"));
-      expect(run).toThrow(CheckFailure);
-      expect(run).toThrow(/marketplace\.json: missing plugins array/);
+      expect(run, content).toThrow(CheckFailure);
+      expect(run, content).toThrow(/marketplace\.json: missing plugins array/);
     }
   });
 
@@ -252,13 +252,13 @@ describe("loadMarketplace", () => {
 describe("KEBAB_CASE", () => {
   test("accepts kebab-case names", () => {
     for (const name of ["skills", "natural-writing", "a1-b2"]) {
-      expect(KEBAB_CASE.test(name)).toBe(true);
+      expect(KEBAB_CASE.test(name), name).toBe(true);
     }
   });
 
   test("rejects everything else", () => {
     for (const name of ["Natural-Writing", "a_b", "-leading", "trailing-", "a--b", ""]) {
-      expect(KEBAB_CASE.test(name)).toBe(false);
+      expect(KEBAB_CASE.test(name), JSON.stringify(name)).toBe(false);
     }
   });
 });
@@ -266,13 +266,13 @@ describe("KEBAB_CASE", () => {
 describe("isUnknownArray", () => {
   test("accepts arrays, including empty ones", () => {
     for (const value of [[], [1, 2], ["a"], [null]]) {
-      expect(isUnknownArray(value)).toBe(true);
+      expect(isUnknownArray(value), Bun.inspect(value)).toBe(true);
     }
   });
 
   test("rejects non-arrays", () => {
     for (const value of [{}, { length: 0 }, "text", 3, null, undefined, true]) {
-      expect(isUnknownArray(value)).toBe(false);
+      expect(isUnknownArray(value), Bun.inspect(value)).toBe(false);
     }
   });
 });

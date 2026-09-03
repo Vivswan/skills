@@ -255,21 +255,25 @@ describe("sweep.mts worktree rows", () => {
 
   // msAgo is [dirty, untracked, nested], the stampAll argument order.
   const newestDirtyCases: {
+    id: string;
     newest: "dirty" | "untracked" | "nested";
     msAgo: [number, number, number];
     reason: string;
   }[] = [
     {
+      id: "newest-untracked",
       newest: "untracked",
       msAgo: [600_000, 300_000, 900_000],
       reason: "untracked files count, not only tracked modifications",
     },
     {
+      id: "newest-nested",
       newest: "nested",
       msAgo: [600_000, 300_000, 120_000],
       reason: "guards --untracked-files=all; a collapsed newdir/ entry never moves on inner edits",
     },
     {
+      id: "newest-dirty",
       newest: "dirty",
       msAgo: [60_000, 300_000, 900_000],
       reason: "tracked modifications count, not only untracked files",
@@ -277,10 +281,10 @@ describe("sweep.mts worktree rows", () => {
   ];
 
   test.each(newestDirtyCases)(
-    "newestDirtyMtime follows the newest of dirty, untracked, nested: $newest ($reason)",
-    ({ newest, msAgo }) => {
+    "newestDirtyMtime follows the newest of dirty, untracked, nested: $id ($reason)",
+    ({ id, newest, msAgo }) => {
       const stamps = stampAll(...msAgo);
-      expect(rowFor(sweep(), "wt-live").newestDirtyMtime).toBe(stamps[newest].iso);
+      expect(rowFor(sweep(), "wt-live").newestDirtyMtime, id).toBe(stamps[newest].iso);
     },
     SWEEP_TIMEOUT,
   );

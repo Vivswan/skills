@@ -81,31 +81,33 @@ describe("install-hooks", () => {
 
   const huskyHooksPaths = [
     {
+      id: "relative",
       value: ".husky/_",
       reason: "husky's relative default; a hooks dir resolved through hooksPath lands here",
     },
     {
+      id: "absolute",
       value: "/somewhere/.husky/_",
       reason: "husky's absolute form (husky writes both); must migrate identically",
     },
   ];
   test.each(huskyHooksPaths)(
-    "removes a stale husky hooksPath ($value) and still installs into the DEFAULT hooks dir",
-    ({ value, reason }) => {
+    "removes a stale husky hooksPath and still installs into the DEFAULT hooks dir: $id ($reason)",
+    ({ id, value }) => {
       // Regression, observed live: `--git-path hooks` honors core.hooksPath, so
       // resolving the hooks dir before the unset published into the stale husky
       // dir and left .git/hooks empty; the two reads below tell those apart.
       const repo = makeRepo();
       try {
-        expect(sh(repo, "git", "config", "core.hooksPath", value).code).toBe(0);
-        expect(install(repo).code, reason).toBe(0);
-        expect(sh(repo, "git", "config", "core.hooksPath").code, reason).toBe(1); // unset
+        expect(sh(repo, "git", "config", "core.hooksPath", value).code, id).toBe(0);
+        expect(install(repo).code, id).toBe(0);
+        expect(sh(repo, "git", "config", "core.hooksPath").code, id).toBe(1); // unset
         // Only the relative shape can land under the repo; checked first so a
         // misdirected install reads as such, not as a missing dispatcher.
         if (!isAbsolute(value)) {
-          expect(existsSync(join(repo, value, "pre-commit")), reason).toBe(false);
+          expect(existsSync(join(repo, value, "pre-commit")), id).toBe(false);
         }
-        expect(readFileSync(join(repo, ".git", "hooks", "pre-commit"), "utf-8"), reason).toBe(
+        expect(readFileSync(join(repo, ".git", "hooks", "pre-commit"), "utf-8"), id).toBe(
           DISPATCHER,
         );
       } finally {
@@ -121,13 +123,13 @@ describe("install-hooks", () => {
     const repo = makeRepo();
     try {
       for (const value of ["my-custom-hooks", "custom/.husky/_", "../.husky/_"]) {
-        expect(sh(repo, "git", "config", "core.hooksPath", value).code).toBe(0);
+        expect(sh(repo, "git", "config", "core.hooksPath", value).code, value).toBe(0);
         const r = install(repo);
-        expect(r.code).toBe(1);
-        expect(r.stderr).toContain("something this repo did not write");
-        expect(r.stderr).toContain(value);
-        expect(sh(repo, "git", "config", "core.hooksPath").stdout).toBe(value);
-        expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+        expect(r.code, value).toBe(1);
+        expect(r.stderr, value).toContain("something this repo did not write");
+        expect(r.stderr, value).toContain(value);
+        expect(sh(repo, "git", "config", "core.hooksPath").stdout, value).toBe(value);
+        expect(existsSync(join(repo, ".git", "hooks", "pre-commit")), value).toBe(false);
       }
     } finally {
       rmSync(repo, { recursive: true, force: true });
@@ -220,16 +222,16 @@ describe("install-hooks", () => {
     },
   ];
   test.each(foreignHooks)(
-    "a pre-existing hook not written by this repo aborts the install untouched: $id",
-    ({ body, reason }) => {
+    "a pre-existing hook not written by this repo aborts the install untouched: $id ($reason)",
+    ({ id, body }) => {
       const repo = makeRepo();
       try {
         const target = join(repo, ".git", "hooks", "pre-commit");
         writeFileSync(target, body);
         const r = install(repo);
-        expect(r.code, reason).toBe(1);
-        expect(r.stderr, reason).toContain("refusing to overwrite");
-        expect(readFileSync(target, "utf-8"), reason).toBe(body);
+        expect(r.code, id).toBe(1);
+        expect(r.stderr, id).toContain("refusing to overwrite");
+        expect(readFileSync(target, "utf-8"), id).toBe(body);
       } finally {
         rmSync(repo, { recursive: true, force: true });
       }
@@ -336,14 +338,14 @@ describe("install-hooks", () => {
     },
   ];
   test.each(brokenGitEntries)(
-    "a .git entry git cannot read fails the install instead of skipping: $id",
-    ({ plant, reason }) => {
+    "a .git entry git cannot read fails the install instead of skipping: $id ($reason)",
+    ({ id, plant }) => {
       const dir = mkdtempSync(join(tmpdir(), "install-hooks-broken-"));
       try {
         plant(dir);
         const r = install(dir);
-        expect(r.code, reason).toBe(1);
-        expect(r.stderr, reason).toContain("git cannot read the repository");
+        expect(r.code, id).toBe(1);
+        expect(r.stderr, id).toContain("git cannot read the repository");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
