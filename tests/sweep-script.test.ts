@@ -1,10 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
-  existsSync,
   lutimesSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -102,6 +103,7 @@ git(wtWipe, "commit", "-m", "initial");
 
 const wtGone = join(fixtureRoot, "wt-gone");
 git(repo, "worktree", "add", wtGone, "-b", "track-gone");
+const wtGoneReal = realpathSync(wtGone);
 rmSync(wtGone, { recursive: true, force: true });
 
 // A divergent non-default mainline for the --base option: origin/develop is
@@ -148,6 +150,13 @@ function rowFor(rows: ReturnType<typeof sweep>, worktreeBasename: string) {
   const row = rows.find((r) => "worktree" in r && basename(r.worktree) === worktreeBasename);
   if (!row) throw new Error(`no row for ${worktreeBasename} in ${JSON.stringify(rows)}`);
   return row;
+}
+
+// An error row is exactly these three keys: any count field beside ok:false
+// is the zeros row the sweep must never emit. Worktree paths are compared as
+// realpaths because git records them that way (/private/var vs /var).
+function expectErrorRow(row: unknown, expected: { worktree: string; error: string }) {
+  expect(row).toEqual({ worktree: expected.worktree, ok: false, error: expected.error });
 }
 
 // Whole-second timestamps so filesystem mtime precision cannot skew equality.
@@ -204,7 +213,15 @@ describe("sweep.mts worktree rows", () => {
         expect(live.statusHash).not.toBe(main.statusHash);
         type Proc = { pid: number; command: string; state: string };
         const procs: Proc[] = live.processes;
-        expect(procs.some((p) => p.pid === parked.pid)).toBe(true);
+        const mine = procs.find((p) => p.pid === parked.pid);
+        if (!mine) throw new Error(`parked pid ${parked.pid} not in ${JSON.stringify(procs)}`);
+        // The whole attributed record: a dead ps probe reads as state
+        // "unknown" and a broken lsof field parse as command "".
+        expect(mine).toEqual({
+          pid: parked.pid,
+          command: "sleep",
+          state: expect.stringMatching(/^S/),
+        });
       } finally {
         parked.kill();
       }
@@ -228,41 +245,42 @@ describe("sweep.mts worktree rows", () => {
   test(
     "a deleted worktree directory is an ok:false row, never a zeros row",
     () => {
-      const gone = rowFor(sweep(), "wt-gone");
-      expect(gone.ok).toBe(false);
-      expect(gone.error).toContain("no longer exists");
-      expect(gone).not.toHaveProperty("dirtyCount");
-      expect(gone).not.toHaveProperty("treeFileCount");
-      expect(gone).not.toHaveProperty("processes");
+      expectErrorRow(rowFor(sweep(), "wt-gone"), {
+        worktree: wtGoneReal,
+        error: "worktree directory no longer exists",
+      });
     },
     SWEEP_TIMEOUT,
   );
 
-  test(
-    "untracked file mtime drives newestDirtyMtime when it is the newest",
-    () => {
-      const { untracked } = stampAll(600_000, 300_000, 900_000);
-      expect(rowFor(sweep(), "wt-live").newestDirtyMtime).toBe(untracked.iso);
+  // msAgo is [dirty, untracked, nested], the stampAll argument order.
+  const newestDirtyCases: {
+    newest: "dirty" | "untracked" | "nested";
+    msAgo: [number, number, number];
+    reason: string;
+  }[] = [
+    {
+      newest: "untracked",
+      msAgo: [600_000, 300_000, 900_000],
+      reason: "untracked files count, not only tracked modifications",
     },
-    SWEEP_TIMEOUT,
-  );
-
-  test(
-    "a file nested in an untracked directory drives newestDirtyMtime too",
-    () => {
-      // Guards --untracked-files=all: default collapsing would report only
-      // newdir/ whose own mtime never moves on edits inside it.
-      const { nested } = stampAll(600_000, 300_000, 120_000);
-      expect(rowFor(sweep(), "wt-live").newestDirtyMtime).toBe(nested.iso);
+    {
+      newest: "nested",
+      msAgo: [600_000, 300_000, 120_000],
+      reason: "guards --untracked-files=all; a collapsed newdir/ entry never moves on inner edits",
     },
-    SWEEP_TIMEOUT,
-  );
+    {
+      newest: "dirty",
+      msAgo: [60_000, 300_000, 900_000],
+      reason: "tracked modifications count, not only untracked files",
+    },
+  ];
 
-  test(
-    "dirty file mtime drives newestDirtyMtime when it is the newest",
-    () => {
-      const { dirty } = stampAll(60_000, 300_000, 900_000);
-      expect(rowFor(sweep(), "wt-live").newestDirtyMtime).toBe(dirty.iso);
+  test.each(newestDirtyCases)(
+    "newestDirtyMtime follows the newest of dirty, untracked, nested: $newest ($reason)",
+    ({ newest, msAgo }) => {
+      const stamps = stampAll(...msAgo);
+      expect(rowFor(sweep(), "wt-live").newestDirtyMtime).toBe(stamps[newest].iso);
     },
     SWEEP_TIMEOUT,
   );
@@ -272,15 +290,18 @@ describe("sweep.mts worktree rows", () => {
     () => {
       const link = join(wtLive, "dangling-link");
       symlinkSync(join(wtLive, "no-such-target"), link);
-      const linkStamp = stamp(30_000);
-      lutimesSync(link, linkStamp.date, linkStamp.date);
-      stampAll(600_000, 300_000, 900_000);
+      try {
+        const linkStamp = stamp(30_000);
+        lutimesSync(link, linkStamp.date, linkStamp.date);
+        stampAll(600_000, 300_000, 900_000);
 
-      const live = rowFor(sweep(), "wt-live");
-      expect(live.ok).toBe(true);
-      expect(live.untrackedCount).toBe(3);
-      expect(live.newestDirtyMtime).toBe(linkStamp.iso);
-      rmSync(link);
+        const live = rowFor(sweep(), "wt-live");
+        expect(live.ok).toBe(true);
+        expect(live.untrackedCount).toBe(3);
+        expect(live.newestDirtyMtime).toBe(linkStamp.iso);
+      } finally {
+        rmSync(link);
+      }
     },
     SWEEP_TIMEOUT,
   );
@@ -351,15 +372,16 @@ describe("sweep.mts worktree rows", () => {
       git(staleRepo, "commit", "-m", "base");
       const inner = join(staleRepo, "inner");
       git(staleRepo, "worktree", "add", inner, "-b", "track-inner");
+      const innerReal = realpathSync(inner);
       rmSync(join(inner, ".git"));
 
       const rows = sweepAt(staleRepo);
       const outer = rowFor(rows, "stale-repo");
       expect(outer.ok).toBe(true);
-      const stale = rowFor(rows, "inner");
-      expect(stale.ok).toBe(false);
-      expect(stale.error).toContain("escaped the worktree");
-      expect(stale).not.toHaveProperty("treeFileCount");
+      expectErrorRow(rowFor(rows, "inner"), {
+        worktree: innerReal,
+        error: `git discovery escaped the worktree: found toplevel ${realpathSync(staleRepo)}`,
+      });
     },
     SWEEP_TIMEOUT,
   );
@@ -444,16 +466,17 @@ describe("sweep.mts worktree rows", () => {
     "every git spawn carries GIT_OPTIONAL_LOCKS=0, even against a hostile inherited value",
     () => {
       // Observer effect guard: a probe that takes index.lock contends with
-      // the workers it observes. A git shim on PATH records any spawn where
-      // the no-locks setting is missing, then execs the real git.
+      // the workers it observes. The shim logs EVERY spawn with the setting
+      // it saw, so an empty log means it was bypassed and proves nothing.
       const realGit = Bun.which("git");
       if (!realGit) throw new Error("git not found on PATH");
       const shimDir = join(fixtureRoot, "git-shim");
       mkdirSync(shimDir, { recursive: true });
-      const violations = join(fixtureRoot, "lock-violations");
+      const spawnLog = join(fixtureRoot, "git-spawns");
+      writeFileSync(spawnLog, "");
       writeFileSync(
         join(shimDir, "git"),
-        `#!/bin/sh\n[ "$GIT_OPTIONAL_LOCKS" = "0" ] || echo "$@" >> "${violations}"\nexec "${realGit}" "$@"\n`,
+        `#!/bin/sh\nprintf '%s %s\\n' "\${GIT_OPTIONAL_LOCKS:-unset}" "$*" >> "${spawnLog}"\nexec "${realGit}" "$@"\n`,
       );
       chmodSync(join(shimDir, "git"), 0o755);
 
@@ -461,7 +484,9 @@ describe("sweep.mts worktree rows", () => {
         PATH: `${shimDir}:${process.env.PATH}`,
         GIT_OPTIONAL_LOCKS: "1",
       });
-      expect(existsSync(violations)).toBe(false);
+      const spawns = readFileSync(spawnLog, "utf8").split("\n").filter(Boolean);
+      expect(spawns.length).toBeGreaterThan(0);
+      expect(spawns.filter((line) => !line.startsWith("0 "))).toEqual([]);
       expect(rowFor(rows, "repo").ok).toBe(true);
       expect(rowFor(rows, "wt-live").ok).toBe(true);
     },
@@ -583,10 +608,11 @@ describe("sweep.mts transcript sensor", () => {
     () => {
       const transcripts = join(fixtureRoot, "transcripts");
       mkdirSync(transcripts);
-      writeFileSync(
-        join(transcripts, "agent-foo-abc.jsonl"),
-        '{"type":"start"}\n{"type":"message"}\n',
-      );
+      const fooBody = '{"type":"start"}\n{"type":"message"}\n';
+      const fooPath = join(transcripts, "agent-foo-abc.jsonl");
+      writeFileSync(fooPath, fooBody);
+      const fooStamp = stamp(120_000);
+      utimesSync(fooPath, fooStamp.date, fooStamp.date);
       writeFileSync(
         join(transcripts, "agent-bar-def.jsonl"),
         '{"type":"start"}\n{"type":"done"}\n{"type":"trunc',
@@ -604,7 +630,9 @@ describe("sweep.mts transcript sensor", () => {
         Bun.spawnSync(["mkfifo", join(transcripts, "agent-fifo-x.jsonl")], { timeout: 10_000 })
           .exitCode === 0;
 
+      const before = Date.now();
       const rows = sweep("--transcripts", transcripts);
+      const after = Date.now();
       const report = rows.find((r) => "transcripts" in r)?.transcripts;
       expect(report.ok).toBe(true);
       type AgentRow = { agent: string } & Record<string, unknown>;
@@ -622,10 +650,18 @@ describe("sweep.mts transcript sensor", () => {
 
       const foo = agents.find((a) => a.agent === "foo-abc");
       if (!foo) throw new Error("missing foo-abc agent row");
-      expect(foo.lastEventType).toBe("message");
-      expect(foo.sizeBytes).toBeGreaterThan(0);
-      expect(foo.lastEventAgeSeconds).toBeGreaterThanOrEqual(0);
-      expect(new Date(foo.mtime as string).getTime()).toBeGreaterThan(0);
+      expect(foo).toEqual({
+        agent: "foo-abc",
+        lastEventType: "message",
+        sizeBytes: Buffer.byteLength(fooBody),
+        mtime: fooStamp.iso,
+        lastEventAgeSeconds: expect.any(Number),
+      });
+      // The sweep read its clock somewhere between before and after; rounding
+      // is monotonic, so the rounded age lies within the rounded bounds.
+      const ageAt = (nowMs: number) => Math.round((nowMs - fooStamp.date.getTime()) / 1000);
+      expect(foo.lastEventAgeSeconds).toBeGreaterThanOrEqual(ageAt(before));
+      expect(foo.lastEventAgeSeconds).toBeLessThanOrEqual(ageAt(after));
 
       const bar = agents.find((a) => a.agent === "bar-def");
       if (!bar) throw new Error("missing bar-def agent row");
