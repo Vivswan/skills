@@ -163,11 +163,14 @@ describe("watch-ci.sh exit matrix", () => {
     const r = run({ GH_LIST_EXIT: "4" });
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("no workflow runs registered");
+    expect(r.stdout).toBe("");
   });
 
-  test("no runs registered exits 2", () => {
+  test("no runs registered exits 2 with no verdict", () => {
     const r = run({ GH_LIST_IDS: "" });
     expect(r.code).toBe(2);
+    expect(r.stderr).toContain("no workflow runs registered");
+    expect(r.stdout).toBe("");
   });
 
   test("runs registering on the third discovery attempt still succeed", () => {
@@ -271,8 +274,7 @@ describe("watch-ci.sh exit matrix", () => {
     // The refusal must carry NO verdict about the superseded selection: the
     // judgment output is buffered and dropped, so run 1's healed green (or a
     // red and its logs) never reaches the report.
-    expect(r.stdout).not.toContain("pass:");
-    expect(r.stdout).not.toContain("FAIL");
+    expect(r.stdout).toBe("");
     // Registration, post-watch re-discovery, and the stability re-check.
     expect(readFileSync(calls, "utf-8")).toBe("3");
   });
@@ -301,7 +303,7 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("retriggered while the conclusion retries waited");
     expect(r.stderr).not.toContain("expected workflow(s) not found");
-    expect(r.stdout).not.toContain("pass:");
+    expect(r.stdout).toBe("");
     // 5 registration polls (gate absent), post-watch re-discovery, and the
     // stability re-check that reveals the late gate run.
     expect(readFileSync(calls, "utf-8")).toBe("7");
@@ -320,7 +322,7 @@ describe("watch-ci.sh exit matrix", () => {
     });
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("mktemp failed");
-    expect(r.stdout).not.toContain("pass:");
+    expect(r.stdout).toBe("");
   });
 
   test("a second-mktemp failure exits 2 and the EXIT trap reclaims the first file", () => {
@@ -346,45 +348,30 @@ describe("watch-ci.sh exit matrix", () => {
     });
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("mktemp failed");
-    expect(r.stdout).not.toContain("pass:");
+    expect(r.stdout).toBe("");
     expect(existsSync(join(scratch, "judgment-1"))).toBe(false);
   });
 
-  test("an unexpected internal tool failure exits 2 via the ERR trap, never 1", () => {
-    // sort is unguarded plumbing inside compute_missing: before the ERR trap,
-    // its failure rode set -e out as the script's raw exit status, which
-    // callers read as a red pipeline. Any future unguarded command joins the
-    // same class, so the trap, not a per-call guard, is the fix.
-    const sortFailDir = join(binDir, "sort-fail-bin");
-    mkdirSync(sortFailDir, { recursive: true });
-    writeFileSync(join(sortFailDir, "sort"), "#!/usr/bin/env bash\nexit 1\n");
-    chmodSync(join(sortFailDir, "sort"), 0o755);
-    const r = run({
-      GH_LIST_IDS: "1",
-      PATH: `${sortFailDir}:${binDir}:${process.env.PATH ?? ""}`,
-    });
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("unexpected command failure");
-    expect(r.stdout).not.toContain("pass:");
-  });
-
-  test("a tr failure while splitting the expectations exits 2, never a vacuous green", () => {
-    // tr feeds the expected-workflow list. When it ran inside the heredoc's
-    // command substitution, its failure only exited that subshell: the
-    // expectation loop saw an empty list, computed missing="" and the run
-    // exited 0 - a tooling failure disabling the vacuous-green gate. The
-    // assignment form must route it to the ERR trap instead.
-    const trFailDir = join(binDir, "tr-fail-bin");
-    mkdirSync(trFailDir, { recursive: true });
-    writeFileSync(join(trFailDir, "tr"), "#!/usr/bin/env bash\nexit 1\n");
-    chmodSync(join(trFailDir, "tr"), 0o755);
-    const r = run({
-      GH_LIST_IDS: "1",
-      PATH: `${trFailDir}:${binDir}:${process.env.PATH ?? ""}`,
-    });
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("unexpected command failure");
-    expect(r.stdout).not.toContain("pass:");
+  test("an unguarded internal tool failure exits 2 with no verdict, never 1 or a vacuous 0", () => {
+    // Both stubs die inside compute_missing during registration polling. An
+    // unguarded failure once rode set -e out as a red-pipeline exit 1, and one
+    // inside the heredoc substitution exited only that subshell: a vacuous 0.
+    for (const c of [
+      { cmd: "sort", reason: "unguarded plumbing must reach the trap, not set -e" },
+      { cmd: "tr", reason: "the expectation split must fail loudly, not empty the gate" },
+    ]) {
+      const failDir = join(binDir, `${c.cmd}-fail-bin`);
+      mkdirSync(failDir, { recursive: true });
+      writeFileSync(join(failDir, c.cmd), "#!/usr/bin/env bash\nexit 1\n");
+      chmodSync(join(failDir, c.cmd), 0o755);
+      const r = run({
+        GH_LIST_IDS: "1",
+        PATH: `${failDir}:${binDir}:${process.env.PATH ?? ""}`,
+      });
+      expect(r.code, `${c.cmd}: ${c.reason}`).toBe(2);
+      expect(r.stderr, `${c.cmd}: ${c.reason}`).toContain("unexpected command failure");
+      expect(r.stdout, `${c.cmd}: ${c.reason}`).toBe("");
+    }
   });
 
   test("a transient re-discovery failure after the conclusion retries heals on the bounded retry", () => {
@@ -426,22 +413,32 @@ describe("watch-ci.sh exit matrix", () => {
     expect(readFileSync(calls, "utf-8")).toBe("5");
   });
 
-  test("an unconcluded run (watch aborted early) exits 2", () => {
-    const r = run({ GH_LIST_IDS: "1", GH_VIEW_1: "EMPTY", GH_WATCH_EXIT: "7" });
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("not concluded");
+  test("a run still unconcluded after the re-watch retries exits 2 with no verdict, never FAIL", () => {
+    const cases: { id: string; env: Record<string, string>; reason: string }[] = [
+      {
+        id: "empty conclusion, failing watch",
+        env: { GH_VIEW_1: "EMPTY", GH_WATCH_EXIT: "7" },
+        reason: "a watch is only a wait; its exit status must never reach the verdict",
+      },
+      {
+        id: "jq-rendered null conclusion",
+        env: { GH_VIEW_1: "null" },
+        reason: "gh --json normalizes null to empty; a raw jq null must land in the same arm",
+      },
+    ];
+    for (const c of cases) {
+      const r = run({ GH_LIST_IDS: "1", ...c.env });
+      expect(r.code, `${c.id}: ${c.reason}`).toBe(2);
+      expect(r.stderr, `${c.id}: ${c.reason}`).toContain("not concluded");
+      expect(r.stdout, `${c.id}: ${c.reason}`).toBe("");
+    }
   });
 
-  test("a jq-rendered null conclusion also exits 2, never FAIL(null)", () => {
-    const r = run({ GH_LIST_IDS: "1", GH_VIEW_1: "null" });
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("not concluded");
-    expect(r.stdout).not.toContain("FAIL(null)");
-  });
-
-  test("a red run outranks a gh hiccup: exits 1", () => {
+  test("a red run outranks a gh hiccup: exits 1 with both reported", () => {
     const r = run({ GH_LIST_IDS: "1 2", GH_VIEW_1: "failure", GH_VIEW_2: "FAILCMD" });
     expect(r.code).toBe(1);
+    expect(r.stdout).toContain("FAIL(failure): CI-1 (1)");
+    expect(r.stderr).toContain("gh failed while checking run 2");
   });
 
   test("an older cancelled run of a re-triggered workflow is superseded, not red", () => {
@@ -541,7 +538,7 @@ describe("watch-ci.sh exit matrix", () => {
     );
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("refusing to judge a stale snapshot");
-    expect(r.stdout).not.toContain("pass:");
+    expect(r.stdout).toBe("");
     // 1 registration poll + 5 fixed-point rounds + the final re-discovery.
     expect(readFileSync(calls, "utf-8")).toBe("7");
   });
@@ -639,7 +636,7 @@ describe("watch-ci.sh exit matrix", () => {
     const r = run({ GH_LIST_IDS: "1", GH_LIST_IDS2: "", GH_LIST_CALLS: calls });
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("re-discovery after the watch returned nothing");
-    expect(r.stdout).not.toContain("pass:");
+    expect(r.stdout).toBe("");
   });
 
   test("a re-discovery failing AFTER partial output exits 2, never judges the fragment", () => {
@@ -656,7 +653,7 @@ describe("watch-ci.sh exit matrix", () => {
     });
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("re-discovery after the watch returned nothing");
-    expect(r.stdout).not.toContain("pass:");
+    expect(r.stdout).toBe("");
   });
 
   test("a re-run (same id, higher attempt) is waited on again before judgment", () => {
@@ -717,7 +714,7 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.stdout).toContain("pass: Build (1)");
   });
 
-  test("repeatable --expect-workflow flags accumulate", () => {
+  test("repeatable --expect-workflow flags with every name discovered exit 0", () => {
     const r = run({ GH_LIST_IDS: "1 2", GH_NAME_1: "Build", GH_NAME_2: "Deploy" }, [
       "--expect-workflow",
       "Build",
@@ -727,26 +724,56 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("pass: Build (1)");
     expect(r.stdout).toContain("pass: Deploy (2)");
+    expect(r.stderr).toBe("");
   });
 
-  test("--expect-workflow with an empty name is a usage error", () => {
-    const r = run({}, ["--expect-workflow", ""]);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("--expect-workflow requires a workflow name");
+  test("repeatable --expect-workflow flags accumulate: neither flag drops the other", () => {
+    // Only one of the two expected names is discovered, so a parser keeping
+    // just the first or just the last flag would exit 0 on one of these rows;
+    // accumulation is the only reading that reports a missing name on both.
+    for (const c of [
+      {
+        id: "only Build discovered",
+        env: { GH_LIST_IDS: "1", GH_NAME_1: "Build" },
+        missing: "Deploy",
+        reason: "the second flag is not dropped by the first",
+      },
+      {
+        id: "only Deploy discovered",
+        env: { GH_LIST_IDS: "1", GH_NAME_1: "Deploy" },
+        missing: "Build",
+        reason: "the first flag survives the second",
+      },
+    ]) {
+      const r = run(c.env, ["--expect-workflow", "Build", "--expect-workflow", "Deploy"]);
+      expect(r.code, `${c.id}: ${c.reason}`).toBe(2);
+      expect(r.stdout, `${c.id}: ${c.reason}`).toContain(`pass: ${c.env.GH_NAME_1} (1)`);
+      expect(r.stderr, `${c.id}: ${c.reason}`).toContain(
+        `expected workflow(s) not found for deadbeef: ${c.missing};`,
+      );
+    }
   });
 
-  test("delimiter-only and trailing-comma expectations are usage errors, never a disabled gate", () => {
-    // A value that splits to zero names ("," here) would otherwise leave
-    // nothing to check and let green bystanders exit 0 - the exact hole the
-    // gate exists to close, reopened through its own flag.
-    for (const value of [",", "Build,", ",Build", "Build,,Deploy"]) {
+  test("delimiter-only, trailing-comma, and empty expectations are usage errors, never a disabled gate", () => {
+    // A value that splits to zero names ("" or "," here) would otherwise
+    // leave nothing to check and let green bystanders exit 0 - the exact hole
+    // the gate exists to close, reopened through its own flag.
+    for (const value of ["", ",", "Build,", ",Build", "Build,,Deploy"]) {
       const r = run({ GH_LIST_IDS: "1" }, ["--expect-workflow", value]);
-      expect(r.code).toBe(2);
-      expect(r.stderr).toContain(
+      expect(r.code, JSON.stringify(value)).toBe(2);
+      expect(r.stderr, JSON.stringify(value)).toContain(
         `--expect-workflow requires a workflow name (empty entry in "${value}")`,
       );
-      expect(r.stdout).not.toContain("pass:");
+      expect(r.stdout, JSON.stringify(value)).toBe("");
     }
+  });
+
+  test("--expect-workflow as the last argument is a usage error, not a silent default", () => {
+    const r = runArgv({}, ["--expect-workflow"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("--expect-workflow requires a workflow name");
+    expect(r.stderr).not.toContain("empty entry");
+    expect(r.stdout).toBe("");
   });
 
   test("newlines in an expectation are usage errors, never a shrunken gate", () => {
