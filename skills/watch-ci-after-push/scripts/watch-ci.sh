@@ -17,11 +17,17 @@
 # before any exit-2 conclusion.
 set -Eeuo pipefail
 
-# Exit 1 is reserved for a judged red pipeline, so an UNEXPECTED failure (a
-# command neither guarded nor part of a judged verdict) must never leak its
-# own status through set -e: route every unhandled failure to the tooling
-# exit 2. -E carries the trap into functions and command substitutions.
-trap 'echo "watch-ci.sh: unexpected command failure around line $LINENO; tooling trouble, not a pipeline verdict" >&2; exit 2' ERR
+# Exit 1 means a judged red pipeline, so every UNHANDLED failure exits 2 here.
+# bash 3.2 fires the -E trap inside guarded $(...) too, so subshells only
+# re-raise; the top level prints once, to the pre-redirect stderr saved as fd 3.
+exec 3>&2
+# shellcheck disable=SC2329 # invoked by the ERR trap below
+on_unhandled_failure() {
+  [ "$BASH_SUBSHELL" -eq 0 ] || exit "$1"
+  echo "watch-ci.sh: unexpected command failure around line $2; tooling trouble, not a pipeline verdict" >&3
+  exit 2
+}
+trap 'on_unhandled_failure $? $LINENO' ERR
 
 # The workflow carrying the required gate can silently fail to register on a
 # push (a dropped push/synchronize event), leaving only bystander workflows
@@ -229,7 +235,7 @@ select_latest 0
 # id:attempt signatures, not just ids: a RE-RUN keeps the id and bumps the
 # attempt, and judging it before its wait would read an in-flight attempt.
 converged=0
-for round in 1 2 3 4 5; do
+for _ in 1 2 3 4 5; do
   for id in $run_ids; do
     # The watch only waits; classification comes from the conclusion query in
     # the judgment loop below, so a watch aborted by a gh/network error

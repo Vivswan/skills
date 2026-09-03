@@ -123,11 +123,15 @@ chmodSync(join(binDir, "sleep"), 0o755);
 afterAll(() => rmSync(binDir, { recursive: true, force: true }));
 
 let scenario = 0;
+// Handled gh failures used to fire the ERR trap inside their $(...) subshell
+// as well, so every scenario asserts this message is absent; the unhandled
+// table opts out via { unhandled: true } and counts it itself.
+const TRAP_MESSAGE = "unexpected command failure";
 // Spawns the script with the given argv exactly; run() below is the common
 // flags-then-SHA shape. The default expectation pins the fixture's default
 // workflow name so each scenario keeps testing its own branch, not the
 // expected-workflow gate (which has dedicated tests below).
-function runArgv(env: Record<string, string>, argv: string[]) {
+function runArgv(env: Record<string, string>, argv: string[], opts: { unhandled?: boolean } = {}) {
   scenario += 1;
   const violations = join(binDir, `violations-${scenario}`);
   const result = Bun.spawnSync(["bash", SCRIPT, ...argv], {
@@ -147,15 +151,25 @@ function runArgv(env: Record<string, string>, argv: string[]) {
     // no violations file means no violations
   }
   expect(violated).toBe("");
+  const stderr = result.stderr.toString();
+  if (!opts.unhandled) {
+    expect(stderr).not.toContain(TRAP_MESSAGE);
+  }
   return {
     code: result.exitCode,
     stdout: result.stdout.toString(),
-    stderr: result.stderr.toString(),
+    stderr,
   };
 }
 
-function run(env: Record<string, string>, args: string[] = ["--expect-workflow", "CI-1"]) {
-  return runArgv(env, [...args, "deadbeef"]);
+const DEFAULT_ARGS = ["--expect-workflow", "CI-1"];
+
+function run(
+  env: Record<string, string>,
+  args: string[] = DEFAULT_ARGS,
+  opts: { unhandled?: boolean } = {},
+) {
+  return runArgv(env, [...args, "deadbeef"], opts);
 }
 
 describe("watch-ci.sh exit matrix", () => {
@@ -352,27 +366,47 @@ describe("watch-ci.sh exit matrix", () => {
     expect(existsSync(join(scratch, "judgment-1"))).toBe(false);
   });
 
-  test("an unguarded internal tool failure exits 2 with no verdict, never 1 or a vacuous 0", () => {
-    // Both stubs die inside compute_missing during registration polling. An
-    // unguarded failure once rode set -e out as a red-pipeline exit 1, and one
-    // inside the heredoc substitution exited only that subshell: a vacuous 0.
-    for (const c of [
-      { cmd: "sort", reason: "unguarded plumbing must reach the trap, not set -e" },
-      { cmd: "tr", reason: "the expectation split must fail loudly, not empty the gate" },
-    ]) {
-      const failDir = join(binDir, `${c.cmd}-fail-bin`);
+  // sort and tr die inside compute_missing (registration polling); sleep dies
+  // inside the judgment loop, whose stderr is buffered to a file the EXIT trap
+  // deletes. Exactly one message: a subshell re-raise must not print its own.
+  const unhandledCases: { id: string; env: Record<string, string>; reason: string }[] = [
+    {
+      id: "sort",
+      env: {},
+      reason: "unguarded plumbing must reach the trap, not set -e",
+    },
+    {
+      id: "tr",
+      env: {},
+      reason: "the expectation split must fail loudly, not empty the gate",
+    },
+    {
+      id: "sleep",
+      env: { GH_VIEW_1: "FAILONCE", GH_ONCE_MARKER: join(binDir, "sleep-fail-marker") },
+      reason: "a failure inside the stderr-buffered judgment loop must report on the real stderr",
+    },
+  ];
+  test.each(unhandledCases)(
+    "an unguarded internal tool failure exits 2 with no verdict, never 1 or a vacuous 0: $id ($reason)",
+    (c) => {
+      const failDir = join(binDir, `${c.id}-fail-bin`);
       mkdirSync(failDir, { recursive: true });
-      writeFileSync(join(failDir, c.cmd), "#!/usr/bin/env bash\nexit 1\n");
-      chmodSync(join(failDir, c.cmd), 0o755);
-      const r = run({
-        GH_LIST_IDS: "1",
-        PATH: `${failDir}:${binDir}:${process.env.PATH ?? ""}`,
-      });
-      expect(r.code, `${c.cmd}: ${c.reason}`).toBe(2);
-      expect(r.stderr, `${c.cmd}: ${c.reason}`).toContain("unexpected command failure");
-      expect(r.stdout, `${c.cmd}: ${c.reason}`).toBe("");
-    }
-  });
+      writeFileSync(join(failDir, c.id), "#!/usr/bin/env bash\nexit 1\n");
+      chmodSync(join(failDir, c.id), 0o755);
+      const r = run(
+        {
+          GH_LIST_IDS: "1",
+          PATH: `${failDir}:${binDir}:${process.env.PATH ?? ""}`,
+          ...c.env,
+        },
+        DEFAULT_ARGS,
+        { unhandled: true },
+      );
+      expect(r.code, c.id).toBe(2);
+      expect(r.stderr.split(TRAP_MESSAGE).length - 1, c.id).toBe(1);
+      expect(r.stdout, c.id).toBe("");
+    },
+  );
 
   test("a transient re-discovery failure after the conclusion retries heals on the bounded retry", () => {
     // Run 1's first view fails, so the conclusion retry re-watches (a wait)
@@ -413,26 +447,27 @@ describe("watch-ci.sh exit matrix", () => {
     expect(readFileSync(calls, "utf-8")).toBe("5");
   });
 
-  test("a run still unconcluded after the re-watch retries exits 2 with no verdict, never FAIL", () => {
-    const cases: { id: string; env: Record<string, string>; reason: string }[] = [
-      {
-        id: "empty conclusion, failing watch",
-        env: { GH_VIEW_1: "EMPTY", GH_WATCH_EXIT: "7" },
-        reason: "a watch is only a wait; its exit status must never reach the verdict",
-      },
-      {
-        id: "jq-rendered null conclusion",
-        env: { GH_VIEW_1: "null" },
-        reason: "gh --json normalizes null to empty; a raw jq null must land in the same arm",
-      },
-    ];
-    for (const c of cases) {
+  const unconcludedCases: { id: string; env: Record<string, string>; reason: string }[] = [
+    {
+      id: "empty conclusion, failing watch",
+      env: { GH_VIEW_1: "EMPTY", GH_WATCH_EXIT: "7" },
+      reason: "a watch is only a wait; its exit status must never reach the verdict",
+    },
+    {
+      id: "jq-rendered null conclusion",
+      env: { GH_VIEW_1: "null" },
+      reason: "gh --json normalizes null to empty; a raw jq null must land in the same arm",
+    },
+  ];
+  test.each(unconcludedCases)(
+    "a run still unconcluded after the re-watch retries exits 2 with no verdict, never FAIL: $id ($reason)",
+    (c) => {
       const r = run({ GH_LIST_IDS: "1", ...c.env });
-      expect(r.code, `${c.id}: ${c.reason}`).toBe(2);
-      expect(r.stderr, `${c.id}: ${c.reason}`).toContain("not concluded");
-      expect(r.stdout, `${c.id}: ${c.reason}`).toBe("");
-    }
-  });
+      expect(r.code, c.id).toBe(2);
+      expect(r.stderr, c.id).toContain("not concluded");
+      expect(r.stdout, c.id).toBe("");
+    },
+  );
 
   test("a red run outranks a gh hiccup: exits 1 with both reported", () => {
     const r = run({ GH_LIST_IDS: "1 2", GH_VIEW_1: "failure", GH_VIEW_2: "FAILCMD" });
@@ -494,20 +529,23 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.stdout).not.toContain("superseded");
   });
 
-  test("anything after the SHA is a usage error, never silently dropped", () => {
-    // The flag loop breaks at the first non-flag word, so a flag placed
-    // after the SHA used to be dropped without a trace: watch-ci.sh <sha>
-    // --expect-workflow Deploy left the default expectation in force and
-    // could exit 0 green off a bystander run - the vacuous green the flag
-    // exists to prevent.
-    for (const trailing of [["--expect-workflow", "Deploy"], ["oops"]]) {
-      const r = runArgv({ GH_LIST_IDS: "1" }, ["deadbeef", ...trailing]);
-      expect(r.code).toBe(2);
-      expect(r.stderr).toContain("unexpected argument(s) after the SHA");
-      expect(r.stderr).toContain(trailing.join(" "));
-      expect(r.stdout).not.toContain("pass:");
-    }
-  });
+  // The flag loop breaks at the first non-flag word, so a flag placed after the
+  // SHA used to be dropped silently, leaving the default expectation in force:
+  // a green bystander run could then exit 0, the vacuous green the flag prevents.
+  const trailingCases: { id: string; trailing: string[] }[] = [
+    { id: "misplaced flag", trailing: ["--expect-workflow", "Deploy"] },
+    { id: "stray word", trailing: ["oops"] },
+  ];
+  test.each(trailingCases)(
+    "anything after the SHA is a usage error, never silently dropped: $id",
+    (c) => {
+      const r = runArgv({ GH_LIST_IDS: "1" }, ["deadbeef", ...c.trailing]);
+      expect(r.code, c.id).toBe(2);
+      expect(r.stderr, c.id).toContain("unexpected argument(s) after the SHA");
+      expect(r.stderr, c.id).toContain(c.trailing.join(" "));
+      expect(r.stdout, c.id).not.toContain("pass:");
+    },
+  );
 
   test("never-settling retriggers are refused after a final re-discovery, never judged stale", () => {
     // Every discovery snapshot reveals a newer run of the same workflow, so
@@ -727,32 +765,39 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.stderr).toBe("");
   });
 
-  test("repeatable --expect-workflow flags accumulate: neither flag drops the other", () => {
-    // Only one of the two expected names is discovered, so a parser keeping
-    // just the first or just the last flag would exit 0 on one of these rows;
-    // accumulation is the only reading that reports a missing name on both.
-    for (const c of [
-      {
-        id: "only Build discovered",
-        env: { GH_LIST_IDS: "1", GH_NAME_1: "Build" },
-        missing: "Deploy",
-        reason: "the second flag is not dropped by the first",
-      },
-      {
-        id: "only Deploy discovered",
-        env: { GH_LIST_IDS: "1", GH_NAME_1: "Deploy" },
-        missing: "Build",
-        reason: "the first flag survives the second",
-      },
-    ]) {
+  // Only one of the two expected names is discovered, so a parser keeping
+  // just the first or just the last flag would exit 0 on one of these rows;
+  // accumulation is the only reading that reports a missing name on both.
+  const accumulateCases: {
+    id: string;
+    env: Record<string, string>;
+    missing: string;
+    reason: string;
+  }[] = [
+    {
+      id: "only Build discovered",
+      env: { GH_LIST_IDS: "1", GH_NAME_1: "Build" },
+      missing: "Deploy",
+      reason: "the second flag is not dropped by the first",
+    },
+    {
+      id: "only Deploy discovered",
+      env: { GH_LIST_IDS: "1", GH_NAME_1: "Deploy" },
+      missing: "Build",
+      reason: "the first flag survives the second",
+    },
+  ];
+  test.each(accumulateCases)(
+    "repeatable --expect-workflow flags accumulate: neither flag drops the other: $id ($reason)",
+    (c) => {
       const r = run(c.env, ["--expect-workflow", "Build", "--expect-workflow", "Deploy"]);
-      expect(r.code, `${c.id}: ${c.reason}`).toBe(2);
-      expect(r.stdout, `${c.id}: ${c.reason}`).toContain(`pass: ${c.env.GH_NAME_1} (1)`);
-      expect(r.stderr, `${c.id}: ${c.reason}`).toContain(
+      expect(r.code, c.id).toBe(2);
+      expect(r.stdout, c.id).toContain(`pass: ${c.env.GH_NAME_1} (1)`);
+      expect(r.stderr, c.id).toContain(
         `expected workflow(s) not found for deadbeef: ${c.missing};`,
       );
-    }
-  });
+    },
+  );
 
   test("delimiter-only, trailing-comma, and empty expectations are usage errors, never a disabled gate", () => {
     // A value that splits to zero names ("" or "," here) would otherwise
@@ -782,9 +827,11 @@ describe("watch-ci.sh exit matrix", () => {
     // silently become "CI", and "A\nB" would become two expectations.
     for (const value of ["\n", "CI\n", "\nCI", "A\nB"]) {
       const r = run({ GH_LIST_IDS: "1" }, ["--expect-workflow", value]);
-      expect(r.code).toBe(2);
-      expect(r.stderr).toContain("--expect-workflow value must not contain newlines");
-      expect(r.stdout).not.toContain("pass:");
+      expect(r.code, JSON.stringify(value)).toBe(2);
+      expect(r.stderr, JSON.stringify(value)).toContain(
+        "--expect-workflow value must not contain newlines",
+      );
+      expect(r.stdout, JSON.stringify(value)).not.toContain("pass:");
     }
   });
 
