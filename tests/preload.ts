@@ -11,8 +11,9 @@
  * and refuse the run - before any test executes - unless containment
  * demonstrably holds for exactly the spawn shape a hygiene-free test uses.
  *
- * Layer 2 - pin the in-process view: suites that build child envs by
- * spreading {...process.env} get the same hermetic base the environ has.
+ * Layer 2 - rebuild process.env through hermeticGitEnv(): Layer 1 has already
+ * proven its GIT_* keys equal the hermetic set, so the only value this can
+ * change is TMPDIR, resolve()-normalized as the launcher already did.
  */
 
 import { hermeticGitEnv } from "../scripts/hermetic-git-env";

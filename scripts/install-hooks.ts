@@ -252,7 +252,7 @@ if (local.code === 0) {
         remaining.raw,
       )
         .map((value) => JSON.stringify(value))
-        .join("\n  ")}\n` + "Remove it from the included file, then rerun 'bun install'.",
+        .join("\n  ")}\nRemove it from the included file, then rerun 'bun install'.`,
     );
   }
 }
