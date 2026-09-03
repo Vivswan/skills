@@ -17,23 +17,13 @@ import {
   rel,
   skillDirs,
 } from "../scripts/lib";
+import { expectCheckFailure } from "./helpers/check-failure";
 
 function tempFile(content: string, name = "SKILL.md"): string {
   const dir = mkdtempSync(join(tmpdir(), "skills-lib-test-"));
   const path = join(dir, name);
   writeFileSync(path, content);
   return path;
-}
-
-function expectCheckFailure(run: () => unknown, message: RegExp): void {
-  let thrown: unknown;
-  try {
-    run();
-  } catch (error) {
-    thrown = error;
-  }
-  expect(thrown).toBeInstanceOf(CheckFailure);
-  expect(errorMessage(thrown)).toMatch(message);
 }
 
 describe("parseFrontmatter", () => {

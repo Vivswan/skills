@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { CheckFailure } from "../scripts/lib";
 import {
   checkDescriptionTriggerForm,
   checkExplicitInvocationPairing,
@@ -9,23 +8,10 @@ import {
   checkReadmeSkillList,
   checkReadmeUsageExplicitRoster,
 } from "../scripts/smoke-checks";
+import { expectCheckFailure } from "./helpers/check-failure";
 
 function readme(listArea: string): string {
   return `# Skills\n\n## Available Skills\n${listArea}\n## Installation\n\ntext\n`;
-}
-
-// Both halves of a rejection in one invocation: runChecks() reports a
-// CheckFailure as FAIL and any other throw as a crash, so the class matters
-// as much as the branch-specific message.
-function expectCheckFailure(run: () => void, message: string | RegExp, reason?: string): void {
-  let thrown: unknown;
-  try {
-    run();
-  } catch (error) {
-    thrown = error;
-  }
-  expect(thrown, reason).toBeInstanceOf(CheckFailure);
-  expect((thrown as CheckFailure).message, reason).toMatch(message);
 }
 
 describe("checkDescriptionTriggerForm", () => {

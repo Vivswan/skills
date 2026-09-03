@@ -21,6 +21,7 @@ import {
   pruneStaleSkills,
   repoSourceIds,
 } from "../scripts/link-agents";
+import { expectCheckFailure } from "./helpers/check-failure";
 
 interface Fixture {
   readonly repoSkill: string;
@@ -35,17 +36,6 @@ function fixture(): Fixture {
   const agentsSkills = join(root, "agents-skills");
   mkdirSync(agentsSkills);
   return { repoSkill, agentsSkills };
-}
-
-function expectCheckFailure(run: () => unknown, message: RegExp): void {
-  let thrown: unknown;
-  try {
-    run();
-  } catch (error) {
-    thrown = error;
-  }
-  expect(thrown).toBeInstanceOf(CheckFailure);
-  expect((thrown as CheckFailure).message).toMatch(message);
 }
 
 describe("linkSkills", () => {
