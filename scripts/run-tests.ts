@@ -13,9 +13,13 @@
  * spawn dies in a ceilinged non-repo directory instead. bunfig.toml is not
  * discovered from the scratch cwd, so the preload - which verifies this
  * birth environment - is passed explicitly.
+ *
+ * The scratch directory is also the test process's TMPDIR: every fixture a
+ * test (or a child inheriting its environment) creates through os.tmpdir()
+ * lives inside it and is deleted with the run, however the suite exits.
  */
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { hermeticGitEnv } from "./hermetic-git-env";
@@ -47,15 +51,19 @@ const args = process.argv.slice(2).map((arg) => {
 });
 if (!hasPathTarget) args.push(join(ROOT, "tests"));
 
+// cwd sits one level below the scratch ceiling: a default-cwd git checks
+// cwd, finds no repository, and cannot climb further.
 const scratch = mkdtempSync(join(tmpdir(), "hermetic-tests-"));
+const cwd = join(scratch, "cwd");
+mkdirSync(cwd);
 let status: number;
 let summary = "";
 try {
   const child = Bun.spawn(
     ["bun", "test", "--preload", join(ROOT, "tests", "preload.ts"), ...args],
     {
-      cwd: scratch,
-      env: hermeticGitEnv(process.env),
+      cwd,
+      env: hermeticGitEnv({ ...process.env, TMPDIR: scratch }),
       stdin: "inherit",
       stdout: "inherit",
       stderr: "pipe",

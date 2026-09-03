@@ -22,6 +22,7 @@
 
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { ROOT } from "./lib";
 
 /** Pure: builds a child environment from a base; never mutates the input. */
@@ -39,12 +40,18 @@ export function hermeticGitEnv(base: NodeJS.ProcessEnv): Record<string, string> 
   env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_SYSTEM = "/dev/null";
 
+  // The fixture temp tree: the launcher's per-run scratch when passed as
+  // TMPDIR, else the OS default. resolve() normalizes a trailing slash so
+  // the launcher and the preload compute the same ceiling.
+  const fixtureTmp = resolve(base.TMPDIR ?? tmpdir());
+  env.TMPDIR = fixtureTmp;
+
   // Repository discovery may never climb up into this repository or out of
   // the temp tree that holds fixtures: a git spawned in a non-repo directory
   // fails loudly instead of finding and mutating the real repo. Raw and
   // resolved paths are both listed because git compares these entries
   // textually against a symlink-resolved cwd (macOS: /var -> /private/var).
-  const ceilings = new Set([ROOT, tmpdir()]);
+  const ceilings = new Set([ROOT, fixtureTmp]);
   for (const dir of [...ceilings]) ceilings.add(realpathSync(dir));
   env.GIT_CEILING_DIRECTORIES = [...ceilings].join(":");
 
