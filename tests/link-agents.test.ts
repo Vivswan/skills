@@ -3,6 +3,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readlinkSync,
   realpathSync,
   symlinkSync,
@@ -34,6 +35,17 @@ function fixture(): Fixture {
   const agentsSkills = join(root, "agents-skills");
   mkdirSync(agentsSkills);
   return { repoSkill, agentsSkills };
+}
+
+function expectCheckFailure(run: () => unknown, message: RegExp): void {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(CheckFailure);
+  expect((thrown as CheckFailure).message).toMatch(message);
 }
 
 describe("linkSkills", () => {
@@ -80,7 +92,7 @@ describe("linkSkills", () => {
     expect(realpathSync(join(agentsSkills, "demo-skill"))).toBe(realpathSync(repoSkill));
   });
 
-  test("dry run reports actions without touching the filesystem", () => {
+  test("dry run reports the relink and leaves an installed copy in place", () => {
     const { repoSkill, agentsSkills } = fixture();
     const installed = join(agentsSkills, "demo-skill");
     mkdirSync(installed);
@@ -89,27 +101,49 @@ describe("linkSkills", () => {
     const actions = linkSkills([repoSkill], agentsSkills, true);
 
     expect(actions).toEqual([{ skill: "demo-skill", kind: "linked" }]);
-    expect(lstatSync(installed).isDirectory()).toBe(true);
+    expect(lstatSync(installed, { throwIfNoEntry: false })?.isDirectory()).toBe(true);
+    expect(readFileSync(join(installed, "SKILL.md"), "utf-8")).toBe("installed copy");
+  });
+
+  test("dry run reports the repoint and leaves a foreign symlink in place", () => {
+    const { repoSkill, agentsSkills } = fixture();
+    const stale = join(agentsSkills, "stale-target");
+    mkdirSync(stale);
+    const target = join(agentsSkills, "demo-skill");
+    symlinkSync(stale, target, "dir");
+
+    const actions = linkSkills([repoSkill], agentsSkills, true);
+
+    expect(actions).toEqual([{ skill: "demo-skill", kind: "linked" }]);
+    expect(readlinkSync(target)).toBe(stale);
   });
 
   test("refuses to replace a directory without a SKILL.md", () => {
     const { repoSkill, agentsSkills } = fixture();
-    mkdirSync(join(agentsSkills, "demo-skill"));
+    const target = join(agentsSkills, "demo-skill");
+    mkdirSync(target);
 
-    expect(() => linkSkills([repoSkill], agentsSkills)).toThrow(CheckFailure);
+    expectCheckFailure(() => linkSkills([repoSkill], agentsSkills), /no SKILL\.md; refusing/);
+    expect(lstatSync(target, { throwIfNoEntry: false })?.isDirectory()).toBe(true);
   });
 
   test("refuses when the target is a plain file", () => {
     const { repoSkill, agentsSkills } = fixture();
-    writeFileSync(join(agentsSkills, "demo-skill"), "not a skill");
+    const target = join(agentsSkills, "demo-skill");
+    writeFileSync(target, "not a skill");
 
-    expect(() => linkSkills([repoSkill], agentsSkills)).toThrow(CheckFailure);
+    expectCheckFailure(
+      () => linkSkills([repoSkill], agentsSkills),
+      /neither a directory nor a symlink/,
+    );
+    expect(lstatSync(target, { throwIfNoEntry: false })?.isFile()).toBe(true);
+    expect(readFileSync(target, "utf-8")).toBe("not a skill");
   });
 
   test("fails when the agents skills directory is missing", () => {
     const { repoSkill, agentsSkills } = fixture();
 
-    expect(() => linkSkills([repoSkill], join(agentsSkills, "nope"))).toThrow(CheckFailure);
+    expectCheckFailure(() => linkSkills([repoSkill], join(agentsSkills, "nope")), /missing; run/);
   });
 });
 
@@ -299,19 +333,33 @@ describe("pruneStaleSkills", () => {
     const staleCopy = installedCopy(agentsSkills, "retired-copy");
     const agentLink = join(agentDir, "retired-skill");
     symlinkSync(staleLink, agentLink, "dir");
+    const gonePointer = join(agentDir, "gone-skill");
+    symlinkSync(join(agentsSkills, "gone-skill"), gonePointer, "dir");
 
     const actions = pruneStaleSkills(
-      options({ lockAttribution: new Map([["retired-copy", "ours" as const]]), dryRun: true }),
+      options({
+        lockAttribution: new Map([
+          ["retired-copy", "ours" as const],
+          ["gone-skill", "ours" as const],
+        ]),
+        dryRun: true,
+      }),
     );
 
-    expect(actions.map((action) => action.kind)).toEqual([
-      "would-prune",
-      "would-prune",
-      "would-prune",
+    expect(actions).toEqual([
+      { path: staleCopy, kind: "would-prune", reason: expect.stringContaining("retired skill") },
+      { path: staleLink, kind: "would-prune", reason: expect.stringContaining("dangling symlink") },
+      {
+        path: gonePointer,
+        kind: "would-prune",
+        reason: expect.stringContaining("dangling pointer"),
+      },
+      { path: agentLink, kind: "would-prune", reason: expect.stringContaining("pruned canonical") },
     ]);
     expect(entryExists(staleLink)).toBe(true);
     expect(entryExists(staleCopy)).toBe(true);
     expect(entryExists(agentLink)).toBe(true);
+    expect(entryExists(gonePointer)).toBe(true);
   });
 
   test("cleans the per-agent pointer left behind by a canonical prune", () => {
@@ -409,21 +457,29 @@ describe("pruneStaleSkills", () => {
     symlinkSync(join(repoSkills, "b-retired"), second, "dir");
 
     const seen: PruneAction[] = [];
+    let atFirstReport: { first: boolean; second: boolean } | undefined;
     expect(() =>
       pruneStaleSkills(
         options({
           onAction: (action) => {
             seen.push(action);
+            if (seen.length === 1) {
+              atFirstReport = { first: entryExists(first), second: entryExists(second) };
+            }
             if (seen.length === 2) throw new Error("downstream failure");
           },
         }),
       ),
     ).toThrow("downstream failure");
 
-    // The first removal was reported before the sweep died mid-run.
-    expect(seen[0]).toEqual({ path: first, kind: "pruned", reason: expect.any(String) });
+    expect(seen).toEqual([
+      { path: first, kind: "pruned", reason: expect.stringContaining("dangling symlink") },
+      { path: second, kind: "pruned", reason: expect.stringContaining("dangling symlink") },
+    ]);
+    // When the first removal was reported, the sweep had not yet reached the second entry.
+    expect(atFirstReport).toEqual({ first: false, second: true });
     expect(entryExists(first)).toBe(false);
-    expect(entryExists(second)).toBe(false); // removal precedes its report
+    expect(entryExists(second)).toBe(false);
   });
 
   test("dry run and real run agree when a stale canonical link has a live target", () => {
@@ -471,9 +527,29 @@ describe("discoverAgentSkillDirs", () => {
 describe("lockfile attribution", () => {
   const repoIds = repoSourceIds("https://github.com/Vivswan/skills");
 
-  test("derives the owner/repo slug and full URL ids", () => {
-    expect(repoIds.has("vivswan/skills")).toBe(true);
-    expect(repoIds.has("https://github.com/vivswan/skills")).toBe(true);
+  test.each([
+    {
+      id: "https",
+      url: "https://github.com/Vivswan/skills",
+      urlId: "https://github.com/vivswan/skills",
+    },
+    {
+      id: "https with .git suffix",
+      url: "https://github.com/Vivswan/skills.git",
+      urlId: "https://github.com/vivswan/skills",
+    },
+    {
+      id: "https with trailing slash",
+      url: "https://github.com/Vivswan/skills/",
+      urlId: "https://github.com/vivswan/skills",
+    },
+    {
+      id: "ssh form keeps its scheme",
+      url: "git@github.com:Vivswan/skills.git",
+      urlId: "git@github.com:vivswan/skills",
+    },
+  ])("derives exactly the normalized URL and owner/repo slug ids: $id", ({ url, urlId }) => {
+    expect(repoSourceIds(url)).toEqual(new Set([urlId, "vivswan/skills"]));
   });
 
   test("attributes by source slug or sourceUrl, case- and .git-insensitive", () => {
