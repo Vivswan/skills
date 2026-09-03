@@ -30,17 +30,24 @@ import { basename, join } from "node:path";
  *   emission sites.
  *
  * Non-contract citations (external commands like pgrep/ps, git idioms, path
- * examples) are deliberately unpinned. Each entry must appear VERBATIM in
- * both the doc and its script source; a one-sided rename fails this test
- * until doc and script move together.
+ * examples) are deliberately unpinned. Each entry must appear in both the doc
+ * and its script source; a one-sided rename fails this test until doc and
+ * script move together. The script side is matched byte-for-byte. The doc
+ * side is matched with whitespace runs collapsed and, on lines inside a bash
+ * or sh fence only, the leading comment marker removed, so a pin names a
+ * phrase, not where the prose happens to wrap.
  *
  * Entries pin a distinctive form PER SIDE: the doc side is a usage-line,
  * sample-JSON, or rendered-contract fragment as the doc prints it, and the
  * script side is a CODE-SHAPED fragment (an object-literal key at the
  * emission site, a dispatch literal or usage-error string, an echo or case
  * literal, a declaration literal) - never a bare word that a stale comment
- * could satisfy. The gate's job is doc-to-source text pinning only; actually
- * executing the scripts is the per-script *.test.ts suites' job.
+ * could satisfy. A pin matches its side exactly once unless it declares how
+ * often it is meant to occur, so a fragment that drifts into ambiguity fails
+ * by construction: a script pin that covers several code sites states their
+ * exact number, and a doc pin the prose repeats states ">=1". The gate's job
+ * is doc-to-source text pinning only; actually executing the scripts is the
+ * per-script *.test.ts suites' job.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -49,7 +56,10 @@ const FLEET_SCRIPTS = join(ROOT, "skills", "orchestrator-mode", "scripts");
 const RUBBER_DUCK = join(ROOT, "skills", "rubber-duck-review");
 const WATCH_CI = join(ROOT, "skills", "watch-ci-after-push");
 
-type CitedToken = { doc: string; script: string };
+type Occurrences = number | ">=1";
+type DocPin = string | { text: string; occurrences: Occurrences };
+type ScriptPin = string | { text: string; occurrences: number };
+type CitedToken = { doc: DocPin; script: ScriptPin };
 type Surface = { docPath: string; scriptPath: string; tokens: CitedToken[] };
 
 const SURFACES: Record<string, Surface> = {
@@ -62,15 +72,27 @@ const SURFACES: Record<string, Surface> = {
         script:
           'console.error("usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]")',
       },
-      { doc: "`--base <mainline>`", script: 'arg === "--base"' },
-      { doc: "`--base origin/develop`", script: "cannot resolve --base ref" },
-      { doc: "or ambiguous `--base` ref", script: '.includes("is ambiguous")' },
-      { doc: '"baseRef":{"ok":false', script: "baseRef: { ok: false" },
-      { doc: "--transcripts", script: '"--transcripts"' },
-      { doc: '"worktree":', script: "worktree: path," },
-      { doc: '"branch":', script: "branch," },
-      { doc: '"ok":', script: "branch,\n    ok: true," },
-      { doc: "ok:false", script: "worktree: path, ok: false" },
+      { doc: { text: "`--base <mainline>`", occurrences: ">=1" }, script: 'arg === "--base"' },
+      {
+        doc: "`--base origin/develop`",
+        script: { text: "cannot resolve --base ref", occurrences: 2 },
+      },
+      {
+        doc: { text: "or ambiguous `--base` ref", occurrences: ">=1" },
+        script: '.includes("is ambiguous")',
+      },
+      {
+        doc: { text: '"baseRef":{"ok":false', occurrences: ">=1" },
+        script: "baseRef: { ok: false",
+      },
+      { doc: { text: "--transcripts", occurrences: ">=1" }, script: '"--transcripts"' },
+      { doc: '"worktree":', script: "worktree: path,\n    branch,\n    ok: true," },
+      { doc: '"branch":', script: "worktree: path,\n    branch," },
+      { doc: { text: '"ok":', occurrences: ">=1" }, script: "branch,\n    ok: true," },
+      {
+        doc: { text: "ok:false", occurrences: ">=1" },
+        script: { text: "worktree: path, ok: false", occurrences: 14 },
+      },
       { doc: '"headSha":', script: "headSha," },
       { doc: '"aheadBehind":', script: "aheadBehind," },
       { doc: '"ahead":', script: "ahead: Number.parseInt(ahead" },
@@ -83,7 +105,7 @@ const SURFACES: Record<string, Surface> = {
       { doc: '"defaultRef":{"ok":false', script: "defaultRef: { ok: false" },
       { doc: '"lsof":{"ok":false', script: "lsof: { ok: false" },
       { doc: '"degraded":true', script: "degraded: true," },
-      { doc: '"control":"FAILED"', script: 'control: "FAILED"' },
+      { doc: '"control":"FAILED"', script: { text: 'control: "FAILED"', occurrences: 3 } },
       { doc: "agent-*.jsonl", script: "agent-(.+)\\.jsonl" },
       { doc: "`mtime`", script: "mtime: stat.mtime.toISOString()" },
       { doc: "sizeBytes", script: "sizeBytes: stat.size" },
@@ -108,11 +130,17 @@ const SURFACES: Record<string, Surface> = {
       { doc: "json-keys <file> [<file2>]", script: "json-keys needs <file> [<other-file>]" },
       { doc: "set <repo-root> <base-ref>", script: "set needs <repo-root> <base-ref>" },
       { doc: "tokens <table.json> <root>", script: "tokens needs <table.json> <tree-root>" },
-      { doc: '"text":', script: "spec.text" },
-      { doc: '"expect"', script: "spec.expect" },
-      { doc: '"expect"', script: 'needs "expect" of ">=1"' },
-      { doc: '"expect": 0', script: "expect >= 0" },
-      { doc: '">=1"', script: 'expect === ">=1"' },
+      {
+        doc: { text: '"text":', occurrences: ">=1" },
+        script: { text: "spec.text", occurrences: 6 },
+      },
+      {
+        doc: { text: '"expect"', occurrences: ">=1" },
+        script: { text: "spec.expect", occurrences: 5 },
+      },
+      { doc: { text: '"expect"', occurrences: ">=1" }, script: 'needs "expect" of ">=1"' },
+      { doc: { text: '"expect": 0', occurrences: ">=1" }, script: "expect >= 0" },
+      { doc: '">=1"', script: { text: 'expect === ">=1"', occurrences: 2 } },
       { doc: "`endLine`", script: "endLine?: number" },
     ],
   },
@@ -120,7 +148,10 @@ const SURFACES: Record<string, Surface> = {
     docPath: FLEET_DOC,
     scriptPath: join(FLEET_SCRIPTS, "ledger.mts"),
     tokens: [
-      { doc: "scripts/ledger.mts <file>", script: "usage: ledger <file> <command> [args...]" },
+      {
+        doc: { text: "scripts/ledger.mts <file>", occurrences: ">=1" },
+        script: "usage: ledger <file> <command> [args...]",
+      },
       {
         doc: "active | dormant-by-design | landing-gate | landed-swept",
         script: '["active", "dormant-by-design", "landing-gate", "landed-swept"]',
@@ -264,20 +295,20 @@ const SURFACES: Record<string, Surface> = {
           '[ "$fail" -eq 1 ] && exit 1\n[ -n "$missing" ] && exit 2\n[ "$gherr" -eq 1 ] && exit 2',
       },
       {
-        doc: "Exit 0: all green (skipped runs count as\npass)",
+        doc: "Exit 0: all green (skipped runs count as pass)",
         script: 'echo "skip: $name ($id)"',
       },
       {
-        doc: "1: some latest run ended with a non-success,\n# non-skipped conclusion",
+        doc: "1: some latest run ended with a non-success, non-skipped conclusion",
         script: 'fail=1\n      echo "FAIL($conclusion): $name ($id)"',
       },
       {
-        doc: "Exit 1: some workflow's latest run ended\nwith any non-success, non-skipped conclusion",
+        doc: "Exit 1: some workflow's latest run ended with any non-success, non-skipped conclusion",
         script: '[ "$fail" -eq 1 ] && exit 1',
       },
       { doc: "Include the FAIL lines", script: 'echo "FAIL($conclusion): $name ($id)"' },
       {
-        doc: "older re-triggered runs are reported\n# as superseded, not judged",
+        doc: "older re-triggered runs are reported as superseded, not judged",
         script: 'echo "superseded: $name ($id)"',
       },
       {
@@ -285,7 +316,7 @@ const SURFACES: Record<string, Surface> = {
         script: 'gh run view "$id" --log-failed 2>&1 | tail -80 || true',
       },
       {
-        doc: "2: no runs registered or\n# gh failed",
+        doc: "2: no runs registered or gh failed",
         script:
           'echo "no workflow runs registered for $sha after ~15s (or gh failed; check stderr above, gh auth status, and the remote)" >&2\n  exit 2',
       },
@@ -398,39 +429,165 @@ const SURFACES: Record<string, Surface> = {
 };
 
 /**
+ * Doc pins name phrases: line wrapping carries no contract, and neither does
+ * the comment marker on lines inside a bash or sh fence. Comment markers in
+ * prose and in every other fence stay intact. Only a bare ``` closes a fence.
+ */
+function normalizeDoc(text: string): string {
+  const lines = text.split("\n");
+  let fence: string | null = null;
+  for (const [index, line] of lines.entries()) {
+    if (fence === null) {
+      fence = /^\s*```(\S*)/.exec(line)?.[1] ?? null;
+    } else if (/^\s*```\s*$/.test(line)) {
+      fence = null;
+    } else if (fence === "bash" || fence === "sh") {
+      lines[index] = line.replace(/^(\s*)#( |$)/, "$1");
+    }
+  }
+  return lines.join("\n").replace(/\s+/g, " ");
+}
+
+/**
  * The single assertion every check in this file goes through - positive
  * checks and the negative control alike, so the control exercises the SAME
  * code path it certifies.
  */
-function assertContains(haystack: string, fragment: string): void {
-  expect(haystack).toContain(fragment);
+function assertOccurrences(haystack: string, text: string, occurrences: Occurrences): void {
+  const found = haystack.split(text).length - 1;
+  const message = `${JSON.stringify(text)} occurs ${found} time(s), expected ${occurrences}`;
+  if (occurrences === ">=1") {
+    expect(found, message).toBeGreaterThanOrEqual(1);
+  } else {
+    expect(found, message).toBe(occurrences);
+  }
+}
+
+// Rows may share a fragment; it registers once, and two rows disagreeing on
+// its count is a table error, not two tests. Only prose may repeat a phrase:
+// a script pin always states the exact number of code sites it covers.
+function uniquePins(
+  pins: Array<DocPin | ScriptPin>,
+  side: "doc" | "script",
+): Map<string, Occurrences> {
+  const byText = new Map<string, Occurrences>();
+  for (const pin of pins) {
+    const { text, occurrences } = typeof pin === "string" ? { text: pin, occurrences: 1 } : pin;
+    const valid =
+      typeof occurrences === "number"
+        ? Number.isInteger(occurrences) && occurrences >= 1
+        : side === "doc";
+    if (!valid) {
+      throw new Error(
+        `${JSON.stringify(text)}: a ${side} pin needs a positive integer count, got ${occurrences}`,
+      );
+    }
+    const known = byText.get(text);
+    if (known !== undefined && known !== occurrences) {
+      throw new Error(
+        `${JSON.stringify(text)} is pinned with occurrences ${known} and ${occurrences}`,
+      );
+    }
+    byText.set(text, occurrences);
+  }
+  return byText;
 }
 
 for (const [surface, { docPath, scriptPath, tokens }] of Object.entries(SURFACES)) {
-  const doc = readFileSync(docPath, "utf-8");
+  const doc = normalizeDoc(readFileSync(docPath, "utf-8"));
   const source = readFileSync(scriptPath, "utf-8");
   const docName = basename(docPath);
   const scriptName = basename(scriptPath);
   describe(surface, () => {
-    for (const token of tokens) {
-      test(`${docName} still asserts ${JSON.stringify(token.doc)}`, () => {
-        assertContains(doc, token.doc);
+    for (const [text, occurrences] of uniquePins(
+      tokens.map((token) => token.doc),
+      "doc",
+    )) {
+      test(`${docName} still asserts ${JSON.stringify(text)}`, () => {
+        assertOccurrences(doc, text, occurrences);
       });
-      test(`${scriptName} still carries ${JSON.stringify(token.script)}`, () => {
-        assertContains(source, token.script);
+    }
+    for (const [text, occurrences] of uniquePins(
+      tokens.map((token) => token.script),
+      "script",
+    )) {
+      test(`${scriptName} still carries ${JSON.stringify(text)}`, () => {
+        assertOccurrences(source, text, occurrences);
       });
     }
   });
 }
 
 // Negative control: prove the checker can fail, through the same helper the
-// positive checks use, on every doc and script this gate reads. If the
-// sentinel ever stops throwing here, the containment probe itself is broken
-// and every green above is meaningless.
+// positive checks use, on every file this gate reads. The pinned message
+// rejects unrelated throws (a failed read, a matcher misuse).
 test("negative control: the shared assertion fails on an impossible token", () => {
   const impossible = "zzDocDriftImpossibleToken414";
-  for (const { docPath, scriptPath } of Object.values(SURFACES)) {
-    expect(() => assertContains(readFileSync(docPath, "utf-8"), impossible)).toThrow();
-    expect(() => assertContains(readFileSync(scriptPath, "utf-8"), impossible)).toThrow();
+  const paths = new Set(
+    Object.values(SURFACES).flatMap(({ docPath, scriptPath }) => [docPath, scriptPath]),
+  );
+  for (const path of paths) {
+    expect(() => assertOccurrences(readFileSync(path, "utf-8"), impossible, 1)).toThrow(
+      /"zzDocDriftImpossibleToken414" occurs 0 time\(s\), expected 1/,
+    );
+  }
+});
+
+// Negative control: the normalizer's exact output for every fence shape the
+// pinned docs use, so a marker stripped outside bash/sh, a dropped language,
+// or a fence closed by a language line all fail here.
+const NORMALIZATION_CASES: Array<{ id: string; input: string; expected: string }> = [
+  {
+    id: "prose wrapping and tabs collapse to single spaces",
+    input: "Exit 0: all\ngreen  (skipped\truns)",
+    expected: "Exit 0: all green (skipped runs)",
+  },
+  {
+    id: "prose keeps its comment markers",
+    input: "# Heading\n\n# not a comment",
+    expected: "# Heading # not a comment",
+  },
+  {
+    id: "bash fence drops leading markers, blank marker lines included",
+    input: "```bash\n# exit 0\n#\n# pass\n```",
+    expected: "```bash exit 0 pass ```",
+  },
+  {
+    id: "indented bash fence drops leading markers",
+    input: "Run:\n  ```bash\n  # exit 0\n  ```",
+    expected: "Run: ```bash exit 0 ```",
+  },
+  {
+    id: "sh fence drops leading markers",
+    input: "```sh\n# exit 0\n```",
+    expected: "```sh exit 0 ```",
+  },
+  {
+    id: "bash fence keeps a marker that is not at line start",
+    input: "```bash\necho '# kept'\n```",
+    expected: "```bash echo '# kept' ```",
+  },
+  {
+    id: "text fence keeps its markers",
+    input: "```text\n# exit 0\n```",
+    expected: "```text # exit 0 ```",
+  },
+  {
+    id: "json fence keeps its markers",
+    input: "```json\n# exit 0\n```",
+    expected: "```json # exit 0 ```",
+  },
+  {
+    id: "a language line inside an open bash fence does not close it",
+    input: "```bash\n# one\n```json\n# two\n```\n# three",
+    expected: "```bash one ```json two ``` # three",
+  },
+];
+
+describe("doc normalization", () => {
+  for (const { id, input, expected } of NORMALIZATION_CASES) {
+    test(id, () => {
+      expect(normalizeDoc(input)).toBe(expected);
+    });
   }
 });
