@@ -22,7 +22,7 @@ The agent applies these on its own when the task matches:
 - [/rubber-duck-review](./skills/rubber-duck-review/) - Cross-model, read-only second-opinion code review
 - [/verify-with-controls](./skills/verify-with-controls/) - Controls and evidence before a zero, alarm, success claim, or stillness becomes a conclusion
 - [/watch-ci-after-push](./skills/watch-ci-after-push/) - Background CI watcher after every push or merge
-- [/worktree-hygiene](./skills/worktree-hygiene/) - Safe worktree removal, explicit handovers, shared-repo rules
+- [/worktree-hygiene](./skills/worktree-hygiene/) - Safe worktree removal, gated retirement of landed branches, explicit handovers, shared-repo rules
 
 ### Invoked by you
 
