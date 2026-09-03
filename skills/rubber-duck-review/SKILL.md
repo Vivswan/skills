@@ -63,11 +63,13 @@ This skill ships `scripts/run-review.mts` (the path is relative to the installed
 - captures the full stream to a scratch file under the OS tmp dir (never the working tree)
 - passes each reviewer's required flags and extracts the verdict
 
-Write the step-2 prompt to a tmp file and pass the reviewer name plus that file:
+Write the step-2 prompt to a tmp file and pass the reviewer name plus that file. Inside an agent worktree the sandbox can refuse a Bash heredoc whose text contains git commands (it cannot verify the command stays inside the worktree), so write the prompt file with the harness's Write tool there:
 
 ```bash
-prompt_file="$(mktemp "${TMPDIR:-/tmp}/rubber-duck-prompt.XXXXXX")"
-# write the step-2 prompt into "$prompt_file" (heredoc with a quoted delimiter, or your Write tool)
+# 1. Write the step-2 prompt to a unique path under the OS tmp dir with your Write tool,
+#    one per review section, e.g. /tmp/rubber-duck-prompt-api-gateway.md (a heredoc with a
+#    quoted delimiter works only outside an agent worktree). 2. Then, in one shell call:
+prompt_file=/tmp/rubber-duck-prompt-api-gateway.md
 bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|copilot per step 1
 ```
 
@@ -95,7 +97,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - **Exit 1** (`review FAILED - relaunch`): the stream was empty, cut mid-turn, truncated on its final line, blank, contained error events, or the reviewer exited non-zero. That is no review at all, never a clean pass. Relaunch it (the captured output path is in the failure message if you want to inspect why).
 - **Exit 2**: fix the invocation or install the missing reviewer binary; nothing was reviewed.
 - After a `--background` run exits, extract the verdict from the captured stream with the same rules and exit codes: `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>`, where `<reviewer>` is the same argument the review was launched with. It validates the reviewer and output file against what the launch recorded, and refuses to report a verdict until the run has recorded a successful exit beside the stream. So extracting too early, with the wrong reviewer, or from the wrong file fails safe.
-- Failed and background runs keep their scratch dir (under the OS tmp dir, never the working tree) for inspection; `rm -rf` it once triaged. Foreground successes clean up after themselves. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the mktemp prompt file you wrote remains yours to remove.
+- Failed and background runs keep their scratch dir (under the OS tmp dir, never the working tree) for inspection; `rm -rf` it once triaged. Foreground successes clean up after themselves. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the prompt file you wrote remains yours to remove.
 
 ### 5. Large change sets: fan out one review per section
 

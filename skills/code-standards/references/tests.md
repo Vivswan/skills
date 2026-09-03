@@ -29,6 +29,7 @@ A shape or dtype claim is not forbidden; it is forbidden *as the whole test*. Mo
 - **Assert the whole outcome.** Compare the entire returned dict, the entire frame, the full selection, not one key. A test that ignores a column cannot catch a regression in it.
 - **Parametrize the axis that varies.** When hand-written cases differ only along one input axis, one case list replaces five near-identical functions. Give each case an identifier and, where the reason is not obvious from the values, a reason string in the assertion message, so a failure names the case and the next reader knows why it exists.
 - **Reuse the repo's existing harness.** If there is already a comparison helper for the thing being tested, use it rather than hand-rolling the plumbing.
+- **Give a shared outcome shape one helper.** When several tests check the same shape (exit code plus complete output; error class plus message), a small helper that asserts the whole shape makes strength the default for the next test; a pointwise fix to one test invites the next weak one. Observed: every one of 16 files got the same partial-assertion finding at one landing gate, and three of them independently wrote the same helper.
 
 ## Prove the test
 
@@ -37,7 +38,8 @@ A guard test that has never failed is not yet evidence. This is the `/verify-wit
 1. Reintroduce the bug in the source (or make the equivalent one-line change).
 2. Run the test and confirm it fails.
 3. Confirm it fails *for that reason*, not on an unrelated error.
-4. Restore the source and confirm green again.
+4. Confirm the mutation reached the assertion you added or changed. A mutation that throws upstream of every `expect` fails the old test just as well and proves nothing about the new one (observed: breaking a default path threw before the new assertion ran; the red run looked right and was not).
+5. Restore the source and confirm green again.
 
 A red run against the pre-fix revision, or a mutation of the code under test, is the same control by another route. A test that was only ever run green is not.
 

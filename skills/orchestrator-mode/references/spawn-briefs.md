@@ -8,7 +8,7 @@ Every brief includes:
 
 1. **The full task contract inline.** Goal, acceptance criteria, and the definition of done. Never say "see task #N"; subagents may lack the board tools.
 2. **An explicit file whitelist and do-not-touch boundary.** The territory the agent owns, plus any shared files with region-level grants (e.g. one CSS file's disjoint regions). This is what lets sibling branches merge without conflicts.
-3. **The gates to run** (typecheck, lint, tests) and the instruction to run its own review loop before signaling done.
+3. **The gates to run** (typecheck, lint, tests) and the instruction to run its own review loop before signaling done. After a lead directive, the builder's re-review prompt states what changed since the last round, and when the directive changed the diff's shape the builder rewrites the amended commit's body to match (the directive can say so explicitly): `--amend --no-edit` left stale bodies twice in one wave.
 4. **How to signal completion** (e.g. message the lead) and the handoff contract: commit finished work to the worktree's branch (never push unless the brief says so) and include the branch name, commit subjects, and any escalations in the signal. In PR-per-track mode the brief NAMES THE ACTOR explicitly, preserving both options. Either the builder pushes its branch, opens the PR, reports the URL in its signal, and spawns (or requests) the CI watcher for its own pushes; or the builder stays no-push and the lead pushes from the worktree, opens the PR, and starts the watcher. The final signal is the only permitted stop.
 5. **For a teammate-style agent whose REPORT matters, the delivery mechanism itself:** the brief mandates an explicit message to the lead carrying the report. A teammate agent's final text is not delivered anywhere: unlike an unnamed one-shot spawn, whose output the harness hands back automatically, a teammate that merely ends its turn with the report as prose has reported to no one (five silent strandings in one production session).
 6. **The stop-and-wait ban** (below).
@@ -18,6 +18,7 @@ Every brief includes:
 10. **The idempotency rule** (below): every directive and every briefed step is safe to arrive twice, late, or after the fact; a late arrival is also checked for supersession before acting, and genuinely non-idempotent operations are named in the brief.
 11. **For long-running service agents (the fleet monitor, long-horizon watchers): the standing-state channel.** The brief names the session ledger as where standing state arrives (re-read it every sweep) and requires every lead directive received as a message to be acknowledged in the agent's NEXT report. The delivery rule and its lead side live in `references/fleet-monitor.md`, Reporting Discipline.
 12. **Scratch files go to /tmp, never the worktree.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
+13. **Prompt and scratch files are written with the Write tool, one plain command per step.** In Claude Code, a builder inside an agent worktree has a sandbox that refuses Bash heredocs and compound commands whose text contains the word `git` (even inside a quoted prompt) as too complex to verify they stay inside the worktree; five builders in one wave each rediscovered it. So the brief says: write prompt and scratch files with the Write tool, and restore a mutated source with `cp` from a `/tmp` backup rather than a git command chained into the mutation.
 
 ## The Stop-and-Wait Ban
 
@@ -93,7 +94,9 @@ Territory: src/gateway/** and tests/gateway/** only. Do NOT touch
   signal instead of making them.
 Gates: run `bun run check` FOREGROUND until green, then run your own
   review loop and fix findings before signaling. Spawn reviewers UNNAMED
-  (named spawns detach); write scratch/prompt files to /tmp, never here.
+  (named spawns detach); write scratch/prompt files to /tmp with your
+  Write tool, never here and never via a heredoc (the sandbox refuses
+  heredocs and compound commands that mention git).
 Handoff: commit finished work to wt/rate-limit (do not push). Signal the
   lead with the branch name, commit subjects, any escalations, and one
   line per lead message you received. Re-read your FULL inbox first: a
