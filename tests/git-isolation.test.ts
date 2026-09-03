@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { ROOT } from "../scripts/lib";
@@ -22,11 +22,42 @@ function run(cwd: string | undefined, ...args: string[]) {
   };
 }
 
+// The exact GIT_* surface the launcher must establish, spelled out here
+// rather than taken from hermeticGitEnv: an expected value derived from the
+// code under test would move in step with a dropped or changed pin.
+function expectedCeilings(): string {
+  const dirs = new Set([ROOT, resolve(tmpdir())]);
+  for (const dir of [...dirs]) dirs.add(realpathSync(dir));
+  return [...dirs].join(":");
+}
+const HERMETIC_GIT: Record<string, string> = {
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_CEILING_DIRECTORIES: expectedCeilings(),
+  GIT_AUTHOR_NAME: "fixture",
+  GIT_AUTHOR_EMAIL: "fixture@example.com",
+  GIT_COMMITTER_NAME: "fixture",
+  GIT_COMMITTER_EMAIL: "fixture@example.com",
+};
+
+// The GIT_* slice of an environment, matched case-insensitively like
+// hermeticGitEnv drops it: the whole surface the launcher pins.
+function gitSubset(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => key.toUpperCase().startsWith("GIT_")),
+  );
+}
+
 // What a default-env child actually sees - NOT process.env, which the
-// preload pins regardless of how this run was launched.
-function childVisible(name: string): string {
-  const r = Bun.spawnSync(["/bin/sh", "-c", `printf %s "$${name}"`], { stdout: "pipe" });
-  return r.stdout.toString();
+// preload pins regardless of how this run was launched. A Bun child reports
+// its own birth environment as JSON (portable where `env -0` is not).
+function childEnv(): Record<string, string> {
+  const r = Bun.spawnSync(
+    [process.execPath, "-e", "process.stdout.write(JSON.stringify(process.env))"],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  expect(r.exitCode).toBe(0);
+  return JSON.parse(r.stdout.toString());
 }
 
 // Hard interlock, measured on real children (the preload runs the same
@@ -37,10 +68,10 @@ function assertChildEnvContained(): void {
   // A default-spawn git must not discover ANY repository: not via an
   // inherited GIT_DIR, not from the starting directory, not by climbing.
   expect(run(undefined, "rev-parse", "--git-dir").code).not.toBe(0);
-  expect(childVisible("GIT_CEILING_DIRECTORIES")).toContain(ROOT);
-  expect(childVisible("GIT_CONFIG_GLOBAL")).toBe("/dev/null");
-  expect(childVisible("GIT_CONFIG_SYSTEM")).toBe("/dev/null");
-  expect(childVisible("GIT_DIR")).toBe("");
+  // Exactly the hermetic GIT_* set - same keys, same values, nothing
+  // extra. Discovery alone misses a stray GIT_CONFIG redirect, which would
+  // still route a default-env `git config` write into the real file.
+  expect(gitSubset(childEnv())).toEqual(HERMETIC_GIT);
 }
 
 // The real repository's config file - the file the original incident (and
@@ -55,18 +86,12 @@ function realConfigPath(): string {
 }
 
 describe("test git isolation (launcher + preload)", () => {
-  test("default-env children see the hermetic environment", () => {
+  test("default-env children see exactly the hermetic GIT_* environment", () => {
     assertChildEnvContained();
-    expect(childVisible("GIT_AUTHOR_NAME")).toBe("fixture");
-    expect(childVisible("GIT_COMMITTER_EMAIL")).toBe("fixture@example.com");
   });
 
-  test("the preload pinned the in-process view to the same base", () => {
-    for (const key of ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"]) {
-      expect(process.env[key]).toBeUndefined();
-    }
-    expect(process.env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
-    expect(process.env.GIT_CEILING_DIRECTORIES ?? "").toContain(ROOT);
+  test("the in-process GIT_* view equals the hermetic set", () => {
+    expect(gitSubset(process.env)).toEqual(HERMETIC_GIT);
   });
 
   test("a leaky repo-level config write with default env AND default cwd is contained", () => {
