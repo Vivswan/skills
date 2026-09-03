@@ -13,8 +13,8 @@
     "test": "bun scripts/run-tests.ts",
     "test:cli": "bun scripts/cli-discovery-test.ts",
     "lint": "biome ci .",
-    "lint:yaml": "uvx yamllint -s .",
-    "lint:json": "uvx check-jsonschema --schemafile https://json.schemastore.org/package.json package.json && uvx check-jsonschema --builtin-schema vendor.github-issue-forms .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml && uvx check-jsonschema --schemafile https://json.schemastore.org/github-issue-config.json .github/ISSUE_TEMPLATE/config.yml",
+    "lint:yaml": "uvx --no-config yamllint -s .",
+    "lint:json": "uvx --no-config check-jsonschema --schemafile https://json.schemastore.org/package.json package.json && uvx --no-config check-jsonschema --builtin-schema vendor.github-issue-forms .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml && uvx --no-config check-jsonschema --schemafile https://json.schemastore.org/github-issue-config.json .github/ISSUE_TEMPLATE/config.yml",
     "check:fix": "biome check --write .",
     "check": "bun run typecheck && bun run lint && bun run lint:yaml && bun run lint:json && bun run test && bun run validate && bun run smoke"
   },
