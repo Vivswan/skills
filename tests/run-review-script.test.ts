@@ -33,6 +33,10 @@ violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
 if [ "$1 $2 $3 $4" != "exec --json --sandbox read-only" ] || [ "$#" -ne 5 ]; then
   violate "codex argv: $*"; exit 64
 fi
+if [ "$5" = "-" ]; then channel=stdin; else channel=argv; fi
+if [ "$channel" != "\${STUB_EXPECT_DELIVERY}" ]; then
+  violate "codex delivery: $channel"; exit 64
+fi
 if [ "$5" = "-" ] && [ "\${STUB_SKIP_STDIN:-0}" != "1" ]; then
   cat > "\${STUB_PROMPT_COPY}"
 elif [ "$5" != "-" ]; then
@@ -93,11 +97,16 @@ if [ "$1 $2 $3 $4 $5 $6" != "-p --permission-mode plan --verbose --output-format
   violate "claude argv: $*"; exit 64
 fi
 if [ "$#" -eq 7 ]; then
+  channel=argv
   printf '%s' "$7" > "\${STUB_PROMPT_COPY}"
 elif [ "$#" -eq 6 ]; then
+  channel=stdin
   cat > "\${STUB_PROMPT_COPY}"
 else
   violate "claude argv: $*"; exit 64
+fi
+if [ "$channel" != "\${STUB_EXPECT_DELIVERY}" ]; then
+  violate "claude delivery: $channel"; exit 64
 fi
 case "\${STUB_MODE:-ok}" in
   ok)
@@ -166,6 +175,9 @@ function run(args: string[], env: Record<string, string> = {}, path?: string) {
       PATH: path ?? `${binDir}:${process.env.PATH}`,
       STUB_VIOLATIONS: violations,
       STUB_PROMPT_COPY: promptCopy,
+      // The stubs report the channel the prompt actually arrived on, so a
+      // --stdin-prompt run that fell back to argv fails as a violation.
+      STUB_EXPECT_DELIVERY: args.includes("--stdin-prompt") ? "stdin" : "argv",
       ...env,
     },
     stdout: "pipe",
@@ -188,6 +200,18 @@ function run(args: string[], env: Record<string, string> = {}, path?: string) {
     stderr,
     promptCopy,
   };
+}
+
+/** A failed review or usage error prints nothing on stdout: a verdict beside
+ * a non-zero exit would read as a clean pass to a caller. */
+function expectFailure(
+  r: ReturnType<typeof run>,
+  expected: { code: 1 | 2; stderr: string },
+  id?: string,
+): void {
+  expect(r.code, id).toBe(expected.code);
+  expect(r.stdout, id).toBe("");
+  expect(r.stderr, id).toContain(expected.stderr);
 }
 
 /** Poll for the completed review.status record a background monitor writes
@@ -239,8 +263,7 @@ describe("run-review.mts", () => {
 
   test("copilot whitespace-only output is a failed review, not a verdict", () => {
     const r = run(["copilot", promptFile], { STUB_MODE: "blank" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("review FAILED - relaunch");
+    expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty output" });
   });
 
   test("a stub that reads stdin completes: stdin is 'ignore', not an open pipe", () => {
@@ -263,7 +286,7 @@ describe("run-review.mts", () => {
 
   test("--stdin-prompt with copilot is a usage error: exit 2", () => {
     const r = run(["copilot", promptFile, "--stdin-prompt"]);
-    expect(r.code).toBe(2);
+    expectFailure(r, { code: 2, stderr: "copilot does not support --stdin-prompt" });
   });
 
   test("--stdin-prompt delivers a prompt larger than any pipe buffer in full", () => {
@@ -291,8 +314,10 @@ describe("run-review.mts", () => {
 
   test("codex stream cut before a verdict exits 1", () => {
     const r = run(["codex", promptFile], { STUB_MODE: "cut" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("review FAILED - relaunch");
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (stream ended without a verdict event",
+    });
   });
 
   test("codex agent_message without a following turn.completed is narration, not a verdict", () => {
@@ -303,9 +328,7 @@ describe("run-review.mts", () => {
 
   test("a stream cut inside a later turn voids the earlier turn's verdict", () => {
     const r = run(["codex", promptFile], { STUB_MODE: "cutsecond" });
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toContain("review FAILED - relaunch");
+    expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (stream cut mid-turn" });
   });
 
   test("a malformed trailing line voids the verdict even after turn.completed", () => {
@@ -319,8 +342,10 @@ describe("run-review.mts", () => {
 
   test("claude stream ending without a result event exits 1", () => {
     const r = run(["claude", promptFile], { STUB_MODE: "cut" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("review FAILED - relaunch");
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (stream ended without a verdict event",
+    });
   });
 
   test("a claude result with is_error true is a failed review, even on CLI exit 0", () => {
@@ -338,23 +363,22 @@ describe("run-review.mts", () => {
 
   test("an empty stream exits 1: an empty review never reads as clean", () => {
     const r = run(["codex", promptFile], { STUB_MODE: "empty" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("review FAILED - relaunch");
+    expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty output" });
   });
 
   test("a whitespace-only verdict exits 1 for both stream formats", () => {
     for (const tool of ["codex", "claude"]) {
       const r = run([tool, promptFile], { STUB_MODE: "blank" });
-      expect(r.code).toBe(1);
-      expect(r.stderr).toContain("review FAILED - relaunch");
+      expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty verdict" }, tool);
     }
   });
 
   test("a verdict from a reviewer that exited non-zero still fails", () => {
     const r = run(["codex", promptFile], { STUB_EXIT: "3" });
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toContain("review FAILED - relaunch");
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (reviewer status: 3 (stderr kept at",
+    });
   });
 
   test("missing reviewer binary exits 2, not 1", () => {
@@ -364,9 +388,15 @@ describe("run-review.mts", () => {
   });
 
   test("unknown reviewer or missing prompt file are usage errors: exit 2", () => {
-    expect(run(["gemini", promptFile]).code).toBe(2);
-    expect(run(["codex"]).code).toBe(2);
-    expect(run(["codex", join(binDir, "no-such-prompt.txt")]).code).toBe(2);
+    const cases: [string[], string][] = [
+      [["gemini", promptFile], "unknown reviewer: gemini"],
+      [["codex"], "expected exactly one <prompt-file>"],
+      [["codex", join(binDir, "no-such-prompt.txt")], "cannot read prompt file"],
+    ];
+    for (const [args, message] of cases) {
+      const r = run(args);
+      expectFailure(r, { code: 2, stderr: message }, args.join(" "));
+    }
   });
 
   test("--background prints output path and pid; --extract reads the verdict later", () => {
@@ -408,17 +438,24 @@ describe("run-review.mts", () => {
     rmSync(dirname(outputFile), { recursive: true, force: true });
   });
 
-  test("--extract before the exit status is recorded fails safe, even on a full stream", () => {
-    const earlyDir = mkdtempSync(join(tmpdir(), "run-review-early-"));
-    const outputFile = join(earlyDir, "review.jsonl");
-    writeFileSync(
-      outputFile,
-      '{"type":"item.completed","item":{"type":"agent_message","text":"looks complete"}}\n{"type":"turn.completed"}\n',
-    );
-    const extracted = run(["codex", "--extract", outputFile]);
-    expect(extracted.code).toBe(1);
-    expect(extracted.stderr).toContain("no exit status recorded");
-    rmSync(earlyDir, { recursive: true, force: true });
+  test("--extract with no exit status recorded fails safe, stream complete or not yet created", () => {
+    const cases = [
+      { id: "full stream, no record", stream: true },
+      { id: "nothing created yet", stream: false },
+    ];
+    for (const { id, stream } of cases) {
+      const earlyDir = mkdtempSync(join(tmpdir(), "run-review-early-"));
+      const outputFile = join(earlyDir, "review.jsonl");
+      if (stream) {
+        writeFileSync(
+          outputFile,
+          '{"type":"item.completed","item":{"type":"agent_message","text":"looks complete"}}\n{"type":"turn.completed"}\n',
+        );
+      }
+      const extracted = run(["codex", "--extract", outputFile]);
+      expectFailure(extracted, { code: 1, stderr: "no exit status recorded" }, id);
+      rmSync(earlyDir, { recursive: true, force: true });
+    }
   });
 
   test("--extract with a different reviewer than the launch is refused: exit 2", () => {
@@ -465,20 +502,12 @@ describe("run-review.mts", () => {
     );
     const statusFile = join(corruptDir, "review.status");
     writeFileSync(statusFile, "not json");
-    expect(run(["codex", "--extract", outputFile]).code).toBe(2);
+    const corrupt = run(["codex", "--extract", outputFile]);
+    expectFailure(corrupt, { code: 2, stderr: "not a run-review capture" });
     writeFileSync(statusFile, '{"tool":"codex","output":"review.jsonl","status":0}');
     const extracted = run(["codex", "--extract", outputFile]);
-    expect(extracted.code).toBe(2);
-    expect(extracted.stderr).toContain("non-string status");
+    expectFailure(extracted, { code: 2, stderr: "non-string status" });
     rmSync(corruptDir, { recursive: true, force: true });
-  });
-
-  test("--extract before the monitor even creates the stream exits 1, not 2", () => {
-    const pendingDir = mkdtempSync(join(tmpdir(), "run-review-pending-"));
-    const extracted = run(["codex", "--extract", join(pendingDir, "review.jsonl")]);
-    expect(extracted.code).toBe(1);
-    expect(extracted.stderr).toContain("no exit status recorded");
-    rmSync(pendingDir, { recursive: true, force: true });
   });
 });
 
