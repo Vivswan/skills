@@ -28,10 +28,6 @@ import { basename, join } from "node:path";
  *   set with its default, the interval defaults and floor, the
  *   baseline-first discipline, and the exit-code 0/1/2/3 semantics at their
  *   emission sites.
- * - skills/worktree-hygiene/SKILL.md <-> its scripts/retire-branch.mts: the
- *   invocation shape, every flag the section cites, the rehearsal and
- *   landing-gate literals, and the exit-code 1/2/3 constants at their exit
- *   sites.
  *
  * Non-contract citations (external commands like pgrep/ps, git idioms, path
  * examples) are deliberately unpinned. Each entry must appear in both the doc
@@ -59,7 +55,6 @@ const FLEET_DOC = join(ROOT, "skills", "orchestrator-mode", "references", "fleet
 const FLEET_SCRIPTS = join(ROOT, "skills", "orchestrator-mode", "scripts");
 const RUBBER_DUCK = join(ROOT, "skills", "rubber-duck-review");
 const WATCH_CI = join(ROOT, "skills", "watch-ci-after-push");
-const WORKTREE_HYGIENE = join(ROOT, "skills", "worktree-hygiene");
 
 type Occurrences = number | ">=1";
 type DocPin = string | { text: string; occurrences: Occurrences };
@@ -431,62 +426,6 @@ const SURFACES: Record<string, Surface> = {
       },
     ],
   },
-  "worktree-hygiene/SKILL.md <-> retire-branch.mts": {
-    docPath: join(WORKTREE_HYGIENE, "SKILL.md"),
-    scriptPath: join(WORKTREE_HYGIENE, "scripts", "retire-branch.mts"),
-    tokens: [
-      {
-        doc: {
-          text: 'bun "<skill-dir>/scripts/retire-branch.mts" --branch feature/thing',
-          occurrences: 2,
-        },
-        script: '"usage: retire-branch.mts --branch <name> [options]"',
-      },
-      { doc: "--branch feature/thing --execute", script: 'flag === "--execute"' },
-      {
-        doc: "--mainline develop --remote upstream --repo-root /path/to/repo",
-        script: '"--mainline": "mainline",',
-      },
-      {
-        doc: "--mainline develop --remote upstream --repo-root /path/to/repo",
-        script: '"--remote": "remote",',
-      },
-      {
-        doc: "--mainline develop --remote upstream --repo-root /path/to/repo",
-        script: '"--repo-root": "repoRoot",',
-      },
-      { doc: "--original-tip 7c31f0e", script: '"--original-tip": "originalTip",' },
-      {
-        doc: "--no-writer-check # a host where lsof cannot answer",
-        script: 'flag === "--no-writer-check"',
-      },
-      {
-        doc: "REHEARSED: every gate passed for feature/thing; nothing was destroyed",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "REHEARSED: every gate passed for ${options.branch}; nothing was destroyed",
-      },
-      {
-        doc: { text: "(add --execute)", occurrences: 2 },
-        script: { text: "(add --execute)", occurrences: 2 },
-      },
-      {
-        doc: { text: "[landed] by content equivalence at", occurrences: 2 },
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "by content equivalence at ${short(base)}",
-      },
-      {
-        doc: "`[landed] by ancestry`",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "by ancestry: ${label} is contained in",
-      },
-      { doc: "| 1 | a gate REFUSED on the evidence", script: "const EXIT_REFUSED = 1;" },
-      { doc: "| 1 | a gate REFUSED on the evidence", script: "exitWith(EXIT_REFUSED," },
-      { doc: "| 2 | usage error", script: "const EXIT_USAGE = 2;" },
-      { doc: "| 2 | usage error", script: "exitWith(EXIT_USAGE," },
-      { doc: "| 3 | BROKEN measurement", script: "const EXIT_BROKEN = 3;" },
-      { doc: "| 3 | BROKEN measurement", script: "exitWith(EXIT_BROKEN," },
-    ],
-  },
 };
 
 /**
@@ -648,7 +587,7 @@ const NORMALIZATION_CASES: Array<{ id: string; input: string; expected: string }
 describe("doc normalization", () => {
   for (const { id, input, expected } of NORMALIZATION_CASES) {
     test(id, () => {
-      expect(normalizeDoc(input), id).toBe(expected);
+      expect(normalizeDoc(input)).toBe(expected);
     });
   }
 });

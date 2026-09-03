@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Worktree Hygiene",
     "shortDescription": "Safe removal, handover, and sharing of git worktrees.",
-    "longDescription": "Fires when a session creates, removes, hands over, or shares git worktrees, or retires a branch after it landed. Gates removal on fresh status codes and live-writer checks; retires landed branches through one gated program (ancestry or content-equivalence landing proof, sha-pinned deletion); makes handovers explicit ownership transfers; enforces one branch per worktree; and names the shared-.git and file-ownership hazards of parallel actors.",
+    "longDescription": "Fires when a session creates, removes, hands over, or shares git worktrees. Gates removal on fresh status codes, content-verified landings, and live-writer checks; makes handovers explicit ownership transfers; enforces one branch per worktree; and names the shared-.git and file-ownership hazards of parallel actors.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
     "capabilities": ["Read", "Bash", "Git"],
