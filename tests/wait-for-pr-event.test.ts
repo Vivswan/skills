@@ -175,6 +175,19 @@ function run(
 
 const STATIC = { "gql-1": gql({ threads: [true] }), "pr-1": prView([["ci", "SUCCESS"]]) };
 
+/** The whole check outcome of a watched run: the baseline snapshot segment,
+ * which only a correctly keyed check map can print, plus EVERY check delta
+ * emitted, so a collision that masks or invents a row cannot pass unseen. */
+function expectSnapshotAndDeltas(
+  r: ReturnType<typeof run>,
+  expected: { checks: string; deltas: string[] },
+): void {
+  expect(r.code).toBe(0);
+  expect(r.stdout).toContain(`checks ${expected.checks};`);
+  const deltas = r.stdout.split("\n").filter((line) => line.startsWith("check "));
+  expect(deltas).toEqual(expected.deltas);
+}
+
 describe("wait-for-pr-event.mts", () => {
   test("baseline failure exits 2 before any wait or retry", () => {
     const r = run(["7", "--repo", "octo/example"], {}, { STUB_FAIL_GQL: "1" });
@@ -273,8 +286,10 @@ describe("wait-for-pr-event.mts", () => {
       "pr-1": prView([["ci", "", "IN_PROGRESS"]]),
       "pr-2": prView([["ci", "FAILURE"]]),
     });
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("check ci -> failure (was pending)");
+    expectSnapshotAndDeltas(r, {
+      checks: "ci=pending",
+      deltas: ["check ci -> failure (was pending)"],
+    });
   });
 
   test("a StatusContext state change is a check delta too", () => {
@@ -283,8 +298,10 @@ describe("wait-for-pr-event.mts", () => {
       "pr-1": prView([["deploy/preview", "PENDING", undefined, "StatusContext"]]),
       "pr-2": prView([["deploy/preview", "FAILURE", undefined, "StatusContext"]]),
     });
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("check deploy/preview -> failure (was pending)");
+    expectSnapshotAndDeltas(r, {
+      checks: "deploy/preview=pending",
+      deltas: ["check deploy/preview -> failure (was pending)"],
+    });
   });
 
   test("a CheckRun and a StatusContext sharing a name are tracked separately", () => {
@@ -299,10 +316,12 @@ describe("wait-for-pr-event.mts", () => {
         ["ci", "SUCCESS", undefined, "StatusContext"],
       ]),
     });
-    expect(r.code).toBe(0);
-    // Exactly one delta: the StatusContext flip, not a masked CheckRun.
-    expect(r.stdout.match(/check ci -> /g)).toHaveLength(1);
-    expect(r.stdout).toContain("check ci -> success (was pending)");
+    // Keyed by bare name, the StatusContext row would overwrite the CheckRun:
+    // the baseline would read "ci=pending" and the flip would look identical.
+    expectSnapshotAndDeltas(r, {
+      checks: "ci=success ci=pending",
+      deltas: ["check ci -> success (was pending)"],
+    });
   });
 
   test("same-name CheckRuns from different workflows never mask each other", () => {
@@ -317,9 +336,12 @@ describe("wait-for-pr-event.mts", () => {
         ["test", "FAILURE", undefined, undefined, "nightly.yml"],
       ]),
     });
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("check nightly.yml:test -> failure (was success)");
-    expect(r.stdout).not.toContain("check ci.yml:test ->");
+    // A bare-name key would keep only the last row, so the baseline would read
+    // "nightly.yml:test=success" alone and ci.yml would never be diffed.
+    expectSnapshotAndDeltas(r, {
+      checks: "ci.yml:test=success nightly.yml:test=success",
+      deltas: ["check nightly.yml:test -> failure (was success)"],
+    });
   });
 
   test("a check vanishing from the rollup is a delta, not silence", () => {
@@ -331,8 +353,10 @@ describe("wait-for-pr-event.mts", () => {
       ]),
       "pr-2": prView([["ci", "SUCCESS"]]),
     });
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("check lint -> vanished (was success)");
+    expectSnapshotAndDeltas(r, {
+      checks: "ci=success lint=success",
+      deltas: ["check lint -> vanished (was success)"],
+    });
   });
 
   test("a check appearing pending AFTER the baseline still reports its vanishing", () => {
@@ -348,8 +372,10 @@ describe("wait-for-pr-event.mts", () => {
         "pr-3": prView(),
       },
     );
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("check ci -> vanished (was pending)");
+    expectSnapshotAndDeltas(r, {
+      checks: "none",
+      deltas: ["check ci -> vanished (was pending)"],
+    });
   }, 30000);
 
   test("a malformed but zero-exit baseline response still exits 2", () => {
@@ -408,9 +434,13 @@ describe("wait-for-pr-event.mts", () => {
       "pr-1": prView(),
     });
     expect(watched.code).toBe(0);
+    expect(watched.stdout).toContain("merged at t");
+    expect(watched.stdout).not.toContain("not watched");
+    // Baseline only: one graphql call and one checks call each.
+    expect(watched.ghCalls).toHaveLength(2);
     const unwatched = run(["7", "--repo", "octo/example"], { "gql-1": merged, "pr-1": prView() });
     expect(unwatched.code).toBe(1);
-    // Baseline only: one graphql call and one checks call each.
+    expect(unwatched.stdout).toContain("merged at t but merge is not watched");
     expect(unwatched.ghCalls).toHaveLength(2);
   });
 
@@ -447,18 +477,61 @@ describe("wait-for-pr-event.mts", () => {
     expect(r.ghCalls).toHaveLength(0);
   });
 
-  test("unknown flags, bad numbers, and extra arguments are usage errors", () => {
-    expect(run(["7", "--frobnicate"], STATIC).code).toBe(2);
-    expect(run(["abc"], STATIC).code).toBe(2);
-    expect(run(["7", "extra"], STATIC).code).toBe(2);
-    expect(run([], STATIC).code).toBe(2);
-    expect(run(["7", "--until", "comment,mail"], STATIC).code).toBe(2);
-    expect(run(["7", "--repo", "not-a-repo"], STATIC).code).toBe(2);
+  // Usage and tooling errors share exit 2: each test below pins the message
+  // of the one validation branch it exists for, and that gh was never called.
+  test("an unknown flag is a usage error before any gh call", () => {
+    const r = run(["7", "--frobnicate"], STATIC);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("unknown flag: --frobnicate");
+    expect(r.ghCalls).toHaveLength(0);
+  });
+
+  test("a non-numeric pr number is a usage error before any gh call", () => {
+    const r = run(["abc"], STATIC);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("<pr-number> must be a positive integer, got: abc");
+    expect(r.ghCalls).toHaveLength(0);
+  });
+
+  test("an extra positional argument is a usage error before any gh call", () => {
+    const r = run(["7", "extra"], STATIC);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("unexpected extra argument: extra");
+    expect(r.ghCalls).toHaveLength(0);
+  });
+
+  test("a missing pr number is a usage error before any gh call", () => {
+    const r = run([], STATIC);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("missing <pr-number>");
+    expect(r.ghCalls).toHaveLength(0);
+  });
+
+  test("an unknown --until event is a usage error before any gh call", () => {
+    const r = run(["7", "--until", "comment,mail"], STATIC);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain(
+      "--until accepts a comma set of comment,review,checks,merge; got: mail",
+    );
+    expect(r.ghCalls).toHaveLength(0);
+  });
+
+  test("a malformed --repo is a usage error before any gh call", () => {
+    const r = run(["7", "--repo", "not-a-repo"], STATIC);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("--repo must be owner/name, got: not-a-repo");
+    expect(r.ghCalls).toHaveLength(0);
+  });
+
+  test("a --timeout overflowing safe integers is a usage error, not an eternal wait", () => {
     // Digits that overflow to an unsafe integer would make an Infinity-like
     // deadline; they must be a usage error, not an eternal wait.
-    const overflow = run(["7", "--timeout", "99999999999999999999"], STATIC);
-    expect(overflow.code).toBe(2);
-    expect(overflow.stderr).toContain("safe integer range");
+    const r = run(["7", "--timeout", "99999999999999999999"], STATIC);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain(
+      "--timeout must be a whole number within safe integer range, got: 99999999999999999999",
+    );
+    expect(r.ghCalls).toHaveLength(0);
   });
 
   test("the deadline triggers one final read: a last-window delta still exits 0", () => {
