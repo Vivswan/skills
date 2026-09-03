@@ -49,6 +49,8 @@ interface ProbeOutput {
   error?: string;
   failures?: number;
   value?: number | string[] | KeyDiff | TokenResult[];
+  file?: string;
+  literal?: string;
   evidence?: Evidence[];
   sources?: { committed: string[]; dirty: string[] };
 }
@@ -108,6 +110,16 @@ function probeWithEnv(
 
 function probe(...args: string[]): { code: number | null; out: ProbeOutput; stderr: string } {
   return probeWithEnv({}, args);
+}
+
+// Pins the exit code and the ENTIRE emitted object together, so a test
+// cannot pass on code and ok alone while another field regresses.
+function expectOutcome(
+  r: { code: number | null; out: ProbeOutput },
+  expected: { code: number; out: ProbeOutput },
+): void {
+  expect(r.code).toBe(expected.code);
+  expect(r.out).toEqual(expected.out);
 }
 
 function sh(cwd: string, ...cmd: string[]): string {
@@ -241,15 +253,33 @@ describe("probe count", () => {
     const dir = fixtureDir();
     const file = join(dir, "workflows.txt");
     writeFileSync(file, "  - update-release.yml\n  - release.yml\n  - deploy.yml\n");
-    const { code, out } = probe("count", file, "release.yml");
-    expect(code).toBe(0);
-    expect(out.ok).toBe(true);
-    expect(out.value).toBe(1);
-    expect(out.evidence).toHaveLength(1);
-    expect(out.evidence?.[0]).toEqual({ line: 2, text: "  - release.yml" });
-    const longer = probe("count", file, "update-release.yml");
-    expect(longer.out.value).toBe(1);
-    expect(longer.out.evidence?.[0]?.line).toBe(1);
+    expectOutcome(probe("count", file, "release.yml"), {
+      code: 0,
+      out: {
+        ok: true,
+        file,
+        literal: "release.yml",
+        value: 1,
+        evidence: [{ line: 2, text: "  - release.yml" }],
+      },
+    });
+    expectOutcome(probe("count", file, "update-release.yml"), {
+      code: 0,
+      out: {
+        ok: true,
+        file,
+        literal: "update-release.yml",
+        value: 1,
+        evidence: [{ line: 1, text: "  - update-release.yml" }],
+      },
+    });
+    // With no anchored sibling present, the embedded name alone reads 0.
+    const prose = join(dir, "workflows.md");
+    writeFileSync(prose, "The gate keeps update-release.yml wired\ninto the pipeline.\n");
+    expectOutcome(probe("count", prose, "release.yml"), {
+      code: 0,
+      out: { ok: true, file: prose, literal: "release.yml", value: 0, evidence: [] },
+    });
   });
 
   test("value always equals the number of evidence lines", () => {
@@ -268,11 +298,10 @@ describe("probe json-keys", () => {
     const dir = fixtureDir();
     const file = join(dir, "broken.json");
     writeFileSync(file, '{"a": 1,,}\n');
-    const { code, out } = probe("json-keys", file);
-    expect(code).toBe(1);
-    expect(out.ok).toBe(false);
-    expect(out.error).toContain("broken.json");
-    expect(out.value).toBeUndefined();
+    expectOutcome(probe("json-keys", file), {
+      code: 1,
+      out: { ok: false, error: expect.stringContaining(`${file}: JSON Parse error`) },
+    });
   });
 
   test("valid JSON yields sorted full key paths", () => {
@@ -291,15 +320,30 @@ describe("probe json-keys", () => {
     const second = join(dir, "de.json");
     writeFileSync(first, '{"shared": 1, "onlyEn": 2}\n');
     writeFileSync(second, '{"shared": 1, "onlyDe": 3}\n');
-    const { code, out } = probe("json-keys", first, second);
-    expect(code).toBe(1);
-    expect(out.ok).toBe(false);
-    const diff = out.value as KeyDiff;
-    expect(diff.onlyInFirst).toEqual(["onlyEn"]);
-    expect(diff.onlyInSecond).toEqual(["onlyDe"]);
-    const same = probe("json-keys", first, first);
-    expect(same.code).toBe(0);
-    expect(same.out.ok).toBe(true);
+    expectOutcome(probe("json-keys", first, second), {
+      code: 1,
+      out: {
+        ok: false,
+        value: {
+          first: { file: first, keyCount: 2 },
+          second: { file: second, keyCount: 2 },
+          onlyInFirst: ["onlyEn"],
+          onlyInSecond: ["onlyDe"],
+        },
+      },
+    });
+    expectOutcome(probe("json-keys", first, first), {
+      code: 0,
+      out: {
+        ok: true,
+        value: {
+          first: { file: first, keyCount: 2 },
+          second: { file: first, keyCount: 2 },
+          onlyInFirst: [],
+          onlyInSecond: [],
+        },
+      },
+    });
   });
 
   test("keys that are not valid JS identifiers are bracket-quoted", () => {
@@ -320,9 +364,18 @@ describe("probe json-keys", () => {
     const trickFile = join(dir, "trick.json");
     writeFileSync(arrayFile, '{"a": [0]}\n');
     writeFileSync(trickFile, '{"a": 0, "a[0]": 0}\n');
-    const { code, out } = probe("json-keys", arrayFile, trickFile);
-    expect(code).toBe(1);
-    expect(out.ok).toBe(false);
+    expectOutcome(probe("json-keys", arrayFile, trickFile), {
+      code: 1,
+      out: {
+        ok: false,
+        value: {
+          first: { file: arrayFile, keyCount: 2 },
+          second: { file: trickFile, keyCount: 2 },
+          onlyInFirst: ["a[0]"],
+          onlyInSecond: ['["a[0]"]'],
+        },
+      },
+    });
   });
 });
 
@@ -609,15 +662,19 @@ describe("probe tokens", () => {
     const dir = fixtureDir();
     const table = join(dir, "table.json");
     writeFileSync(table, "{}");
-    const { code, out } = probe("tokens", table, dir);
-    expect(code).toBe(1);
-    expect(out.ok).toBe(false);
-    expect(out.error).toContain("empty");
+    expectOutcome(probe("tokens", table, dir), {
+      code: 1,
+      out: { ok: false, error: `${table}: table is empty - a probe with no tokens cannot pass` },
+    });
     const noTokens = join(dir, "no-tokens.json");
     writeFileSync(noTokens, JSON.stringify({ "doc.md": [] }));
-    const empty = probe("tokens", noTokens, dir);
-    expect(empty.code).toBe(1);
-    expect(empty.out.ok).toBe(false);
+    expectOutcome(probe("tokens", noTokens, dir), {
+      code: 1,
+      out: {
+        ok: false,
+        error: `${noTokens}: entry for "doc.md" must be a non-empty array of tokens`,
+      },
+    });
   });
 
   test("a table entry escaping the tree root is rejected", () => {
@@ -853,17 +910,6 @@ describe("reflow safety", () => {
     expect(out.evidence?.[0]?.line).toBe(2);
     expect(out.evidence?.[0]?.text).toBe("second alpha");
     expect(out.evidence?.[0]?.endLine).toBe(3);
-  });
-
-  test("release.yml still cannot match update-release.yml after normalization", () => {
-    const dir = fixtureDir();
-    const file = join(dir, "workflows.md");
-    writeFileSync(file, "The gate keeps update-release.yml wired\ninto the pipeline.\n");
-    const { code, out } = probe("count", file, "release.yml");
-    expect(code).toBe(0);
-    expect(out.ok).toBe(true);
-    expect(out.value).toBe(0);
-    expect(out.evidence).toEqual([]);
   });
 
   test("a genuinely deleted sentence still reads 0 on the reflowed file", () => {
