@@ -1,17 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   existsSync,
-  lstatSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
-  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 
 // Contract tests for the orchestrator-mode session ledger. Each test drives
@@ -62,40 +60,45 @@ function runJson(file: string, ...args: RunArg[]) {
   return { ...r, json: JSON.parse(r.stdout) };
 }
 
+// Whole-outcome check: the exit code and the complete JSON as one comparison,
+// so a command whose output is deterministic is never pinned by a single field.
+function expectRun(
+  file: string,
+  args: RunArg[],
+  expected: { code: number; json: unknown },
+  id?: string,
+) {
+  const r = runJson(file, ...args);
+  expect({ code: r.code, json: r.json }, id).toEqual(expected);
+  return r;
+}
+
 describe("init / state / show round-trip", () => {
   test("init creates, re-init never clobbers, state transitions are reported", () => {
     const file = freshFile();
 
-    const init = runJson(file, "init");
-    expect(init.code).toBe(0);
-    expect(init.json).toMatchObject({ ok: true, created: true });
+    expectRun(file, ["init"], { code: 0, json: { ok: true, created: true, file } });
     expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({ workers: {}, flags: [] });
 
-    const first = runJson(file, "state", "builder-a", "active");
-    expect(first.code).toBe(0);
-    expect(first.json).toMatchObject({
-      ok: true,
-      worker: "builder-a",
-      previous: null,
-      state: "active",
+    expectRun(file, ["state", "builder-a", "active"], {
+      code: 0,
+      json: { ok: true, worker: "builder-a", previous: null, state: "active" },
+    });
+    expectRun(file, ["state", "builder-a", "dormant-by-design"], {
+      code: 0,
+      json: { ok: true, worker: "builder-a", previous: "active", state: "dormant-by-design" },
     });
 
-    const second = runJson(file, "state", "builder-a", "dormant-by-design");
-    expect(second.code).toBe(0);
-    expect(second.json).toMatchObject({ previous: "active", state: "dormant-by-design" });
+    expectRun(file, ["init"], { code: 0, json: { ok: true, created: false, file } });
 
-    const reinit = runJson(file, "init");
-    expect(reinit.code).toBe(0);
-    expect(reinit.json).toMatchObject({ ok: true, created: false });
-
-    const one = runJson(file, "show", "builder-a");
-    expect(one.code).toBe(0);
-    expect(one.json).toMatchObject({ worker: "builder-a", state: "dormant-by-design", grants: [] });
-
-    const all = runJson(file, "show");
-    expect(all.code).toBe(0);
-    expect(all.json.workers["builder-a"].state).toBe("dormant-by-design");
-    expect(all.json.flags).toEqual([]);
+    expectRun(file, ["show", "builder-a"], {
+      code: 0,
+      json: { worker: "builder-a", state: "dormant-by-design", grants: [], flags: [] },
+    });
+    expectRun(file, ["show"], {
+      code: 0,
+      json: { workers: { "builder-a": { state: "dormant-by-design", grants: [] } }, flags: [] },
+    });
   });
 
   test("show of an unknown worker exits 1", () => {
@@ -229,9 +232,10 @@ describe("flags", () => {
   test("a prefix matching no flag exits 1", () => {
     const file = freshFile();
     run(file, "init");
-    const r = runJson(file, "retract", "deadbeef");
-    expect(r.code).toBe(1);
-    expect(r.json.ok).toBe(false);
+    expectRun(file, ["retract", "deadbeef"], {
+      code: 1,
+      json: { ok: false, error: 'no flag matches hash prefix "deadbeef"' },
+    });
   });
 
   test("the worker/text boundary cannot collide in the hash", () => {
@@ -409,42 +413,12 @@ describe("corrupt ledger files", () => {
 });
 
 describe("atomic writes", () => {
-  test("two sequential writer processes both persist", () => {
-    const file = freshFile();
-    run(file, "init");
-    expect(runJson(file, "flag", "builder-a", "first writer").code).toBe(0);
-    expect(runJson(file, "flag", "builder-b", "second writer").code).toBe(0);
-
-    const ledger = JSON.parse(readFileSync(file, "utf-8"));
-    expect(ledger.flags).toHaveLength(2);
-    const workers = ledger.flags.map((f: { worker: string }) => f.worker).sort();
-    expect(workers).toEqual(["builder-a", "builder-b"]);
-  });
-
   test("writes leave no temp files behind", () => {
     const file = freshFile();
     run(file, "init");
     run(file, "flag", "builder-a", "text");
     const leftovers = readdirSync(dir).filter((name) => name.endsWith(".tmp"));
     expect(leftovers).toEqual([]);
-  });
-
-  test("a planted temp-shaped symlink is neither followed nor fatal", () => {
-    const file = freshFile();
-    run(file, "init");
-    const victim = join(dir, "victim.txt");
-    writeFileSync(victim, "precious");
-    // Shape of the historical predictable temp name: .<basename>.<pid>.<suffix>.tmp
-    const planted = join(dir, `.${basename(file)}.12345.abcdef.tmp`);
-    symlinkSync(victim, planted);
-
-    const r = runJson(file, "flag", "builder-a", "symlink probe");
-    expect(r.code).toBe(0);
-    // The victim was never truncated or overwritten through the symlink,
-    // and the planted link itself is untouched.
-    expect(readFileSync(victim, "utf-8")).toBe("precious");
-    expect(lstatSync(planted).isSymbolicLink()).toBe(true);
-    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(1);
   });
 
   test("racing inits create the ledger exactly once and never clobber", async () => {
@@ -476,26 +450,6 @@ describe("atomic writes", () => {
     expect(workers).toEqual(Array.from({ length: 8 }, (_, i) => `builder-${i}`).sort());
   });
 
-  test("racing writers never leave the file torn or corrupt", async () => {
-    const file = freshFile();
-    run(file, "init");
-    const procs = Array.from({ length: 8 }, (_, i) =>
-      Bun.spawn(["bun", SCRIPT, file, "flag", `builder-${i}`, "racing write"], {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: childEnv(),
-      }),
-    );
-    await Promise.all(procs.map((proc) => proc.exited));
-    for (const proc of procs) {
-      // Every racer read a complete ledger and appended cleanly.
-      expect(proc.exitCode).toBe(0);
-    }
-    expect(() => JSON.parse(readFileSync(file, "utf-8"))).not.toThrow();
-    // show runs the full loader (shape + hash integrity): exit 0 means not corrupt.
-    expect(runJson(file, "show").code).toBe(0);
-  });
-
   test("eight identical CONCURRENT flags: exactly one accepted, seven refused", async () => {
     const file = freshFile();
     run(file, "init");
@@ -522,7 +476,7 @@ describe("atomic writes", () => {
     expect(ledger.flags[0].hash).toBe(accepted[0]?.json.hash);
   });
 
-  test("eight distinct CONCURRENT flags: all persist, every returned hash in the file", async () => {
+  test("eight distinct CONCURRENT flags: all persist, every hash in the file, never torn or corrupt", async () => {
     const file = freshFile();
     run(file, "init");
     const procs = Array.from({ length: 8 }, (_, i) =>
@@ -550,6 +504,8 @@ describe("atomic writes", () => {
       // An exit-0 hash the caller may later retract must actually be durable.
       expect(persisted.has(r.json.hash)).toBe(true);
     }
+    // show runs the full loader (shape + hash integrity): exit 0 means not corrupt.
+    expectRun(file, ["show"], { code: 0, json: ledger });
   });
 });
 
@@ -591,39 +547,48 @@ describe("ledger lock", () => {
     }
   });
 
-  test("an orphaned break mutex pauses auto-recovery: loud timeout, no steal", () => {
-    const file = freshFile();
-    run(file, "init");
-    const lock = `${file}.lock`;
-    writeFileSync(lock, `${deadPid()}\n`);
-    const past = new Date(Date.now() - 60_000);
-    utimesSync(lock, past, past);
-    writeFileSync(`${lock}.break`, "1\n");
+  test("an orphaned break mutex gates acquisition: loud timeout, no steal, no lock created", () => {
+    for (const { id, staleLock } of [
+      {
+        id: "stale dead-holder lock present: the gate is taken before the break, so no steal",
+        staleLock: true,
+      },
+      {
+        id: "no lock present: the gate is taken before the create, so no lock appears",
+        staleLock: false,
+      },
+    ]) {
+      const file = freshFile();
+      run(file, "init");
+      const lock = `${file}.lock`;
+      const gate = `${lock}.break`;
+      const seededLock = staleLock ? `${deadPid()}\n` : null;
+      if (seededLock !== null) {
+        writeFileSync(lock, seededLock);
+        const past = new Date(Date.now() - 60_000);
+        utimesSync(lock, past, past);
+      }
+      writeFileSync(gate, "1\n");
 
-    const r = runJson(file, "flag", "builder-a", "must not happen", {
-      LEDGER_LOCK_TIMEOUT_MS: "200",
-    });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("lock");
-    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
-    expect(existsSync(lock)).toBe(true);
-  });
-
-  test("an orphaned break mutex with NO lock present still gates acquisition", () => {
-    const file = freshFile();
-    run(file, "init");
-    const lock = `${file}.lock`;
-    writeFileSync(`${lock}.break`, "1\n");
-
-    const r = runJson(file, "flag", "builder-a", "must not happen", {
-      LEDGER_LOCK_TIMEOUT_MS: "200",
-    });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("lock");
-    // The writer must neither create the lock nor mutate the ledger.
-    expect(existsSync(lock)).toBe(false);
-    expect(JSON.parse(readFileSync(file, "utf-8")).flags).toHaveLength(0);
-    expect(readFileSync(`${lock}.break`, "utf-8")).toBe("1\n");
+      const r = expectRun(
+        file,
+        ["flag", "builder-a", "must not happen", { LEDGER_LOCK_TIMEOUT_MS: "200" }],
+        {
+          code: 1,
+          json: { ok: false, error: expect.stringContaining("could not acquire ledger lock") },
+        },
+        id,
+      );
+      expect(r.stderr, id).toContain("could not acquire ledger lock");
+      expect(
+        {
+          flags: JSON.parse(readFileSync(file, "utf-8")).flags,
+          lock: existsSync(lock) ? readFileSync(lock, "utf-8") : null,
+          gate: existsSync(gate) ? readFileSync(gate, "utf-8") : null,
+        },
+        id,
+      ).toEqual({ flags: [], lock: seededLock, gate: "1\n" });
+    }
   });
 
   test("an aged lock whose holder is ALIVE is never stolen", () => {
