@@ -21,8 +21,9 @@ import { ROOT } from "../scripts/lib";
 // supersede rather than FAIL), and older re-triggered runs are reported as
 // superseded without affecting the exit code. The expected-workflow gate
 // (default "CI", overridden by --expect-workflow) turns an absent gate
-// workflow into exit 2 with evidence, never a vacuous pass. A fake `sleep`
-// keeps the discovery-retry scenarios instant.
+// workflow into exit 2 with evidence, never a vacuous pass. Every watch
+// passes --interval 60 (gh's 3 s default drained the API rate bucket). A fake
+// `sleep` keeps the discovery-retry scenarios instant.
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.sh");
 
@@ -81,7 +82,7 @@ if [ "$1 $2" = "run list" ]; then
   exit 0
 fi
 if [ "$1 $2" = "run watch" ]; then
-  [ "$#" -eq 3 ] || violate "watch: $*"
+  [ "$*" = "run watch $3 --interval 60" ] || violate "watch: $*"
   exit "\${GH_WATCH_EXIT:-0}"
 fi
 if [ "$1 $2" = "run view" ]; then

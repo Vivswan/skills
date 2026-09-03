@@ -29,9 +29,10 @@ const WATCHABLE = ["comment", "review", "checks", "merge"] as const;
 type Watched = (typeof WATCHABLE)[number];
 
 const DEFAULT_UNTIL = "comment,review";
-const DEFAULT_INTERVAL_SECONDS = 45;
-// Tighter polling hammers the API without making humans reply faster.
-const MIN_INTERVAL_SECONDS = 15;
+const DEFAULT_INTERVAL_SECONDS = 60;
+// The polling budget floor (SKILL.md, Polling Budget): faster polling only
+// spends the shared 5000-requests-per-hour bucket; humans reply no sooner.
+const MIN_INTERVAL_SECONDS = 60;
 const DEFAULT_TIMEOUT_SECONDS = 1800;
 const GH_CALL_TIMEOUT_MS = 60_000;
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;

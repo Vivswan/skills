@@ -11,13 +11,14 @@ Who merges, the standing merge exceptions, show-the-change PR bodies, draft disc
 
 ## Direct Commits to the Mainline
 
-1. One pending change on the mainline at a time, in plan order.
+1. One pending change on the mainline at a time, in plan order. Wait for the previous landing's CI verdict before pushing the next: when the mainline's runs share a concurrency group key, GitHub keeps at most one running plus one pending run per key, so a third push cancels the pending run and that SHA never gets a verdict (two landings in one production session needed reruns for exactly this), and the one-watcher rule in orchestrator-mode's Land section (6) keeps the API budget intact.
 2. Take the builder's branch (named in its completion signal) and prepare it per the repo's conventions: rebase onto the mainline, cherry-pick its commits, or export and apply its diff as a patch.
    - A DEPENDENT track (based on a sibling's branch) needs one extra recorded fact, MAINTAINED rather than set-once: the dependency's tip sha. Pin it when the upper track branches, and re-record it after every restack of the upper branch. The boundary tracks the branch's ACTUAL current base, so it updates at exactly the moments the base changes; a stale recording replays later or rewritten dependency commits.
    - At landing, transplant only the track-specific delta: `git rebase --onto <mainline> <recorded-dep-tip> <upper-branch>`. A dependency landed via squash or cherry-pick leaves its original commits outside the mainline's ancestry, so a whole-branch rebase would replay the dependency's changes.
    - The boundary must be RECORDED, not inferred: squash rewrites history (the same lesson as the PR gate's restack-before-retarget rule below).
 3. Re-run the gates on the result and run the review pass. Then land per the prep mode: a rebase or cherry-pick already leaves committed work, so fast-forward the mainline onto it and push; an applied patch is uncommitted, so commit it first, then push. Either way, what gets pushed is the MAINLINE, never the builder's branch.
 4. Keep the mainline tree frozen while a review round is in flight, and serialize resource-exclusive validation (fixed ports, shared stacks).
+5. Reverting a red landing is itself a landing, subject to the repo's commit-subject convention: `git revert` keeps the default subject `Revert "<subject>"`, which fails a Conventional Commits check, so revert with `git revert --no-edit <sha>` and then `git commit --amend -m "revert: <original subject>" -m "This reverts commit <sha>."` before pushing (`git revert -m` is the merge-parent selector, not a message flag). Production: the revert of a red landing on main failed CI's commit-subject validator on the very next run and needed a lease-pinned amend of the mainline tip to repair.
 
 ## PRs
 

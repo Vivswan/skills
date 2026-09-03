@@ -22,7 +22,8 @@ import { basename, join } from "node:path";
  *   full-SHA discovery command, the exit-code 0/1/2 semantics at their exit
  *   sites, the expected-workflow gate (its --expect-workflow override, its
  *   missing-evidence message, and the manual-dispatch hint), the failing-log
- *   excerpt command, and the superseded/FAIL/skip reporting literals.
+ *   excerpt command, the superseded/FAIL/skip reporting literals, and the
+ *   60 s watch poll interval at its declaration and every watch call site.
  * - skills/watch-ci-after-push/SKILL.md <-> its
  *   scripts/wait-for-pr-event.mts: the invocation shape, the --until event
  *   set with its default, the interval defaults and floor, the
@@ -349,6 +350,14 @@ const SURFACES: Record<string, Surface> = {
         doc: "Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything",
         script: "viewfail=1\n      continue\n    fi\n    viewfail=0",
       },
+      {
+        doc: "bundled script passes `--interval 60` to every `gh run watch`",
+        script: "watch_interval=60",
+      },
+      {
+        doc: "bundled script passes `--interval 60` to every `gh run watch`",
+        script: { text: 'gh run watch "$id" --interval "$watch_interval"', occurrences: 3 },
+      },
     ],
   },
   "watch-ci-after-push/SKILL.md <-> wait-for-pr-event.mts": {
@@ -369,12 +378,12 @@ const SURFACES: Record<string, Surface> = {
         script: 'const DEFAULT_UNTIL = "comment,review";',
       },
       {
-        doc: "default 45, minimum 15",
-        script: "const DEFAULT_INTERVAL_SECONDS = 45;",
+        doc: "default 60, minimum 60",
+        script: "const DEFAULT_INTERVAL_SECONDS = 60;",
       },
       {
-        doc: "default 45, minimum 15",
-        script: "const MIN_INTERVAL_SECONDS = 15;",
+        doc: "default 60, minimum 60",
+        script: "const MIN_INTERVAL_SECONDS = 60;",
       },
       {
         doc: "a failed poll retries after 2 seconds",

@@ -405,6 +405,56 @@ describe("sweep.mts worktree rows", () => {
     SWEEP_TIMEOUT,
   );
 
+  // A zero treeFileCount is the wipe signal on a worktree row but voids the
+  // positive control on the main-checkout row (production read 0 there for two
+  // sweeps, then recovered). The axis: WHERE the all-files-deleted commit lands.
+  const zeroTreeCases: { id: string; zeroRow: "control" | "worktree" }[] = [
+    { id: "control row fails the sweep", zeroRow: "control" },
+    { id: "worktree row is a normal wipe reading", zeroRow: "worktree" },
+  ];
+  test.each(zeroTreeCases)(
+    "a treeFileCount of 0 on the $id",
+    (c) => {
+      const root = join(fixtureRoot, `zero-tree-${c.zeroRow}`);
+      mkdirSync(root);
+      git(root, "init", "-b", "main");
+      writeFileSync(join(root, "only.txt"), "x\n");
+      git(root, "add", ".");
+      git(root, "commit", "-m", "initial");
+      let wipedAt = root;
+      if (c.zeroRow === "worktree") {
+        wipedAt = join(fixtureRoot, "zero-tree-wt");
+        git(root, "worktree", "add", wipedAt, "-b", "track-wipe-all");
+      }
+      git(wipedAt, "rm", "only.txt");
+      git(wipedAt, "commit", "-m", "delete everything");
+
+      const result = runSweep(root);
+      expect(result.stderr.toString()).toBe("");
+      const rows = result.stdout
+        .toString()
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const wiped = rowFor(rows, basename(wipedAt));
+      expect(wiped.ok).toBe(true);
+      expect(wiped.treeFileCount).toBe(0);
+      if (c.zeroRow === "control") {
+        expect(result.exitCode).toBe(1);
+        const first = rows[0];
+        expect(first.control).toBe("FAILED");
+        expect(first.reason).toContain(
+          `has treeFileCount 0 at HEAD ${wiped.headSha}; an empty tree on the main checkout invalidates the positive control`,
+        );
+      } else {
+        expect(result.exitCode).toBe(0);
+        expect(rows.some((r) => r.control === "FAILED")).toBe(false);
+        expect(rowFor(rows, basename(root)).treeFileCount).toBe(1);
+      }
+    },
+    SWEEP_TIMEOUT,
+  );
+
   test(
     "hostile inherited GIT_* env cannot redirect the sweep off its argument",
     () => {

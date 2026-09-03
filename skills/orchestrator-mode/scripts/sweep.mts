@@ -706,6 +706,22 @@ async function worktreeRow(
   };
 }
 
+// The main checkout is the positive control: it must resolve a HEAD sha or
+// hold a process (this sweep), and its tree at HEAD is the baseline worktree
+// rows are compared against, so a zero there voids the comparison.
+function controlFailureReason(control: Record<string, unknown>): string | null {
+  const name = basename(String(control.worktree));
+  const hasHead = typeof control.headSha === "string" && control.headSha.length > 0;
+  const hasProcesses = Array.isArray(control.processes) && control.processes.length > 0;
+  if (control.ok !== true || !(hasHead || hasProcesses)) {
+    return `main checkout row (${name}) has no headSha and no processes: ${JSON.stringify(control)}`;
+  }
+  if (control.treeFileCount === 0) {
+    return `main checkout row (${name}) has treeFileCount 0 at HEAD ${String(control.headSha)}; an empty tree on the main checkout invalidates the positive control, and worktree rows cannot be compared against a zero baseline`;
+  }
+  return null;
+}
+
 // --- main -------------------------------------------------------------------
 
 function usage(): number {
@@ -841,23 +857,11 @@ async function main(): Promise<number> {
     );
   }
 
-  // Positive control: the first porcelain entry is the main checkout, which
-  // must always resolve a HEAD sha or hold at least one process (this very
-  // sweep, when run from it). An impossible control row means the instrument
-  // is broken - report that, never a quiet fleet.
-  const control = rows[0] as Record<string, unknown>;
-  const controlAlive =
-    control.ok === true &&
-    ((typeof control.headSha === "string" && control.headSha.length > 0) ||
-      (Array.isArray(control.processes) && control.processes.length > 0));
-  if (!controlAlive) {
-    emit({
-      control: "FAILED",
-      reason:
-        `main checkout row (${basename(String(control.worktree))}) has no headSha and no ` +
-        `processes: ${JSON.stringify(control)}`,
-    });
-  }
+  // Positive control: the first porcelain entry is the main checkout. An
+  // impossible control row means the instrument is broken - report that,
+  // never a quiet fleet.
+  const controlFailure = controlFailureReason(rows[0] as Record<string, unknown>);
+  if (controlFailure !== null) emit({ control: "FAILED", reason: controlFailure });
 
   if (lsofLine !== null) emit(lsofLine);
   if (base.ref === null) {
@@ -869,7 +873,7 @@ async function main(): Promise<number> {
   }
   for (const row of rows) emit(row);
   if (transcriptsDir !== null) emit(transcriptReport(transcriptsDir));
-  return controlAlive ? 0 : 1;
+  return controlFailure === null ? 0 : 1;
 }
 
 process.exitCode = await main();

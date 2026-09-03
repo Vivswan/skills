@@ -269,7 +269,7 @@ describe("wait-for-pr-event.mts", () => {
 
   test("a check delta is ignored when checks are not watched: timeout, exit 3", () => {
     const r = run(
-      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "60"],
       {
         "gql-1": gql(),
         "pr-1": prView([["ci", "", "IN_PROGRESS"]]),
@@ -362,9 +362,9 @@ describe("wait-for-pr-event.mts", () => {
   test("a check appearing pending AFTER the baseline still reports its vanishing", () => {
     // baseline [] -> pending (not a delta) -> [] must emit the vanish:
     // deltas diff against the previous snapshot, not the original baseline.
-    // The second real poll sits one full 15s interval after the first.
+    // The second poll is the deadline's final read, 2 s in (not a 60 s interval).
     const r = run(
-      ["7", "--repo", "octo/example", "--until", "checks", "--interval", "15", "--timeout", "60"],
+      ["7", "--repo", "octo/example", "--until", "checks", "--interval", "60", "--timeout", "2"],
       {
         "gql-1": gql(),
         "pr-1": prView(),
@@ -455,7 +455,7 @@ describe("wait-for-pr-event.mts", () => {
   });
 
   test("timeout exits 3 with baseline and final snapshots as evidence", () => {
-    const r = run(["7", "--repo", "octo/example", "--timeout", "1", "--interval", "15"], STATIC);
+    const r = run(["7", "--repo", "octo/example", "--timeout", "1", "--interval", "60"], STATIC);
     expect(r.code).toBe(3);
     expect(r.stdout).toContain("no watched change in comment,review after 1s");
     expect(r.stdout).toContain("baseline: state OPEN");
@@ -464,14 +464,14 @@ describe("wait-for-pr-event.mts", () => {
   });
 
   test("the interval floor is enforced as a usage error before any gh call", () => {
-    const r = run(["7", "--repo", "octo/example", "--interval", "5"], STATIC);
+    const r = run(["7", "--repo", "octo/example", "--interval", "59"], STATIC);
     expect(r.code).toBe(2);
-    expect(r.stderr).toContain("--interval must be at least 15 seconds");
+    expect(r.stderr).toContain("--interval must be at least 60 seconds, got: 59");
     expect(r.ghCalls).toHaveLength(0);
   });
 
   test("a dash-prefixed value after a flag is rejected, not consumed", () => {
-    const r = run(["7", "--until", "--interval", "45"], STATIC);
+    const r = run(["7", "--until", "--interval", "60"], STATIC);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("--until requires a value");
     expect(r.ghCalls).toHaveLength(0);
@@ -536,7 +536,7 @@ describe("wait-for-pr-event.mts", () => {
 
   test("the deadline triggers one final read: a last-window delta still exits 0", () => {
     const r = run(
-      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "60"],
       {
         "gql-1": gql({ comments: 3 }),
         "gql-2": gql({ comments: 3 }),
@@ -552,7 +552,7 @@ describe("wait-for-pr-event.mts", () => {
 
   test("after the final read the timeout is honored: exit 3, no further poll", () => {
     const r = run(
-      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "60"],
       { "gql-1": gql({ comments: 3 }), "pr-1": prView() },
     );
     expect(r.code).toBe(3);
@@ -563,7 +563,7 @@ describe("wait-for-pr-event.mts", () => {
 
   test("a failed final read exits 2, never presenting stale evidence as final", () => {
     const r = run(
-      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "60"],
       { "gql-1": gql({ comments: 3 }), "pr-1": prView() },
       { STUB_FAIL_GQL_CALLS: "3" }, // baseline and first poll succeed; the final read fails
     );
@@ -576,7 +576,7 @@ describe("wait-for-pr-event.mts", () => {
     // The failing poll is NOT flagged as final: it sleeps past the deadline
     // and then errors, so only the clock says the wait is over.
     const r = run(
-      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "15"],
+      ["7", "--repo", "octo/example", "--until", "comment", "--timeout", "1", "--interval", "60"],
       { "gql-1": gql({ comments: 3 }), "pr-1": prView() },
       { STUB_SLEEP_GQL_CALLS: "2", STUB_FAIL_GQL_CALLS: "2" },
     );

@@ -76,6 +76,10 @@ done
 
 # Full SHA required: gh run list --commit silently matches nothing for short SHAs.
 sha="${1:-$(git rev-parse HEAD)}"
+# gh run watch refreshes every 3 s by default; parallel watchers at that rate
+# drained GitHub's 5000-requests-per-hour REST bucket and blinded every CI
+# verdict for 45 minutes. One refresh per minute per watched run instead.
+watch_interval=60
 # The flag loop stops at the first non-flag word, so anything after the SHA
 # (a misplaced --expect-workflow, a typo) would otherwise be dropped silently
 # - and a dropped expectation flag lets a green bystander run read as the
@@ -240,7 +244,7 @@ for _ in 1 2 3 4 5; do
     # The watch only waits; classification comes from the conclusion query in
     # the judgment loop below, so a watch aborted by a gh/network error
     # cannot misreport.
-    gh run watch "$id" >/dev/null 2>&1 || true
+    gh run watch "$id" --interval "$watch_interval" >/dev/null 2>&1 || true
   done
   # A failed or empty re-discovery is tooling trouble, same as at first
   # discovery; silently judging the stale snapshot instead could re-report a
@@ -267,7 +271,7 @@ done
 # known to be stale.
 if [ "$converged" -ne 1 ]; then
   for id in $run_ids; do
-    gh run watch "$id" >/dev/null 2>&1 || true
+    gh run watch "$id" --interval "$watch_interval" >/dev/null 2>&1 || true
   done
   run_lines="$(discover_with_retry)"
   if [ -z "$run_lines" ]; then
@@ -331,7 +335,7 @@ for id in $run_ids; do
   for attempt in 1 2 3; do
     if [ "$attempt" -gt 1 ]; then
       sleep 2
-      gh run watch "$id" >/dev/null 2>&1 || true
+      gh run watch "$id" --interval "$watch_interval" >/dev/null 2>&1 || true
       rewatched=1
     fi
     if ! line="$(gh run view "$id" --json name,conclusion --jq '"\(.conclusion)\t\(.name)"' 2>/dev/null)"; then

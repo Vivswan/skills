@@ -8,17 +8,18 @@ Every brief includes:
 
 1. **The full task contract inline.** Goal, acceptance criteria, and the definition of done. Never say "see task #N"; subagents may lack the board tools.
 2. **An explicit file whitelist and do-not-touch boundary.** The territory the agent owns, plus any shared files with region-level grants (e.g. one CSS file's disjoint regions). This is what lets sibling branches merge without conflicts.
-3. **The gates to run** (typecheck, lint, tests) and the instruction to run its own review loop before signaling done. After a lead directive, the builder's re-review prompt states what changed since the last round, and when the directive changed the diff's shape the builder rewrites the amended commit's body to match (the directive can say so explicitly): `--amend --no-edit` left stale bodies twice in one wave.
+3. **The gates to run** (typecheck, lint, tests) and the instruction to run its own review loop before signaling done. The install comes first: a fresh worktree has no installed dependencies (`node_modules`, a venv), the pre-commit hook refuses to run without them, and a runner like `bun run` can silently resolve the parent checkout's binaries and pass anyway, so the brief's first command after item 14's worktree preflight is the repo's install (`bun install --frozen-lockfile` or its equivalent). After a lead directive, the builder's re-review prompt states what changed since the last round, and when the directive changed the diff's shape the builder rewrites the amended commit's body to match (the directive can say so explicitly): `--amend --no-edit` left stale bodies twice in one wave.
 4. **How to signal completion** (e.g. message the lead) and the handoff contract: commit finished work to the worktree's branch (never push unless the brief says so) and include the branch name, commit subjects, and any escalations in the signal. In PR-per-track mode the brief NAMES THE ACTOR explicitly, preserving both options. Either the builder pushes its branch, opens the PR, reports the URL in its signal, and spawns (or requests) the CI watcher for its own pushes; or the builder stays no-push and the lead pushes from the worktree, opens the PR, and starts the watcher. The final signal is the only permitted stop.
-5. **For a teammate-style agent whose REPORT matters, the delivery mechanism itself:** the brief mandates an explicit message to the lead carrying the report. A teammate agent's final text is not delivered anywhere: unlike an unnamed one-shot spawn, whose output the harness hands back automatically, a teammate that merely ends its turn with the report as prose has reported to no one (five silent strandings in one production session).
+5. **For a teammate-style (named) agent whose REPORT matters, the delivery mechanism itself:** the brief REQUIRES an explicit SendMessage to the lead carrying the report, as the agent's final act, and says why. In Claude Code the harness delivers nothing else for a named (teammate) spawn: unlike an unnamed one-shot spawn, whose output comes back to the spawner automatically, a named agent's final text reaches nobody, so a teammate that ends its turn with the report as prose has reported to no one (five silent strandings in one production session, and it bit again in a later one whose briefs only said "report to the lead"). Codex hands a named agent's final output to the spawner on its own; the explicit message costs nothing there and keeps one brief shape across harnesses.
 6. **The stop-and-wait ban** (below).
 7. **The comment rules and the TODO ban** (below). Comments only for what code cannot show; where the `/code-standards` skill is installed, the brief points builders at it for the full house standards.
 8. **The out-of-territory rule:** anything broken or wrong found outside the agent's file whitelist is reported in the completion signal, never fixed silently. A silent out-of-territory edit collides with another agent's territory, and a silently dropped finding is lost.
 9. **The inbox-reconciliation rule** (below): the final signal enumerates every lead message received, with one line of evidence per directive.
 10. **The idempotency rule** (below): every directive and every briefed step is safe to arrive twice, late, or after the fact; a late arrival is also checked for supersession before acting, and genuinely non-idempotent operations are named in the brief.
 11. **For long-running service agents (the fleet monitor, long-horizon watchers): the standing-state channel.** The brief names the session ledger as where standing state arrives (re-read it every sweep) and requires every lead directive received as a message to be acknowledged in the agent's NEXT report. The delivery rule and its lead side live in `references/fleet-monitor.md`, Reporting Discipline.
-12. **Scratch files go to /tmp, never the worktree.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
+12. **Scratch files go to /tmp, never the worktree, at a unique per-agent path.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit. And the /tmp path is a `mktemp -d` taken once or an agent-named directory, never a fixed name like `/tmp/commit-msg.txt`: three builders in one session wrote their commit messages to that same path, and one track's commit carried another track's message (content unaffected).
 13. **Prompt and scratch files are written with the Write tool, one plain command per step.** In Claude Code, a builder inside an agent worktree has a sandbox that refuses Bash heredocs and compound commands whose text contains the word `git` (even inside a quoted prompt) as too complex to verify they stay inside the worktree; five builders in one wave each rediscovered it. So the brief says: write prompt and scratch files with the Write tool, and restore a mutated source with `cp` from a `/tmp` backup rather than a git command chained into the mutation.
+14. **Every git command in the brief names the worktree: `git -C <absolute worktree path> ...`**, never `cd <worktree> && git ...` (the compound form trips the same sandbox rule as item 13; `git -C` is one command). A shell's cwd is not a fact about the worktree: a teammate's cwd reset to the main checkout between turns, and its `git reset --soft` moved local main for a minute (restored, nothing pushed). And the builder's FIRST command is the preflight `git -C <worktree> rev-parse --show-toplevel`, which must print back the ABSOLUTE worktree path the brief declares (never the main checkout's path, and never a mere "somewhere under the harness's default worktree directory" test: Claude Code's `.claude/worktrees/` is one harness's default, not a fact about the worktree) before any install or edit: a worktree-isolated spawn once did not materialize, and the builder was editing the main checkout.
 
 ## The Stop-and-Wait Ban
 
@@ -87,18 +88,30 @@ Builders may never leave TODO or FIXME markers. The work either happens in the s
 ## Example Brief
 
 ```text
-Task: Add rate limiting to the API gateway (worktree branch: wt/rate-limit).
+Task: Add rate limiting to the API gateway (worktree branch: wt/rate-limit,
+  worktree /repo/.claude/worktrees/wt-rate-limit).
 Done means: middleware added, unit tests pass, gateway docs section updated.
 Territory: src/gateway/** and tests/gateway/** only. Do NOT touch
   src/core/** or shared configs; report needed changes there in your
   signal instead of making them.
+Environment: FIRST run `git -C /repo/.claude/worktrees/wt-rate-limit
+  rev-parse --show-toplevel` and require that exact path back (a spawn's
+  worktree can fail to materialize). Then `bun install --frozen-lockfile
+  --cwd /repo/.claude/worktrees/wt-rate-limit` (a fresh worktree has no
+  node_modules; the pre-commit hook refuses without them). Every git
+  command names the worktree the same way, `git -C <that path> ...`,
+  never `cd && git`.
 Gates: run `bun run check` FOREGROUND until green, then run your own
-  review loop and fix findings before signaling. Spawn reviewers UNNAMED
-  (named spawns detach); write scratch/prompt files to /tmp with your
-  Write tool, never here and never via a heredoc (the sandbox refuses
-  heredocs and compound commands that mention git).
-Handoff: commit finished work to wt/rate-limit (do not push). Signal the
-  lead with the branch name, commit subjects, any escalations, and one
+  review loop and fix findings before signaling. In Claude Code spawn
+  reviewers UNNAMED (named spawns detach there); write scratch/prompt
+  files under your own `mktemp -d` in /tmp with your Write tool, never
+  here, never a fixed name like /tmp/commit-msg.txt, and never via a
+  heredoc (the sandbox refuses heredocs and compound commands that
+  mention git).
+Handoff: commit finished work to wt/rate-limit (do not push). Your final
+  act is one SendMessage to the lead (in Claude Code a named agent's final
+  text reaches nobody) with the branch name, commit subjects, any
+  escalations, and one
   line per lead message you received. Re-read your FULL inbox first: a
   signal that omits a pending directive is not a final signal.
 Rules: no TODO/FIXME markers; do the work or escalate it. Comments only

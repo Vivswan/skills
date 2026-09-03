@@ -74,6 +74,15 @@ In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins t
 - All green: one line ("CI passed: <workflow names>").
 - Any failure: the failing workflow and job names, the log excerpt that shows the actual error, and the run URL. Excerpt, not the full log.
 
+## Polling Budget
+
+GitHub's core REST bucket is 5000 authenticated requests per hour per user, shared by every REST call the session makes (`gh run list`, `watch`, and `view` included). Production: parallel watchers plus `gh run watch` at its 3 s default refresh exhausted it, and every CI verdict was blind for 45 minutes. Two rules follow:
+
+- **One CI poller per session at a time.** Queue the next push behind the running watcher, or, when the branch's runs share a `concurrency` group key, watch only the newest mainline tip: an older tip's watcher can end with no verdict to report (the group behavior is spelled out below).
+- **The sustained watch interval is at least 60 s.** The bundled script passes `--interval 60` to every `gh run watch`; a hand-rolled watcher does the same (`gh run watch <id> --interval 60`), never gh's default. The script's two bounded bursts are not what this rule is about and stay as they are: registration polling (up to five `gh run list` calls 3 s apart, until the runs appear) and the transient-failure retries (up to three attempts 2 s apart) each spend a handful of requests once; the minutes-long watch is where the budget goes.
+
+Stacked pushes also lose verdicts on GitHub's side. When a workflow's runs share a `concurrency` group key (commonly the workflow plus the branch), GitHub keeps at most one running plus one pending run per key: a newer push cancels the pending run (and the running one too where `cancel-in-progress` evaluates true), so that SHA never gets a verdict, which the script reports as `FAIL(cancelled)` on a latest run. Two landings in one session needed reruns for exactly this; wait for the running watcher's verdict before pushing again.
+
 ## After a Merge
 
 A merge is a push to the mainline by other hands, and nothing above covers it by accident: after `gh pr merge`, `git rev-parse HEAD` in the checkout still names the TOPIC branch's tip, while the squash or merge commit is a new SHA that exists only on the mainline. A watcher started on the topic tip proves nothing about the merged pipeline. With a merge queue, `gh pr merge` can return success on ENQUEUE, before the commits reach the mainline; wait until the PR is actually merged (`mergedAt` set) before fetching, or the fetch grabs the pre-merge tip. Then resolve the mainline tip and run the same workflow (discovery, background watch, report) on that SHA:
@@ -93,7 +102,7 @@ bun "<skill-dir>/scripts/wait-for-pr-event.mts" <pr-number> --repo <owner/name> 
 ```
 
 - `--until` picks the watched events from `comment,review,checks,merge` (default: `comment,review`).
-- `--interval` sets seconds between polls (default 45, minimum 15), but a failed poll retries after 2 seconds instead of waiting the full interval; `--timeout` sets seconds before giving up (default 1800).
+- `--interval` sets seconds between polls (default 60, minimum 60: the Polling Budget floor above), but a failed poll retries after 2 seconds instead of waiting the full interval; `--timeout` sets seconds before giving up (default 1800).
 - The waiter reads a complete baseline first (comment, thread-reply, and review-thread counts via GraphQL `isResolved`, the latest review, per-check conclusions, merged state) and exits 2 instead of waiting when that read fails.
 - At the deadline it makes one final bounded read, so the closing snapshot is current and a delta landing in the last window still exits 0.
 
