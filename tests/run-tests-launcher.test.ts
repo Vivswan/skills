@@ -47,10 +47,13 @@ describe("run-tests zero-test guard", () => {
   });
 
   test("bun's echo of a summary-shaped CLI value cannot spoof the guard", () => {
-    // bun prints `error: regex "Ran 1 test across " matched 0 tests` - an
-    // unanchored search would read that mid-line echo as a real summary and
-    // let --pass-with-no-tests exit 0 on zero tests.
-    const r = run("--pass-with-no-tests", "-t", "Ran 1 test across ", TARGET);
+    // bun prints `error: regex "Ran 1 test across 1 file. [x]" matched 0
+    // tests` - a full summary mid-line, which an unanchored search would take
+    // for a real one and let --pass-with-no-tests exit 0 on zero tests.
+    const spoof = "Ran 1 test across 1 file. [x]";
+    const r = run("--pass-with-no-tests", "-t", spoof, TARGET);
+    // The echo must be present, or this run is only the missing-summary case.
+    expect(r.stderr).toContain(`regex "${spoof}" matched 0 tests`);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("refusing to report success");
   });

@@ -95,9 +95,9 @@ try {
 // summary's timing bracket in SGR codes, which would hide a genuine summary
 // and fail a passing run). The match is anchored to a full line-start
 // summary with bun's timing suffix, and the LAST one wins: bun echoes CLI
-// values mid-line in its own diagnostics (-t "Ran 1 test across " appears
-// inside an "error: regex ..." line), so an unanchored search could be
-// spoofed into seeing tests that never ran. A missing summary on exit 0
+// values mid-line in its own diagnostics (-t "Ran 1 test across 1 file. [x]"
+// appears inside an "error: regex ..." line), so an unanchored search could
+// be spoofed into seeing tests that never ran. A missing summary on exit 0
 // fails too, so a bun wording change breaks loudly here instead of silently
 // disarming the guard.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the ESC escape is exactly what is being stripped
