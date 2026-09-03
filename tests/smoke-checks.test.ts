@@ -14,6 +14,20 @@ function readme(listArea: string): string {
   return `# Skills\n\n## Available Skills\n${listArea}\n## Installation\n\ntext\n`;
 }
 
+// Both halves of a rejection in one invocation: runChecks() reports a
+// CheckFailure as FAIL and any other throw as a crash, so the class matters
+// as much as the branch-specific message.
+function expectCheckFailure(run: () => void, message: string | RegExp, reason?: string): void {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown, reason).toBeInstanceOf(CheckFailure);
+  expect((thrown as CheckFailure).message, reason).toMatch(message);
+}
+
 describe("checkDescriptionTriggerForm", () => {
   test("accepts a trigger-form description", () => {
     expect(() =>
@@ -23,20 +37,20 @@ describe("checkDescriptionTriggerForm", () => {
     ).not.toThrow();
   });
 
-  test("rejects a summary-form description", () => {
-    expect(() =>
-      checkDescriptionTriggerForm("skills/x/SKILL.md", { description: "A skill that watches CI." }),
-    ).toThrow(CheckFailure);
-  });
-
-  test("rejects a bare 'Use when ' with no trigger", () => {
-    expect(() =>
-      checkDescriptionTriggerForm("skills/x/SKILL.md", { description: "Use when " }),
-    ).toThrow(/trigger/);
-  });
-
-  test("rejects a missing description", () => {
-    expect(() => checkDescriptionTriggerForm("skills/x/SKILL.md", {})).toThrow(CheckFailure);
+  test.each([
+    { id: "summary form", frontmatter: { description: "A skill that watches CI." } },
+    {
+      id: "bare 'Use when ' with no trigger",
+      frontmatter: { description: "Use when " },
+      reason: "a summary-shaped dodge that matches the prefix and says nothing",
+    },
+    { id: "missing description", frontmatter: {} },
+  ])("rejects a description that is not trigger-form: $id", ({ frontmatter, reason }) => {
+    expectCheckFailure(
+      () => checkDescriptionTriggerForm("skills/x/SKILL.md", frontmatter),
+      /skills\/x\/SKILL\.md: description must be trigger-form, starting with "Use when \.\.\."/,
+      reason,
+    );
   });
 });
 
@@ -208,17 +222,25 @@ describe("checkReadmeMermaidGraph", () => {
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
   });
 
-  test("negative control: a standalone node with a non-skill label fails", () => {
-    // A label without the leading slash never enters the alias map, so
-    // without full line parsing this orphan would pass every check silently.
-    const graph = `${goodGraph}  orphan["retired"]\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
-  });
-
-  test("negative control: a bare standalone alias fails", () => {
-    const graph = `${goodGraph}  orphan\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
-  });
+  test.each([
+    {
+      id: "a standalone node with a non-skill label",
+      line: 'orphan["retired"]',
+      reason: "a label without the leading slash never enters the alias map",
+    },
+    { id: "a bare standalone alias", line: "orphan" },
+    { id: "a second header line", line: "graph TB" },
+  ])(
+    "negative control: an unparseable line fails instead of slipping past: $id",
+    ({ line, reason }) => {
+      const graph = `${goodGraph}  ${line}\n`;
+      expectCheckFailure(
+        () => checkReadmeMermaidGraph(withGraph(graph), names),
+        `cannot parse mermaid graph line '${line}'`,
+        reason,
+      );
+    },
+  );
 
   test("rejects 'end' as a node alias (reserved flowchart keyword)", () => {
     // Mermaid silently breaks the rendering on an 'end' node instead of
@@ -232,31 +254,31 @@ describe("checkReadmeMermaidGraph", () => {
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
   });
 
-  test("negative control: a malformed edge on the graph-header line still fails", () => {
-    // 'graph LR --> ghost' is not a valid header, and its dangling endpoint
-    // must not ride a header exemption past validation.
-    const graph = 'graph LR --> ghost\n  a["/alpha-one"] --> b["/beta-two"]\n';
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/must open with/);
-  });
-
-  test("rejects a graph without the flowchart header", () => {
-    // Mermaid cannot render a block with no 'graph <direction>' declaration.
-    const graph = '  a["/alpha-one"] --> b["/beta-two"]\n';
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/must open with/);
-  });
-
-  test("rejects an invalid flowchart direction", () => {
-    const graph = 'graph XX\n  a["/alpha-one"] --> b["/beta-two"]\n';
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/must open with/);
-  });
-
-  test("rejects a second header line", () => {
-    const graph = `${goodGraph}graph TB\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
+  test.each([
+    {
+      id: "a malformed edge on the header line",
+      firstLine: "graph LR --> ghost",
+      reason: "the dangling endpoint must not ride a header exemption past validation",
+    },
+    { id: "no header at all", firstLine: "", reason: "mermaid cannot render without one" },
+    { id: "an invalid direction", firstLine: "graph XX" },
+  ])("rejects a graph whose first line is $id", ({ firstLine, reason }) => {
+    // An empty first line is dropped as blank, so the edge itself gets judged
+    // as the header and named in the message.
+    const edge = 'a["/alpha-one"] --> b["/beta-two"]';
+    const graph = `${firstLine}\n  ${edge}\n`;
+    expectCheckFailure(
+      () => checkReadmeMermaidGraph(withGraph(graph), names),
+      `must open with a 'graph <LR|RL|TB|TD|BT>' header, found '${firstLine || edge}'`,
+      reason,
+    );
   });
 
   test("rejects a README without a mermaid block", () => {
-    expect(() => checkReadmeMermaidGraph("# Skills\n", names)).toThrow(CheckFailure);
+    expectCheckFailure(
+      () => checkReadmeMermaidGraph("# Skills\n", names),
+      /missing the mermaid skill-reference graph/,
+    );
   });
 });
 
@@ -274,15 +296,17 @@ describe("checkReadmeInvocationGrouping", () => {
   });
 
   test("rejects a disabled skill listed under Automatic", () => {
-    expect(() =>
-      checkReadmeInvocationGrouping(readme(area), [{ name: "alpha-one", disabled: true }]),
-    ).toThrow(/must be listed under/);
+    expectCheckFailure(
+      () => checkReadmeInvocationGrouping(readme(area), [{ name: "alpha-one", disabled: true }]),
+      /'alpha-one' must be listed under 'Invoked by you'/,
+    );
   });
 
   test("rejects an automatic skill listed under Invoked by you", () => {
-    expect(() =>
-      checkReadmeInvocationGrouping(readme(area), [{ name: "beta-two", disabled: false }]),
-    ).toThrow(/Automatic/);
+    expectCheckFailure(
+      () => checkReadmeInvocationGrouping(readme(area), [{ name: "beta-two", disabled: false }]),
+      /'beta-two' must be listed under 'Automatic'/,
+    );
   });
 
   test("rejects a README without the Invoked by you subsection", () => {
@@ -361,10 +385,35 @@ describe("checkReadmeUsageExplicitRoster", () => {
     ).toThrow(/not a published skill/);
   });
 
-  test("rejects a README where the marker sentence was rewritten away", () => {
-    expect(() =>
-      checkReadmeUsageExplicitRoster("# Skills\n\n## Usage\n\nAll skills load lazily.\n", skills),
-    ).toThrow(/explicit-invocation-only/);
+  const hiddenSentence =
+    "Skills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/)) load only when you invoke them.";
+
+  test.each([
+    {
+      id: "the marker sentence was rewritten away",
+      text: "# Skills\n\n## Usage\n\nAll skills load lazily.\n",
+    },
+    {
+      id: "the sentence sits inside a backtick-fenced block",
+      text: `# Skills\n\n## Usage\n\nAll skills load lazily.\n\n\`\`\`text\n${hiddenSentence}\n\`\`\`\n`,
+      reason: "a code example is not the Usage prose",
+    },
+    {
+      id: "the sentence sits inside a tilde-fenced block",
+      text: `# Skills\n\n## Usage\n\nAll skills load lazily.\n\n~~~text\n${hiddenSentence}\n~~~\n`,
+      reason:
+        "CommonMark fences come in both flavors; stripping only backticks let ~~~ satisfy the check",
+    },
+    {
+      id: "the sentence is outside the Usage section",
+      text: `# Skills\n\n## About\n\n${hiddenSentence}\n\n## Usage\n\nAll skills load lazily.\n`,
+    },
+  ])("rejects a README where $id", ({ text, reason }) => {
+    expectCheckFailure(
+      () => checkReadmeUsageExplicitRoster(text, skills),
+      /the Usage section is missing the sentence/,
+      reason,
+    );
   });
 
   test("rejects unrecognized text inside the roster instead of ignoring it", () => {
@@ -385,20 +434,6 @@ describe("checkReadmeUsageExplicitRoster", () => {
     ).toThrow(/cannot parse/);
   });
 
-  test("ignores a marker sentence hidden inside a fenced block", () => {
-    const text =
-      "# Skills\n\n## Usage\n\nAll skills load lazily.\n\n```text\nSkills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/)) load only when you invoke them.\n```\n";
-    expect(() => checkReadmeUsageExplicitRoster(text, skills)).toThrow(/explicit-invocation-only/);
-  });
-
-  test("ignores a marker sentence hidden inside a tilde-fenced block", () => {
-    // CommonMark fences come in both flavors; stripping only backticks let a
-    // ~~~ block satisfy the check while the real Usage prose said anything.
-    const text =
-      "# Skills\n\n## Usage\n\nAll skills load lazily.\n\n~~~text\nSkills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/)) load only when you invoke them.\n~~~\n";
-    expect(() => checkReadmeUsageExplicitRoster(text, skills)).toThrow(/explicit-invocation-only/);
-  });
-
   test("rejects a duplicate roster entry", () => {
     expect(() =>
       checkReadmeUsageExplicitRoster(
@@ -406,11 +441,5 @@ describe("checkReadmeUsageExplicitRoster", () => {
         skills,
       ),
     ).toThrow(/duplicate/);
-  });
-
-  test("rejects a marker sentence outside the Usage section", () => {
-    const text =
-      "# Skills\n\n## About\n\nSkills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/)) load only when you invoke them.\n\n## Usage\n\nAll skills load lazily.\n";
-    expect(() => checkReadmeUsageExplicitRoster(text, skills)).toThrow(/explicit-invocation-only/);
   });
 });
