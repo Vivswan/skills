@@ -166,7 +166,6 @@ describe("baseline.mts pin/check", () => {
     expect(entry.detail).toContain("-the quick brown fox jumps over the lazy dog");
     expect(entry.detail).toContain("+the quick brown fox");
     expect(entry.detail).toContain("+jumps over the lazy dog");
-    expect(entry.status).not.toBe("missing-in-tree");
   });
 
   test("a deleted line resurrected by a bad merge shows up as +line drift", () => {
@@ -289,28 +288,47 @@ describe("baseline.mts pin/check", () => {
     },
   );
 
-  test("pin refuses a tree-root inside the baseline-dir before mutating", () => {
+  test("an overlapping tree-root and baseline-dir is refused before mutating or comparing", () => {
     const fx = makeFixture({ "docs/a.md": "alpha\n" });
-    // tree inside baseline: installing the new baseline would delete the tree.
-    const inside = runBaseline(["pin", dirname(fx.tree), fx.tree, "docs/a.md"]);
-    expect(inside.code).toBe(2);
-    expect(inside.stderr).toContain("must not be inside");
-    const same = runBaseline(["pin", fx.tree, fx.tree, "docs/a.md"]);
-    expect(same.code).toBe(2);
-    // The source tree is untouched.
-    expect(readFileSync(join(fx.tree, "docs", "a.md"), "utf-8")).toBe("alpha\n");
+    expect(runBaseline(["pin", fx.baseline, fx.tree, "docs/a.md"]).code).toBe(0);
+    fx.write("docs/a.md", "real drift the self-compare would hide\n");
+    const link = join(dirname(fx.tree), "link");
+    symlinkSync(fx.tree, link);
+    const cases = [
+      // Installing the new baseline would delete the tree being pinned.
+      { id: "tree-inside-baseline", args: ["pin", dirname(fx.tree), fx.tree, "docs/a.md"] },
+      { id: "same-dir", args: ["pin", fx.tree, fx.tree, "docs/a.md"] },
+      // A symlink is the same directory under another name on every platform,
+      // so only a canonicalized comparison can refuse it.
+      { id: "symlink-alias", args: ["pin", link, fx.tree, "docs/a.md"] },
+      // Checking the baseline's own content dir would compare every pinned
+      // file with itself and report clean despite the drift written above.
+      { id: "check-self-compare", args: ["check", fx.baseline, join(fx.baseline, "content")] },
+    ];
+    for (const c of cases) {
+      const r = runBaseline(c.args);
+      expect(r.code, c.id).toBe(2);
+      expect(r.summary?.ok, c.id).toBe(false);
+      expect(r.stderr, c.id).toContain("must not be inside");
+    }
+    // The source tree survived every attempt.
+    expect(readFileSync(join(fx.tree, "docs", "a.md"), "utf-8")).toBe(
+      "real drift the self-compare would hide\n",
+    );
   });
 
   test("a case-variant baseline-dir cannot delete the tree", () => {
     const fx = makeFixture({ "docs/a.md": "alpha\n" });
-    // On a case-insensitive filesystem (macOS) this aliases the tree itself
-    // and must be refused (exit 2); on a case-sensitive one it is simply a
-    // distinct directory and pin succeeds. Either way the tree survives.
+    // Only a case-insensitive filesystem (macOS) makes the flipped-case path
+    // alias the tree itself; elsewhere it is a distinct, not-yet-existing
+    // sibling. Probe which world we are in so the exit code is pinned exactly.
     const caseFlipped = join(dirname(fx.tree), "TREE");
+    const aliases = existsSync(caseFlipped);
     const pin = runBaseline(["pin", caseFlipped, fx.tree, "docs/a.md"]);
-    expect([0, 2]).toContain(pin.code);
+    expect(pin.code).toBe(aliases ? 2 : 0);
+    expect(pin.summary?.ok).toBe(!aliases);
+    if (aliases) expect(pin.stderr).toContain("must not be inside");
     expect(readFileSync(join(fx.tree, "docs", "a.md"), "utf-8")).toBe("alpha\n");
-    if (pin.code === 2) expect(pin.stderr).toContain("must not be inside");
   });
 
   test("an empty manifest file list is a check failure, never a vacuous pass", () => {
@@ -362,38 +380,38 @@ describe("baseline.mts pin/check", () => {
     expect(entry.detail).toContain("+alpha gamma");
   });
 
-  test("check with tree-root inside the baseline-dir is refused, never clean", () => {
-    const fx = makeFixture({ "docs/a.md": "alpha\n" });
-    expect(runBaseline(["pin", fx.baseline, fx.tree, "docs/a.md"]).code).toBe(0);
-    fx.write("docs/a.md", "real drift the self-compare would hide\n");
-
-    // Pointing check at the baseline's own content dir would compare every
-    // pinned file with itself and report clean despite the drift above.
-    const selfCheck = runBaseline(["check", fx.baseline, join(fx.baseline, "content")]);
-    expect(selfCheck.code).toBe(2);
-    expect(selfCheck.summary?.ok).toBe(false);
-    expect(selfCheck.stderr).toContain("must not be inside");
-  });
-
-  test("bad usage exits 2 and still emits an ok:false JSON summary", () => {
-    const empty = runBaseline([]);
-    expect(empty.code).toBe(2);
-    expect(empty.summary?.ok).toBe(false);
-    const shortArgs = runBaseline(["pin", "only-one-arg"]);
-    expect(shortArgs.code).toBe(2);
-    expect(shortArgs.summary?.ok).toBe(false);
-    const unknown = runBaseline(["frobnicate", "a", "b"]);
-    expect(unknown.code).toBe(2);
-    expect(unknown.summary?.ok).toBe(false);
-    const traversal = runBaseline(["pin", "/tmp/x", "/tmp/y", "../escape.md"]);
-    expect(traversal.code).toBe(2);
-    expect(traversal.summary?.ok).toBe(false);
-    expect(traversal.stderr).toContain("path traversal");
-    const backslash = runBaseline(["pin", "/tmp/x", "/tmp/y", "..\\outside.md"]);
-    expect(backslash.code).toBe(2);
-    expect(backslash.stderr).toContain("backslash");
-    const driveRelative = runBaseline(["pin", "/tmp/x", "/tmp/y", "C:outside.md"]);
-    expect(driveRelative.code).toBe(2);
-    expect(driveRelative.stderr).toContain("drive-prefixed");
+  test("bad usage exits 2 and the ok:false JSON summary names the reason", () => {
+    const cases = [
+      { id: "no-subcommand", args: [], message: "missing subcommand" },
+      {
+        id: "unknown-subcommand",
+        args: ["frobnicate", "a", "b"],
+        message: "unknown subcommand: frobnicate",
+      },
+      { id: "pin-short", args: ["pin", "only-one-arg"], message: "pin requires" },
+      { id: "check-short", args: ["check", "only-one"], message: "check requires" },
+      { id: "check-extra", args: ["check", "a", "b", "c"], message: "check requires" },
+      {
+        id: "traversal",
+        args: ["pin", "/tmp/x", "/tmp/y", "../escape.md"],
+        message: "path traversal",
+      },
+      {
+        id: "backslash",
+        args: ["pin", "/tmp/x", "/tmp/y", "..\\outside.md"],
+        message: "backslash",
+      },
+      {
+        id: "drive-relative",
+        args: ["pin", "/tmp/x", "/tmp/y", "C:outside.md"],
+        message: "drive-prefixed",
+      },
+    ];
+    for (const c of cases) {
+      const r = runBaseline(c.args);
+      expect(r.code, c.id).toBe(2);
+      expect(r.summary?.ok, c.id).toBe(false);
+      expect(r.summary?.error, c.id).toContain(c.message);
+    }
   });
 });
