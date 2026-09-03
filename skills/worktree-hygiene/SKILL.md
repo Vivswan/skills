@@ -1,6 +1,6 @@
 ---
 name: worktree-hygiene
-description: Use when creating, removing, or handing over git worktrees, or deleting their branches, or when several actors share one repository through worktrees.
+description: Use when creating, removing, or handing over git worktrees, retiring a branch after it landed, or when several actors share one repository through worktrees.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -14,7 +14,7 @@ metadata:
 
 ## When to Apply
 
-- Removing a git worktree or deleting its branch
+- Removing a git worktree, or retiring a branch after it landed (its worktree, its local ref, optionally its remote ref)
 - Handing a worktree or branch from one actor to another, or resuming an actor that owns one
 - Several actors (agents, sessions, scripts) share one repository or one worktree
 - Checking out branches or writing `git config` while other worktrees exist
@@ -38,28 +38,14 @@ After removing:
 
 ### Deleting the branch too
 
-Removing a tree that sits on a branch keeps that branch. Delete the branch itself only once its work is preserved elsewhere, and verify that yourself:
+Removing a tree that sits on a branch keeps that branch. Delete it only once its work is proven preserved on the mainline; `scripts/retire-branch.mts` (Retiring a Landed Branch, below) proves that and deletes in one gated run. Two rules bind regardless:
 
-- **Deleting only the LOCAL branch** is safe once the server holds its tip. Prove it against the server, not a possibly stale remote-tracking ref: `git fetch <remote> <topic>`, then compare the branch tip with `FETCH_HEAD`.
 - **Never trust `git branch -d`.** It only tests merge into the branch's configured upstream (or into HEAD when none is set), and the usual upstream is the branch's own `origin/<topic>`, not your mainline. It can succeed on unlanded work and refuse on landed work; neither verdict proves anything.
-- **Retiring the branch everywhere requires a verified LANDING**, then `git branch -D` for the local ref, and a lease-pinned deletion for the server-side one, so a push landing between your verification and the delete is refused instead of destroyed:
+- **Delete a server-side ref only under a lease** pinned to the sha you verified, so a push landing between your verification and the delete is refused instead of destroyed:
 
   ```bash
   git push <remote> --force-with-lease=refs/heads/<topic>:<verified-sha> :refs/heads/<topic>
   ```
-
-  Verify the landing like this:
-  - Check ancestry first, against a ref the fetch just wrote: `git fetch <remote> <mainline>` followed by `git merge-base --is-ancestor <branch> FETCH_HEAD`. Test `FETCH_HEAD`, not `<remote>/<mainline>`: whether the fetch updates the remote-tracking ref depends on the remote's configured fetch mapping, and a stale local ref proves nothing once the remote moved ahead.
-  - A passing ancestry check clears the branch. A failing one proves nothing under squash or rebase merges, which rewrite the branch's shas (GitHub's rebase merge always does). Whenever ancestry fails, require exact content equivalence at the fetched tip, for every path the branch touched (NUL-safe; renames split into their delete and add halves so a missing source deletion cannot hide; external diff and textconv disabled so no filter can suppress a difference):
-
-    ```bash
-    set -o pipefail                                # a masked failure must never read as "landed"
-    base=$(git merge-base FETCH_HEAD <branch>) && [ -n "$base" ] || exit 1
-    git diff --no-renames --name-only -z "$base" <branch> \
-      | GIT_LITERAL_PATHSPECS=1 xargs -0 -r git diff --no-ext-diff --no-textconv --no-renames FETCH_HEAD <branch> --
-    ```
-
-    Landed means empty output AND a zero exit status; any output or any failing step blocks the deletion. `GIT_LITERAL_PATHSPECS=1` keeps a filename like `:(top)foo` a filename instead of pathspec magic, and `xargs -r` keeps a branch with no changed paths from degenerating into a whole-tree comparison (GNU xargs would otherwise run the diff once with no paths; BSD xargs skips empty input either way). A matching commit subject on the mainline is discovery evidence for where to look, never a pass condition (and `git cherry` is not one either: patch IDs ignore whitespace).
 
 ### Auto-removal can destroy a live workspace
 
@@ -67,6 +53,47 @@ Harnesses that auto-clean isolation worktrees remove them when their actor compl
 
 - An actor coordinating others inside its own isolation worktree dirties the tree IMMEDIATELY on start; one untracked marker file at the worktree root is enough (e.g. `.orchestrator-keepalive`). Verify the marker actually shows as `??` in `git status --porcelain -uall` (`-uall` here too, or a `status.showUntrackedFiles=no` config hides the very evidence this check needs): an ignore rule can hide it, and a hidden marker protects nothing; pick another name when it does. The marker is never staged or committed (removal rule 1 names it the one disposable `??`), and it is deleted before the final signal or handoff.
 - Before resuming any actor that stopped clean in an isolation worktree, verify the worktree still exists. Respawn fresh when it does not.
+
+## Retiring a Landed Branch
+
+`scripts/retire-branch.mts` runs the retirement as one program, so the destructive step is unreachable from a failed gate: it fetches the mainline into a ref the run owns, proves the branch landed, enforces the removal rules above on the branch's worktree, removes it, and deletes the local ref pinned to the verified sha. CI verdict first: `/watch-ci-after-push`. Rehearse; without `--execute` every gate runs and nothing is destroyed:
+
+```bash
+bun "<skill-dir>/scripts/retire-branch.mts" --branch feature/thing
+```
+
+```text
+[fetch] origin/main -> 4f2a9c... (the remote-tracking ref was already current)
+[branch] refs/heads/feature/thing is at 91bd0e...
+[landed] by content equivalence at 7c31f0...: feature/thing matches 4f2a9c on all 3 path(s) it changed
+[worktree] /repo/.worktrees/thing is clean and idle
+[worktree] would remove /repo/.worktrees/thing (add --execute)
+[delete] would delete refs/heads/feature/thing at 91bd0e... (add --execute)
+REHEARSED: every gate passed for feature/thing; nothing was destroyed
+```
+
+Then for real:
+
+```bash
+bun "<skill-dir>/scripts/retire-branch.mts" --branch feature/thing --execute
+```
+
+| Exit | Meaning | What to do |
+| --- | --- | --- |
+| 0 | every gate passed (and every step ran, under `--execute`) | done |
+| 1 | a gate REFUSED on the evidence: not landed, worktree holds work, the ref moved | read the refusal; it names what blocked |
+| 2 | usage error | fix the invocation |
+| 3 | BROKEN measurement: a ref that does not resolve, a git failure, a probe that could not run, a shallow clone | the question was never answered; never retry with the gate removed |
+
+Flags:
+
+```bash
+--mainline develop --remote upstream --repo-root /path/to/repo
+--original-tip 7c31f0e   # a branch rebased before landing: prove the OLD tip landed too
+--no-writer-check        # a host where lsof cannot answer; the run says so out loud
+```
+
+A squash or rebase merge leaves the branch's shas off the mainline, so ancestry refuses; the script then settles the landing by content equivalence automatically and prints which gate cleared it: `[landed] by ancestry` or `[landed] by content equivalence at <base>`. Why each gate exists: `references/retire-branch.md`.
 
 ## Handing Over a Worktree
 
