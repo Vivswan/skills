@@ -4,6 +4,7 @@
 
 - systemic fixes over instance patches
 - guard tests for recurring problems
+- a minimum strength standard every test clears
 - general-purpose over special-case
 - maintainability over effort
 - lean comments
