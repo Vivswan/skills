@@ -31,14 +31,12 @@ function makeSkillDir(extraFrontmatter: string): string {
 }
 
 describe("validateSkillDir metadata.internal guard", () => {
-  test("internal: true on a published skill fails naming the key", () => {
-    const dir = makeSkillDir("metadata:\n  internal: true\n");
+  test.each([
+    ["true", "the marker template/ carries"],
+    ["false", "key presence, not truthiness, is what bans it"],
+  ])("metadata.internal: %s on a published skill fails naming the key (%s)", (value) => {
+    const dir = makeSkillDir(`metadata:\n  internal: ${value}\n`);
     expect(() => validateSkillDir(dir)).toThrow(CheckFailure);
-    expect(() => validateSkillDir(dir)).toThrow(/metadata\.internal/);
-  });
-
-  test("the key is banned outright: internal: false fails too", () => {
-    const dir = makeSkillDir("metadata:\n  internal: false\n");
     expect(() => validateSkillDir(dir)).toThrow(/metadata\.internal/);
   });
 
