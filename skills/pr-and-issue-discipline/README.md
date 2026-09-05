@@ -1,10 +1,11 @@
 # PR and Issue Discipline
 
-`/pr-and-issue-discipline` fires when an agent opens or updates a pull request, writes an issue, or decides who merges. It holds every PR and issue to the same discipline:
+`/pr-and-issue-discipline` fires when an agent opens or updates a pull request, triages a review round, writes an issue, replies to an issue reporter or outside contributor, or decides who merges. It holds every PR and issue to the same discipline:
 
 - **Show, do not describe**: a fenced block is the text form of a picture. Inside the chosen shape or template, the change is shown with real captured output where behavior is observable, or a diagram, table, or contract shape where nothing runs, so the reader skims it and gets the change
 - **Shaped to the change**: what-this-adds, before/after (or what-this-changes for a pure refactor), or what-this-specifies; then `## How` in whatever carrier explains the mechanism fastest (one carrier, programmer to programmer); then `## Proof` naming tests and gates; secrets stripped and machine paths genericized before publishing
 - **Issues too**: what breaks (shown), a minimal repro, expected vs actual, environment only when it matters
+- **Replies to issue reporters and outside contributors**: plain first. A bare `TL;DR` of what would help, a plain-language explanation, and the technical reading collapsed only when it adds something
 - **Template check, once per session, at plan time**: when the target repository ships a PR or issue template, ask the user once, up front, whether to use it or the skill's shapes, then carry that answer for the whole session; no template means the shapes apply directly, and `CONTRIBUTING` guidance is honored either way
 - **Draft discipline**: open as draft, flip ready the moment the PR converges, flip back to draft the moment new commit-requiring work appears
 - **Comment convergence**: every review round triaged the same cycle (valid findings fixed, invalid ones replied to and resolved), with thread state read via GraphQL `isResolved`, never inferred from timestamps
@@ -27,6 +28,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/pr-and-issue-d
 ## What It Does
 
 - Opens PR bodies and issues with the change shown in a block, not described, in the shape that fits it, with redaction before publishing
+- Answers issue reporters and outside contributors in plain language first, with a gentle `TL;DR` list of what would help, and adds the technical details collapsed only when they say something the plain part cannot
 - Flips drafts ready on convergence and back on commit-requiring work, and offers only converged PRs for merge
 - Loops each open PR to comment convergence: CI green, every thread resolved, the latest round quiet
 - Defaults the merge to the human hand, with two narrow standing exceptions and an exit-conditioned landing

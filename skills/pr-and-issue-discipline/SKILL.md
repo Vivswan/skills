@@ -1,6 +1,6 @@
 ---
 name: pr-and-issue-discipline
-description: Use when opening a pull request, changing its body, title, or draft state, triaging review comments, writing an issue, or deciding who merges.
+description: Use when opening a pull request, changing its body, title, or draft state, triaging review comments, writing an issue, replying to an issue reporter or outside contributor, or deciding who merges.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -10,12 +10,13 @@ metadata:
 
 > Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, in the shape that fits the change; keep draft state honest, converge reviews, and leave the merge to a human by default.
 
-These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session.
+These rules apply to any session that opens or updates a PR, triages a review round, writes an issue, replies to an issue reporter or outside contributor, or decides who merges. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session.
 
 ## When to Apply
 
 - Opening or updating a pull request (body, title, draft state)
 - Writing a bug report or issue
+- Replying to an issue reporter or outside contributor
 - A review round just landed on an open PR
 - Deciding whether a PR merges, and by whose hand
 
@@ -144,6 +145,58 @@ installed: SKILL.md, README.md          (metadata.json silently missing)
 ````
 
 Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not. When an issue includes captured output, the redaction rule above applies unchanged.
+
+## Replies to Issue Reporters and Outside Contributors: Plain First
+
+An issue reply or a review comment to an outside contributor is read by someone who may find long text hard to read and does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
+
+Specimen: a diagnostics-only bug report whose log ended mid-request. The first reply opened with three paragraphs on hidden provider groups, tombstones, and silent refreshes. The rewrite:
+
+`````markdown
+## TL;DR
+
+1. **What went wrong?** One or two sentences, or a screenshot.
+2. **Is `https://<host>/@<user>` a LiteLLM proxy?** If yes, does it need an API key?
+3. **The log lines after the last request.** In VS Code: `View > Output`, pick `LiteLLM`, copy everything after the line starting with `Fetching from::`.
+
+Number 3 would help the most. The rest of this comment explains why, if you are curious.
+
+## What the report shows
+
+**The report was sent before anything failed.** The last log line is the extension asking your server for its model list. No answer had arrived yet:
+
+```
+Fetching from:: "https://<host>/@<user>/v1/model/info"    <- last line, still waiting
+```
+
+- You removed a server that pointed at `https://<host>/`. The extension remembers that and keeps its models out of the picker. That is expected, not an error.
+- You added a new server at `https://<host>/@<user>` with no API key.
+
+**A guess, to save a round trip:** a URL with `/@username` in it and no API key usually is not a LiteLLM proxy.
+
+<details>
+<summary>Technical details</summary>
+
+- `Provider group is hidden by an explicit user removal`: the `servers` entry was removed. VS Code cannot delete a provider group, so the extension tombstones it and answers with an empty model list. Docs: [Lifecycle: renames, removals, hidden groups](...).
+- `Fetching from:: .../v1/model/info`: the first discovery request. The log buffer holds 50 lines and no error was recorded, so the report was built inside this request's 30 second timeout.
+
+</details>
+`````
+
+The rules the specimen follows:
+
+- **Requests first, as a bare `TL;DR`.** A numbered list, three items at most. Say which one would help most.
+  - Give the exact click path or command when one exists.
+  - "What would help" rather than "what we need": the reporter is doing you a favor. The reader may stop after the list.
+- **Part one is plain language, and never says so.**
+  - Headings name the content ("What the report shows", "What changed"), never the reader's level. "In plain words", "Simple version", and "Non-technical summary" read as talking down.
+  - Say what the reader did and what they see: "the server you removed" rather than "the tombstoned provider group". When a mechanism has no plain name, show its effect instead of naming it.
+  - Quote the reader's own log line with an arrow note rather than paraphrasing it.
+- **Part two is the technical reading, collapsed, and only when it adds something.**
+  - Inside a `<details>` block: the mechanism names, the log lines mapped to code paths, docs links, and what a future maintainer would want when re-reading the thread. Nothing in part one depends on it.
+  - A reply that says everything in plain words has no part two. An "expected behavior, here is the setting" answer needs no details block; the specimen's does, because the buffer size and timeout explain why the log stops where it does.
+- **A guess goes last in part one and is labeled a guess.** It saves a round trip without steering the reader before they answer.
+- Short bullets, bold lead-ins, no paragraph over three sentences. The redaction rule above applies unchanged.
 
 ## Draft Discipline
 

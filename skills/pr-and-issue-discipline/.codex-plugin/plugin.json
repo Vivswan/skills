@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "PR and Issue Discipline",
     "shortDescription": "PRs and issues that show the change instead of describing it.",
-    "longDescription": "Fires when an agent opens or updates a pull request or writes an issue: bodies show the change in a block (captured output where behavior is observable, a diagram or table where not) inside the shape or repository template chosen once per session at plan time, drafts flip with convergence in both directions, every review round is triaged the same cycle with thread state read via GraphQL, and the human merges by default with two narrow standing exceptions.",
+    "longDescription": "Fires when an agent opens or updates a pull request, triages a review round, writes an issue, replies to an issue reporter or outside contributor, or decides who merges. Bodies show the change in a block (captured output where behavior is observable, a diagram or table where not) inside the shape or repository template chosen once per session at plan time. Those replies lead with a plain-language part opening with a TL;DR list of what would help, adding a collapsed technical part only when it carries more. Drafts flip with convergence in both directions, every review round is triaged the same cycle with thread state read via GraphQL, and the human merges by default with two narrow standing exceptions.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
     "capabilities": ["Read", "Write", "Review"],
