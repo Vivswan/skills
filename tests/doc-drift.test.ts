@@ -12,7 +12,7 @@ import { basename, join } from "node:path";
  *   arity/usage contracts, ledger worker states, sweep-row and diagnostic
  *   output fields, transcript-report fields, and token-table schema keys.
  * - skills/rubber-duck-review/SKILL.md <-> its scripts/run-review.mts: the
- *   two usage shapes (launch and --extract), the three reviewer invocations
+ *   three usage shapes (prepare, launch, and --extract), the three reviewer invocations
  *   with their tool-restriction flags, the --background and --stdin-prompt
  *   flag dispatches with their output-emission and stdin-delivery sites, and
  *   the exit-code 0/1/2 semantics including the
@@ -219,6 +219,15 @@ const SURFACES: Record<string, Surface> = {
         script: '"       run-review.mts <codex|claude|copilot> --extract <output-file>"',
       },
       { doc: "via `--extract`", script: 'rest[0] === "--extract"' },
+      {
+        doc: 'bun "<skill-dir>/scripts/run-review.mts" prepare api-gateway',
+        script: '"       run-review.mts prepare <section>"',
+      },
+      { doc: "the script mints the path", script: 'argv[0] === "prepare"' },
+      {
+        doc: "A launch refuses any prompt file outside such a directory",
+        script: "prompt file must live in a directory minted by",
+      },
       {
         doc: "`codex`: runs `codex exec --json --sandbox read-only`",
         script: 'codex: (prompt) => ["exec", "--json", "--sandbox", "read-only", prompt]',

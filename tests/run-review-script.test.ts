@@ -2,14 +2,17 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   closeSync,
+  linkSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import { writeAllSync } from "../skills/rubber-duck-review/scripts/run-review.mts";
 
@@ -154,12 +157,26 @@ for (const [name, body] of [
   writeFileSync(join(binDir, name), body);
   chmodSync(join(binDir, name), 0o755);
 }
-const promptFile = join(binDir, "prompt.txt");
-writeFileSync(promptFile, PROMPT);
+const mintedDirs: string[] = [];
+/** Prompt files reach a launch only through a `prepare`-minted path. */
+function mintPrompt(section: string, content: string = PROMPT): string {
+  const result = Bun.spawnSync([process.execPath, SCRIPT, "prepare", section], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(result.stderr.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+  const file = result.stdout.toString().trimEnd();
+  mintedDirs.push(dirname(file));
+  writeFileSync(file, content);
+  return file;
+}
+const promptFile = mintPrompt("prompt");
 
 afterAll(() => {
   rmSync(binDir, { recursive: true, force: true });
   rmSync(emptyBinDir, { recursive: true, force: true });
+  for (const dir of mintedDirs) rmSync(dir, { recursive: true, force: true });
 });
 
 let scenario = 0;
@@ -291,7 +308,7 @@ describe("run-review.mts", () => {
   });
 
   test("--stdin-prompt delivers a prompt larger than any pipe buffer in full", () => {
-    const hugePrompt = join(binDir, "huge-prompt.txt");
+    const hugePrompt = mintPrompt("huge-prompt", "");
     const hugeContent = "p".repeat(1 << 20);
     writeFileSync(hugePrompt, hugeContent);
     const r = run(["codex", hugePrompt, "--stdin-prompt"]);
@@ -300,8 +317,7 @@ describe("run-review.mts", () => {
   });
 
   test("a reviewer that ignores its stdin prompt file cannot hang or crash the run", () => {
-    const hugePrompt = join(binDir, "huge-prompt-ignored.txt");
-    writeFileSync(hugePrompt, "p".repeat(1 << 20));
+    const hugePrompt = mintPrompt("huge-prompt-ignored", "p".repeat(1 << 20));
     const r = run(["codex", hugePrompt, "--stdin-prompt"], { STUB_SKIP_STDIN: "1" });
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("CODEX VERDICT");
@@ -394,7 +410,7 @@ describe("run-review.mts", () => {
       { id: "no-prompt-file", args: ["codex"], message: "expected exactly one <prompt-file>" },
       {
         id: "unreadable-prompt-file",
-        args: ["codex", join(binDir, "no-such-prompt.txt")],
+        args: ["codex", join(dirname(promptFile), "no-such-prompt.txt")],
         message: "cannot read prompt file",
       },
     ];
@@ -404,11 +420,94 @@ describe("run-review.mts", () => {
     }
   });
 
+  test("prepare mints a distinct tmp directory per call and prints the section file inside it", () => {
+    const first = mintPrompt("api-gateway");
+    const second = mintPrompt("api-gateway");
+    expect(first).not.toBe(second);
+    for (const file of [first, second]) {
+      expect(dirname(dirname(file))).toBe(tmpdir());
+      expect(basename(dirname(file)).startsWith("rubber-duck-prompt-")).toBe(true);
+      expect(basename(file)).toBe("api-gateway.md");
+      expect(readFileSync(join(dirname(file), ".minted-by-run-review"), "utf-8")).toBe("");
+    }
+  });
+
+  test("prepare rejects a section that is not a bare file name, or a missing one: exit 2", () => {
+    for (const [id, args] of [
+      ["path-separator", ["prepare", "sub/dir"]],
+      ["dot-dot", ["prepare", ".."]],
+      ["empty", ["prepare", ""]],
+      ["missing", ["prepare"]],
+      ["extra", ["prepare", "a", "b"]],
+    ] as const) {
+      const r = run([...args]);
+      expectFailure(r, { code: 2, stderr: "prepare" }, id);
+    }
+  });
+
+  test("a prompt file that prepare did not mint is refused: exit 2", () => {
+    // Negative controls for the collision guard. Each row is a way a shared
+    // or predictable prompt could reach a launch without going through prepare.
+    const predictable = join(binDir, "prompt.txt");
+    writeFileSync(predictable, PROMPT);
+    const nested = join(dirname(promptFile), "nested");
+    mkdirSync(nested);
+    writeFileSync(join(nested, "prompt.md"), PROMPT);
+    // Right prefix, hand-made: no marker.
+    const handMade = mkdtempSync(join(tmpdir(), "rubber-duck-prompt-"));
+    mintedDirs.push(handMade);
+    writeFileSync(join(handMade, "prompt.md"), PROMPT);
+    // A symlink inside a minted dir that points at a shared file elsewhere.
+    const linked = join(dirname(promptFile), "linked.md");
+    symlinkSync(predictable, linked);
+    // A hard link inside a minted dir to a shared file elsewhere.
+    const hardLinked = join(dirname(promptFile), "hard-linked.md");
+    linkSync(predictable, hardLinked);
+    // A symlinked directory, prefix-named, pointing at a genuine minted dir.
+    const aliasDir = join(tmpdir(), `rubber-duck-prompt-alias-${process.pid}`);
+    symlinkSync(dirname(promptFile), aliasDir);
+    mintedDirs.push(aliasDir);
+    const notMinted = "prompt file must live in a directory minted by";
+    for (const [id, file, message] of [
+      ["hand-picked-tmp-path", predictable, notMinted],
+      ["nested-inside-minted-dir", join(nested, "prompt.md"), notMinted],
+      ["prefix-without-marker", join(handMade, "prompt.md"), notMinted],
+      ["symlinked-minted-dir", join(aliasDir, basename(promptFile)), notMinted],
+      ["symlink-out-of-minted-dir", linked, "not a symlink or hard link"],
+      ["hard-link-to-shared-file", hardLinked, "not a symlink or hard link"],
+    ] as const) {
+      expectFailure(run(["codex", file]), { code: 2, stderr: message }, id);
+    }
+    // --background is a caller-facing launch too, not the internal capture.
+    expectFailure(run(["codex", predictable, "--background"]), { code: 2, stderr: notMinted });
+  });
+
+  test("--capture without its --background launch record is refused: exit 2", () => {
+    // --capture must not be a side door around the minted-prompt guard.
+    const predictable = join(binDir, "capture-prompt.txt");
+    writeFileSync(predictable, PROMPT);
+    const scratch = mkdtempSync(join(tmpdir(), "rubber-duck-"));
+    mintedDirs.push(scratch);
+    const snapshot = join(scratch, "prompt.txt");
+    writeFileSync(snapshot, PROMPT);
+    const refused = { code: 2, stderr: "--capture is internal to --background" } as const;
+    // Each row sets up the scratch dir, then launches against exactly that state.
+    for (const [id, record, prompt] of [
+      ["no-record", null, snapshot],
+      ["record-for-other-reviewer", '{"tool":"claude","output":"review.jsonl"}', snapshot],
+      ["record-for-other-output-file", '{"tool":"codex","output":"review.out"}', snapshot],
+      ["prompt-not-the-snapshot", '{"tool":"codex","output":"review.jsonl"}', predictable],
+    ] as const) {
+      if (record === null) rmSync(join(scratch, "review.status"), { force: true });
+      else writeFileSync(join(scratch, "review.status"), record);
+      expectFailure(run(["codex", prompt, "--capture", scratch]), refused, id);
+    }
+  });
+
   test("--background prints output path and pid; --extract reads the verdict later", () => {
     // A private prompt file, deleted right after launch: the monitor must
     // review its snapshot, not re-read the caller's (now gone) file.
-    const bgPrompt = join(binDir, "bg-prompt.txt");
-    writeFileSync(bgPrompt, PROMPT);
+    const bgPrompt = mintPrompt("bg-prompt");
     const r = run(["codex", bgPrompt, "--background"]);
     rmSync(bgPrompt);
     expect(r.code).toBe(0);

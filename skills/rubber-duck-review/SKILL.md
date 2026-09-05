@@ -26,8 +26,8 @@ Use this skill when someone asks for:
 - Prefer a dedicated review tool when one is available.
 - Use a reviewer that is different from the current model when possible.
 - If no dedicated tool exists, fall back to a read-only CLI invocation through this skill's `scripts/run-review.mts` (step 3). Pick the reviewer by which model *you* are:
-  - If you are currently using **Claude** → `codex`, fallback `copilot`.
-  - If you are currently using **Codex or GitHub Copilot** → `claude`, fallback `copilot`.
+  - If you are currently using **Claude** -> `codex`, fallback `copilot`.
+  - If you are currently using **Codex or GitHub Copilot** -> `claude`, fallback `copilot`.
 - **Never** let the reviewer write files, edit code, or run unrestricted shell commands.
   - The script enforces read-only flags: `--sandbox read-only` (codex) / `--permission-mode plan` (claude) / a read-only tool allow-list (copilot).
   - Read-only still lets the reviewer self-check: it can run read-only commands (grep, `git diff`, typecheck; copilot can only read and grep files) but writes are blocked. That self-checking makes findings concrete.
@@ -63,13 +63,21 @@ This skill ships `scripts/run-review.mts` (the path is relative to the installed
 - captures the full stream to a scratch file under the OS tmp dir (never the working tree)
 - passes each reviewer's required flags and extracts the verdict
 
-Write the step-2 prompt to a tmp file and pass the reviewer name plus that file. Inside an agent worktree the sandbox can refuse a Bash heredoc whose text contains git commands (it cannot verify the command stays inside the worktree), so write the prompt file with the harness's Write tool there:
+Write the step-2 prompt to a tmp file and pass the reviewer name plus that file. Several agents (or several sections of one fan-out) review at once on one machine, and a predictable name such as `/tmp/rubber-duck-prompt-<section>.md` lets one writer overwrite another's prompt before the script reads it, so the script mints the path:
+
+- `prepare <section>` creates a private directory with `mkdtemp` (atomic, so two callers can never receive the same one), leaves its marker there, and prints the section's prompt file inside it.
+- A launch refuses any prompt file outside such a directory, and any symlink or hard link inside one. The marker is the proof, not the location, so the two shells need not share `TMPDIR`.
+
+Inside an agent worktree the sandbox can refuse a Bash heredoc whose text contains git commands (it cannot verify the command stays inside the worktree), so write the prompt file with the harness's Write tool there:
 
 ```bash
-# 1. Write the step-2 prompt to a unique path under the OS tmp dir with your Write tool,
-#    one per review section, e.g. /tmp/rubber-duck-prompt-api-gateway.md (a heredoc with a
-#    quoted delimiter works only outside an agent worktree). 2. Then, in one shell call:
-prompt_file=/tmp/rubber-duck-prompt-api-gateway.md
+# 1. Mint the prompt path, one call per review section. Shell state does not survive
+#    between tool calls, so copy the printed path by hand:
+bun "<skill-dir>/scripts/run-review.mts" prepare api-gateway   # prints e.g. /tmp/rubber-duck-prompt-Kq3mZp/api-gateway.md
+# 2. Write the step-2 prompt to that path with your Write tool (a heredoc with a quoted
+#    delimiter works only outside an agent worktree).
+# 3. Then, in one shell call:
+prompt_file=/tmp/rubber-duck-prompt-Kq3mZp/api-gateway.md
 bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|copilot per step 1
 ```
 
@@ -97,7 +105,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - **Exit 1** (`review FAILED - relaunch`): the stream was empty, cut mid-turn, truncated on its final line, blank, contained error events, or the reviewer exited non-zero. That is no review at all, never a clean pass. Relaunch it (the captured output path is in the failure message if you want to inspect why).
 - **Exit 2**: fix the invocation or install the missing reviewer binary; nothing was reviewed.
 - After a `--background` run exits, extract the verdict from the captured stream with the same rules and exit codes: `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>`, where `<reviewer>` is the same argument the review was launched with. It validates the reviewer and output file against what the launch recorded, and refuses to report a verdict until the run has recorded a successful exit beside the stream. So extracting too early, with the wrong reviewer, or from the wrong file fails safe.
-- Failed and background runs keep their scratch dir (under the OS tmp dir, never the working tree) for inspection; `rm -rf` it once triaged. Foreground successes clean up after themselves. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the prompt file you wrote remains yours to remove.
+- Failed and background runs keep their scratch dir (under the OS tmp dir, never the working tree) for inspection; `rm -rf` it once triaged. Foreground successes clean up after themselves. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the prompt directory you minted remains yours to remove.
 
 ### 5. Large change sets: fan out one review per section
 

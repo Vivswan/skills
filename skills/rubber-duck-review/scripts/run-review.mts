@@ -5,6 +5,16 @@
  * Usage:
  *   run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt]
  *   run-review.mts <codex|claude|copilot> --extract <output-file>
+ *   run-review.mts prepare <section>
+ *
+ * prepare mints a private directory under os.tmpdir() with mkdtemp (atomic,
+ * so concurrent reviews can never share a path), leaves its marker file in
+ * it, and prints the section's prompt file inside it. A launch accepts only a
+ * regular file directly inside a marked directory: a predictable shared path,
+ * which one agent could overwrite under another before the launch reads it,
+ * is refused as a usage error, as is a symlink out of the directory. The
+ * marker, not the location, is the provenance, so the prepare and launch
+ * shells need not share TMPDIR.
  *
  * The reviewer is spawned directly from an argv array (never through a
  * shell), so backticks and $(...) in the prompt stay literal. stdin is
@@ -37,6 +47,8 @@
 import { spawn } from "node:child_process";
 import {
   closeSync,
+  existsSync,
+  lstatSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -91,7 +103,12 @@ const USAGE = [
   "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt]",
   "       run-review.mts <codex|claude|copilot> --extract <output-file>",
   "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir>  (internal)",
+  "       run-review.mts prepare <section>",
 ].join("\n");
+
+const PROMPT_DIR_PREFIX = "rubber-duck-prompt-";
+const MINT_MARKER = ".minted-by-run-review";
+const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Thrown after exit output is queued, so `never`-typed helpers stay honest. */
 class SilentExit extends Error {}
@@ -100,6 +117,72 @@ function usageError(message: string): never {
   process.stderr.write(`${message}\n${USAGE}\n`);
   process.exitCode = 2;
   throw new SilentExit();
+}
+
+/** Mint a private directory for one review's prompt files and print the
+ * section's prompt file path inside it. mkdtemp is atomic, so two callers can
+ * never receive the same directory. */
+function preparePrompt(section: string): void {
+  if (!SECTION_NAME.test(section)) {
+    usageError(`prepare: section must match ${SECTION_NAME}, got ${JSON.stringify(section)}`);
+  }
+  const dir = mkdtempSync(join(tmpdir(), PROMPT_DIR_PREFIX));
+  writeFileSync(join(dir, MINT_MARKER), "");
+  process.stdout.write(`${join(dir, `${section}.md`)}\n`);
+}
+
+/** A launch accepts only a regular, singly-linked file directly inside a
+ * prepare-minted directory (prefix plus marker, and not itself a symlink), so
+ * a predictable shared path cannot come back, and no symlink or hard link can
+ * alias the launch onto a shared file elsewhere. */
+function requireMintedPrompt(promptFile: string): void {
+  const dir = dirname(promptFile);
+  const notMinted = (): never =>
+    usageError(
+      `prompt file must live in a directory minted by \`run-review.mts prepare <section>\`, got ${promptFile}`,
+    );
+  if (!basename(dir).startsWith(PROMPT_DIR_PREFIX) || !existsSync(join(dir, MINT_MARKER))) {
+    notMinted();
+  }
+  let dirStat: ReturnType<typeof lstatSync>;
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    dirStat = lstatSync(dir);
+    stat = lstatSync(promptFile);
+  } catch (error) {
+    usageError(`cannot read prompt file ${promptFile}: ${String(error)}`);
+  }
+  if (dirStat.isSymbolicLink()) notMinted();
+  if (!stat.isFile() || stat.nlink !== 1) {
+    usageError(
+      `prompt file must be a regular file with a single link in its minted directory, not a symlink or hard link: ${promptFile}`,
+    );
+  }
+}
+
+/** --capture is the monitor half of --background: it may consume only the
+ * prompt snapshot inside a scratch dir whose launch record names this
+ * reviewer. A caller cannot use it to launch an unminted prompt. */
+function requireCaptureProvenance(tool: Tool, promptFile: string, captureDir: string): void {
+  const scratch = scratchPaths(captureDir, tool);
+  const refuse = (): never =>
+    usageError(
+      `--capture is internal to --background: ${captureDir} has no matching launch record`,
+    );
+  let record: unknown;
+  try {
+    record = JSON.parse(readFileSync(scratch.statusFile, "utf-8"));
+  } catch {
+    refuse();
+  }
+  if (
+    !isRecord(record) ||
+    record.tool !== tool ||
+    record.output !== basename(scratch.outFile) ||
+    promptFile !== join(captureDir, "prompt.txt")
+  ) {
+    refuse();
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -404,6 +487,9 @@ function runBackground(tool: Tool, prompt: string, stdinPrompt: boolean): void {
   // the detached monitor gets around to reading it.
   const promptSnapshot = join(scratch.dir, "prompt.txt");
   writeFileSync(promptSnapshot, prompt);
+  // The launch record is what lets the monitor's --capture prove its
+  // provenance (and what --extract reads while the run is still pending).
+  recordStatus(scratch, tool);
   const monitorArgs = [
     fileURLToPath(import.meta.url),
     tool,
@@ -491,6 +577,13 @@ function extractRecorded(tool: Tool, outputFile: string): void {
 
 function main(): void {
   const argv = process.argv.slice(2);
+  if (argv[0] === "prepare") {
+    const section = argv[1];
+    if (section === undefined || argv.length !== 2)
+      usageError("prepare takes exactly one <section>");
+    preparePrompt(section);
+    return;
+  }
   const toolArg = argv[0];
   if (toolArg === undefined || !isTool(toolArg)) {
     usageError(`unknown reviewer: ${toolArg ?? "(none)"}`);
@@ -528,6 +621,8 @@ function main(): void {
   if (promptFile === undefined || positional.length !== 1) {
     usageError("expected exactly one <prompt-file>");
   }
+  if (captureDir === null) requireMintedPrompt(promptFile);
+  else requireCaptureProvenance(tool, promptFile, captureDir);
   let prompt: string;
   try {
     prompt = readFileSync(promptFile, "utf-8");
