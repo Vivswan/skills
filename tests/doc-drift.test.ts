@@ -230,13 +230,14 @@ const SURFACES: Record<string, Surface> = {
         script: "prompt file must live in a directory minted by",
       },
       {
-        doc: "`codex`: runs `codex exec --json --sandbox read-only`",
-        script: 'codex: (prompt) => ["exec", "--json", "--sandbox", "read-only", prompt]',
+        doc: "`codex`: runs `codex exec --json --sandbox read-only --output-schema <schema>`",
+        script:
+          'codex: (prompt) => [\n    "exec",\n    "--json",\n    "--sandbox",\n    "read-only",\n    "--output-schema",\n    SCHEMA_FILE,\n    prompt,\n  ],',
       },
       {
-        doc: "`claude`: runs `claude -p --permission-mode plan --verbose --output-format stream-json`",
+        doc: "`claude`: runs `claude -p --permission-mode plan --verbose --output-format stream-json --json-schema <schema>`",
         script:
-          '"-p",\n    "--permission-mode",\n    "plan",\n    "--verbose",\n    "--output-format",\n    "stream-json",',
+          '"-p",\n    "--permission-mode",\n    "plan",\n    "--verbose",\n    "--output-format",\n    "stream-json",\n    "--json-schema",\n    schemaText(),',
       },
       {
         doc: "`copilot`: runs `copilot -p <prompt> -s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps`",
@@ -258,15 +259,16 @@ const SURFACES: Record<string, Surface> = {
         script: "stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, prompt)",
       },
       {
-        doc: "0: verdict extracted and printed to stdout, or a `--background` launch started",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "process.stdout.write(`${extraction.verdict}\\n`);\n    process.exitCode = 0;",
+        doc: "0: verdict extracted and printed to stdout as the JSON report, or a `--background` launch started",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          "process.stdout.write(`${JSON.stringify(report, null, 2)}\\n`);\n    process.exitCode = 0;",
       },
       {
         doc: "1: `review FAILED - relaunch`.",
         script:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-          "review FAILED - relaunch (${extraction.reason}${kept})\\n`);\n  process.exitCode = 1;",
+          "`review FAILED - relaunch (${extraction.reason}; output kept at ${outputFile})\\n`,\n  );\n  process.exitCode = 1;",
       },
       {
         doc: "2: usage error or reviewer binary not found.",

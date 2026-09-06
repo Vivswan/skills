@@ -49,6 +49,7 @@ Use this skill when someone asks for:
   - Enumerate participants by grepping installed skills, e.g. `grep -rlE '^## Review Criteria' ~/.claude/skills/*/SKILL.md .claude/skills/*/SKILL.md 2>/dev/null` (adjust the paths to wherever your harness installs skills).
   - A skill whose criteria only apply in a specific context names its heading differently (e.g. `## <Context> Review Criteria`) and folds its own criteria into the reviews it launches itself.
 - Ask for **prioritized** findings (blocking vs non-blocking), and ask it to say so plainly if the code is correct; this keeps re-reviews terminable.
+- The report is one JSON object: `blocking` and `non_blocking` arrays of `{where, claim, evidence}`, a `recorded_not_built` string array, and a `summary`. Paste the report-format block from the template; the script enforces the shape for codex and claude through `scripts/verdict-schema.json`, and copilot has only the prompt to go on.
 - If the user has already declined or reverted something in this thread, add a short `Already decided / out of scope` section so the reviewer does not keep re-raising it.
 - On a re-review, state which fixes were already applied so it focuses on what remains.
 
@@ -61,7 +62,9 @@ This skill ships `scripts/run-review.mts` (the path is relative to the installed
 - spawns the reviewer from an argv array with no shell in between (backticks and `$(...)` in the prompt stay literal)
 - closes stdin (both `codex exec` and `claude -p` block forever waiting on open stdin)
 - captures the full stream to a scratch file under the OS tmp dir (never the working tree)
-- passes each reviewer's required flags and extracts the verdict
+- passes each reviewer's required flags, including the verdict schema (`scripts/verdict-schema.json`) for codex and claude, so the final message cannot be free text
+- extracts the verdict and refuses one with no tool call before it: codex fills its narration into the schema too, so a turn that ends at "I will review now" is a valid-looking empty verdict, and the missing reads are what expose it
+- prints one JSON report: the verdict, the tool-call count, the path of the kept capture, and a compact trajectory (one row per reviewer step) so you can see what the reviewer did without opening the stream
 
 Write the step-2 prompt to a tmp file and pass the reviewer name plus that file. Several agents (or several sections of one fan-out) review at once on one machine, and a predictable name such as `/tmp/rubber-duck-prompt-<section>.md` lets one writer overwrite another's prompt before the script reads it, so the script mints the path:
 
@@ -82,30 +85,35 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 ```
 
 - Reviewer argument:
-  - `codex`: runs `codex exec --json --sandbox read-only`.
-  - `claude`: runs `claude -p --permission-mode plan --verbose --output-format stream-json` (`--verbose` is required with `stream-json`).
+  - `codex`: runs `codex exec --json --sandbox read-only --output-schema <schema>`.
+  - `claude`: runs `claude -p --permission-mode plan --verbose --output-format stream-json --json-schema <schema>` (`--verbose` is required with `stream-json`).
   - `copilot`: runs `copilot -p <prompt> -s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps`. Last-resort fallback; prefer codex/claude. Its limits:
     - The read-only tool allow-list lets it read and grep files, but it cannot shell out, write, reach MCP servers, or spawn subagents.
     - No shell means no `git diff` and no typecheck, so name the files to read.
-    - It does not stream JSON, so there is no liveness signal.
+    - It does not stream JSON, so there is no liveness signal, no trajectory in the report, and no tool-call check on its verdict; and no schema flag, so only the prompt asks it for the JSON object.
 - `--stdin-prompt` (codex/claude only): add it if the environment rejects the prompt as a command argument, or the prompt is very large. The prompt file itself is served as the reviewer's stdin. A file fd is EOF-terminated, so it cannot hang; the stdin hang trap is an open pipe, not a used stdin.
 - Foreground (the default) blocks until the reviewer exits, so give the tool call a generous timeout. Subagents (worktree builders, spawned workers) always run foreground: a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
 - `--background` prints the output-file path and the PID of a detached monitor that records the reviewer's exit status beside the stream. Leads use it to keep working while the review runs, then extract the verdict once it exits (step 4). Killing that PID cancels the review (the signal is forwarded to the reviewer).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line). Silence in between is normal; a real review can take a while.
 - Runtime: `bun`; `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
 - Exit codes:
-  - 0: verdict extracted and printed to stdout, or a `--background` launch started (that run's verdict comes later, via `--extract`).
+  - 0: verdict extracted and printed to stdout as the JSON report, or a `--background` launch started (that run's verdict comes later, via `--extract`).
   - 1: `review FAILED - relaunch`.
   - 2: usage error or reviewer binary not found.
 - In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the reviewer invocations, the flags, the exit codes, the failure verdict) to `scripts/run-review.mts`. A rename on either side fails CI until doc and script move together.
 
 ### 4. Act on the printed verdict
 
-- **Exit 0** from a foreground run or `--extract`: the verdict is on stdout. Triage it per steps 6-7: apply or reject each finding, and treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes. (A `--background` launch also exits 0, printing only the output path and PID; its verdict comes from `--extract`.)
-- **Exit 1** (`review FAILED - relaunch`): the stream was empty, cut mid-turn, truncated on its final line, blank, contained error events, or the reviewer exited non-zero. That is no review at all, never a clean pass. Relaunch it (the captured output path is in the failure message if you want to inspect why).
+- **Exit 0** from a foreground run or `--extract`: stdout is one JSON report. (A `--background` launch also exits 0, printing only the output path and PID; its verdict comes from `--extract`.)
+  - `verdict.blocking` and `verdict.non_blocking`: the findings, each `{where, claim, evidence}`. Triage them per steps 6-7: apply or reject each one.
+  - `verdict.recorded_not_built`: speculative hardening the reviewer set aside; step 6 says what happens to it.
+  - `verdict.summary`: what was reviewed and how. Treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes.
+  - `tool_calls`, `trajectory`: how many reads and commands preceded the verdict, and a compact row per reviewer step. A verdict whose trajectory shows a single `git diff` and no reads of the changed files is a weak review; sharpen the prompt (name the files) and relaunch.
+  - `capture`: the full reviewer stream, kept for inspection. Read it when a finding or the summary looks off and you want the exact reviewer message.
+- **Exit 1** (`review FAILED - relaunch`): the stream was empty, cut mid-turn, truncated on its final line, contained error events, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. That is no review at all, never a clean pass. Relaunch it (the captured output path is in the failure message if you want to inspect why).
 - **Exit 2**: fix the invocation or install the missing reviewer binary; nothing was reviewed.
 - After a `--background` run exits, extract the verdict from the captured stream with the same rules and exit codes: `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>`, where `<reviewer>` is the same argument the review was launched with. It validates the reviewer and output file against what the launch recorded, and refuses to report a verdict until the run has recorded a successful exit beside the stream. So extracting too early, with the wrong reviewer, or from the wrong file fails safe.
-- Failed and background runs keep their scratch dir (under the OS tmp dir, never the working tree) for inspection; `rm -rf` it once triaged. Foreground successes clean up after themselves. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the prompt directory you minted remains yours to remove.
+- Every run that reached the reviewer keeps its scratch dir (under the OS tmp dir, never the working tree): the `capture` path in the report, or the `output kept at` path in the failure. `rm -rf` that directory once the verdict is triaged. Exit 2 for a missing binary captured nothing and leaves nothing behind. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the prompt directory you minted remains yours to remove.
 
 ### 5. Large change sets: fan out one review per section
 
