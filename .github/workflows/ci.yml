@@ -63,3 +63,19 @@ jobs:
       - uses: Vivswan/repo-platform/actions/all-green@build
         with:
           needs: ${{ toJSON(needs) }}
+
+  # Repo-owned: edit post-green.yml, not this file. Runs after the gate,
+  # before the release, on the judged commit; no job lane here (a caller
+  # holding a lane a called job takes deadlocks the call).
+  post-green:
+    needs: [all-green]
+    if: >-
+      needs.all-green.result == 'success' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/post-green.yml
+    with:
+      sha: ${{ github.sha }}
+    secrets: inherit
