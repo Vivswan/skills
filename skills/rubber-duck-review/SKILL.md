@@ -117,7 +117,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 
 - Treat valid "non-blocking" feedback as real work when it is a correctness or maintainability finding with a demonstrated effect in this change.
   - A small, obvious hardening that rides along in the same change is fine (an exit-code check beside a version check, a bound where a bound is one argument).
-  - The stop sign is the cascade: when each review round finds one more bypass of the last fix, the target is widening. Keep the first round's minimal form and record the rest under `Recorded, not built`.
+  - The stop sign is the cascade: when each review round finds one more hypothetical bypass of the last hardening, the target is widening. Keep the first round's minimal form and record the rest under `Recorded, not built`. A demonstrable defect found in a later round is still work under the first bullet.
   - Items under `Recorded, not built` are not work: leave them in the report and open no task or PR for them, unless the user asks. The other exception is a repository with more than 100 GitHub stars: surface those items to the user with the concrete risk, and build only the ones they confirm.
 - Fix valid non-blocking findings as well as the blocking ones, including fixes that improve maintainability (clearer naming, removed duplication, simpler structure).
   - Skip a valid finding only when the fix would conflict with the design, reach outside the change under review, or go against an explicit user decision; record why.
