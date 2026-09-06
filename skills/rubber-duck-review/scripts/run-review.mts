@@ -497,9 +497,10 @@ function reportVerdict(extraction: Extraction, outputFile: string): void {
     process.exitCode = 0;
     return;
   }
-  process.stderr.write(
-    `review FAILED - relaunch (${extraction.reason}; output kept at ${outputFile})\n`,
-  );
+  // Name the capture only when it is there to read: an --extract whose
+  // stream was already deleted must not point at a path that is gone.
+  const kept = existsSync(outputFile) ? `; output kept at ${outputFile}` : "";
+  process.stderr.write(`review FAILED - relaunch (${extraction.reason}${kept})\n`);
   process.exitCode = 1;
 }
 

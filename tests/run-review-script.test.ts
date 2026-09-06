@@ -711,6 +711,19 @@ describe("run-review.mts", () => {
     const extracted = run(["codex", "--extract", outputFile]);
     expect(extracted.code).toBe(1);
     expect(extracted.stderr).toContain("recorded reviewer status: 3");
+    // Positive control for the kept-output suffix: the stream is still there.
+    expect(extracted.stderr).toContain(`output kept at ${outputFile}`);
+  });
+
+  test("--extract on a completed run whose stream was deleted fails without naming a kept file", () => {
+    const r = run(["codex", promptFile, "--background"]);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("0");
+    rmSync(outputFile);
+    const extracted = run(["codex", "--extract", outputFile]);
+    expectFailure(extracted, { code: 1, stderr: "cannot read output file" });
+    expect(extracted.stderr).not.toContain("output kept at");
+    rmSync(dirname(outputFile), { recursive: true, force: true });
   });
 
   test("a background run with a missing binary records not-found; --extract exits 2", () => {

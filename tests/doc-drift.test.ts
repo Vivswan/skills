@@ -268,7 +268,7 @@ const SURFACES: Record<string, Surface> = {
         doc: "1: `review FAILED - relaunch`.",
         script:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-          "`review FAILED - relaunch (${extraction.reason}; output kept at ${outputFile})\\n`,\n  );\n  process.exitCode = 1;",
+          "`review FAILED - relaunch (${extraction.reason}${kept})\\n`);\n  process.exitCode = 1;",
       },
       {
         doc: "2: usage error or reviewer binary not found.",
