@@ -122,6 +122,7 @@ const SURFACES: Record<string, Surface> = {
       { doc: '"command":', script: "command: entry.command" },
       { doc: '"state":', script: "state: states.get(" },
       { doc: "git ls-tree -r", script: '"ls-tree", "-r"' },
+      { doc: "--full-tree", script: '"ls-tree", "-r", "-z", "--full-tree"' },
     ],
   },
   "fleet-monitor.md <-> probe.mts": {

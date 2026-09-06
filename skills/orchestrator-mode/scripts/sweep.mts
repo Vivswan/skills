@@ -100,7 +100,7 @@ function sanitizedEnv(): NodeJS.ProcessEnv {
 function run(
   cmd: string,
   args: string[],
-  opts: { acceptStdoutOnError?: boolean; env?: Record<string, string> } = {},
+  opts: { acceptStdoutOnError?: boolean; env?: Record<string, string>; cwd?: string } = {},
 ): Promise<RunResult> {
   return new Promise((resolvePromise) => {
     execFile(
@@ -110,6 +110,7 @@ function run(
         timeout: COMMAND_TIMEOUT_MS,
         maxBuffer: MAX_BUFFER,
         encoding: "buffer",
+        cwd: opts.cwd,
         env: { ...sanitizedEnv(), ...opts.env },
       },
       (error, stdout, stderr) => {
@@ -419,6 +420,9 @@ function transcriptReport(dir: string): unknown {
 
 type BaseRef = { ref: string; sha: string } | { ref: null; error: string };
 
+/** A git call pinned to one worktree's verified gitdir, work tree, AND cwd. */
+type PinnedGit = (args: string[]) => Promise<RunResult>;
+
 /**
  * Resolve an operator-supplied --base ref to a pinned sha. Any committish is
  * accepted (origin/develop, a local branch, a tag, a sha); --end-of-options
@@ -527,9 +531,9 @@ async function resolveDefaultRef(repoRoot: string): Promise<BaseRef> {
  * would silently report a healthy detached row.
  */
 async function readBranch(
-  pinned: string[],
+  pinnedGit: PinnedGit,
 ): Promise<{ ok: true; branch: string | null } | { ok: false; error: string }> {
-  const result = await run("git", [...pinned, "symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const result = await pinnedGit(["symbolic-ref", "--quiet", "--short", "HEAD"]);
   if (result.ok) return { ok: true, branch: result.stdout.toString("utf8").trim() };
   if (result.code === 1) return { ok: true, branch: null };
   return { ok: false, error: result.error };
@@ -592,36 +596,38 @@ async function worktreeRow(
       error: `gitdir moved during discovery (${gitDir} -> ${gitValue(gitDirVerify.stdout)})`,
     };
   }
-  const pinned = ["--git-dir", gitDir, "--work-tree", path];
+  // cwd is pinned too: git reads a cwd INSIDE a work tree as a pathspec
+  // prefix, so a sweep launched from a nested worktree (this repo keeps them
+  // under the main checkout) would list the main checkout's tree relative to
+  // that subdirectory. A vanished dir fails the spawn and the row goes
+  // ok:false, as it should.
+  const pinnedGit: PinnedGit = (args) =>
+    run("git", ["--git-dir", gitDir, "--work-tree", path, ...args], { cwd: path });
 
   // headSha and branch come from the pinned gitdir, read HERE and re-read
   // after the other probes: discovery-time values could predate a mid-sweep
   // commit or checkout, and a row mixing old identity with new counts would
   // carry a contradiction.
-  const headBefore = await run("git", [...pinned, "rev-parse", "HEAD"]);
+  const headBefore = await pinnedGit(["rev-parse", "HEAD"]);
   if (!headBefore.ok) return { worktree: path, ok: false, error: headBefore.error };
   const headSha = headBefore.stdout.toString("utf8").trim();
-  const branchBefore = await readBranch(pinned);
+  const branchBefore = await readBranch(pinnedGit);
   if (!branchBefore.ok) return { worktree: path, ok: false, error: branchBefore.error };
   const branch = branchBefore.branch;
 
   // --untracked-files=all: the default collapses a nested untracked tree to
   // one "dir/" entry whose mtime does not move on edits inside it, so active
   // work would read as stalled.
-  const status = await run("git", [
-    ...pinned,
-    "status",
-    "--porcelain",
-    "-z",
-    "--untracked-files=all",
-  ]);
+  const status = await pinnedGit(["status", "--porcelain", "-z", "--untracked-files=all"]);
   if (!status.ok) return { worktree: path, ok: false, error: status.error };
 
   // Tree size at HEAD: HEAD sha, ahead/behind, dirty count, and mtimes all
   // read normal for a commit stacked on top of a repo-wiping commit - only
   // the file count at HEAD vs the base separates "committed its work" from
-  // "committed on top of deleting the repo".
-  const tree = await run("git", [...pinned, "ls-tree", "-r", "-z", "--name-only", "HEAD"]);
+  // "committed on top of deleting the repo". --full-tree: ls-tree is the one
+  // reading here whose default output is cwd-prefix-relative; say so at the
+  // call rather than rely on the cwd pin alone.
+  const tree = await pinnedGit(["ls-tree", "-r", "-z", "--full-tree", "--name-only", "HEAD"]);
   if (!tree.ok) return { worktree: path, ok: false, error: tree.error };
   const treeFileCount = splitNul(tree.stdout).filter((name) => name.length > 0).length;
 
@@ -631,13 +637,7 @@ async function worktreeRow(
     // default branch, or the --base ref), not the mutable ref name: a
     // concurrent fetch moving the ref mid-sweep would otherwise give
     // different rows different bases.
-    const counts = await run("git", [
-      ...pinned,
-      "rev-list",
-      "--left-right",
-      "--count",
-      `${baseSha}...HEAD`,
-    ]);
+    const counts = await pinnedGit(["rev-list", "--left-right", "--count", `${baseSha}...HEAD`]);
     if (!counts.ok) return { worktree: path, ok: false, error: counts.error };
     const [behind, ahead] = counts.stdout.toString("utf8").trim().split(/\s+/);
     aheadBehind = {
@@ -657,7 +657,7 @@ async function worktreeRow(
   // rev-list ran, the readings above describe a mix of two states - refuse
   // the row rather than report an internally inconsistent one; the next
   // sweep re-measures.
-  const headAfter = await run("git", [...pinned, "rev-parse", "HEAD"]);
+  const headAfter = await pinnedGit(["rev-parse", "HEAD"]);
   if (!headAfter.ok) return { worktree: path, ok: false, error: headAfter.error };
   const headShaAfter = headAfter.stdout.toString("utf8").trim();
   if (headShaAfter !== headSha) {
@@ -667,7 +667,7 @@ async function worktreeRow(
       error: `HEAD moved mid-row (${headSha} -> ${headShaAfter}); readings are inconsistent`,
     };
   }
-  const branchAfter = await readBranch(pinned);
+  const branchAfter = await readBranch(pinnedGit);
   if (!branchAfter.ok) return { worktree: path, ok: false, error: branchAfter.error };
   if (branchAfter.branch !== branch) {
     return {

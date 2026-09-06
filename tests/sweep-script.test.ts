@@ -120,10 +120,15 @@ git(wtDev, "push", "origin", "develop");
 git(repo, "worktree", "remove", wtDev);
 git(repo, "fetch", "origin");
 
-function runSweep(root: string, extraEnv: Record<string, string> = {}, ...extraArgs: string[]) {
+function runSweep(
+  root: string,
+  opts: { env?: Record<string, string>; cwd?: string } = {},
+  ...extraArgs: string[]
+) {
   return Bun.spawnSync(["bun", SCRIPT, root, ...extraArgs], {
     timeout: SWEEP_TIMEOUT,
-    env: { ...cleanEnv(), ...extraEnv },
+    cwd: opts.cwd,
+    env: { ...cleanEnv(), ...opts.env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -131,7 +136,7 @@ function runSweep(root: string, extraEnv: Record<string, string> = {}, ...extraA
 
 // JSON.parse keeps the rows untyped; assertions below pin the actual shape.
 function sweepWithEnv(root: string, extraEnv: Record<string, string>, ...extraArgs: string[]) {
-  const result = runSweep(root, extraEnv, ...extraArgs);
+  const result = runSweep(root, { env: extraEnv }, ...extraArgs);
   expect(result.stderr.toString()).toBe("");
   expect(result.exitCode).toBe(0);
   const lines = result.stdout.toString().trim().split("\n");
@@ -406,8 +411,8 @@ describe("sweep.mts worktree rows", () => {
   );
 
   // A zero treeFileCount is the wipe signal on a worktree row but voids the
-  // positive control on the main-checkout row (production read 0 there for two
-  // sweeps, then recovered). The axis: WHERE the all-files-deleted commit lands.
+  // positive control on the main-checkout row. The axis: WHERE the
+  // all-files-deleted commit lands.
   const zeroTreeCases: { id: string; zeroRow: "control" | "worktree" }[] = [
     { id: "control row fails the sweep", zeroRow: "control" },
     { id: "worktree row is a normal wipe reading", zeroRow: "worktree" },
@@ -451,6 +456,49 @@ describe("sweep.mts worktree rows", () => {
         expect(rows.some((r) => r.control === "FAILED")).toBe(false);
         expect(rowFor(rows, basename(root)).treeFileCount).toBe(1);
       }
+    },
+    SWEEP_TIMEOUT,
+  );
+
+  // The row's git calls are pinned with --git-dir/--work-tree, but git still
+  // reads a cwd INSIDE that work tree as a pathspec prefix, so a sweep
+  // launched from a nested worktree (this repo keeps them under
+  // .claude/worktrees/) once listed the main checkout's tree relative to the
+  // nested dir: treeFileCount 0 and a control:FAILED verdict on a healthy
+  // repo. The axis: where the sweep is launched from.
+  const cwdRepo = join(fixtureRoot, "cwd-repo");
+  const nestedWorktree = join(cwdRepo, ".claude", "worktrees", "nested");
+  mkdirSync(cwdRepo);
+  git(cwdRepo, "init", "-b", "main");
+  writeFileSync(join(cwdRepo, "tracked.txt"), "x\n");
+  mkdirSync(join(cwdRepo, "lib"));
+  writeFileSync(join(cwdRepo, "lib", "a.txt"), "a\n");
+  git(cwdRepo, "add", ".");
+  git(cwdRepo, "commit", "-m", "initial");
+  git(cwdRepo, "worktree", "add", nestedWorktree, "-b", "track-nested");
+  const launchCwdCases: { id: string; cwd: string }[] = [
+    { id: "a nested worktree inside the main checkout", cwd: nestedWorktree },
+    { id: "a plain subdirectory of the main checkout", cwd: join(cwdRepo, "lib") },
+  ];
+  test.each(launchCwdCases)(
+    "rows read the same launched from $id as from the repo root",
+    (c) => {
+      const rowsLaunchedFrom = (cwd: string) => {
+        const result = runSweep(cwdRepo, { cwd });
+        expect(result.stderr.toString()).toBe("");
+        expect(result.exitCode).toBe(0);
+        const lines = result.stdout.toString().trim().split("\n");
+        return lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+      };
+      // The launching process's own cwd lands in one row's processes list
+      // (lsof attribution), so processes is the one column allowed to differ.
+      const withoutProcesses = (rows: Record<string, unknown>[]) =>
+        rows.filter((r) => "worktree" in r).map(({ processes, ...rest }) => rest);
+      const fromRoot = rowsLaunchedFrom(cwdRepo);
+      const fromCwd = rowsLaunchedFrom(c.cwd);
+      expect(fromCwd.some((r) => r.control === "FAILED")).toBe(false);
+      expect(rowFor(fromRoot, "cwd-repo").treeFileCount).toBe(2);
+      expect(withoutProcesses(fromCwd)).toEqual(withoutProcesses(fromRoot));
     },
     SWEEP_TIMEOUT,
   );
