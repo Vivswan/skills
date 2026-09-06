@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Rubber-duck review verdict",
+  "description": "The reviewer's final message. run-review.mts hands this schema to codex (--output-schema) and claude (--json-schema) so the final answer cannot be free text; copilot has no schema flag and must emit this object itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["blocking", "non_blocking", "recorded_not_built", "summary"],
+  "properties": {
+    "blocking": {
+      "type": "array",
+      "description": "Findings that must be fixed before the change lands.",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "non_blocking": {
+      "type": "array",
+      "description": "Findings worth fixing that do not block on their own.",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "recorded_not_built": {
+      "type": "array",
+      "description": "Speculative hardening, one line each. Not findings; the driving agent decides whether any is built.",
+      "items": { "type": "string" }
+    },
+    "summary": {
+      "type": "string",
+      "description": "One or two sentences on what was reviewed and how it was checked. With no findings, state plainly that the code is correct."
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["where", "claim", "evidence"],
+      "properties": {
+        "where": { "type": "string", "description": "File and line, or the symbol." },
+        "claim": { "type": "string", "description": "What is wrong, in one sentence." },
+        "evidence": {
+          "type": "string",
+          "description": "The concrete input or state and the wrong output, crash, or data loss it produces, or the concrete maintainability cost in this change."
+        }
+      }
+    }
+  }
+}

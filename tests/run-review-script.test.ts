@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   closeSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -20,45 +21,113 @@ import { writeAllSync } from "../skills/rubber-duck-review/scripts/run-review.mt
 // drive every exit path, pinning the traps the script encapsulates - the
 // prompt travels as one argv element (backticks and $() stay literal), stdin
 // is closed so a reviewer that reads it cannot hang, the verdict is the LAST
-// codex agent_message / the final claude result, and an empty, cut, blank,
-// or errored stream exits 1 (never a clean pass). gh-style violations files
-// catch any drift in the exact reviewer invocations.
+// codex agent_message / the final claude result and must be the schema
+// object with at least one tool call before it, and an empty, cut, blank,
+// prose-only, preamble-only, or errored stream exits 1 (never a clean pass).
+// gh-style violations files catch any drift in the exact reviewer invocations.
 
 const SCRIPT = join(ROOT, "skills", "rubber-duck-review", "scripts", "run-review.mts");
+const SCHEMA = join(ROOT, "skills", "rubber-duck-review", "scripts", "verdict-schema.json");
 
 // Prompt content that a shell would mangle: proves no shell ever sees it.
 const PROMPT = "Review only.\nRun `git --no-pager diff HEAD` and note $(hostname) stays literal.\n";
 
 const BIG_VERDICT_BYTES = 262144;
 
+/** The verdict object the schema describes, as each stub reviewer reports it. */
+function verdictFor(reviewer: string) {
+  return {
+    blocking: [],
+    non_blocking: [
+      { where: "src/a.ts:3", claim: "misleading name", evidence: `${reviewer} read it` },
+    ],
+    recorded_not_built: ["a bound for a caller that does not exist"],
+    summary: `${reviewer.toUpperCase()} VERDICT: correct, no blocking findings`,
+  };
+}
+const CODEX_VERDICT = verdictFor("codex");
+const CLAUDE_VERDICT = verdictFor("claude");
+const COPILOT_VERDICT = verdictFor("copilot");
+
+/** One codex agent_message line carrying the given text (JSON-escaped once,
+ * so the stub's single quotes deliver it byte-for-byte). */
+function codexMessage(text: string): string {
+  return JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
+}
+const CODEX_VERDICT_LINE = codexMessage(JSON.stringify(CODEX_VERDICT));
+/** The big-verdict line split around its summary, so the stub can splice in
+ * a summary larger than any pipe buffer. */
+const [bigOpen, bigClose] = codexMessage(
+  JSON.stringify({ blocking: [], non_blocking: [], recorded_not_built: [], summary: "@BIG@" }),
+).split("@BIG@") as [string, string];
+const CODEX_TOOL_LINE = JSON.stringify({
+  type: "item.completed",
+  item: { type: "command_execution", command: "git --no-pager diff --cached" },
+});
+const CLAUDE_TOOL_LINE = JSON.stringify({
+  type: "assistant",
+  message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git diff" } }] },
+});
+const CLAUDE_ANSWER_TOOL_LINE = JSON.stringify({
+  type: "assistant",
+  message: { content: [{ type: "tool_use", name: "StructuredOutput", input: CLAUDE_VERDICT }] },
+});
+const CLAUDE_RESULT_LINE = JSON.stringify({
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  result: JSON.stringify(CLAUDE_VERDICT),
+  structured_output: CLAUDE_VERDICT,
+});
+
 const FAKE_CODEX = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
-if [ "$1 $2 $3 $4" != "exec --json --sandbox read-only" ] || [ "$#" -ne 5 ]; then
+if [ "$1 $2 $3 $4 $5" != "exec --json --sandbox read-only --output-schema" ] || [ "$#" -ne 7 ]; then
   violate "codex argv: $*"; exit 64
 fi
-if [ "$5" = "-" ]; then channel=stdin; else channel=argv; fi
+if [ "$6" != "\${STUB_SCHEMA}" ] || [ ! -f "$6" ]; then
+  violate "codex schema: $6"; exit 64
+fi
+if [ "$7" = "-" ]; then channel=stdin; else channel=argv; fi
 if [ "$channel" != "\${STUB_EXPECT_DELIVERY}" ]; then
   violate "codex delivery: $channel"; exit 64
 fi
-if [ "$5" = "-" ] && [ "\${STUB_SKIP_STDIN:-0}" != "1" ]; then
+if [ "$7" = "-" ] && [ "\${STUB_SKIP_STDIN:-0}" != "1" ]; then
   cat > "\${STUB_PROMPT_COPY}"
-elif [ "$5" != "-" ]; then
-  printf '%s' "$5" > "\${STUB_PROMPT_COPY}"
+elif [ "$7" != "-" ]; then
+  printf '%s' "$7" > "\${STUB_PROMPT_COPY}"
 fi
 # With stdin open (a pipe) this blocks forever; stdio 'ignore' gives EOF.
 if [ "\${STUB_READ_STDIN:-0}" = "1" ]; then cat > /dev/null; fi
 case "\${STUB_MODE:-ok}" in
   ok)
     echo '{"type":"thread.started","thread_id":"t1"}'
+    echo '{"type":"turn.started"}'
     echo '{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}'
-    echo '{"type":"item.completed","item":{"type":"agent_message","text":"intermediate narration"}}'
+    echo '${codexMessage("intermediate narration")}'
     echo 'mid-stream garbage that is not JSON'
-    echo '{"type":"item.completed","item":{"type":"command_execution","command":"git diff"}}'
-    echo '{"type":"item.completed","item":{"type":"agent_message","text":"CODEX VERDICT: correct, no blocking findings"}}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  preamble)
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  prose)
+    echo '${CODEX_TOOL_LINE}'
+    echo '${codexMessage("CODEX VERDICT: correct, no blocking findings")}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  badshape)
+    echo '${CODEX_TOOL_LINE}'
+    echo '${codexMessage(JSON.stringify({ blocking: [], summary: "no non_blocking key" }))}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
     ;;
   trunctail)
-    echo '{"type":"item.completed","item":{"type":"agent_message","text":"CODEX VERDICT: correct, no blocking findings"}}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
     printf '{"type":"item.completed","item":{"type":"agent_'
     ;;
@@ -68,11 +137,13 @@ case "\${STUB_MODE:-ok}" in
     ;;
   cutlate)
     echo '{"type":"thread.started","thread_id":"t1"}'
-    echo '{"type":"item.completed","item":{"type":"agent_message","text":"narration that looks like a verdict"}}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
     ;;
   cutsecond)
     echo '{"type":"turn.started"}'
-    echo '{"type":"item.completed","item":{"type":"agent_message","text":"first-turn verdict"}}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
     echo '{"type":"turn.started"}'
     ;;
@@ -81,12 +152,14 @@ case "\${STUB_MODE:-ok}" in
     echo '{"type":"error","message":"stream disconnected before completion"}'
     ;;
   blank)
-    echo '{"type":"item.completed","item":{"type":"agent_message","text":""}}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${codexMessage("")}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
     ;;
   big)
     big="$(head -c ${BIG_VERDICT_BYTES} /dev/zero | tr '\\0' 'x')"
-    printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\\n' "$big"
+    echo '${CODEX_TOOL_LINE}'
+    printf '%s%s%s\\n' '${bigOpen}' "$big" '${bigClose}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
     ;;
   empty) ;;
@@ -96,13 +169,14 @@ exit "\${STUB_EXIT:-0}"
 
 const FAKE_CLAUDE = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
-if [ "$1 $2 $3 $4 $5 $6" != "-p --permission-mode plan --verbose --output-format stream-json" ]; then
+if [ "$1 $2 $3 $4 $5 $6 $7" != "-p --permission-mode plan --verbose --output-format stream-json --json-schema" ]; then
   violate "claude argv: $*"; exit 64
 fi
-if [ "$#" -eq 7 ]; then
+case "$8" in *'"recorded_not_built"'*) ;; *) violate "claude schema: $8"; exit 64;; esac
+if [ "$#" -eq 9 ]; then
   channel=argv
-  printf '%s' "$7" > "\${STUB_PROMPT_COPY}"
-elif [ "$#" -eq 6 ]; then
+  printf '%s' "$9" > "\${STUB_PROMPT_COPY}"
+elif [ "$#" -eq 8 ]; then
   channel=stdin
   cat > "\${STUB_PROMPT_COPY}"
 else
@@ -115,7 +189,20 @@ case "\${STUB_MODE:-ok}" in
   ok)
     echo '{"type":"system","subtype":"init"}'
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"looking around"}]}}'
-    echo '{"type":"result","subtype":"success","is_error":false,"result":"CLAUDE VERDICT: correct, no blocking findings"}'
+    echo '${CLAUDE_TOOL_LINE}'
+    echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"diff"}]}}'
+    echo '${CLAUDE_ANSWER_TOOL_LINE}'
+    echo '${CLAUDE_RESULT_LINE}'
+    ;;
+  preamble)
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"I will review the changes now."}]}}'
+    echo '${CLAUDE_ANSWER_TOOL_LINE}'
+    echo '${CLAUDE_RESULT_LINE}'
+    ;;
+  resultstring)
+    echo '${CLAUDE_TOOL_LINE}'
+    echo '${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(CLAUDE_VERDICT) })}'
     ;;
   iserror)
     echo '{"type":"system","subtype":"init"}'
@@ -127,6 +214,7 @@ case "\${STUB_MODE:-ok}" in
     ;;
   blank)
     echo '{"type":"system","subtype":"init"}'
+    echo '${CLAUDE_TOOL_LINE}'
     echo '{"type":"result","subtype":"success","result":"   "}'
     ;;
 esac
@@ -141,7 +229,11 @@ if [ "$1" != "-p" ] || [ "$3 $4 $5 $6 $7" != "$ro" ] || [ "$#" -ne 7 ]; then
 fi
 printf '%s' "$2" > "\${STUB_PROMPT_COPY}"
 case "\${STUB_MODE:-ok}" in
-  ok) echo "COPILOT VERDICT: correct";;
+  ok) echo '${JSON.stringify(COPILOT_VERDICT)}';;
+  fenced) printf '\\x60\\x60\\x60json\\n%s\\n\\x60\\x60\\x60\\n' '${JSON.stringify(COPILOT_VERDICT)}';;
+  extrakey) echo '${JSON.stringify({ ...COPILOT_VERDICT, severity: "high" })}';;
+  extrafindingkey) echo '${JSON.stringify({ ...COPILOT_VERDICT, blocking: [{ where: "x", claim: "c", evidence: "e", severity: "high" }] })}';;
+  prose) echo "COPILOT VERDICT: correct";;
   blank) printf '   \\n';;
 esac
 exit "\${STUB_EXIT:-0}"
@@ -179,6 +271,13 @@ afterAll(() => {
   for (const dir of mintedDirs) rmSync(dir, { recursive: true, force: true });
 });
 
+interface Report {
+  verdict: Record<string, unknown>;
+  tool_calls: number;
+  capture: string;
+  trajectory: { event: string; text?: string }[];
+}
+
 let scenario = 0;
 function run(args: string[], env: Record<string, string> = {}, path?: string) {
   scenario += 1;
@@ -192,6 +291,7 @@ function run(args: string[], env: Record<string, string> = {}, path?: string) {
       PATH: path ?? `${binDir}:${process.env.PATH}`,
       STUB_VIOLATIONS: violations,
       STUB_PROMPT_COPY: promptCopy,
+      STUB_SCHEMA: SCHEMA,
       // The stubs report the channel the prompt actually arrived on, so a
       // --stdin-prompt run that fell back to argv fails as a violation.
       STUB_EXPECT_DELIVERY: args.includes("--stdin-prompt") ? "stdin" : "argv",
@@ -207,15 +307,28 @@ function run(args: string[], env: Record<string, string> = {}, path?: string) {
     // no violations file means no violations
   }
   expect(violated).toBe("");
+  const stdout = result.stdout.toString();
   const stderr = result.stderr.toString();
-  // Expected-failure runs keep their scratch dir for inspection; sweep it.
+  // Every review run keeps its scratch dir for inspection: a success names
+  // the capture in its report, a failure in its message. Sweep both.
   const kept = /(?:output|stderr) kept at ([^)\n]+)/.exec(stderr)?.[1];
   if (kept) rmSync(dirname(kept), { recursive: true, force: true });
+  let report: Report | null = null;
+  if (result.exitCode === 0 && stdout.startsWith("{")) {
+    report = JSON.parse(stdout) as Report;
+    expect(existsSync(report.capture)).toBe(true);
+    rmSync(dirname(report.capture), { recursive: true, force: true });
+  }
   return {
     code: result.exitCode,
-    stdout: result.stdout.toString(),
+    stdout,
     stderr,
     promptCopy,
+    /** The parsed JSON report of a successful review, or a throw. */
+    report(): Report {
+      if (report === null) throw new Error(`no report on stdout: ${stdout}\n${stderr}`);
+      return report;
+    },
   };
 }
 
@@ -254,28 +367,52 @@ function backgroundOutputFile(stdout: string): string {
 }
 
 describe("run-review.mts", () => {
-  test("codex: last agent_message wins and the prompt arrives shell-untouched", () => {
+  test("codex: last agent_message wins, the report carries verdict, tool calls, capture, trajectory", () => {
     const r = run(["codex", promptFile]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toBe("CODEX VERDICT: correct, no blocking findings\n");
-    expect(r.stdout).not.toContain("intermediate narration");
+    const report = r.report();
+    expect(report.verdict).toEqual(CODEX_VERDICT);
+    expect(report.tool_calls).toBe(1);
+    expect(basename(report.capture)).toBe("review.jsonl");
+    // The narration is visible as a trajectory step, never as the verdict;
+    // long steps are excerpted, the full text stays in the capture.
+    expect(report.trajectory.slice(0, 3)).toEqual([
+      { event: "reasoning", text: "thinking" },
+      { event: "agent_message", text: "intermediate narration" },
+      { event: "command_execution", text: "git --no-pager diff --cached" },
+    ]);
+    expect(report.trajectory[3]?.event).toBe("agent_message");
+    expect(report.trajectory[3]?.text).toMatch(/^\{"blocking":\[\].*\.\.\.$/);
+    expect(report.trajectory).toHaveLength(4);
     expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
     const statusLines = r.stderr.split("\n").filter(Boolean);
     expect(statusLines).toEqual(["review stream alive", "reviewer exited (status=0)"]);
   });
 
-  test("claude: verdict is the result string on the final result event", () => {
+  test("claude: verdict is the structured_output on the final result event", () => {
     const r = run(["claude", promptFile]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toBe("CLAUDE VERDICT: correct, no blocking findings\n");
+    const report = r.report();
+    expect(report.verdict).toEqual(CLAUDE_VERDICT);
+    // The StructuredOutput call delivers the answer; only Bash is a review step.
+    expect(report.tool_calls).toBe(1);
+    expect(report.trajectory.map((row) => row.event)).toEqual(["text", "tool_use", "result"]);
     expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
   });
 
-  test("copilot: prompt immediately after -p, plain stdout is the verdict", () => {
-    const r = run(["copilot", promptFile]);
+  test("claude: a result string carrying the object is the verdict when structured_output is absent", () => {
+    const r = run(["claude", promptFile], { STUB_MODE: "resultstring" });
     expect(r.code).toBe(0);
-    expect(r.stdout).toBe("COPILOT VERDICT: correct\n");
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    expect(r.report().verdict).toEqual(CLAUDE_VERDICT);
+  });
+
+  test("copilot: prompt immediately after -p, plain stdout must be the verdict object", () => {
+    for (const mode of ["ok", "fenced"]) {
+      const r = run(["copilot", promptFile], { STUB_MODE: mode });
+      expect(r.code, mode).toBe(0);
+      expect(r.report().verdict, mode).toEqual(COPILOT_VERDICT);
+      expect(readFileSync(r.promptCopy, "utf-8"), mode).toBe(PROMPT);
+    }
   });
 
   test("copilot whitespace-only output is a failed review, not a verdict", () => {
@@ -283,21 +420,70 @@ describe("run-review.mts", () => {
     expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty output" });
   });
 
+  test("a schema-valid verdict with no tool call before it is a preamble, not a review", () => {
+    // Issue 94: codex ended its turn on the narration line and the empty
+    // verdict read as clean. The schema cannot catch it (codex fills the
+    // narration into the schema too); the missing reads do.
+    for (const tool of ["codex", "claude"]) {
+      const r = run([tool, promptFile], { STUB_MODE: "preamble" });
+      expectFailure(
+        r,
+        { code: 1, stderr: "review FAILED - relaunch (no tool calls before the final message" },
+        tool,
+      );
+    }
+  });
+
+  test("a final message that is not the verdict object fails the review", () => {
+    const cases = [
+      { id: "codex prose", tool: "codex", mode: "prose", reason: "final message is not JSON" },
+      {
+        id: "codex missing key",
+        tool: "codex",
+        mode: "badshape",
+        reason: "non_blocking is not an array",
+      },
+      { id: "copilot prose", tool: "copilot", mode: "prose", reason: "final message is not JSON" },
+      // The schema says additionalProperties false; the script's own reading
+      // of a plain-text (copilot) verdict must be exactly as strict.
+      {
+        id: "copilot extra key",
+        tool: "copilot",
+        mode: "extrakey",
+        reason: "unexpected key(s): severity",
+      },
+      {
+        id: "copilot extra finding key",
+        tool: "copilot",
+        mode: "extrafindingkey",
+        reason: "blocking is not an array of exactly",
+      },
+    ];
+    for (const { id, tool, mode, reason } of cases) {
+      const r = run([tool, promptFile], { STUB_MODE: mode });
+      expectFailure(
+        r,
+        { code: 1, stderr: `review FAILED - relaunch (not a verdict: ${reason}` },
+        id,
+      );
+    }
+  });
+
   test("a stub that reads stdin completes: stdin is 'ignore', not an open pipe", () => {
     const r = run(["codex", promptFile], { STUB_READ_STDIN: "1" });
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("CODEX VERDICT");
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
   });
 
   test("--stdin-prompt serves the prompt file as stdin for codex and claude", () => {
     const cases = [
-      { id: "codex", verdict: "CODEX VERDICT: correct, no blocking findings\n" },
-      { id: "claude", verdict: "CLAUDE VERDICT: correct, no blocking findings\n" },
+      { id: "codex", verdict: CODEX_VERDICT },
+      { id: "claude", verdict: CLAUDE_VERDICT },
     ];
     for (const { id: tool, verdict } of cases) {
       const r = run([tool, promptFile, "--stdin-prompt"]);
       expect(r.code, tool).toBe(0);
-      expect(r.stdout, tool).toBe(verdict);
+      expect(r.report().verdict, tool).toEqual(verdict);
       expect(readFileSync(r.promptCopy, "utf-8"), tool).toBe(PROMPT);
     }
   });
@@ -320,13 +506,13 @@ describe("run-review.mts", () => {
     const hugePrompt = mintPrompt("huge-prompt-ignored", "p".repeat(1 << 20));
     const r = run(["codex", hugePrompt, "--stdin-prompt"], { STUB_SKIP_STDIN: "1" });
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("CODEX VERDICT");
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
   });
 
   test("a large verdict is printed in full, not truncated at exit", () => {
     const r = run(["codex", promptFile], { STUB_MODE: "big" });
     expect(r.code).toBe(0);
-    expect(r.stdout).toBe(`${"x".repeat(BIG_VERDICT_BYTES)}\n`);
+    expect(r.report().verdict.summary).toBe("x".repeat(BIG_VERDICT_BYTES));
   });
 
   test("codex stream cut before a verdict exits 1", () => {
@@ -517,7 +703,8 @@ describe("run-review.mts", () => {
     expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
     const extracted = run(["codex", "--extract", outputFile]);
     expect(extracted.code).toBe(0);
-    expect(extracted.stdout).toBe("CODEX VERDICT: correct, no blocking findings\n");
+    expect(extracted.report().verdict).toEqual(CODEX_VERDICT);
+    expect(extracted.report().capture).toBe(outputFile);
     rmSync(dirname(outputFile), { recursive: true, force: true });
   });
 
@@ -529,6 +716,19 @@ describe("run-review.mts", () => {
     const extracted = run(["codex", "--extract", outputFile]);
     expect(extracted.code).toBe(1);
     expect(extracted.stderr).toContain("recorded reviewer status: 3");
+    // Positive control for the kept-output suffix: the stream is still there.
+    expect(extracted.stderr).toContain(`output kept at ${outputFile}`);
+  });
+
+  test("--extract on a completed run whose stream was deleted fails without naming a kept file", () => {
+    const r = run(["codex", promptFile, "--background"]);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("0");
+    rmSync(outputFile);
+    const extracted = run(["codex", "--extract", outputFile]);
+    expectFailure(extracted, { code: 1, stderr: "cannot read output file" });
+    expect(extracted.stderr).not.toContain("output kept at");
+    rmSync(dirname(outputFile), { recursive: true, force: true });
   });
 
   test("a background run with a missing binary records not-found; --extract exits 2", () => {

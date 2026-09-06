@@ -7,6 +7,30 @@
  *   run-review.mts <codex|claude|copilot> --extract <output-file>
  *   run-review.mts prepare <section>
  *
+ * The verdict is the structured object in verdict-schema.json (blocking,
+ * non_blocking, recorded_not_built, summary). codex and claude receive that
+ * schema through their CLIs (--output-schema / --json-schema), so their final
+ * message cannot be free text; copilot has no schema flag and must emit the
+ * object itself. A message that does not parse as the schema object fails
+ * the review.
+ *
+ * A well-formed message is still not a verdict on its own: codex applies the
+ * schema to its narration too, so a turn that ends after "I will review the
+ * changes now" produces a schema-valid object with empty findings. A review
+ * has to read something, so the verdict counts only when at least one tool
+ * call (a command, a file read) precedes it in the same turn; a turn with
+ * none is a preamble and fails the review. copilot's plain-text output has no
+ * trajectory to check, which is one reason it is the last-resort reviewer.
+ *
+ * On success stdout is one JSON object: the verdict, the tool-call count, the
+ * path of the kept capture (the full reviewer stream, for inspecting any
+ * message), and a compact trajectory (one row per reviewer step). Every run
+ * that reached the reviewer keeps its capture dir so a surprising verdict can
+ * be traced; remove it once triaged. A foreground launch that never started
+ * the reviewer (binary not found) has nothing to keep and removes it; a
+ * --background one keeps the dir, since --extract reads the recorded
+ * not-found status from it.
+ *
  * prepare mints a private directory under os.tmpdir() with mkdtemp (atomic,
  * so concurrent reviews can never share a path), leaves its marker file in
  * it, and prints the section's prompt file inside it. A launch accepts only a
@@ -38,9 +62,10 @@
  * Exit codes:
  *   0  verdict extracted and printed to stdout, or a --background launch
  *      started (that run's verdict comes later, via --extract)
- *   1  review FAILED - relaunch (empty or cut stream, error events, blank
- *      or unrecorded verdicts, or a non-zero reviewer exit; an empty review
- *      must never read as clean)
+ *   1  review FAILED - relaunch (empty or cut stream, error events, a final
+ *      message that is not the schema object, a verdict with no tool calls
+ *      before it, blank or unrecorded verdicts, or a non-zero reviewer exit;
+ *      an empty review must never read as clean)
  *   2  usage error or reviewer binary not found
  */
 
@@ -68,11 +93,29 @@ function isTool(value: string): value is Tool {
   return (TOOLS as readonly string[]).includes(value);
 }
 
+const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), "verdict-schema.json");
+
+/** Read once at launch; a missing or malformed schema beside the script is a
+ * broken install, not a review failure. */
+function schemaText(): string {
+  return readFileSync(SCHEMA_FILE, "utf-8");
+}
+
 const TOOL_ARGS: Record<Tool, (prompt: string) => string[]> = {
   // --sandbox read-only: the reviewer can grep/diff/typecheck but not write.
-  codex: (prompt) => ["exec", "--json", "--sandbox", "read-only", prompt],
+  // --output-schema: the final message must be the verdict object.
+  codex: (prompt) => [
+    "exec",
+    "--json",
+    "--sandbox",
+    "read-only",
+    "--output-schema",
+    SCHEMA_FILE,
+    prompt,
+  ],
   // --verbose is REQUIRED with --output-format stream-json; without it claude
-  // errors to stderr and stdout stays empty.
+  // errors to stderr and stdout stays empty. --json-schema takes the schema
+  // inline and delivers the verdict as the result's structured_output.
   claude: (prompt) => [
     "-p",
     "--permission-mode",
@@ -80,6 +123,8 @@ const TOOL_ARGS: Record<Tool, (prompt: string) => string[]> = {
     "--verbose",
     "--output-format",
     "stream-json",
+    "--json-schema",
+    schemaText(),
     prompt,
   ],
   // -p consumes the next argument, so the prompt must immediately follow it.
@@ -193,7 +238,34 @@ function isEnoent(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
 }
 
-type Extraction = { ok: true; verdict: string } | { ok: false; reason: string };
+interface Finding {
+  where: string;
+  claim: string;
+  evidence: string;
+}
+
+/** The verdict object verdict-schema.json describes. */
+interface Verdict {
+  blocking: Finding[];
+  non_blocking: Finding[];
+  recorded_not_built: string[];
+  summary: string;
+}
+
+/** One reviewer step, for the compact trajectory on stdout. */
+interface TrajectoryRow {
+  event: string;
+  text?: string;
+}
+
+interface Review {
+  verdict: Verdict;
+  /** Tool calls (commands, file reads) that preceded the verdict in its turn. */
+  toolCalls: number;
+  trajectory: TrajectoryRow[];
+}
+
+type Extraction = { ok: true; review: Review } | { ok: false; reason: string };
 
 interface Delivery {
   args: string[];
@@ -216,13 +288,92 @@ function stdinDelivery(tool: Tool, promptFile: string): Delivery {
   usageError("copilot does not support --stdin-prompt (-p requires the prompt as an argument)");
 }
 
+const EXCERPT_CHARS = 160;
+
+function excerpt(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > EXCERPT_CHARS ? `${flat.slice(0, EXCERPT_CHARS)}...` : flat;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+/** Exactly the schema's keys: verdict-schema.json says additionalProperties
+ * false, and this reading of a reviewer's message must not be looser. */
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+const FINDING_KEYS = ["where", "claim", "evidence"] as const;
+const VERDICT_KEYS = ["blocking", "non_blocking", "recorded_not_built", "summary"] as const;
+
+function isFinding(value: unknown): value is Finding {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, FINDING_KEYS) &&
+    typeof value.where === "string" &&
+    typeof value.claim === "string" &&
+    typeof value.evidence === "string"
+  );
+}
+
+/** The schema gives codex and claude the shape; this check is what makes the
+ * script's own reading of any reviewer's final message the same contract. */
+function parseVerdict(value: unknown): Verdict | string {
+  if (!isRecord(value)) return "final message is not a JSON object";
+  if (!hasOnlyKeys(value, VERDICT_KEYS)) {
+    return `unexpected key(s): ${Object.keys(value)
+      .filter((key) => !VERDICT_KEYS.includes(key as (typeof VERDICT_KEYS)[number]))
+      .join(", ")}`;
+  }
+  const { blocking, non_blocking, recorded_not_built, summary } = value;
+  if (!Array.isArray(blocking) || !blocking.every(isFinding)) {
+    return "blocking is not an array of exactly {where, claim, evidence}";
+  }
+  if (!Array.isArray(non_blocking) || !non_blocking.every(isFinding)) {
+    return "non_blocking is not an array of exactly {where, claim, evidence}";
+  }
+  if (!isStringArray(recorded_not_built)) return "recorded_not_built is not an array of strings";
+  if (typeof summary !== "string" || summary.trim() === "") return "summary is missing or blank";
+  return { blocking, non_blocking, recorded_not_built, summary };
+}
+
+/** copilot answers in plain text, so the object may arrive inside a ```json
+ * fence; anything else around it is a failed review, not something to guess at. */
+function parseVerdictText(text: string): Verdict | string {
+  const unfenced = text
+    .trim()
+    .replace(/^```(?:json)?\s*\n?/, "")
+    .replace(/\n?```\s*$/, "");
+  let value: unknown;
+  try {
+    value = JSON.parse(unfenced);
+  } catch {
+    return "final message is not JSON";
+  }
+  return parseVerdict(value);
+}
+
+/** Claude's read-only turn calls tools by name; StructuredOutput is how the
+ * schema answer itself is delivered, so it is not evidence of a review. */
+const CLAUDE_ANSWER_TOOL = "StructuredOutput";
+
 function extractVerdict(tool: Tool, raw: string): Extraction {
   if (tool === "copilot") {
     const text = raw.trim();
-    return text ? { ok: true, verdict: text } : { ok: false, reason: "empty output" };
+    if (!text) return { ok: false, reason: "empty output" };
+    const verdict = parseVerdictText(text);
+    if (typeof verdict === "string") return { ok: false, reason: `not a verdict: ${verdict}` };
+    return { ok: true, review: { verdict, toolCalls: 0, trajectory: [] } };
   }
-  let verdict: string | null = null;
+  const trajectory: TrajectoryRow[] = [];
+  let verdict: Verdict | string | null = null;
   let errorEvent: string | null = null;
+  // Tool calls seen so far in the current turn; the count at the moment the
+  // winning message lands is what proves the reviewer read something first.
+  let toolCallsThisTurn = 0;
+  let toolCallsBeforeVerdict = 0;
   // codex: a verdict only counts once its turn completes; a stream cut right
   // after an agent_message is mid-thought narration, not a verdict. A trailing
   // turn.started with no matching end likewise voids any earlier verdict.
@@ -245,31 +396,72 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
     if (!isRecord(event)) continue;
     if (event.type === "error" || event.type === "turn.failed") {
       errorEvent = typeof event.message === "string" ? event.message : trimmed;
+      trajectory.push({ event: String(event.type), text: excerpt(errorEvent) });
     }
-    // codex narrates with intermediate agent_message items; the last one wins.
-    if (
-      tool === "codex" &&
-      event.type === "item.completed" &&
-      isRecord(event.item) &&
-      event.item.type === "agent_message" &&
-      typeof event.item.text === "string"
-    ) {
-      verdict = event.item.text;
-      awaitingTurnEnd = true;
+    if (tool === "codex") {
+      if (event.type === "turn.started") {
+        turnOpen = true;
+        toolCallsThisTurn = 0;
+      }
+      if (event.type === "item.completed" && isRecord(event.item)) {
+        const item = event.item;
+        const kind = typeof item.type === "string" ? item.type : "item";
+        if (kind === "command_execution" || kind === "mcp_tool_call") {
+          toolCallsThisTurn += 1;
+          const command = typeof item.command === "string" ? item.command : kind;
+          trajectory.push({ event: kind, text: excerpt(command) });
+        } else if (typeof item.text === "string") {
+          trajectory.push({ event: kind, text: excerpt(item.text) });
+        }
+        // codex narrates with intermediate agent_message items; the last one wins.
+        if (kind === "agent_message" && typeof item.text === "string") {
+          verdict = item.text.trim() === "" ? "" : parseVerdictText(item.text);
+          toolCallsBeforeVerdict = toolCallsThisTurn;
+          awaitingTurnEnd = true;
+        }
+      }
+      if (event.type === "turn.completed" || event.type === "turn.failed") {
+        awaitingTurnEnd = false;
+        turnOpen = false;
+      }
     }
-    if (tool === "codex" && event.type === "turn.started") turnOpen = true;
-    if (tool === "codex" && (event.type === "turn.completed" || event.type === "turn.failed")) {
-      awaitingTurnEnd = false;
-      turnOpen = false;
-    }
-    if (tool === "claude" && event.type === "result") {
-      // claude reports in-band terminal failures as result records with
-      // is_error: true (the CLI can still exit 0); those carry no verdict.
-      if (event.is_error === true) {
-        const subtype = typeof event.subtype === "string" ? event.subtype : "unknown";
-        errorEvent = `claude result has is_error: true (subtype: ${subtype})`;
-      } else if (typeof event.result === "string") {
-        verdict = event.result;
+    if (tool === "claude") {
+      if (
+        event.type === "assistant" &&
+        isRecord(event.message) &&
+        Array.isArray(event.message.content)
+      ) {
+        for (const block of event.message.content) {
+          if (!isRecord(block)) continue;
+          if (block.type === "tool_use") {
+            const name = typeof block.name === "string" ? block.name : "tool";
+            if (name === CLAUDE_ANSWER_TOOL) continue;
+            toolCallsThisTurn += 1;
+            trajectory.push({
+              event: "tool_use",
+              text: excerpt(`${name} ${JSON.stringify(block.input ?? {})}`),
+            });
+          } else if (block.type === "text" && typeof block.text === "string") {
+            trajectory.push({ event: "text", text: excerpt(block.text) });
+          }
+        }
+      }
+      if (event.type === "result") {
+        // claude reports in-band terminal failures as result records with
+        // is_error: true (the CLI can still exit 0); those carry no verdict.
+        if (event.is_error === true) {
+          const subtype = typeof event.subtype === "string" ? event.subtype : "unknown";
+          errorEvent = `claude result has is_error: true (subtype: ${subtype})`;
+          trajectory.push({ event: "result", text: excerpt(errorEvent) });
+        } else if ("structured_output" in event) {
+          verdict = parseVerdict(event.structured_output);
+          toolCallsBeforeVerdict = toolCallsThisTurn;
+          trajectory.push({ event: "result" });
+        } else if (typeof event.result === "string") {
+          verdict = event.result.trim() === "" ? "" : parseVerdictText(event.result);
+          toolCallsBeforeVerdict = toolCallsThisTurn;
+          trajectory.push({ event: "result" });
+        }
       }
     }
   }
@@ -286,19 +478,30 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
   if (awaitingTurnEnd || turnOpen) {
     return { ok: false, reason: "stream cut mid-turn (no turn.completed after the last events)" };
   }
-  if (verdict.trim() === "") return { ok: false, reason: "empty verdict" };
-  return { ok: true, verdict };
+  if (verdict === "") return { ok: false, reason: "empty verdict" };
+  if (typeof verdict === "string") return { ok: false, reason: `not a verdict: ${verdict}` };
+  if (toolCallsBeforeVerdict === 0) {
+    return {
+      ok: false,
+      reason: "no tool calls before the final message (a preamble, not a review)",
+    };
+  }
+  return { ok: true, review: { verdict, toolCalls: toolCallsBeforeVerdict, trajectory } };
 }
 
 // Exits go through process.exitCode + a natural event-loop drain, never
 // process.exit(): an explicit exit can truncate a large pending stream write.
-function reportVerdict(extraction: Extraction, keptOutputFile?: string): void {
+function reportVerdict(extraction: Extraction, outputFile: string): void {
   if (extraction.ok) {
-    process.stdout.write(`${extraction.verdict}\n`);
+    const { verdict, toolCalls, trajectory } = extraction.review;
+    const report = { verdict, tool_calls: toolCalls, capture: outputFile, trajectory };
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     process.exitCode = 0;
     return;
   }
-  const kept = keptOutputFile ? `; output kept at ${keptOutputFile}` : "";
+  // Name the capture only when it is there to read: an --extract whose
+  // stream was already deleted must not point at a path that is gone.
+  const kept = existsSync(outputFile) ? `; output kept at ${outputFile}` : "";
   process.stderr.write(`review FAILED - relaunch (${extraction.reason}${kept})\n`);
   process.exitCode = 1;
 }
@@ -452,11 +655,8 @@ function runForeground(tool: Tool, delivery: Delivery, scratch: Scratch): void {
           reason: `reviewer status: ${status} (stderr kept at ${scratch.errFile})`,
         };
       }
-      if (extraction.ok) {
-        rmSync(scratch.dir, { recursive: true, force: true });
-        reportVerdict(extraction);
-        return;
-      }
+      // The capture stays on success too: the printed report names it, so a
+      // surprising verdict can be traced to the exact reviewer message.
       reportVerdict(extraction, scratch.outFile);
     },
   });
@@ -569,7 +769,7 @@ function extractRecorded(tool: Tool, outputFile: string): void {
   try {
     raw = readFileSync(outputFile, "utf-8");
   } catch (error) {
-    reportVerdict({ ok: false, reason: `cannot read output file: ${String(error)}` });
+    reportVerdict({ ok: false, reason: `cannot read output file: ${String(error)}` }, outputFile);
     return;
   }
   reportVerdict(extractVerdict(tool, raw), outputFile);
