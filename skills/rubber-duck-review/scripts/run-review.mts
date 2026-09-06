@@ -26,8 +26,10 @@
  * path of the kept capture (the full reviewer stream, for inspecting any
  * message), and a compact trajectory (one row per reviewer step). Every run
  * that reached the reviewer keeps its capture dir so a surprising verdict can
- * be traced; remove it once triaged. A launch that never started the reviewer
- * (binary not found) has nothing to keep and removes it.
+ * be traced; remove it once triaged. A foreground launch that never started
+ * the reviewer (binary not found) has nothing to keep and removes it; a
+ * --background one keeps the dir, since --extract reads the recorded
+ * not-found status from it.
  *
  * prepare mints a private directory under os.tmpdir() with mkdtemp (atomic,
  * so concurrent reviews can never share a path), leaves its marker file in
