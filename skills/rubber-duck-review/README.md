@@ -21,7 +21,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/rubber-duck-re
 - Launches a review-only pass with another model, tool, or CLI
 - Ships `scripts/run-review.mts`, which spawns the reviewer safely (no shell, stdin closed or fed from the prompt file, stream captured to a tmp file) and prints the extracted verdict
 - Keeps the reviewer read-only
-- Focuses findings on correctness, future-proofing, and design quality
+- Focuses findings on demonstrable defects and design quality; speculative hardening is recorded, not built, unless the user asks or, in a repository with more than 100 GitHub stars, confirms it after being shown the risk
 - Encourages re-review after fixes
 
 ## Plugin-Ready Layout

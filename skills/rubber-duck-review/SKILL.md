@@ -40,10 +40,10 @@ Use this skill when someone asks for:
 - Tell it how to see the change, naming the same target the convergence gate scopes to (e.g. "run `git --no-pager diff --cached` and read the new files" before a commit, or "run `git --no-pager diff <base>...HEAD`" with the branch's actual base for a branch or PR) rather than pasting diffs; it follows imports and cross-file behavior better that way. `git diff HEAD` is neither: empty on a committed branch, and polluted by unstaged edits before a commit.
 - Ask the reviewer to look for:
   - Correctness issues
-  - Future-proofing risks
-  - Naming or design choices that will become awkward as the codebase grows
-  - Hardcoded assumptions that may become misleading later
+  - Demonstrable defects: a correctness finding earns work when it names a concrete input or state and the wrong output, crash, or data loss it produces in the change under review. A maintainability finding earns work when it points at something concrete in this change, per the next bullet.
+  - Naming or design choices that are already awkward in this change: a name that misleads about what the code does today, or duplication and structure introduced here
   - Workarounds propped up by long justification comments: if it takes a paragraph-long comment to argue the workaround is OK, the code is wrong. Flag both the comment and the code for fixing.
+  - Speculative hardening (hostile callers that cannot reach the code, races in single-user tools, deadlines already bounded by an outer timeout, defensive checks for inputs the code never receives) is listed under a `Recorded, not built` heading, never as a finding. It stays unbuilt unless the user asks for it. In a repository with more than 100 GitHub stars it is instead surfaced to the user and built only after they confirm (step 6). A small, obvious hardening that rides along in the change under review (an exit-code check beside a version check) is fine to keep; the reviewer must not propose a wider one to replace it.
 - Fold in criteria from **companion skills**: for EVERY installed skill that declares a `## Review Criteria` section in its SKILL.md, expand that section into the reviewer prompt, and triage the resulting findings with that skill's own workflow.
   - There is no registry; declaring the section is what makes a skill part of the review. In this collection, `/no-invalid-states`, `/code-standards`, `/never-twice`, and `/verify-with-controls` declare it.
   - Enumerate participants by grepping installed skills, e.g. `grep -rlE '^## Review Criteria' ~/.claude/skills/*/SKILL.md .claude/skills/*/SKILL.md 2>/dev/null` (adjust the paths to wherever your harness installs skills).
@@ -115,7 +115,10 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 
 ### 6. Apply findings thoughtfully
 
-- Treat valid "non-blocking" feedback as real work, especially when it points at design traps or future maintenance issues.
+- Treat valid "non-blocking" feedback as real work when it is a correctness or maintainability finding with a demonstrated effect in this change.
+  - A small, obvious hardening that rides along in the same change is fine (an exit-code check beside a version check, a bound where a bound is one argument).
+  - The stop sign is the cascade: when each review round finds one more hypothetical bypass of the last hardening, the target is widening. Keep the first round's minimal form and record the rest under `Recorded, not built`. A demonstrable defect found in a later round is still work under the first bullet.
+  - Items under `Recorded, not built` are not work: leave them in the report and open no task or PR for them, unless the user asks. The other exception is a repository with more than 100 GitHub stars: surface those items to the user with the concrete risk, and build only the ones they confirm.
 - Fix valid non-blocking findings as well as the blocking ones, including fixes that improve maintainability (clearer naming, removed duplication, simpler structure).
   - Skip a valid finding only when the fix would conflict with the design, reach outside the change under review, or go against an explicit user decision; record why.
   - A finding you judge incorrect or inapplicable is not skipped but rejected, per the next bullet.
