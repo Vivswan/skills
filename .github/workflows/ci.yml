@@ -45,7 +45,7 @@ jobs:
       issues: read
       vulnerability-alerts: read
     with:
-      modules: '["agents", "bun", "issue-templates", "pr-title", "auto-assign", "settings-sync"]'
+      modules: '["bun", "issue-templates", "pr-title"]'
       private: false
       codeql-languages: '["javascript-typescript"]'
 
