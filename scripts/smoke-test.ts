@@ -374,12 +374,12 @@ function checkAuthorIdentity(
   }
 }
 
-// Every manifest and SKILL.md frontmatter defers to the repository
-// LICENSE.md file (npm's "SEE LICENSE IN <file>" convention); keep the
-// copies in lockstep with the root plugin manifest, and the README and
-// LICENSE.md naming the same license.
+// Every manifest and SKILL.md frontmatter defers to LICENSE.md (npm's "SEE
+// LICENSE IN <file>" convention): copies stay in lockstep with the root plugin
+// manifest, README and LICENSE.md name the same license, the version is LICENSE.md's alone.
 const LICENSE_DEFERRAL = "SEE LICENSE IN LICENSE.md";
-const LICENSE_TITLE = "Individual and Small Organization License 1.0.0";
+const LICENSE_NAME = "Individual and Small Organization License";
+const LICENSE_HEADING = new RegExp(`^# ${LICENSE_NAME} \\d+\\.\\d+\\.\\d+$`, "m");
 
 function checkLicenseIdentity(
   manifest: RootManifest,
@@ -443,12 +443,14 @@ function checkLicenseIdentity(
   const afterHeading = readme.slice(headingIndex + licenseHeading.length);
   const nextHeading = afterHeading.search(/^## /m);
   const section = nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
-  if (!section.includes(LICENSE_TITLE)) {
-    fail(`README.md: License section must mention ${LICENSE_TITLE}`);
+  if (!section.includes(LICENSE_NAME)) {
+    fail(`README.md: License section must mention ${LICENSE_NAME}`);
   }
 
-  if (!rootLicense.includes(LICENSE_TITLE)) {
-    fail(`LICENSE.md: text must contain the literal '${LICENSE_TITLE}'`);
+  // The version lives in LICENSE.md alone (the template sync bumps it), so the
+  // README names the license without a version and the heading must carry one.
+  if (!LICENSE_HEADING.test(rootLicense)) {
+    fail(`LICENSE.md: must carry the heading '# ${LICENSE_NAME} <version>'`);
   }
 }
 
