@@ -5,7 +5,7 @@
 # An optional `mirrors` list declares byte copies of rendered files
 # (repo-platform's docs/new-repo.md has the contract).
 
-modules: ["agents", "bun", "issue-templates", "pr-title", "auto-assign", "settings-sync"]
+modules: ["bun", "issue-templates", "pr-title"]
 
 # Mirror declarations: the sync copies the freshly rendered source over
 # every target after each render, so the bundled per-skill license copies
