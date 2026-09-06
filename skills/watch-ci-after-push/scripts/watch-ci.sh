@@ -426,7 +426,9 @@ if [ -n "$missing" ]; then
   done <<EOF
 $discovered_names
 EOF
-  echo "expected workflow(s) not found for $sha: $missing; discovered only: ${found_list:-nothing}. The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch> (or override the expectation with --expect-workflow <name>)" >&2
+  echo "expected workflow(s) not found for $sha: $missing; discovered only: ${found_list:-nothing}." \
+    "The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch>" \
+    "(or override the expectation with --expect-workflow <name>)" >&2
 fi
 
 # A real red run outranks a missing expected workflow, which outranks a gh

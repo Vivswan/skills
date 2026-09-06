@@ -55,6 +55,11 @@ function codexMessage(text: string): string {
   return JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
 }
 const CODEX_VERDICT_LINE = codexMessage(JSON.stringify(CODEX_VERDICT));
+/** The big-verdict line split around its summary, so the stub can splice in
+ * a summary larger than any pipe buffer. */
+const [bigOpen, bigClose] = codexMessage(
+  JSON.stringify({ blocking: [], non_blocking: [], recorded_not_built: [], summary: "@BIG@" }),
+).split("@BIG@") as [string, string];
 const CODEX_TOOL_LINE = JSON.stringify({
   type: "item.completed",
   item: { type: "command_execution", command: "git --no-pager diff --cached" },
@@ -154,7 +159,7 @@ case "\${STUB_MODE:-ok}" in
   big)
     big="$(head -c ${BIG_VERDICT_BYTES} /dev/zero | tr '\\0' 'x')"
     echo '${CODEX_TOOL_LINE}'
-    printf '{"type":"item.completed","item":{"type":"agent_message","text":"{\\\\"blocking\\\\":[],\\\\"non_blocking\\\\":[],\\\\"recorded_not_built\\\\":[],\\\\"summary\\\\":\\\\"%s\\\\"}"}}\\n' "$big"
+    printf '%s%s%s\\n' '${bigOpen}' "$big" '${bigClose}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
     ;;
   empty) ;;
