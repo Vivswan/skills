@@ -33,6 +33,11 @@ import { basename, join } from "node:path";
  *   invocation shape, every flag the section cites, the rehearsal and
  *   landing-gate literals, and the exit-code 1/2/3 constants at their exit
  *   sites.
+ * - skills/codex-browser-fix/SKILL.md <-> its scripts/browser-plugin-preflight.mts
+ *   and scripts/browser-auth-launcher.mts: the --check and --plugin-dir
+ *   flags with their exit codes, the CODEX_HOME root, the launcher path and
+ *   its app-server-only provider override, the config tables it rewrites,
+ *   and the rollback root.
  *
  * Non-contract citations (external commands like pgrep/ps, git idioms, path
  * examples) are deliberately unpinned. Each entry must appear in both the doc
@@ -61,6 +66,7 @@ const FLEET_SCRIPTS = join(ROOT, "skills", "orchestrator-mode", "scripts");
 const RUBBER_DUCK = join(ROOT, "skills", "rubber-duck-review");
 const WATCH_CI = join(ROOT, "skills", "watch-ci-after-push");
 const WORKTREE_HYGIENE = join(ROOT, "skills", "worktree-hygiene");
+const CODEX_BROWSER_FIX = join(ROOT, "skills", "codex-browser-fix");
 
 type Occurrences = number | ">=1";
 type DocPin = string | { text: string; occurrences: Occurrences };
@@ -506,6 +512,44 @@ const SURFACES: Record<string, Surface> = {
       { doc: "| 2 | usage error", script: "exitWith(EXIT_USAGE," },
       { doc: "| 3 | BROKEN measurement", script: "const EXIT_BROKEN = 3;" },
       { doc: "| 3 | BROKEN measurement", script: "exitWith(EXIT_BROKEN," },
+    ],
+  },
+  "codex-browser-fix/SKILL.md <-> browser-plugin-preflight.mts": {
+    docPath: join(CODEX_BROWSER_FIX, "SKILL.md"),
+    scriptPath: join(CODEX_BROWSER_FIX, "scripts", "browser-plugin-preflight.mts"),
+    tokens: [
+      {
+        doc: { text: "--check", occurrences: ">=1" },
+        script: 'if (arg === "--check") checkOnly = true;',
+      },
+      {
+        doc: "`--plugin-dir <dir>`",
+        script: '"usage: browser-plugin-preflight.mts [--check] [--plugin-dir <dir>]"',
+      },
+      { doc: "a missing `--plugin-dir` value exits 2", script: "process.exit(2);" },
+      { doc: { text: "`$CODEX_HOME`", occurrences: 1 }, script: "process.env.CODEX_HOME" },
+      { doc: "`<home>/scripts/browser-codex`", script: '"scripts", "browser-codex"' },
+      {
+        doc: "under `[mcp_servers.node_repl.env]`",
+        script: '"mcp_servers.node_repl.env.CODEX_CLI_PATH": launcherPath',
+      },
+      {
+        doc: "Under `[shell_environment_policy.set]`",
+        script:
+          '"shell_environment_policy.set.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": clientHash',
+      },
+      {
+        doc: "`<home>/plugin-rollbacks/`",
+        script: { text: '"plugin-rollbacks",', occurrences: 2 },
+      },
+    ],
+  },
+  "codex-browser-fix/SKILL.md <-> browser-auth-launcher.mts": {
+    docPath: join(CODEX_BROWSER_FIX, "SKILL.md"),
+    scriptPath: join(CODEX_BROWSER_FIX, "scripts", "browser-auth-launcher.mts"),
+    tokens: [
+      { doc: "`-c 'model_provider=\"openai\"'`", script: "-c 'model_provider=\"openai\"'" },
+      { doc: "Only its `app-server` subcommand", script: "app-server)" },
     ],
   },
 };

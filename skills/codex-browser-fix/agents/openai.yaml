@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Browser Fix"
+  short_description: "Keep the Codex Chrome plugin driving your Chromium browser."
+  brand_color: "#FB542B"

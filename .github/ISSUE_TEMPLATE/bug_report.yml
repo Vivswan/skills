@@ -9,6 +9,7 @@ body:
       description: Which skill is affected?
       options:
         - code-standards
+        - codex-browser-fix
         - craft-skills-and-memories
         - no-invalid-states
         - natural-writing

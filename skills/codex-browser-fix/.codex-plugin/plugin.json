@@ -1,0 +1,29 @@
+{
+  "name": "codex-browser-fix",
+  "description": "Keeps the Codex desktop Chrome plugin driving Brave and other Chromium browsers: cache sync after app updates, browser-only auth under a custom model provider, and browser-family selection.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/codex-browser-fix",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": ["agent-skills", "codex", "browser", "chromium", "brave", "plugin-ready"],
+  "skills": "./",
+  "interface": {
+    "displayName": "Codex Browser Fix",
+    "shortDescription": "Keep the Codex Chrome plugin driving your Chromium browser.",
+    "longDescription": "Codex on macOS only. Fixes the 'Codex auth token is unavailable' error under a custom model provider with a launcher scoped to the browser helper's app-server subprocess, re-syncs the bundled Chrome plugin cache and trust settings after desktop app updates, and selects Brave, Vivaldi, Opera, Edge, or Chrome by browser family. Your main model provider and credentials stay unchanged.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/codex-browser-fix",
+    "defaultPrompt": [
+      "Use $codex-browser-fix and open my Brave profile to finish this form.",
+      "The browser says Codex auth token is unavailable; fix it.",
+      "Check the Chrome plugin setup after the app update."
+    ],
+    "brandColor": "#FB542B"
+  }
+}
