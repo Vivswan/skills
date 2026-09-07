@@ -58,15 +58,16 @@ Chrome and Edge have vendor selectors: `agent.browsers.get("chrome")` and `agent
 ```js
 // Declared once per session; call it again with a profile name after asking.
 async function selectExtension(family, profileName) {
+  const label = (c) => c.profileName ?? c.name; // the name shown when asking
   const candidates = (await agent.browsers.list()).filter(
     (c) =>
       c.type === "extension" &&
       c.family === family &&
-      (profileName === undefined || c.profileName === profileName),
+      (profileName === undefined || label(c) === profileName),
   );
   if (candidates.length === 0) throw new Error(`No connected ${family} extension`);
   if (candidates.length > 1) {
-    const profiles = candidates.map((c) => c.profileName ?? c.name).join(", ");
+    const profiles = candidates.map(label).join(", ");
     throw new Error(`Several ${family} profiles connected (${profiles}); ask which one`);
   }
   return agent.browsers.get(candidates[0].id);
