@@ -374,7 +374,8 @@ async function main(): Promise<void> {
     .filter(
       (entry) => versionPattern.test(entry.name) && (entry.isDirectory() || entry.isSymbolicLink()),
     )
-    .map((entry) => entry.name);
+    .map((entry) => entry.name)
+    .sort(); // readdir order is filesystem-specific; the report and sync order are not
 
   for (const pinnedName of pinnedNames) {
     await syncPinnedDirectory(sourceDir, path.join(cacheRoot, pinnedName));
