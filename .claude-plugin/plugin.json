@@ -12,6 +12,7 @@
   "keywords": ["agent-skills", "natural-writing", "code-review", "type-safety", "orchestration"],
   "skills": [
     "./skills/code-standards",
+    "./skills/codex-browser-fix",
     "./skills/craft-skills-and-memories",
     "./skills/no-invalid-states",
     "./skills/natural-writing",
