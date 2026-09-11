@@ -8,7 +8,7 @@ metadata:
 
 # PR and Issue Discipline
 
-> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, in the shape that fits the change; keep draft state honest, converge reviews, and leave the merge to a human by default.
+> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, in the shape that fits the change; anything written for a tool or another agent sits in one collapsed section at the bottom; keep draft state honest, converge reviews, and leave the merge to a human by default.
 
 These rules apply to any session that opens or updates a PR, triages a review round, writes an issue, replies to an issue reporter or outside contributor, or decides who merges. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session.
 
@@ -22,7 +22,29 @@ These rules apply to any session that opens or updates a PR, triages a review ro
 
 ## PR Bodies: Show the Change, Shaped to It
 
-Show the change rather than describe it. A PR body is text, so its picture is a fenced block: real captured output wherever behavior is observable, a diagram, table, or the contract's own shape where nothing runs. The reader skims the blocks and gets the change without reading a paragraph; prose only carries what no block can. Shape the body to the change; never force every PR through one template.
+Show the change rather than describe it. A PR body is text, so its picture is a fenced block: real captured output wherever behavior is observable, a diagram, table, or the contract's own shape where nothing runs. The reader skims the blocks and gets the change without reading a paragraph. Shape the body to the change; never force every PR through one template.
+
+**Two parts.** Part one is for a human skimming: the change shown (the opening block, in one of the shapes below), then the fewest words. Part two, at the BOTTOM, is a single collapsible section, collapsed by default, for anything written for another agent or tool rather than the human reader:
+
+```markdown
+<details>
+<summary>Technical details</summary>
+
+...
+
+</details>
+```
+
+- **Into part two:** reviewer guidance for bot reviewers such as Copilot, mechanism detail beyond `## How`, the recorded-not-built and accepted-deviation lists, gate and codex round counts, file-by-file notes.
+- **Nothing in part one depends on part two.** A PR whose detail fits in part one has no part two.
+- **The summary line is a heading.** The Readability rules below govern it: "Technical details" names content.
+
+**Readability rules**, for PR bodies and issue replies alike (the Replies section below points here rather than restating them):
+
+- **No blob of text.** No paragraph over three sentences.
+- **Short bullets with bold lead-ins.** Tables and fenced blocks carry structure.
+- **Headings name the content** ("What changed", "What the report shows"), never the reader's level: "In plain words", "Simple version", and "Non-technical summary" read as talking down.
+- **As short as the change allows.** The blocks carry the change, the words only what no block can.
 
 **Template check, once per session, at plan time.** Before the first PR or issue of the session, while still planning, resolve the choice once and reuse it for every PR and issue in that session:
 
@@ -34,6 +56,8 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: honor its rules on title conventions, required sections, and linked issues inside the body you write.
 
 ### Additive feature
+
+Its detail fits in part one, so it has no part two.
 
 ````markdown
 ## What this adds
@@ -50,7 +74,7 @@ The resolver validates the manifest against the checkout, closes changed context
 
 ## Proof
 
-- Manifest validation and shard-resolution tests pass (2 new), `bun run check` green.
+- **Tests and gate:** manifest validation and shard-resolution cases pass (2 new), `bun run check` green.
 ````
 
 ### Existing behavior change or bug fix
@@ -81,8 +105,26 @@ after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live ver
 
 ## Proof
 
-- 34 tests green (2 new), `bun run check` green
+- **Tests and gate:** 34 green (2 new), `bun run check` green.
+
+<details>
+<summary>Technical details</summary>
+
+- **Reviewer note (Copilot):** the 300s ceiling is a constant in `scripts/sweep.mts`, not a flag; a flag was recorded, not built, since no second caller exists.
+- **Proof detail:** one new test pins the extension while the lock is held, the other the plain 120s verdict without it.
+- **Files:** `scripts/sweep.mts` (the probe), `tests/sweep-script.test.ts` (the two cases).
+
+BEGIN_COMMIT_OVERRIDE
+fix(sweep)!: extend the probe while the build lock is held
+
+BREAKING CHANGE: `--probe-timeout` is removed; the probe extends itself while the build lock is held.
+The probe's dead verdict can arrive up to 300s after start instead of at 120s; callers that raced it must re-read.
+END_COMMIT_OVERRIDE
+
+</details>
 ````
+
+The block closing the details section is the commit-override rule below at work: this specimen's merge carries two breaks, so one `BREAKING CHANGE` footer lists them on two lines.
 
 ### Contract or documentation PR
 
@@ -107,7 +149,15 @@ The smoke test reads the three files per skill and fails the build on any drift.
 
 ## Proof
 
-- Smoke-test cases for the mirrored block and the invocation pairing pass.
+- **Smoke test:** the mirrored-block and invocation-pairing cases pass.
+
+<details>
+<summary>Technical details</summary>
+
+- **Accepted deviation:** `longDescription` is not mirrored; the codex manifest carries the long form alone.
+- **Gates:** `bun run check` green; codex review converged in one round.
+
+</details>
 ````
 
 For every form:
@@ -115,13 +165,29 @@ For every form:
 - Blocks show, prose tells. Where behavior is observable, the opening block is an actual command and its actual output, complete enough to stand alone; never manufacture output or add it only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
 - `## How` has no mandated carrier. Use terse bullets, a small diagram, a table, or two short paragraphs, whichever explains the mechanism fastest. One carrier per point: a diagram followed by a paragraph re-explaining it means the diagram failed.
 - `## Proof` names focused behavioral tests or stable checks, with numbers where they exist (tests, gates). Do not turn it into transient CI, approval, or review status.
-- Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary. Usually 200 to 400 words is enough. The diff carries the detail; do not narrate the implementation process, reduction history, line counts, status, future work, scope caveats, reviewer guidance, or the entire diff.
+- Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above. The diff carries the detail; part one never narrates the implementation process, reduction history, line counts, transient status, future work, or the entire diff. Reviewer guidance, scope caveats, and gate or review round counts go in part two or nowhere.
 
 **Redact captured output before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
 
+**Release-please reads the body.** In a repository released by release-please, footers travel in the PR body as a commit-override block, whatever the squash setting put in the commit message. Release-please reads the merged PR's body at run time and, when it holds the block, parses that block in place of the commit message; a commit whose message it cannot parse is dropped from the changelog.
+
+- **The marker words appear nowhere else in the body.** Release-please splits the body at the first occurrence of the opening marker, so a prose mention before the block ("the block below", spelled with the marker) becomes the message, fails to parse, and drops the commit from the release. Call it the commit-override block in prose; spell the markers only as the block itself.
+- **One `BREAKING CHANGE` note per commit** (the last footer wins): several breaks go into one footer whose value spans several lines, one break per line, or into one `BEGIN_NESTED_COMMIT` / `END_NESTED_COMMIT` block per break.
+- **A bad block is repaired after the merge** by editing the merged PR's body; release-please re-reads it on its next run, and the dropped commit returns to the release.
+
+The override changes release-please's parsed message, not the git commit: a repository whose release tool reads the squash commit itself keeps its footers in that commit message, under its own rules. The block is written for a tool, so it is the last element inside the Technical details section; release-please matches the markers inside a `<details>` element. In a release-please repository, a PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) closes its details section with:
+
+```text
+BEGIN_COMMIT_OVERRIDE
+<conventional subject line>
+
+<footer>: <value, one line per break>
+END_COMMIT_OVERRIDE
+```
+
 ## Issues: Same Principle
 
-What breaks, shown first; then the minimum around it. Short and skimmable, no walls of text.
+What breaks, shown first; then the minimum around it, under the Readability rules above.
 
 The session's template answer, resolved at plan time above, covers issues too: fill the chosen issue template's fields and apply this principle inside them, or use the shape below when the answer was the skill's shapes or no template exists.
 
@@ -140,15 +206,15 @@ installed: SKILL.md, README.md          (metadata.json silently missing)
 
 ## Expected vs actual
 
-- Expected: every file in the skill folder installed
-- Actual: `metadata.json` dropped without a warning
+- **Expected:** every file in the skill folder installed
+- **Actual:** `metadata.json` dropped without a warning
 ````
 
 Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not. When an issue includes captured output, the redaction rule above applies unchanged.
 
 ## Replies to Issue Reporters and Outside Contributors: Plain First
 
-An issue reply or a review comment to an outside contributor is read by someone who may find long text hard to read and does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
+An issue reply or a review comment to an outside contributor is read by someone skimming a thread who does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
 
 Specimen: a diagnostics-only bug report whose log ended mid-request. The first reply opened with three paragraphs on hidden provider groups, tombstones, and silent refreshes. The rewrite:
 
@@ -169,16 +235,16 @@ Number 3 would help the most. The rest of this comment explains why, if you are 
 Fetching from:: "https://<host>/@<user>/v1/model/info"    <- last line, still waiting
 ```
 
-- You removed a server that pointed at `https://<host>/`. The extension remembers that and keeps its models out of the picker. That is expected, not an error.
-- You added a new server at `https://<host>/@<user>` with no API key.
+- **The server you removed** pointed at `https://<host>/`. The extension remembers that and keeps its models out of the picker. That is expected, not an error.
+- **The server you added** is at `https://<host>/@<user>` with no API key.
 
 **A guess, to save a round trip:** a URL with `/@username` in it and no API key usually is not a LiteLLM proxy.
 
 <details>
 <summary>Technical details</summary>
 
-- `Provider group is hidden by an explicit user removal`: the `servers` entry was removed. VS Code cannot delete a provider group, so the extension tombstones it and answers with an empty model list. Docs: [Lifecycle: renames, removals, hidden groups](...).
-- `Fetching from:: .../v1/model/info`: the first discovery request. The log buffer holds 50 lines and no error was recorded, so the report was built inside this request's 30 second timeout.
+- **Hidden provider group:** `Provider group is hidden by an explicit user removal` means the `servers` entry was removed. VS Code cannot delete a provider group, so the extension tombstones it and answers with an empty model list. Docs: [Lifecycle: renames, removals, hidden groups](...).
+- **Where the log stops:** `Fetching from:: .../v1/model/info` is the first discovery request. The log buffer holds 50 lines and no error was recorded, so the report was built inside this request's 30 second timeout.
 
 </details>
 `````
@@ -188,15 +254,14 @@ The rules the specimen follows:
 - **Requests first, as a bare `TL;DR`.** A numbered list, three items at most. Say which one would help most.
   - Give the exact click path or command when one exists.
   - "What would help" rather than "what we need": the reporter is doing you a favor. The reader may stop after the list.
-- **Part one is plain language, and never says so.**
-  - Headings name the content ("What the report shows", "What changed"), never the reader's level. "In plain words", "Simple version", and "Non-technical summary" read as talking down.
+- **Part one is plain language, and never says so** (the Readability rules above own the heading rule).
   - Say what the reader did and what they see: "the server you removed" rather than "the tombstoned provider group". When a mechanism has no plain name, show its effect instead of naming it.
   - Quote the reader's own log line with an arrow note rather than paraphrasing it.
-- **Part two is the technical reading, collapsed, and only when it adds something.**
+- **Part two is the technical reading, collapsed, and only when it adds something.** The same collapsible as a PR body's part two, with the same summary line.
   - Inside a `<details>` block: the mechanism names, the log lines mapped to code paths, docs links, and what a future maintainer would want when re-reading the thread. Nothing in part one depends on it.
   - A reply that says everything in plain words has no part two. An "expected behavior, here is the setting" answer needs no details block; the specimen's does, because the buffer size and timeout explain why the log stops where it does.
 - **A guess goes last in part one and is labeled a guess.** It saves a round trip without steering the reader before they answer.
-- Short bullets, bold lead-ins, no paragraph over three sentences. The redaction rule above applies unchanged.
+- The Readability rules and the redaction rule above apply unchanged.
 
 ## Draft Discipline
 
