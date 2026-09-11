@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -23,7 +24,9 @@ import { writeAllSync } from "../skills/rubber-duck-review/scripts/run-review.mt
 // is closed so a reviewer that reads it cannot hang, the verdict is the LAST
 // codex agent_message / the final claude result and must be the schema
 // object with at least one tool call before it, and an empty, cut, blank,
-// prose-only, preamble-only, or errored stream exits 1 (never a clean pass).
+// prose-only, preamble-only, or errored stream exits 1 (never a clean pass),
+// and --extract --wait blocks on the launch record until the monitor records
+// the exit instead of leaving the caller to poll by hand.
 // gh-style violations files catch any drift in the exact reviewer invocations.
 
 const SCRIPT = join(ROOT, "skills", "rubber-duck-review", "scripts", "run-review.mts");
@@ -99,6 +102,7 @@ elif [ "$7" != "-" ]; then
 fi
 # With stdin open (a pipe) this blocks forever; stdio 'ignore' gives EOF.
 if [ "\${STUB_READ_STDIN:-0}" = "1" ]; then cat > /dev/null; fi
+if [ -n "\${STUB_SLEEP:-}" ]; then sleep "\${STUB_SLEEP}"; fi
 case "\${STUB_MODE:-ok}" in
   ok)
     echo '{"type":"thread.started","thread_id":"t1"}'
@@ -361,9 +365,46 @@ function waitForStatus(outputFile: string): string {
 }
 
 function backgroundOutputFile(stdout: string): string {
-  const line = stdout.split("\n").find((candidate) => candidate.startsWith("output: "));
-  if (line === undefined) throw new Error(`no output line in: ${stdout}`);
-  return line.slice("output: ".length);
+  const line = stdout.split("\n").find((candidate) => candidate.startsWith("output-file: "));
+  if (line === undefined) throw new Error(`no output-file line in: ${stdout}`);
+  return line.slice("output-file: ".length);
+}
+
+/** A complete codex stream whose verdict extracts cleanly once a status lands. */
+const COMPLETE_CODEX_STREAM = `${CODEX_TOOL_LINE}\n${CODEX_VERDICT_LINE}\n{"type":"turn.completed"}\n`;
+const LAUNCH_RECORD = '{"tool":"codex","output":"review.jsonl"}';
+
+/** A capture dir as a --background launch leaves it: stream and launch
+ * record present, no status yet. */
+function pendingCapture(stream = true): string {
+  const dir = mkdtempSync(join(tmpdir(), "run-review-pending-"));
+  if (stream) writeFileSync(join(dir, "review.jsonl"), COMPLETE_CODEX_STREAM);
+  writeFileSync(join(dir, "review.status"), LAUNCH_RECORD);
+  return join(dir, "review.jsonl");
+}
+
+/** Complete a pending capture the way the monitor does: write-then-rename,
+ * so a waiter polling mid-write never reads a truncated record. */
+function recordStatus(outputFile: string, status: string): void {
+  const statusFile = join(dirname(outputFile), "review.status");
+  writeFileSync(
+    `${statusFile}.tmp`,
+    JSON.stringify({ tool: "codex", output: "review.jsonl", status }),
+  );
+  renameSync(`${statusFile}.tmp`, statusFile);
+}
+
+/** A script run left in flight, for the --wait cases observed mid-wait. */
+function start(args: string[]) {
+  return Bun.spawn([process.execPath, SCRIPT, ...args], {
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 describe("run-review.mts", () => {
@@ -690,21 +731,137 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("--background prints output path and pid; --extract reads the verdict later", () => {
+  test("--background prints output-file and pid; --extract --wait returns the verdict once the monitor records the exit", () => {
     // A private prompt file, deleted right after launch: the monitor must
-    // review its snapshot, not re-read the caller's (now gone) file.
+    // review its snapshot, not re-read the caller's (now gone) file. The
+    // stub sleeps so the wait starts on a record that has no status yet.
     const bgPrompt = mintPrompt("bg-prompt");
-    const r = run(["codex", bgPrompt, "--background"]);
+    const r = run(["codex", bgPrompt, "--background"], { STUB_SLEEP: "1" });
     rmSync(bgPrompt);
     expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/pid: \d+/);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toMatch(/^output-file: \S+\/review\.jsonl\npid: \d+\n$/);
     const outputFile = backgroundOutputFile(r.stdout);
-    expect(waitForStatus(outputFile)).toBe("0");
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
-    const extracted = run(["codex", "--extract", outputFile]);
+    const extracted = run(["codex", "--extract", "--wait", outputFile]);
     expect(extracted.code).toBe(0);
+    expect(extracted.stderr).toBe("");
     expect(extracted.report().verdict).toEqual(CODEX_VERDICT);
     expect(extracted.report().capture).toBe(outputFile);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  }, 15000);
+
+  test("--extract --wait blocks on a launch record without a status, then reports the status that lands", async () => {
+    const cases = [
+      { status: "0", code: 0, stderr: "" },
+      {
+        status: "3",
+        code: 1,
+        stderr: "review FAILED - relaunch (recorded reviewer status: 3; output kept at <file>)\n",
+      },
+      { status: "not-found", code: 2, stderr: "reviewer binary not found: codex\n" },
+    ];
+    for (const { status, code, stderr } of cases) {
+      const outputFile = pendingCapture();
+      const proc = start(["codex", "--extract", "--wait", outputFile]);
+      await Bun.sleep(1000);
+      expect(proc.exitCode, status).toBeNull();
+      recordStatus(outputFile, status);
+      expect(await proc.exited, status).toBe(code);
+      const stdout = await new Response(proc.stdout).text();
+      expect(await new Response(proc.stderr).text(), status).toBe(
+        stderr.replace("<file>", outputFile),
+      );
+      if (code === 0) {
+        const report = JSON.parse(stdout) as Report;
+        expect(report.verdict, status).toEqual(CODEX_VERDICT);
+        expect(report.capture, status).toBe(outputFile);
+      } else {
+        expect(stdout, status).toBe("");
+      }
+      rmSync(dirname(outputFile), { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("--extract --wait --timeout 1 on a record that never completes exits 1 naming the file and the seconds", () => {
+    for (const stream of [true, false]) {
+      const outputFile = pendingCapture(stream);
+      const started = Date.now();
+      const r = run(["codex", "--extract", "--wait", "--timeout", "1", outputFile]);
+      expect(Date.now() - started, String(stream)).toBeGreaterThanOrEqual(1000);
+      expect(r.code, String(stream)).toBe(1);
+      expect(r.stdout, String(stream)).toBe("");
+      const file = escapeRegExp(outputFile);
+      const kept = stream ? `; output kept at ${file}` : "";
+      expect(r.stderr, String(stream)).toMatch(
+        new RegExp(
+          `^review FAILED - relaunch \\(--wait timed out: no exit status recorded beside ${file} after \\d+ s${kept}\\)\\n$`,
+        ),
+      );
+      rmSync(dirname(outputFile), { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("--extract --wait fails at once, exit 2, when the record is missing or names another launch", () => {
+    // The launch writes the record before printing the output-file line, so
+    // no record on the first read is a wrong path: it must not poll for an hour.
+    const missingDir = join(tmpdir(), `run-review-missing-${process.pid}`, "review.jsonl");
+    const bareDir = mkdtempSync(join(tmpdir(), "run-review-bare-"));
+    writeFileSync(join(bareDir, "review.jsonl"), COMPLETE_CODEX_STREAM);
+    const codexCapture = pendingCapture();
+    const noRecord = "no launch record beside";
+    for (const [id, tool, file, message] of [
+      ["missing-directory", "codex", missingDir, noRecord],
+      ["directory-without-record", "codex", join(bareDir, "review.jsonl"), noRecord],
+      ["other-reviewer", "claude", codexCapture, "launched with reviewer 'codex', not 'claude'"],
+      [
+        "other-file",
+        "codex",
+        join(dirname(codexCapture), "prompt.txt"),
+        "output file is 'review.jsonl'",
+      ],
+    ] as const) {
+      const started = Date.now();
+      const r = run([tool, "--extract", "--wait", file]);
+      expect(Date.now() - started, id).toBeLessThan(1900);
+      expectFailure(r, { code: 2, stderr: message }, id);
+    }
+    rmSync(bareDir, { recursive: true, force: true });
+    rmSync(dirname(codexCapture), { recursive: true, force: true });
+  });
+
+  test("--wait and --timeout outside --extract --wait, or a bad timeout, are usage errors: exit 2", () => {
+    const outputFile = pendingCapture();
+    const badTimeout = "--timeout requires a whole number of seconds, at least 1";
+    for (const [id, args, message] of [
+      ["wait-on-launch", ["codex", promptFile, "--wait"], "--wait applies only to --extract"],
+      [
+        "timeout-on-launch",
+        ["codex", promptFile, "--timeout", "5"],
+        "--timeout applies only to --extract",
+      ],
+      [
+        "timeout-without-wait",
+        ["codex", "--extract", "--timeout", "5", outputFile],
+        "--timeout applies only to --extract --wait",
+      ],
+      ["timeout-zero", ["codex", "--extract", "--wait", "--timeout", "0", outputFile], badTimeout],
+      [
+        "timeout-word",
+        ["codex", "--extract", "--wait", "--timeout", "soon", outputFile],
+        badTimeout,
+      ],
+      ["timeout-no-value", ["codex", "--extract", "--wait", outputFile, "--timeout"], badTimeout],
+      ["no-file", ["codex", "--extract", "--wait"], "--extract takes exactly one <output-file>"],
+      [
+        "two-files",
+        ["codex", "--extract", "--wait", outputFile, outputFile],
+        "--extract takes exactly one <output-file>",
+      ],
+      ["unknown-flag", ["codex", "--extract", "--bogus", outputFile], "unknown flag: --bogus"],
+    ] as const) {
+      expectFailure(run([...args]), { code: 2, stderr: message }, id);
+    }
     rmSync(dirname(outputFile), { recursive: true, force: true });
   });
 

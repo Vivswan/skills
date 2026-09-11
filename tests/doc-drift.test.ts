@@ -12,11 +12,12 @@ import { basename, join } from "node:path";
  *   arity/usage contracts, ledger worker states, sweep-row and diagnostic
  *   output fields, transcript-report fields, and token-table schema keys.
  * - skills/rubber-duck-review/SKILL.md <-> its scripts/run-review.mts: the
- *   three usage shapes (prepare, launch, and --extract), the three reviewer invocations
- *   with their tool-restriction flags, the --background and --stdin-prompt
- *   flag dispatches with their output-emission and stdin-delivery sites, and
- *   the exit-code 0/1/2 semantics including the
- *   "review FAILED - relaunch" verdict literal.
+ *   four usage shapes (prepare, launch, --extract, and --extract --wait), the
+ *   three reviewer invocations with their tool-restriction flags, the
+ *   --background and --stdin-prompt flag dispatches with their
+ *   output-emission and stdin-delivery sites, the --wait poll interval,
+ *   default timeout, and its two failure literals, and the exit-code 0/1/2
+ *   semantics including the "review FAILED - relaunch" verdict literal.
  * - skills/watch-ci-after-push/SKILL.md <-> its scripts/watch-ci.sh: the
  *   invocation shape (one full-SHA argument, defaulting to HEAD), the
  *   full-SHA discovery command, the exit-code 0/1/2 semantics at their exit
@@ -227,6 +228,37 @@ const SURFACES: Record<string, Surface> = {
       },
       { doc: "via `--extract`", script: 'rest[0] === "--extract"' },
       {
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the shell parameter-expansion fragment as the doc prints it
+        doc: 'bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" > "${out%/*}/verdict.out" 2>&1',
+        script:
+          '"       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]"',
+      },
+      {
+        doc: "collect the verdict with `--extract --wait`",
+        script: 'if (arg === "--wait") wait = true;',
+      },
+      { doc: "polls the launch record every 2 s", script: "const WAIT_POLL_MS = 2000;" },
+      {
+        doc: "(`--timeout <seconds>`, default 3600)",
+        script: "const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;",
+      },
+      {
+        doc: "1: review failed or `--wait timed out` (relaunch)",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          "reason: `--wait timed out: no exit status recorded beside ${outputFile} after ${elapsed} s`,",
+      },
+      {
+        doc: "2: wrong reviewer or file, or no launch record beside the output file",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          "`no launch record beside ${outputFile}: --wait needs the output-file a --background launch printed`,",
+      },
+      {
+        doc: "exits 1 (`no exit status recorded`) while the reviewer is still running",
+        script: 'reason: "no exit status recorded (reviewer still running?)"',
+      },
+      {
         doc: 'bun "<skill-dir>/scripts/run-review.mts" prepare api-gateway',
         script: '"       run-review.mts prepare <section>"',
       },
@@ -251,13 +283,13 @@ const SURFACES: Record<string, Surface> = {
           'copilot: (prompt) => [\n    "-p",\n    prompt,\n    "-s",\n    "--available-tools=view,rg,glob",\n    "--deny-tool=write",\n    "--deny-tool=shell",\n    "--disable-builtin-mcps",',
       },
       {
-        doc: "`--background` prints the output-file path and the PID of a detached monitor",
+        doc: "`--background` prints exactly two lines, `output-file: <path>` and `pid: <n>`",
         script: 'arg === "--background"',
       },
       {
-        doc: "`--background` prints the output-file path and the PID of a detached monitor",
+        doc: "`--background` prints exactly two lines, `output-file: <path>` and `pid: <n>`",
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "process.stdout.write(`output: ${scratch.outFile}\\npid: ${monitor.pid}\\n`);",
+        script: "process.stdout.write(`output-file: ${scratch.outFile}\\npid: ${monitor.pid}\\n`);",
       },
       { doc: "`--stdin-prompt` (codex/claude only)", script: 'arg === "--stdin-prompt"' },
       {
