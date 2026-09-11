@@ -34,7 +34,7 @@ gh api graphql -f owner=<owner> -f name=<repo> -f oid="$sha" -f query='
   --jq '.data.repository.object.checkSuites.nodes[]? | select(.app.slug == "github-actions" and .workflowRun != null) | "\(.workflowRun.databaseId)\t\(.status)\t\(.conclusion)\t\(.workflowRun.workflow.name)"'
 ```
 
-Suites without a `workflowRun` belong to external apps (CodeQL, Semgrep) and are not workflow runs; the filter drops them. The snippet reads the first 100 suites; the bundled script pages through `pageInfo` so a run past the first page is still judged. Still empty after ~15s? That usually means no workflow triggers on this ref. Say so and stop (include the repo's Actions URL).
+Suites without a `workflowRun` belong to external apps (CodeQL, Semgrep) and are not workflow runs; the filter drops them. The snippet reads the first 100 suites; the bundled script pages through `pageInfo` so a run past the first page is still judged, and it confirms a multi-page snapshot with an identical second read (one page is atomic, several are not). Still empty after ~15s? That usually means no workflow triggers on this ref. Say so and stop (include the repo's Actions URL).
 
 ### 2. Watch in the background
 

@@ -39,6 +39,16 @@ case "$1" in
       *statusCheckRollup*)
         n="$(next checks)"
         if [ "\${STUB_FAIL_CHECKS:-0}" = "1" ]; then echo "gh: graphql boom" >&2; exit 1; fi
+        # Every page after the first must read the head the first page named,
+        # never resolve the PR head again; the first must not pin one.
+        case "$*" in
+          *"-F cursor="*)
+            case "$*" in
+              *'object(oid: $oid)'*"-f oid=\${STUB_HEAD_OID:-headsha} -F cursor="*) ;;
+              *) echo "stub gh: a rollup page after the first must pin the head oid: $*" >&2; exit 64;;
+            esac;;
+          *'object(oid'* | *" oid="*) echo "stub gh: the first rollup page resolves the head, never pins one: $*" >&2; exit 64;;
+        esac
         serve checks "$n"
         ;;
       *)
@@ -125,51 +135,43 @@ function gql(shape: GqlShape = {}): string {
   });
 }
 
-/** checks as [name, conclusion, typename?, workflow?] rows in the head
- * commit's statusCheckRollup shape; StatusContext rows use context/state
- * instead of name/conclusion, and a running CheckRun has a null conclusion,
- * exactly as GraphQL renders them. `page` adds a next-page cursor. */
+/** checks as [name, conclusion, typename?, workflow?] rows in the rollup
+ * shape; StatusContext rows use context/state instead of name/conclusion,
+ * and a running CheckRun has a null conclusion, exactly as GraphQL renders
+ * them. `page` adds a next-page cursor. The first page comes back under the
+ * PR's head commit (with its oid); later pages under `object(oid:)`. */
 function checks(
   rows: Array<[string, string, string?, string?]> = [],
   page: { hasNextPage: boolean; endCursor: string | null } = {
     hasNextPage: false,
     endCursor: null,
   },
+  shape: "head" | "pinned" = "head",
 ): string {
-  return JSON.stringify({
-    data: {
-      repository: {
-        pullRequest: {
-          commits: {
-            nodes: [
-              {
-                commit: {
-                  statusCheckRollup: {
-                    contexts: {
-                      nodes: rows.map(([name, conclusion, typename, workflow]) =>
-                        typename === "StatusContext"
-                          ? { __typename: typename, context: name, state: conclusion }
-                          : {
-                              __typename: "CheckRun",
-                              name,
-                              conclusion: conclusion === "" ? null : conclusion,
-                              checkSuite: {
-                                workflowRun:
-                                  workflow === undefined ? null : { workflow: { name: workflow } },
-                              },
-                            },
-                      ),
-                      pageInfo: page,
-                    },
-                  },
-                },
+  const statusCheckRollup = {
+    contexts: {
+      nodes: rows.map(([name, conclusion, typename, workflow]) =>
+        typename === "StatusContext"
+          ? { __typename: typename, context: name, state: conclusion }
+          : {
+              __typename: "CheckRun",
+              name,
+              conclusion: conclusion === "" ? null : conclusion,
+              checkSuite: {
+                workflowRun: workflow === undefined ? null : { workflow: { name: workflow } },
               },
-            ],
-          },
-        },
-      },
+            },
+      ),
+      pageInfo: page,
     },
-  });
+  };
+  const repository =
+    shape === "pinned"
+      ? { object: { statusCheckRollup } }
+      : {
+          pullRequest: { commits: { nodes: [{ commit: { oid: "headsha", statusCheckRollup } }] } },
+        };
+  return JSON.stringify({ data: { repository } });
 }
 
 /** The PR-state query's calls only: the checks query shares the graphql verb. */
@@ -406,20 +408,21 @@ describe("wait-for-pr-event.mts", () => {
 
   test("check contexts sum across rollup pages, cursor passed to page 2", () => {
     // Page 1 of the rollup ends with a cursor; page 2 holds the check that
-    // flips. A read that stopped at 100 contexts would never see nightly.
+    // flips. A read that stopped at 100 contexts would never see nightly;
+    // the fake rejects a page 2 that does not pin page 1's head oid.
     const r = run(["7", "--repo", "octo/example", "--until", "checks"], {
       "gql-1": gql(),
       "checks-1": checks([["ci", "SUCCESS"]], { hasNextPage: true, endCursor: "k1" }),
-      "checks-2": checks([["nightly", "SUCCESS"]]),
+      "checks-2": checks([["nightly", "SUCCESS"]], undefined, "pinned"),
       "checks-3": checks([["ci", "SUCCESS"]], { hasNextPage: true, endCursor: "k1" }),
-      "checks-4": checks([["nightly", "FAILURE"]]),
+      "checks-4": checks([["nightly", "FAILURE"]], undefined, "pinned"),
     });
     expectSnapshotAndDeltas(r, {
       checks: "ci=success nightly=success",
       deltas: ["check nightly -> failure (was success)"],
     });
     const checksCalls = r.ghCalls.filter((call) => call.includes("statusCheckRollup"));
-    expect(checksCalls.map((call) => call.endsWith("-F cursor=k1"))).toEqual([
+    expect(checksCalls.map((call) => call.endsWith("-f oid=headsha -F cursor=k1"))).toEqual([
       false,
       true,
       false,
@@ -431,7 +434,9 @@ describe("wait-for-pr-event.mts", () => {
     const r = run(["7", "--repo", "octo/example"], {
       "gql-1": gql(),
       "checks-1": JSON.stringify({
-        data: { repository: { pullRequest: { commits: { nodes: [{ commit: {} }] } } } },
+        data: {
+          repository: { pullRequest: { commits: { nodes: [{ commit: { oid: "headsha" } }] } } },
+        },
       }),
     });
     expect(r.code).toBe(2);
@@ -445,7 +450,9 @@ describe("wait-for-pr-event.mts", () => {
       "checks-1": JSON.stringify({
         data: {
           repository: {
-            pullRequest: { commits: { nodes: [{ commit: { statusCheckRollup: null } }] } },
+            pullRequest: {
+              commits: { nodes: [{ commit: { oid: "headsha", statusCheckRollup: null } }] },
+            },
           },
         },
       }),

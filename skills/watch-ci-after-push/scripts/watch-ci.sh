@@ -9,6 +9,7 @@
 # Exit 2: no runs registered, gh failed, an expected workflow never registered a run, or any unexpected internal failure.
 #   The ERR trap routes internal failures to 2, never to 1.
 # Discovery and polling are GraphQL, one request per page of 100 check suites per poll; REST is touched only for failed-job logs.
+#   One page is atomic; a multi-page snapshot is confirmed by an identical second read before it is judged.
 #   The Actions REST endpoints (run list/watch/view) are throttled as a secondary bucket that locks for an hour
 #   under parallel watchers while core reads 5000/5000 and GraphQL keeps answering.
 #   A GraphQL failure, rate limit included, is a gh failure (exit 2); there is no fallback to REST.
@@ -100,47 +101,64 @@ suites_query='query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor
       checkSuites(first: 100, after: $cursor) {
         nodes {
           status conclusion app { slug }
-          workflowRun { databaseId workflow { databaseId name } }
+          workflowRun { databaseId updatedAt workflow { databaseId name } }
         }
         pageInfo { hasNextPage endCursor }
       }
     } }
   }
 }'
-# Row shape: <run id> TAB <status> TAB <conclusion> TAB <workflow id> TAB <workflow name>, enum words lowercased.
+# Row shape: <run id> TAB <status> TAB <conclusion> TAB <workflow id> TAB <updated at> TAB <workflow name>, enum words lowercased.
+# updatedAt only serves the identical-read comparison: status and conclusion alone cannot see a re-run that completed again between reads.
 # The last line is the page marker: "end", or "next" TAB <cursor>.
 # A null conclusion (still running) renders as the word null; "[]?" makes an unknown SHA an empty snapshot, not a jq error.
 # shellcheck disable=SC2016 # $suites is jq's, not the shell's
 suites_filter='.data.repository.object.checkSuites as $suites
 | ($suites.nodes[]? | select(.app.slug == "github-actions" and .workflowRun != null)
-  | "\(.workflowRun.databaseId)\t\(.status | ascii_downcase)\t\(.conclusion // "null" | ascii_downcase)\t\(.workflowRun.workflow.databaseId)\t\(.workflowRun.workflow.name)"),
+  | "\(.workflowRun.databaseId)\t\(.status | ascii_downcase)\t\(.conclusion // "null" | ascii_downcase)\t\(.workflowRun.workflow.databaseId)\t\(.workflowRun.updatedAt)\t\(.workflowRun.workflow.name)"),
   (if $suites.pageInfo.hasNextPage then "next\t\($suites.pageInfo.endCursor)" else "end" end)'
 # Heavy retriggering can stack hundreds of suites on one SHA; a failed run past the first page must still be judged.
 max_suite_pages=10
+# A re-run between two page fetches can hide a re-queued suite from both pages; the bound on re-reads keeps a busy SHA from looping.
+max_snapshot_rounds=5
 
-# One snapshot is every page of the commit's check suites, each with its run status, so the run list and the run states
-# are read together. A failed gh call prints NOTHING, even after earlier pages or partial output were received:
+# Sets `snapshot` to every row of the commit's check suites and `pages` to how many pages it took.
+# A failed gh call yields NOTHING, even after earlier pages or partial output were received:
 # a partial snapshot judged as complete would leave the omitted runs unmeasured.
-discover() {
-  local cursor="" page out tail rows=""
-  for ((page = 1; page <= max_suite_pages; page++)); do
+read_snapshot() {
+  local cursor="" out tail
+  snapshot=""
+  for ((pages = 1; pages <= max_suite_pages; pages++)); do
     set --
     [ -z "$cursor" ] || set -- -f cursor="$cursor"
     out="$(gh api graphql -f query="$suites_query" -f owner="$owner" -f name="$name" -f oid="$sha" "$@" --jq "$suites_filter")" || return 1
     tail="${out##*$'\n'}"
     case "$out" in
-      *$'\n'*) rows="$rows${out%$'\n'*}"$'\n' ;;
+      *$'\n'*) snapshot="$snapshot${out%$'\n'*}"$'\n' ;;
     esac
     case "$tail" in
-      end)
-        printf '%s' "$rows"
-        return 0
-        ;;
+      end) return 0 ;;
       next$'\t'?*) cursor="${tail#next$'\t'}" ;;
       *) return 1 ;;
     esac
   done
   echo "check suites for $sha span more than $max_suite_pages pages of 100; refusing to judge a partial snapshot" >&2
+  return 1
+}
+
+# One page is one atomic read of the run list with its states.
+# A multi-page snapshot is not: it is confirmed by an identical second read, else re-read up to the round cap.
+discover() {
+  local round snapshot pages prev=""
+  for ((round = 1; round <= max_snapshot_rounds; round++)); do
+    read_snapshot || return 1
+    if [ "$pages" -eq 1 ] || [ "$snapshot" = "$prev" ]; then
+      printf '%s' "$snapshot"
+      return 0
+    fi
+    prev="$snapshot"
+  done
+  echo "check suites for $sha kept changing across $max_snapshot_rounds multi-page reads; refusing to judge a partial snapshot" >&2
   return 1
 }
 
@@ -150,7 +168,7 @@ discover() {
 # only exits its own subshell, and the silently empty expectation list would read as "nothing missing".
 compute_missing() {
   local expected_lines
-  discovered_names="$(printf '%s\n' "$run_lines" | cut -f5- | sort -u)"
+  discovered_names="$(printf '%s\n' "$run_lines" | cut -f6- | sort -u)"
   expected_lines="$(printf '%s\n' "$expected_csv" | tr ',' '\n')"
   missing=""
   while IFS= read -r want; do
@@ -191,7 +209,7 @@ select_latest() {
   selected_lines=""
   pending=0
   seen_wfids=$'\n'
-  while IFS=$'\t' read -r id status conclusion wfid wfname; do
+  while IFS=$'\t' read -r id status conclusion wfid _updated wfname; do
     [ -n "$id" ] || continue
     case "$wfid" in
       # Ruleset/unnamed runs can lack a workflow id (jq renders it "null"); judge each individually.

@@ -25,7 +25,8 @@ const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.
 // The graphql answer is raw GraphQL JSON built from the fixture and piped
 // through the real jq with the --jq filter the script passed, so the filter's
 // field order, enum lowercasing, and external-suite drop are under test.
-// GH_RUNS entries are "id" (COMPLETED) or "id@<status>" (still running); with
+// GH_RUNS entries are "id" (COMPLETED), "id@<status>" (still running), or
+// "id@<status>@<updatedAt>" (an empty status is COMPLETED; default t1); with
 // GH_RUNS<n> set, that snapshot is served from the n-th snapshot onward (a
 // snapshot is one first-page call plus its cursor pages). GH_PAGE_SIZE splits
 // a snapshot into pages; the cursor for page k is "page<k>".
@@ -76,13 +77,14 @@ if [ "$1 $2" = "api graphql" ]; then
     i=$((i + 1))
     [ "$i" -gt $(( (page - 1) * size )) ] || continue
     if [ "$i" -gt $(( page * size )) ]; then more=true; break; fi
-    id="\${entry%%@*}"
-    status=COMPLETED; case "$entry" in *@*) status="$(printf '%s' "\${entry#*@}" | tr a-z A-Z)";; esac
+    id="\${entry%%@*}"; rest=""; case "$entry" in *@*) rest="\${entry#*@}";; esac
+    updated="\${rest#*@}"; [ "$updated" != "$rest" ] || updated=t1
+    status="$(printf '%s' "\${rest%%@*}" | tr a-z A-Z)"; [ -n "$status" ] || status=COMPLETED
     cvar="GH_CONCLUSION_\${id}"; conclusion="$(printf '%s' "\${!cvar:-success}" | tr a-z A-Z)"
     if [ "$status" != COMPLETED ] || [ "$conclusion" = NULL ]; then conclusion=null; else conclusion="\\"$conclusion\\""; fi
     nvar="GH_NAME_\${id}"; wvar="GH_WF_\${id}"; wfid="\${!wvar:-$((1000 + id))}"
     node="{\\"status\\":\\"$status\\",\\"conclusion\\":$conclusion,\\"app\\":{\\"slug\\":\\"github-actions\\"},"
-    node="$node\\"workflowRun\\":{\\"databaseId\\":$id,\\"workflow\\":{\\"databaseId\\":$wfid,\\"name\\":\\"\${!nvar:-CI-$id}\\"}}}"
+    node="$node\\"workflowRun\\":{\\"databaseId\\":$id,\\"updatedAt\\":\\"$updated\\",\\"workflow\\":{\\"databaseId\\":$wfid,\\"name\\":\\"\${!nvar:-CI-$id}\\"}}}"
     nodes="\${nodes:+$nodes,}$node"
   done
   if [ "$page" -eq 1 ]; then
@@ -231,6 +233,7 @@ describe("watch-ci.sh exit matrix", () => {
   test("all green exits 0 with a pass line per run; external suites are not runs", () => {
     // The two CodeQL-style suites carry FAILURE and no workflowRun: judged,
     // they would exit 1; counted, they would break the pass-line shape.
+    // One page is one atomic read: exactly one graphql call.
     const r = run({ GH_RUNS: "1 2", GH_EXTERNAL_SUITES: "2" });
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("pass: CI-2 (2)\npass: CI-1 (1)\n");
@@ -286,12 +289,60 @@ describe("watch-ci.sh exit matrix", () => {
   test("a failed run on the second page of check suites is still judged", () => {
     // Page size 2 puts run 3 on page 2. An unpaginated read would see only
     // runs 1 and 2, print their passes, and exit 0 over the hidden failure.
+    // Two pages are not one atomic read, so the snapshot is read twice.
     const r = run({ GH_RUNS: "1 2 3", GH_PAGE_SIZE: "2", GH_CONCLUSION_3: "failure" });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe(
       "FAIL(failure): CI-3 (3)\nlog excerpt for 3\npass: CI-2 (2)\npass: CI-1 (1)\n",
     );
-    expect(r.snapshots).toBe(1);
+    expect(r.snapshots).toBe(2);
+  });
+
+  test("a multi-page snapshot that changes between reads is judged from the confirmed read", () => {
+    // Read 1 sees runs 1-2; run 3 (a failure) registers before read 2, which
+    // read 3 confirms. Judging read 1 would exit 0 over the failure.
+    const r = run({
+      GH_RUNS: "1 2",
+      GH_RUNS2: "1 2 3",
+      GH_PAGE_SIZE: "1",
+      GH_CONCLUSION_3: "failure",
+    });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe(
+      "FAIL(failure): CI-3 (3)\nlog excerpt for 3\npass: CI-2 (2)\npass: CI-1 (1)\n",
+    );
+    expect(r.snapshots).toBe(3);
+  });
+
+  test("identical statuses across two multi-page reads still re-read when a run's updatedAt moved", () => {
+    // Runs A and B on separate pages: A is re-run and completes again between
+    // the two reads, so both read success/success while a re-run was in
+    // flight. Only the updatedAt column can see it; read 3 must confirm.
+    const r = run({ GH_RUNS: "1 2", GH_RUNS2: "1@@t2 2", GH_PAGE_SIZE: "1" }, [
+      "--expect-workflow",
+      "CI-1",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("pass: CI-2 (2)\npass: CI-1 (1)\n");
+    expect(r.snapshots).toBe(3);
+  });
+
+  test("a multi-page snapshot changing on every read is refused after 5 rounds, never judged", () => {
+    // Reads alternate between two multi-page run lists, so no two
+    // consecutive reads agree. Each of the 5 registration attempts spends
+    // its 5 rounds.
+    const env: Record<string, string> = { GH_PAGE_SIZE: "1" };
+    for (let read = 1; read <= 25; read += 1) {
+      env[read === 1 ? "GH_RUNS" : `GH_RUNS${read}`] = read % 2 === 1 ? "1 2" : "1 2 3";
+    }
+    const r = run(env);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain(
+      "kept changing across 5 multi-page reads; refusing to judge a partial snapshot",
+    );
+    expect(r.stderr).toContain("no workflow runs registered");
+    expect(r.stdout).toBe("");
+    expect(r.snapshots).toBe(25);
   });
 
   test("check suites spanning more than 10 pages are refused, never judged partially", () => {

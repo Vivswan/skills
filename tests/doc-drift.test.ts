@@ -426,7 +426,7 @@ const SURFACES: Record<string, Surface> = {
       },
       {
         doc: "per-check conclusions from the head commit's `statusCheckRollup`",
-        script: "nodes { commit { statusCheckRollup { contexts(first: 100, after: $cursor) {",
+        script: "nodes { commit { oid statusCheckRollup { contexts(first: 100) {",
       },
       {
         doc: "exits 2 instead of waiting when that read fails",
