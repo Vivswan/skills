@@ -37,7 +37,7 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 
 - **Into part two:** reviewer guidance for bot reviewers such as Copilot, mechanism detail beyond `## How`, the recorded-not-built and accepted-deviation lists, gate and codex round counts, file-by-file notes.
 - **Nothing in part one depends on part two.** A PR whose detail fits in part one has no part two.
-- **The summary names its content** ("Technical details"), never the reader's level.
+- **The summary line is a heading.** The Readability rules below govern it: "Technical details" names content.
 
 **Readability rules**, for PR bodies and issue replies alike (the Replies section below points here rather than restating them):
 
@@ -162,7 +162,7 @@ For every form:
 
 ## Issues: Same Principle
 
-What breaks, shown first; then the minimum around it. Short and skimmable, no walls of text.
+What breaks, shown first; then the minimum around it, under the Readability rules above.
 
 The session's template answer, resolved at plan time above, covers issues too: fill the chosen issue template's fields and apply this principle inside them, or use the shape below when the answer was the skill's shapes or no template exists.
 
@@ -181,15 +181,15 @@ installed: SKILL.md, README.md          (metadata.json silently missing)
 
 ## Expected vs actual
 
-- Expected: every file in the skill folder installed
-- Actual: `metadata.json` dropped without a warning
+- **Expected:** every file in the skill folder installed
+- **Actual:** `metadata.json` dropped without a warning
 ````
 
 Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not. When an issue includes captured output, the redaction rule above applies unchanged.
 
 ## Replies to Issue Reporters and Outside Contributors: Plain First
 
-An issue reply or a review comment to an outside contributor is read by someone who may find long text hard to read and does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
+An issue reply or a review comment to an outside contributor is read by someone skimming a thread who does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
 
 Specimen: a diagnostics-only bug report whose log ended mid-request. The first reply opened with three paragraphs on hidden provider groups, tombstones, and silent refreshes. The rewrite:
 
@@ -210,16 +210,16 @@ Number 3 would help the most. The rest of this comment explains why, if you are 
 Fetching from:: "https://<host>/@<user>/v1/model/info"    <- last line, still waiting
 ```
 
-- You removed a server that pointed at `https://<host>/`. The extension remembers that and keeps its models out of the picker. That is expected, not an error.
-- You added a new server at `https://<host>/@<user>` with no API key.
+- **The server you removed** pointed at `https://<host>/`. The extension remembers that and keeps its models out of the picker. That is expected, not an error.
+- **The server you added** is at `https://<host>/@<user>` with no API key.
 
 **A guess, to save a round trip:** a URL with `/@username` in it and no API key usually is not a LiteLLM proxy.
 
 <details>
 <summary>Technical details</summary>
 
-- `Provider group is hidden by an explicit user removal`: the `servers` entry was removed. VS Code cannot delete a provider group, so the extension tombstones it and answers with an empty model list. Docs: [Lifecycle: renames, removals, hidden groups](...).
-- `Fetching from:: .../v1/model/info`: the first discovery request. The log buffer holds 50 lines and no error was recorded, so the report was built inside this request's 30 second timeout.
+- **Hidden provider group:** `Provider group is hidden by an explicit user removal` means the `servers` entry was removed. VS Code cannot delete a provider group, so the extension tombstones it and answers with an empty model list. Docs: [Lifecycle: renames, removals, hidden groups](...).
+- **Where the log stops:** `Fetching from:: .../v1/model/info` is the first discovery request. The log buffer holds 50 lines and no error was recorded, so the report was built inside this request's 30 second timeout.
 
 </details>
 `````
