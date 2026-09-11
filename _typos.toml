@@ -1,0 +1,9 @@
+# This repository's own typos allowlist; the fleet allowlist in
+# Vivswan/repo-platform's actions/typos/_typos.toml applies underneath it.
+
+[default]
+extend-ignore-re = [
+  # The hyphenated prefix in mis-parses, mis-grouping, mis-set: typos splits
+  # it at the hyphen and reads the bare `mis` as a misspelling of miss/mist.
+  "\\bmis-",
+]
