@@ -169,9 +169,9 @@ For every form:
 
 **Redact captured output before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
 
-**Release tooling reads the body.** A squash-merge prefills its commit message from the PR body; when release-please parses that commit, it replaces the message with the body's `BEGIN_COMMIT_OVERRIDE` block, and a commit whose message it cannot parse is dropped from the changelog. It keeps ONE `BREAKING CHANGE` note per commit (the last footer wins), so several breaks go into one footer whose value spans several lines, one break per line, or into one `BEGIN_NESTED_COMMIT` / `END_NESTED_COMMIT` block per break.
+**Release-please reads the body.** In a repository released by release-please, a squash-merge prefills its commit message from the PR body; when release-please parses that commit, it replaces the message with the body's `BEGIN_COMMIT_OVERRIDE` block, and a commit whose message it cannot parse is dropped from the changelog. It keeps ONE `BREAKING CHANGE` note per commit (the last footer wins), so several breaks go into one footer whose value spans several lines, one break per line, or into one `BEGIN_NESTED_COMMIT` / `END_NESTED_COMMIT` block per break.
 
-The block is written for a tool, so it is the last element inside the Technical details section; release-please matches the markers inside a `<details>` element. A PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) closes its details section with:
+The override changes release-please's parsed message, not the git commit: a repository whose release tool reads the squash commit itself keeps its footers in that commit message, under its own rules. The block is written for a tool, so it is the last element inside the Technical details section; release-please matches the markers inside a `<details>` element. In a release-please repository, a PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) closes its details section with:
 
 ```text
 BEGIN_COMMIT_OVERRIDE
