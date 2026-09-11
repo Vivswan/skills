@@ -33,13 +33,73 @@ Before writing or keeping a comment, ask two questions:
 
 Fail either: rewrite or delete. A wholly redundant comment is deleted, not compressed. A comment that buries one real constraint in narration keeps only the constraint.
 
-## Specimen
+## Specimens
 
-The before/after header is in `SKILL.md`, under this standard. What changed:
+**A header above a regex**, before and after, is in `SKILL.md` under this standard. What changed:
 
 - The opening sentence described the regex, which the code shows; it is gone.
 - Each remaining fact is one sentence the code cannot show, with its reason attached; the third continues onto a second line at its colon.
 - The reader skims separate facts instead of untangling one wrapped paragraph.
+
+**A rules list, 28 lines to 8 facts.** The doc comment on a field holding a server-reported capability baseline; every AFTER line was checked against the code through five review rounds.
+
+```text
+BEFORE, one wrapped paragraph across 28 lines:
+/**
+ * The server-reported capability baseline of one registered entry: the walk's
+ * server-level input, carried on PreAttachModelInfo.litellm.serverDeclared.
+ * Two separate facts ride here. The VALUES are the conservative aggregation
+ * results exactly as registration advertises them, present whenever ANY
+ * contributor reported the field - so a lower-precedence catalog guess can
+ * never displace a conservative server minimum, while a field no contributor
+ * reported stays absent and lets the catalog fill it. `outputDeclared` is the
+ * stricter every-contributor rule and controls only whether the output limit
+ * bypasses the request-side cap.
+ *
+ * max_input_tokens is present whenever ANY numeric limit was reported, not
+ * only max_input_tokens itself: the collapse fills a missing input limit from
+ * the reported context and output limits, and that server-grounded number is
+ * what registration advertises - re-deriving it from the collapsed context and
+ * output can overstate it, because min(ctx_i - out_i) undercuts min(ctx) -
+ * min(out). Boolean fields count as reported when any contributor carried the
+ * explicit flag (or, for reasoning, the supported-params list); modality flags
+ * count as reported when the server supplied a modality array at all, an
+ * accepted conflation of "reported false" with "unreported". The
+ * prompt-caching and response-schema flags hold only when every contributor
+ * advertises them, so the baseline can never say more than the entry
+ * advertised; the supported-params and reasoning_effort_levels lists are each
+ * present only when every contributor carries one and hold their
+ * intersection; costs appear only for pricing-eligible shapes, and only the
+ * costs the server declared - discovery's serverCostsOf already mapped the
+ * 0/0 no-pricing stamp to undefined at ingest.
+ */
+
+AFTER, one complete sentence per line:
+/**
+ * ANY contributor's report keeps a limit or flag FIELD present.
+ * Its VALUE is registration's conservative aggregate, exactly as advertised.
+ * So a catalog guess never displaces a server minimum, and unreported fields stay absent for it.
+ * The two string lists are present only when EVERY contributor carries one.
+ * Costs are present only for pricing-eligible shapes, so aggregates omit them even when reported.
+ * outputDeclared is the stricter every-contributor rule and gates only the request-side cap.
+ * max_input_tokens counts as reported when ANY limit was, since re-deriving it can overstate it.
+ * A modality array marks all modality flags reported, conflating false with unreported on purpose.
+ */
+```
+
+What went, and why:
+
+- The opening sentence named what the field is; its type shows that.
+- The min(ctx_i - out_i) derivation; a derivation belongs in the commit message.
+- The stamp mapping done by another function; that function's own doc states it.
+- The per-flag narration; the body's `some(...)` calls show it.
+
+Two traps the review rounds caught in earlier rewrites, both compression changing the truth:
+
+- "can overstate" had become "overstates"; a hedge the code justifies is a fact, not padding.
+- "present whenever ANY contributor reported" had swallowed the exceptions (the two string lists need every contributor; costs need a pricing-eligible shape); a rule with exceptions keeps them or is wrong.
+
+After compressing, check each remaining sentence against the code, as the two-question test asks; shorter is never allowed to be less true.
 
 ## No comment-justified workarounds
 

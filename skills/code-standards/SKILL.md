@@ -161,6 +161,6 @@ Triage findings against the standards above; each criterion maps to one.
 
 - `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort
 - `references/tests.md`: the minimum standard for tests, what counts as weak, proving a guard test with a negative control
-- `references/comments.md`: what a good comment carries, its shape and ceiling, the two-question test, the specimen, the TODO ban, planning references
+- `references/comments.md`: what a good comment carries, its shape and ceiling, the two-question test, the specimens, the TODO ban, planning references
 - `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging
 - `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions
