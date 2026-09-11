@@ -19,11 +19,12 @@ import { basename, join } from "node:path";
  *   "review FAILED - relaunch" verdict literal.
  * - skills/watch-ci-after-push/SKILL.md <-> its scripts/watch-ci.sh: the
  *   invocation shape (one full-SHA argument, defaulting to HEAD), the
- *   full-SHA discovery command, the exit-code 0/1/2 semantics at their exit
- *   sites, the expected-workflow gate (its --expect-workflow override, its
- *   missing-evidence message, and the manual-dispatch hint), the failing-log
- *   excerpt command, the superseded/FAIL/skip reporting literals, and the
- *   60 s watch poll interval at its declaration and every watch call site.
+ *   GraphQL discovery query and its full-SHA lookup, the exit-code 0/1/2
+ *   semantics at their exit sites, the expected-workflow gate (its
+ *   --expect-workflow override, its missing-evidence message, and the
+ *   manual-dispatch hint), the failing-log excerpt command, the
+ *   superseded/FAIL/skip reporting literals, and the 60 s poll interval at
+ *   its declaration and its sleep.
  * - skills/watch-ci-after-push/SKILL.md <-> its
  *   scripts/wait-for-pr-event.mts: the invocation shape, the --until event
  *   set with its default, the interval defaults and floor, the
@@ -304,9 +305,17 @@ const SURFACES: Record<string, Surface> = {
         script: 'sha="${1:-$(git rev-parse HEAD)}"',
       },
       {
-        doc: "**FULL 40-character SHA**: `gh run list --commit` silently returns an empty list for short SHAs",
+        doc: "**FULL 40-character SHA**: the GraphQL `object(oid:)` lookup rejects short SHAs outright",
+        script: "object(oid: $oid) { ... on Commit {",
+      },
+      {
+        doc: "in one `gh api graphql` request per page of 100 check suites per poll",
         script:
-          'gh run list --commit "$sha" --limit 100 --json databaseId,attempt,workflowDatabaseId,workflowName',
+          'gh api graphql -f query="$suites_query" -f owner="$owner" -f name="$name" -f oid="$sha" "$@" --jq "$suites_filter"',
+      },
+      {
+        doc: 'select(.app.slug == "github-actions" and .workflowRun != null)',
+        script: 'select(.app.slug == "github-actions" and .workflowRun != null)',
       },
       {
         doc: "exit 0: latest run per workflow green",
@@ -320,20 +329,20 @@ const SURFACES: Record<string, Surface> = {
       },
       {
         doc: "Exit 0: all green (skipped runs count as pass)",
-        script: 'echo "skip: $name ($id)"',
+        script: 'echo "skip: $wfname ($id)"',
       },
       {
         doc: "1: some latest run ended with a non-success, non-skipped conclusion",
-        script: 'fail=1\n      echo "FAIL($conclusion): $name ($id)"',
+        script: 'fail=1\n      echo "FAIL($conclusion): $wfname ($id)"',
       },
       {
         doc: "Exit 1: some workflow's latest run ended with any non-success, non-skipped conclusion",
         script: '[ "$fail" -eq 1 ] && exit 1',
       },
-      { doc: "Include the FAIL lines", script: 'echo "FAIL($conclusion): $name ($id)"' },
+      { doc: "Include the FAIL lines", script: 'echo "FAIL($conclusion): $wfname ($id)"' },
       {
         doc: "older re-triggered runs are reported as superseded, not judged",
-        script: 'echo "superseded: $name ($id)"',
+        script: 'echo "superseded: $wfname ($id)"',
       },
       {
         doc: "(log excerpts in the file)",
@@ -365,16 +374,16 @@ const SURFACES: Record<string, Surface> = {
         script: "discover_with_retry() {",
       },
       {
-        doc: "Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything",
-        script: "viewfail=1\n      continue\n    fi\n    viewfail=0",
+        doc: "The bundled script sleeps 60 s between polls (`poll_interval=60`)",
+        script: "poll_interval=60",
       },
       {
-        doc: "bundled script passes `--interval 60` to every `gh run watch`",
-        script: "watch_interval=60",
+        doc: "The bundled script sleeps 60 s between polls (`poll_interval=60`)",
+        script: 'sleep "$poll_interval"',
       },
       {
-        doc: "bundled script passes `--interval 60` to every `gh run watch`",
-        script: { text: 'gh run watch "$id" --interval "$watch_interval"', occurrences: 3 },
+        doc: "touch REST only for failed-job logs (`gh run view <id> --log-failed`, once per failed run)",
+        script: 'gh run view "$id" --log-failed 2>&1 | tail -80 || true',
       },
     ],
   },
@@ -412,8 +421,12 @@ const SURFACES: Record<string, Surface> = {
         script: "const DEFAULT_TIMEOUT_SECONDS = 1800;",
       },
       {
-        doc: "via GraphQL `isResolved`",
+        doc: "review-thread counts via `isResolved`",
         script: "nodes { isResolved comments { totalCount } }",
+      },
+      {
+        doc: "per-check conclusions from the head commit's `statusCheckRollup`",
+        script: "nodes { commit { statusCheckRollup { contexts(first: 100, after: $cursor) {",
       },
       {
         doc: "exits 2 instead of waiting when that read fails",

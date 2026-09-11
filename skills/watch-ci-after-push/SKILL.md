@@ -20,20 +20,21 @@ Every push gets a **background watcher** that reports pass/fail with failing-job
 
 ### 1. Find the runs the push triggered
 
-- Poll until the runs appear: they can take a few seconds to register after the push.
-- Always pass the **FULL 40-character SHA**: `gh run list --commit` silently returns an empty list for short SHAs.
+- Poll until the runs appear: they can take a few seconds to register after the push. The bundled script does this itself (up to five reads 3 s apart).
+- Always pass the **FULL 40-character SHA**: the GraphQL `object(oid:)` lookup rejects short SHAs outright.
+- Read through GraphQL, never `gh run list`: the Actions REST endpoints are a separate rate bucket (Polling Budget below). One query returns every workflow run on the commit with its status:
 
 ```bash
-sha="$(git rev-parse HEAD)"   # full SHA - short SHAs silently match nothing
-for i in 1 2 3 4 5; do
-  runs="$(gh run list --commit "$sha" --json databaseId,name,status,conclusion,url)"
-  [ "$runs" != "[]" ] && break
-  sleep 3
-done
-echo "$runs"
+sha="$(git rev-parse HEAD)"   # full SHA: object(oid:) rejects short ones
+gh api graphql -f owner=<owner> -f name=<repo> -f oid="$sha" -f query='
+  query($owner: String!, $name: String!, $oid: GitObjectID!) {
+    repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit {
+      checkSuites(first: 100) { nodes { status conclusion app { slug } workflowRun { databaseId workflow { name } } } }
+    } } } }' \
+  --jq '.data.repository.object.checkSuites.nodes[]? | select(.app.slug == "github-actions" and .workflowRun != null) | "\(.workflowRun.databaseId)\t\(.status)\t\(.conclusion)\t\(.workflowRun.workflow.name)"'
 ```
 
-Still empty after ~15s? That usually means no workflow triggers on this ref. Say so and stop (include the repo's Actions URL).
+Suites without a `workflowRun` belong to external apps (CodeQL, Semgrep) and are not workflow runs; the filter drops them. The snippet reads the first 100 suites; the bundled script pages through `pageInfo` so a run past the first page is still judged. Still empty after ~15s? That usually means no workflow triggers on this ref. Say so and stop (include the repo's Actions URL).
 
 ### 2. Watch in the background
 
@@ -67,7 +68,7 @@ The script refuses a vacuous green: the expected workflow (by default the one na
 
 The exit codes are ranked, not independent: a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2). A missing gate workflow plus a red bystander therefore exits 1, with the missing-workflow message still printed; clear the red run, then watch again for the gate.
 
-In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the exit semantics, the expected-workflow gate, the superseded/FAIL/skip lines) to `scripts/watch-ci.sh`. A rename on either side fails CI until doc and script move together.
+In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the GraphQL discovery, the exit semantics, the expected-workflow gate, the superseded/FAIL/skip lines) to `scripts/watch-ci.sh`. A rename on either side fails CI until doc and script move together.
 
 ### 3. Report
 
@@ -76,10 +77,11 @@ In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins t
 
 ## Polling Budget
 
-GitHub's core REST bucket is 5000 authenticated requests per hour per user, shared by every REST call the session makes (`gh run list`, `watch`, and `view` included). Production: parallel watchers plus `gh run watch` at its 3 s default refresh exhausted it, and every CI verdict was blind for 45 minutes. Two rules follow:
+GitHub throttles in separate buckets. The core REST bucket is 5000 authenticated requests per hour per user. The Actions REST endpoints (`gh run list`, `gh run watch`, `gh run view`) are additionally throttled as a secondary bucket: ten sessions on one account locked it for over an hour with 403 "API rate limit exceeded" while core still read 5000/5000, and every REST-based CI verdict was blind. GraphQL has its own bucket and kept answering throughout. Earlier, `gh run watch` at its 3 s default refresh across parallel watchers drained core and blinded every verdict for 45 minutes. Three rules follow:
 
+- **Discover and poll through GraphQL, never the Actions REST endpoints.** The bundled scripts read every workflow run on the commit, with its status and conclusion, in one `gh api graphql` request per page of 100 check suites per poll, and touch REST only for failed-job logs (`gh run view <id> --log-failed`, once per failed run). A hand-rolled watcher does the same (the query in step 1). A rate-limited GraphQL answer is tooling trouble (exit 2), never a reason to fall back to REST.
 - **One CI poller per session at a time.** Queue the next push behind the running watcher, or, when the branch's runs share a `concurrency` group key, watch only the newest mainline tip: an older tip's watcher can end with no verdict to report (the group behavior is spelled out below).
-- **The sustained watch interval is at least 60 s.** The bundled script passes `--interval 60` to every `gh run watch`; a hand-rolled watcher does the same (`gh run watch <id> --interval 60`), never gh's default. The script's two bounded bursts are not what this rule is about and stay as they are: registration polling (up to five `gh run list` calls 3 s apart, until the runs appear) and the transient-failure retries (up to three attempts 2 s apart) each spend a handful of requests once; the minutes-long watch is where the budget goes.
+- **The sustained poll interval is at least 60 s.** The bundled script sleeps 60 s between polls (`poll_interval=60`); a hand-rolled watcher does the same, never `gh run watch` at its 3 s default. The script's two bounded bursts are not what this rule is about and stay as they are: registration polling (up to five reads 3 s apart, until the runs appear) and the transient-failure retries (up to three attempts 2 s apart) each spend a handful of requests once; the minutes-long watch is where the budget goes.
 
 Stacked pushes also lose verdicts on GitHub's side. When a workflow's runs share a `concurrency` group key (commonly the workflow plus the branch), GitHub keeps at most one running plus one pending run per key: a newer push cancels the pending run (and the running one too where `cancel-in-progress` evaluates true), so that SHA never gets a verdict, which the script reports as `FAIL(cancelled)` on a latest run. Two landings in one session needed reruns for exactly this; wait for the running watcher's verdict before pushing again.
 
@@ -103,7 +105,7 @@ bun "<skill-dir>/scripts/wait-for-pr-event.mts" <pr-number> --repo <owner/name> 
 
 - `--until` picks the watched events from `comment,review,checks,merge` (default: `comment,review`).
 - `--interval` sets seconds between polls (default 60, minimum 60: the Polling Budget floor above), but a failed poll retries after 2 seconds instead of waiting the full interval; `--timeout` sets seconds before giving up (default 1800).
-- The waiter reads a complete baseline first (comment, thread-reply, and review-thread counts via GraphQL `isResolved`, the latest review, per-check conclusions, merged state) and exits 2 instead of waiting when that read fails.
+- The waiter reads a complete baseline first, all through GraphQL (comment, thread-reply, and review-thread counts via `isResolved`, the latest review, per-check conclusions from the head commit's `statusCheckRollup` paged past 100 contexts, merged state) and exits 2 instead of waiting when that read fails.
 - At the deadline it makes one final bounded read, so the closing snapshot is current and a delta landing in the last window still exits 0.
 
 | Exit | Meaning |
