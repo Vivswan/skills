@@ -7,7 +7,7 @@
 - a minimum strength standard every test clears
 - general-purpose over special-case
 - maintainability over effort
-- lean comments
+- comments that carry only what the code cannot show, one fact per line
 - no barrel files or pass-through functions
 - no planning references in code
 - lean AGENTS.md files
