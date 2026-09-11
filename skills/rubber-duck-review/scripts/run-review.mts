@@ -5,6 +5,7 @@
  * Usage:
  *   run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt]
  *   run-review.mts <codex|claude|copilot> --extract <output-file>
+ *   run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]
  *   run-review.mts prepare <section>
  *
  * The verdict is the structured object in verdict-schema.json (blocking,
@@ -57,16 +58,19 @@
  * review.status beside the stream; --extract validates all three against its
  * own invocation and refuses to report a verdict until the recorded status is
  * a success, so extracting too early, from a failed run, or from the wrong
- * capture fails safe.
+ * capture fails safe. --extract --wait polls that record until the exit is
+ * recorded, then extracts; it is how a caller waits without hand-rolling a
+ * poll over the record or the output path.
  *
  * Exit codes:
  *   0  verdict extracted and printed to stdout, or a --background launch
  *      started (that run's verdict comes later, via --extract)
  *   1  review FAILED - relaunch (empty or cut stream, error events, a final
  *      message that is not the schema object, a verdict with no tool calls
- *      before it, blank or unrecorded verdicts, or a non-zero reviewer exit;
- *      an empty review must never read as clean)
- *   2  usage error or reviewer binary not found
+ *      before it, blank or unrecorded verdicts, a non-zero reviewer exit, or
+ *      a --wait that timed out; an empty review must never read as clean)
+ *   2  usage error (including no launch record beside a --wait output file)
+ *      or reviewer binary not found
  */
 
 import { spawn } from "node:child_process";
@@ -147,11 +151,15 @@ const TOOL_ARGS: Record<Tool, (prompt: string) => string[]> = {
 const USAGE = [
   "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt]",
   "       run-review.mts <codex|claude|copilot> --extract <output-file>",
+  "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]",
   "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir>  (internal)",
   "       run-review.mts prepare <section>",
 ].join("\n");
 
 const PROMPT_DIR_PREFIX = "rubber-duck-prompt-";
+const WAIT_POLL_MS = 2000;
+const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
+const TIMEOUT_SECONDS = /^[1-9][0-9]*$/;
 const MINT_MARKER = ".minted-by-run-review";
 const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -705,39 +713,37 @@ function runBackground(tool: Tool, prompt: string, stdinPrompt: boolean): void {
   });
   monitor.on("spawn", () => {
     monitor.unref();
-    process.stdout.write(`output: ${scratch.outFile}\npid: ${monitor.pid}\n`);
+    process.stdout.write(`output-file: ${scratch.outFile}\npid: ${monitor.pid}\n`);
   });
 }
 
-function extractRecorded(tool: Tool, outputFile: string): void {
-  // Status first: before the monitor records completion (or even creates the
-  // stream), extraction must fail as an unfinished review, not a usage error.
-  let recordText: string | null = null;
+interface LaunchRecord {
+  /** Absent until the monitor records the reviewer's exit. */
+  status?: string;
+}
+
+/** The record beside the output file, once its reviewer and output name are
+ * checked against this invocation; null when there is no record at all.
+ * A record that is present but not a matching launch record is a usage error. */
+function readLaunchRecord(tool: Tool, outputFile: string): LaunchRecord | null {
+  let recordText: string;
   try {
     recordText = readFileSync(join(dirname(outputFile), "review.status"), "utf-8");
   } catch {
-    // no record beside the file: the monitor may not have started yet
+    return null;
   }
-  if (recordText === null) {
-    reportVerdict(
-      { ok: false, reason: "no exit status recorded (reviewer still running?)" },
-      outputFile,
-    );
-    return;
-  }
+  // Typed as a variable so the compiler narrows `parsed` through the call.
+  const notCapture: () => never = () =>
+    usageError(`unrecognized review.status beside ${outputFile}: not a run-review capture`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(recordText);
   } catch {
-    usageError(`unrecognized review.status beside ${outputFile}: not a run-review capture`);
+    notCapture();
   }
-  if (!isRecord(parsed)) {
-    usageError(`unrecognized review.status beside ${outputFile}: not a run-review capture`);
-  }
-  const { tool: recordedTool, output: recordedOutput, status: recordedStatus } = parsed;
-  if (typeof recordedTool !== "string" || typeof recordedOutput !== "string") {
-    usageError(`unrecognized review.status beside ${outputFile}: not a run-review capture`);
-  }
+  if (!isRecord(parsed)) notCapture();
+  const { tool: recordedTool, output: recordedOutput, status } = parsed;
+  if (typeof recordedTool !== "string" || typeof recordedOutput !== "string") notCapture();
   if (recordedTool !== tool) {
     usageError(
       `this capture was launched with reviewer '${recordedTool}', not '${tool}'; extract with the same reviewer`,
@@ -746,23 +752,21 @@ function extractRecorded(tool: Tool, outputFile: string): void {
   if (recordedOutput !== basename(outputFile)) {
     usageError(`this capture's output file is '${recordedOutput}', not '${basename(outputFile)}'`);
   }
-  if (!("status" in parsed)) {
-    reportVerdict(
-      { ok: false, reason: "no exit status recorded (reviewer still running?)" },
-      outputFile,
-    );
-    return;
-  }
-  if (typeof recordedStatus !== "string") {
+  if (!("status" in parsed)) return {};
+  if (typeof status !== "string") {
     usageError(`unrecognized review.status beside ${outputFile}: non-string status`);
   }
-  if (recordedStatus === "not-found") {
+  return { status };
+}
+
+function reportRecordedRun(tool: Tool, outputFile: string, status: string): void {
+  if (status === "not-found") {
     process.stderr.write(`reviewer binary not found: ${tool}\n`);
     process.exitCode = 2;
     return;
   }
-  if (recordedStatus !== "0") {
-    reportVerdict({ ok: false, reason: `recorded reviewer status: ${recordedStatus}` }, outputFile);
+  if (status !== "0") {
+    reportVerdict({ ok: false, reason: `recorded reviewer status: ${status}` }, outputFile);
     return;
   }
   let raw: string;
@@ -773,6 +777,55 @@ function extractRecorded(tool: Tool, outputFile: string): void {
     return;
   }
   reportVerdict(extractVerdict(tool, raw), outputFile);
+}
+
+function extractRecorded(tool: Tool, outputFile: string): void {
+  // Before the monitor records completion (or even creates the stream),
+  // extraction must fail as an unfinished review, not a usage error.
+  const record = readLaunchRecord(tool, outputFile);
+  if (record?.status === undefined) {
+    reportVerdict(
+      { ok: false, reason: "no exit status recorded (reviewer still running?)" },
+      outputFile,
+    );
+    return;
+  }
+  reportRecordedRun(tool, outputFile, record.status);
+}
+
+/** Blocks the main thread; a timer callback could not route a usage error
+ * through SilentExit, and the wait has nothing else to do. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** The launch writes the record before it prints the output-file line, so
+ * a missing record on the first read is a wrong path, never an early read. */
+function extractAfterWait(tool: Tool, outputFile: string, timeoutSeconds: number): void {
+  const started = Date.now();
+  const deadline = started + timeoutSeconds * 1000;
+  const noRecord = (): never =>
+    usageError(
+      `no launch record beside ${outputFile}: --wait needs the output-file a --background launch printed`,
+    );
+  let record = readLaunchRecord(tool, outputFile) ?? noRecord();
+  while (record.status === undefined) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      const elapsed = Math.round((Date.now() - started) / 1000);
+      reportVerdict(
+        {
+          ok: false,
+          reason: `--wait timed out: no exit status recorded beside ${outputFile} after ${elapsed} s`,
+        },
+        outputFile,
+      );
+      return;
+    }
+    sleepSync(Math.min(WAIT_POLL_MS, remaining));
+    record = readLaunchRecord(tool, outputFile) ?? noRecord();
+  }
+  reportRecordedRun(tool, outputFile, record.status);
 }
 
 function main(): void {
@@ -792,11 +845,29 @@ function main(): void {
   const rest = argv.slice(1);
 
   if (rest[0] === "--extract") {
-    const outputFile = rest[1];
-    if (outputFile === undefined || rest.length !== 2) {
+    let wait = false;
+    let timeoutSeconds: number | null = null;
+    const files: string[] = [];
+    for (let i = 1; i < rest.length; i += 1) {
+      const arg = rest[i] as string;
+      if (arg === "--wait") wait = true;
+      else if (arg === "--timeout") {
+        i += 1;
+        const value = rest[i];
+        if (value === undefined || !TIMEOUT_SECONDS.test(value)) {
+          usageError("--timeout requires a whole number of seconds, at least 1");
+        }
+        timeoutSeconds = Number(value);
+      } else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
+      else files.push(arg);
+    }
+    if (timeoutSeconds !== null && !wait) usageError("--timeout applies only to --extract --wait");
+    const outputFile = files[0];
+    if (outputFile === undefined || files.length !== 1) {
       usageError("--extract takes exactly one <output-file>");
     }
-    extractRecorded(tool, outputFile);
+    if (wait) extractAfterWait(tool, outputFile, timeoutSeconds ?? DEFAULT_WAIT_TIMEOUT_SECONDS);
+    else extractRecorded(tool, outputFile);
     return;
   }
 
@@ -811,6 +882,8 @@ function main(): void {
     else if (arg === "--capture") {
       i += 1;
       captureDir = rest[i] ?? usageError("--capture requires a directory");
+    } else if (arg === "--wait" || arg === "--timeout") {
+      usageError(`${arg} applies only to --extract`);
     } else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
     else positional.push(arg);
   }

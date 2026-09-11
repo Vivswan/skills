@@ -93,7 +93,10 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
     - It does not stream JSON, so there is no liveness signal, no trajectory in the report, and no tool-call check on its verdict; and no schema flag, so only the prompt asks it for the JSON object.
 - `--stdin-prompt` (codex/claude only): add it if the environment rejects the prompt as a command argument, or the prompt is very large. The prompt file itself is served as the reviewer's stdin. A file fd is EOF-terminated, so it cannot hang; the stdin hang trap is an open pipe, not a used stdin.
 - Foreground (the default) blocks until the reviewer exits, so give the tool call a generous timeout. Subagents (worktree builders, spawned workers) always run foreground: a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
-- `--background` prints the output-file path and the PID of a detached monitor that records the reviewer's exit status beside the stream. Leads use it to keep working while the review runs, then extract the verdict once it exits (step 4). Killing that PID cancels the review (the signal is forwarded to the reviewer).
+- `--background` prints exactly two lines, `output-file: <path>` and `pid: <n>`.
+  - `output-file` is the captured stream; a detached monitor records the reviewer's exit status beside it.
+  - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 4).
+  - Killing that PID cancels the review (the signal is forwarded to the reviewer).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line). Silence in between is normal; a real review can take a while.
 - Runtime: `bun`; `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
 - Exit codes:
@@ -112,7 +115,20 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - `capture`: the full reviewer stream, kept for inspection. Read it when a finding or the summary looks off and you want the exact reviewer message.
 - **Exit 1** (`review FAILED - relaunch`): the stream was empty, cut mid-turn, truncated on its final line, contained error events, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. That is no review at all, never a clean pass. Relaunch it (while the captured stream still exists, its path is in the failure message if you want to inspect why).
 - **Exit 2**: fix the invocation or install the missing reviewer binary; nothing was reviewed.
-- After a `--background` run exits, extract the verdict from the captured stream with the same rules and exit codes: `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>`, where `<reviewer>` is the same argument the review was launched with. It validates the reviewer and output file against what the launch recorded, and refuses to report a verdict until the run has recorded a successful exit beside the stream. So extracting too early, with the wrong reviewer, or from the wrong file fails safe.
+- After a `--background` launch, wait for the verdict in a background shell so the harness wakes you when it lands; never poll `review.status` or the output path by hand:
+  ```bash
+  out=<the path from the output-file: line>
+  bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" > "${out%/*}/verdict.out" 2>&1
+  ```
+  - `<reviewer>` is the argument the review was launched with.
+  - The verdict lands in `verdict.out` inside that review's capture dir, so parallel reviews (step 5) never overwrite one another, and it travels and is removed with the dir.
+  - The script polls the launch record every 2 s until the monitor records the exit (`--timeout <seconds>`, default 3600), then prints the same JSON report.
+  - It validates the reviewer and output file against what the launch recorded, so waiting on the wrong reviewer or file fails at once.
+  - Exit codes, same as a foreground run:
+    - 0: verdict printed.
+    - 1: review failed or `--wait timed out` (relaunch).
+    - 2: wrong reviewer or file, or no launch record beside the output file.
+- `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>` without `--wait` reads a finished run once: it exits 1 (`no exit status recorded`) while the reviewer is still running instead of blocking.
 - Every run that reached the reviewer keeps its scratch dir (under the OS tmp dir, never the working tree): the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). `rm -rf` that directory once the verdict is triaged. A foreground launch whose reviewer binary is missing (exit 2) captured nothing and leaves nothing behind; a `--background` one keeps its dir so `--extract` can report the missing binary, so remove it after that. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the prompt directory you minted remains yours to remove.
 
 ### 5. Large change sets: fan out one review per section
