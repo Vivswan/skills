@@ -18,8 +18,10 @@ Never a comment: what the code does, its types, its control flow, its history, t
 
 - One idea per sentence. Short sentences. Plain words.
 - A multi-line comment is a list of separate facts, one per line, never a paragraph that wraps.
+- Lines stay at or under 100 characters; formatters do not reflow comments. A fact that runs longer continues on the next line, split at a clause boundary; two facts never share a line to fit.
+- Never shorten a block by packing prose to the line width. A wall of text that fits the cap is worse than the original; a `comment-cap: ignore` marker on a packed block is the worst of both.
 - Usual length: one to three lines. Ceiling: 10 lines per block and 25 for a file header, the numbers the fleet's file-size check warns at.
-- Text that is not the author's to shape (a license header, an upstream-shaped block) is exempt from the ceiling; mark it the way the check accepts, a `comment-cap: ignore <reason>` line inside the block.
+- Text that is not the author's to shape (a license header, an upstream-shaped block) is exempt from the ceiling; mark it the way the check accepts, a `comment-cap: ignore <reason>` line inside the block. Nothing else is marked: a block still over the cap after honest cutting is reported to the lead.
 - A reader skims it and gets the point; a comment that needs a second read is rewritten.
 
 ## The test
@@ -36,7 +38,7 @@ Fail either: rewrite or delete. A wholly redundant comment is deleted, not compr
 The before/after header is in `SKILL.md`, under this standard. What changed:
 
 - The opening sentence described the regex, which the code shows; it is gone.
-- Each remaining line is one fact the code cannot show, with its reason in the same sentence.
+- Each remaining fact is one sentence the code cannot show, with its reason attached; the third continues onto a second line at its colon.
 - The reader skims separate facts instead of untangling one wrapped paragraph.
 
 ## No comment-justified workarounds
@@ -58,5 +60,6 @@ Code and comments never reference planning artifacts: work-package names, spike 
 - Run the two-question test before writing a comment and before keeping one you meet.
 - Shape every comment you keep: one fact per line, under the ceiling.
 - Treat any multi-line comment defending a hack, special case, or fragile assumption as a signal to redesign that code until the comment becomes unnecessary.
-- Run these checks explicitly in every pre-commit review pass (see the `/rubber-duck-review` skill), and propagate them to every subagent that writes code.
+- Run these checks explicitly in every pre-commit review pass (see the `/rubber-duck-review` skill).
+- Hand a subagent that writes or sweeps comments this file and the SKILL.md section by path, and tell it to read both first. Never a paraphrase: a lead's paraphrase is where the rule inverts. One lead's version read "prefer one dense paragraph over bullets", and six agents produced packed walls of text with markers on top.
 - When sweeping a whole repo, skip generated files and symlinked files.
