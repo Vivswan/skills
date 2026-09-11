@@ -9,8 +9,11 @@
 // on garbage. Every exit prints evidence, never a bare code.
 //
 // Run with bun; node builtins only, no npm dependencies. Every external
-// call goes through gh via spawnSync with an explicit timeout. Thread state
-// comes from GraphQL (isResolved), paginated past 100 threads.
+// call goes through gh via spawnSync with an explicit timeout. Every read is
+// an explicit GraphQL query: thread state via isResolved, paginated past 100
+// threads; check state via the head commit's statusCheckRollup, paginated
+// past 100 contexts (gh pr view --json statusCheckRollup is GraphQL too, but
+// its query and page size are gh's, not this file's).
 //
 // Exit codes:
 //   0  a watched event happened; the output names it (new review, comment
@@ -31,7 +34,7 @@ type Watched = (typeof WATCHABLE)[number];
 const DEFAULT_UNTIL = "comment,review";
 const DEFAULT_INTERVAL_SECONDS = 60;
 // The polling budget floor (SKILL.md, Polling Budget): faster polling only
-// spends the shared 5000-requests-per-hour bucket; humans reply no sooner.
+// spends the shared rate bucket; humans reply no sooner.
 const MIN_INTERVAL_SECONDS = 60;
 const DEFAULT_TIMEOUT_SECONDS = 1800;
 const GH_CALL_TIMEOUT_MS = 60_000;
@@ -39,8 +42,9 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 // A failed poll retries sooner than the interval: transient API errors get
 // bounded retries, not a full silent interval each.
 const POLL_RETRY_SECONDS = 2;
-// 100 threads per page; a PR with >5000 threads is a broken measurement.
-const MAX_THREAD_PAGES = 50;
+// 100 threads or check contexts per page; a PR with >5000 of either is a
+// broken measurement.
+const MAX_PAGES = 50;
 
 const USAGE = [
   "usage: wait-for-pr-event.mts <pr-number> [--until <set>] [--interval <sec>] [--timeout <sec>] [--repo <owner/name>]",
@@ -266,39 +270,148 @@ function parsePrPage(raw: string): PrPage {
   };
 }
 
-function readChecks(repo: string, prNumber: number, budgetEndsAt: number): Map<string, CheckState> {
-  const raw = gh(
-    ["pr", "view", String(prNumber), "--repo", repo, "--json", "statusCheckRollup"],
-    budgetEndsAt,
-  );
-  const parsed = parseJson(raw, "gh pr view");
-  // The field must be PRESENT: a response missing it is a broken read, not a
-  // PR with no checks (null and [] are how gh renders those).
-  if (!isRecord(parsed) || !("statusCheckRollup" in parsed)) {
-    throw new GhError("gh pr view: response carries no statusCheckRollup field");
+// The rollup of the PR's HEAD commit: a force-push moves the head, and the
+// checks of the old head vanish from it, which diffDeltas reports.
+const CHECKS_QUERY = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      commits(last: 1) {
+        nodes { commit { oid statusCheckRollup { contexts(first: 100) {
+          nodes {
+            __typename
+            ... on CheckRun { name conclusion checkSuite { workflowRun { workflow { name } } } }
+            ... on StatusContext { context state }
+          }
+          pageInfo { hasNextPage endCursor }
+        } } } }
+      }
+    }
   }
-  const rollup = parsed.statusCheckRollup;
-  const checks = new Map<string, CheckState>();
-  if (rollup === null) return checks;
-  if (!Array.isArray(rollup)) throw new GhError("gh pr view: statusCheckRollup is not an array");
-  for (const entry of rollup) {
+}`;
+
+// Later pages read the commit the first page named: commits(last: 1) is
+// resolved on every request, so a force-push between pages would otherwise
+// mix two heads' contexts into one snapshot.
+const CHECKS_PAGE_QUERY = `
+query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String!) {
+  repository(owner: $owner, name: $name) {
+    object(oid: $oid) { ... on Commit { statusCheckRollup { contexts(first: 100, after: $cursor) {
+      nodes {
+        __typename
+        ... on CheckRun { name conclusion checkSuite { workflowRun { workflow { name } } } }
+        ... on StatusContext { context state }
+      }
+      pageInfo { hasNextPage endCursor }
+    } } } }
+  }
+}`;
+
+interface ChecksPage {
+  /** the head commit, named by the first page only */
+  oid: string | null;
+  checks: [string, CheckState][];
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+function parseChecksPage(raw: string, first: boolean): ChecksPage {
+  const repository = get(get(parseJson(raw, "gh api graphql"), "data"), "repository");
+  let commit: unknown;
+  if (first) {
+    const pr = get(repository, "pullRequest");
+    if (pr === null || pr === undefined) {
+      throw new GhError("GraphQL response has no pullRequest (wrong repo or PR number?)");
+    }
+    const commits = get(get(pr, "commits"), "nodes");
+    if (!Array.isArray(commits) || commits.length !== 1) {
+      throw new GhError("GraphQL response: commits(last: 1).nodes is not a one-element array");
+    }
+    commit = get(commits[0], "commit");
+  } else {
+    commit = get(repository, "object");
+  }
+  // The rollup field must be PRESENT: a response without it is a broken
+  // read, not a commit with no checks (null is how GraphQL renders that).
+  if (!isRecord(commit) || !("statusCheckRollup" in commit)) {
+    throw new GhError("GraphQL response: commit carries no statusCheckRollup field");
+  }
+  const oid = first ? requireString(get(commit, "oid"), "head commit oid") : null;
+  const rollup = commit.statusCheckRollup;
+  if (rollup === null) return { oid, checks: [], hasNextPage: false, endCursor: null };
+  const contexts = get(rollup, "contexts");
+  const nodes = get(contexts, "nodes");
+  if (!Array.isArray(nodes)) {
+    throw new GhError("GraphQL response: statusCheckRollup.contexts.nodes is not an array");
+  }
+  const pageInfo = get(contexts, "pageInfo");
+  const hasNextPage = get(pageInfo, "hasNextPage");
+  if (typeof hasNextPage !== "boolean") {
+    throw new GhError("GraphQL response: contexts.pageInfo.hasNextPage is not a boolean");
+  }
+  const endCursor = get(pageInfo, "endCursor");
+  const checks = nodes.map((entry): [string, CheckState] => {
+    const kind = requireString(get(entry, "__typename"), "context __typename");
     // CheckRun rows carry name+conclusion, StatusContext rows context+state.
     const name = get(entry, "name") ?? get(entry, "context");
     if (typeof name !== "string" || name === "") {
-      throw new GhError("gh pr view: a statusCheckRollup entry has neither name nor context");
+      throw new GhError("GraphQL response: a rollup context has neither name nor context");
     }
-    const typename = get(entry, "__typename");
-    const kind = typeof typename === "string" ? typename : "CheckRun";
-    // gh renders the owning workflow for CheckRun rows; two workflows can
-    // expose the same job name, and one must never mask the other.
-    const workflow = get(entry, "workflowName");
+    // Two workflows can expose the same job name, and one must never mask
+    // the other; external check runs (no workflowRun) get the empty workflow.
+    const workflow = get(get(get(get(entry, "checkSuite"), "workflowRun"), "workflow"), "name");
     const workflowName = typeof workflow === "string" ? workflow : "";
     const conclusion = get(entry, "conclusion") ?? get(entry, "state");
-    checks.set(`${kind}:${workflowName}:${name}`, {
-      name: workflowName === "" ? name : `${workflowName}:${name}`,
-      conclusion:
-        typeof conclusion === "string" && conclusion !== "" ? conclusion.toLowerCase() : "pending",
-    });
+    return [
+      `${kind}:${workflowName}:${name}`,
+      {
+        name: workflowName === "" ? name : `${workflowName}:${name}`,
+        conclusion:
+          typeof conclusion === "string" && conclusion !== ""
+            ? conclusion.toLowerCase()
+            : "pending",
+      },
+    ];
+  });
+  return {
+    oid,
+    checks,
+    hasNextPage,
+    endCursor: typeof endCursor === "string" ? endCursor : null,
+  };
+}
+
+function readChecks(repo: string, prNumber: number, budgetEndsAt: number): Map<string, CheckState> {
+  const [owner, name] = repo.split("/") as [string, string];
+  const checks = new Map<string, CheckState>();
+  let next: { oid: string; cursor: string } | null = null;
+  for (let pageCount = 1; ; pageCount += 1) {
+    if (pageCount > MAX_PAGES) {
+      throw new GhError(`check-context pagination did not end after ${MAX_PAGES} pages`);
+    }
+    const [query, ...target]: string[] =
+      next === null
+        ? [CHECKS_QUERY, "-F", `number=${prNumber}`]
+        : [CHECKS_PAGE_QUERY, "-f", `oid=${next.oid}`, "-F", `cursor=${next.cursor}`];
+    const args = [
+      "api",
+      "graphql",
+      "-f",
+      `query=${query}`,
+      "-F",
+      `owner=${owner}`,
+      "-F",
+      `name=${name}`,
+    ];
+    const page = parseChecksPage(gh([...args, ...target], budgetEndsAt), next === null);
+    for (const [key, state] of page.checks) checks.set(key, state);
+    if (!page.hasNextPage) break;
+    if (page.endCursor === null) {
+      throw new GhError("GraphQL response: contexts hasNextPage without an endCursor");
+    }
+    const headOid: string | null = next === null ? page.oid : next.oid;
+    if (headOid === null) throw new GhError("unreachable: the first rollup page carried no oid");
+    next = { oid: headOid, cursor: page.endCursor };
   }
   return checks;
 }
@@ -311,8 +424,8 @@ function readSnapshot(repo: string, prNumber: number, budgetEndsAt: number): Sna
   let threadComments = 0;
   let cursor: string | null = null;
   for (let pageCount = 1; ; pageCount += 1) {
-    if (pageCount > MAX_THREAD_PAGES) {
-      throw new GhError(`review-thread pagination did not end after ${MAX_THREAD_PAGES} pages`);
+    if (pageCount > MAX_PAGES) {
+      throw new GhError(`review-thread pagination did not end after ${MAX_PAGES} pages`);
     }
     const args = [
       "api",
