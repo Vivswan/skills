@@ -1,5 +1,5 @@
-# Repo-owned: written once by Vivswan/repo-platform, never
-# overwritten by a later sync. Regenerate files that must ride in the
+# Repo-owned: seeded once by the fleet sync, never overwritten.
+# Regenerate files that must ride in the
 # release commit here; releases never wait on this path. Pushes made with
 # github.token do NOT re-trigger the PR's checks; REPO_PLATFORM_TOKEN does.
 

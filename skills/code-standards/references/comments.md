@@ -18,7 +18,7 @@ Never a comment: what the code does, its types, its control flow, its history, t
 
 - One idea per sentence. Short sentences. Plain words.
 - A multi-line comment is a list of separate facts, one per line, never a paragraph that wraps.
-- Usual length: one to three lines. Ceiling: 10 lines per block and 25 for a file header, the numbers repo-platform's file-size check warns at.
+- Usual length: one to three lines. Ceiling: 10 lines per block and 25 for a file header, the numbers the fleet's file-size check warns at.
 - Text that is not the author's to shape (a license header, an upstream-shaped block) is exempt from the ceiling; mark it the way the check accepts, a `comment-cap: ignore <reason>` line inside the block.
 - A reader skims it and gets the point; a comment that needs a second read is rewritten.
 
