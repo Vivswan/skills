@@ -115,7 +115,15 @@ after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live ver
 - **Files:** `scripts/sweep.mts` (the probe), `tests/sweep-script.test.ts` (the two cases).
 
 </details>
+
+BEGIN_COMMIT_OVERRIDE
+fix(sweep)!: extend the probe while the build lock is held
+
+BREAKING CHANGE: `--probe-timeout` is removed; the probe extends itself while the build lock is held.
+END_COMMIT_OVERRIDE
 ````
+
+The closing block is the commit-override rule below at work: this specimen's merge carries a `BREAKING CHANGE` footer, so the body ends with the message release-please reads.
 
 ### Contract or documentation PR
 
@@ -159,6 +167,18 @@ For every form:
 - Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above. The diff carries the detail; part one never narrates the implementation process, reduction history, line counts, transient status, future work, or the entire diff. Reviewer guidance, scope caveats, and gate or review round counts go in part two or nowhere.
 
 **Redact captured output before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
+
+**Release tooling reads the body.** A squash-merge prefills its commit message from the PR body, and release-please's conventional-commit parser fails on a markdown-heavy message: it falls back to the subject and drops every footer (three `BREAKING CHANGE` footers were lost that way in one release). The parser needs a clean message, and the body is not one.
+
+A PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) therefore ends its body with a plain block, after the details element and outside it, that release-please reads instead of the squash message:
+
+```text
+BEGIN_COMMIT_OVERRIDE
+<conventional subject line>
+
+<one footer per line, consecutive>
+END_COMMIT_OVERRIDE
+```
 
 ## Issues: Same Principle
 
