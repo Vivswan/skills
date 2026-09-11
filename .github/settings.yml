@@ -1,5 +1,5 @@
 ---
-# This repository's OWN settings, applied by Vivswan/repo-platform's
+# This repository's OWN settings, applied by the fleet's
 # central settings-repos run (and by the settings-sync workflow on pushes
 # to this file, when the repo carries its own REPO_PLATFORM_TOKEN; without
 # one that self-apply skips with a warning).
@@ -7,7 +7,7 @@
 # Rendered ONCE by the settings-sync module, repo-owned from then on:
 # the sync never rewrites or deletes this file. The fleet's own
 # settings (the shared repository defaults, the labels and rulesets this
-# repository's modules need) are NOT in this file - repo-platform merges
+# repository's modules need) are NOT in this file - the fleet merges
 # them per repository at apply time and layers this file OVER them:
 #
 # - Keys here win over the fleet defaults; objects merge key by key.
