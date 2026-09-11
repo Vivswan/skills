@@ -66,7 +66,7 @@ A comment is read by humans and agents, the human first. It carries only what th
   - the one input that motivated a guard
 - **Never a comment:** what the code does, its types, its control flow, its history, the alternatives. History and alternatives go in the commit message.
 - **Shape:** one idea per sentence, short sentences, plain words. A multi-line comment is a list of separate facts, one per line, never a paragraph that wraps.
-- **Ceiling:** usual length one to three lines; hard cap 10 lines per block and 25 for a file header, the fleet caps.
+- **Ceiling:** usual length one to three lines; at most 10 lines per block and 25 for a file header, the numbers the fleet's file-size check warns at.
 - **Test, before writing or keeping one:** "What does this say that the code does not?" and "Could a tired human read it in one pass?" Fail either: rewrite or delete.
 - A comment grown into a paragraph holds narration (delete it) or a workaround defense (fix the code, not the comment).
 
