@@ -1,3 +1,18 @@
+# Contributing to skills
+
+Thanks for contributing. Every change lands through a pull request; this page covers what a change goes through and how a skill is laid out.
+
+## Pull requests
+
+- Open a PR as a draft and flip it ready when it converges. PRs are squash-merged, so the PR title becomes the commit subject.
+- PR titles and commit subjects are [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), for example `feat: add X`; the `pr-title` check validates the title.
+- Run `bun run check` before pushing. CI runs the same command and gates on the `all-green` check.
+- Plain ASCII punctuation only: no curly quotes, em-dashes, or invisible unicode.
+- By opening a pull request, or offering code in an issue or review for inclusion, you agree to the Contributions section of [LICENSE.md](LICENSE.md).
+
+## Security
+
+Never report a vulnerability in an issue or pull request. Use GitHub's private "Report a vulnerability" route on the Security tab.
 
 ## Creating a skill
 

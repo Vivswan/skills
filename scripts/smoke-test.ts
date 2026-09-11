@@ -447,7 +447,7 @@ function checkLicenseIdentity(
     fail(`README.md: License section must mention ${LICENSE_NAME}`);
   }
 
-  // The version lives in LICENSE.md alone (the template sync bumps it), so the
+  // The version lives in LICENSE.md alone (the repo-platform sync bumps it), so the
   // README names the license without a version and the heading must carry one.
   if (!LICENSE_HEADING.test(rootLicense)) {
     fail(`LICENSE.md: must carry the heading '# ${LICENSE_NAME} <version>'`);

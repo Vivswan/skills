@@ -5,7 +5,7 @@
 # one that self-apply skips with a warning).
 #
 # Rendered ONCE by the settings-sync module, repo-owned from then on:
-# template sync never rewrites or deletes this file. The fleet's own
+# the sync never rewrites or deletes this file. The fleet's own
 # settings (the shared repository defaults, the labels and rulesets this
 # repository's modules need) are NOT in this file - repo-platform merges
 # them per repository at apply time and layers this file OVER them:
