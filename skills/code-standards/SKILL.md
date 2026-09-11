@@ -137,7 +137,7 @@ Full detail: `references/artifacts.md`.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
-- Comments a reader cannot take in one pass: a paragraph that wraps, several ideas in one sentence, a block over 10 lines or a header over 25.
+- Comments a reader cannot take in one pass: a paragraph that wraps, several ideas in one sentence, a block over 10 lines or a header over 25. The ceiling exemption in `references/comments.md` applies.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
