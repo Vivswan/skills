@@ -114,16 +114,17 @@ after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live ver
 - **Proof detail:** one new test pins the extension while the lock is held, the other the plain 120s verdict without it.
 - **Files:** `scripts/sweep.mts` (the probe), `tests/sweep-script.test.ts` (the two cases).
 
-</details>
-
 BEGIN_COMMIT_OVERRIDE
 fix(sweep)!: extend the probe while the build lock is held
 
 BREAKING CHANGE: `--probe-timeout` is removed; the probe extends itself while the build lock is held.
+The probe's dead verdict can arrive up to 300s after start instead of at 120s; callers that raced it must re-read.
 END_COMMIT_OVERRIDE
+
+</details>
 ````
 
-The closing block is the commit-override rule below at work: this specimen's merge carries a `BREAKING CHANGE` footer, so the body ends with the message release-please reads.
+The block closing the details section is the commit-override rule below at work: this specimen's merge carries two breaks, so one `BREAKING CHANGE` footer lists them on two lines.
 
 ### Contract or documentation PR
 
@@ -168,15 +169,15 @@ For every form:
 
 **Redact captured output before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
 
-**Release tooling reads the body.** A squash-merge prefills its commit message from the PR body, and release-please's conventional-commit parser fails on a markdown-heavy message: it falls back to the subject and drops every footer (three `BREAKING CHANGE` footers were lost that way in one release). The parser needs a clean message, and the body is not one.
+**Release tooling reads the body.** A squash-merge prefills its commit message from the PR body; when release-please parses that commit, it replaces the message with the body's `BEGIN_COMMIT_OVERRIDE` block, and a commit whose message it cannot parse is dropped from the changelog. It keeps ONE `BREAKING CHANGE` note per commit (the last footer wins), so several breaks go into one footer whose value spans several lines, one break per line, or into one `BEGIN_NESTED_COMMIT` / `END_NESTED_COMMIT` block per break.
 
-A PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) therefore ends its body with a plain block, after the details element and outside it, that release-please reads instead of the squash message:
+The block is written for a tool, so it is the last element inside the Technical details section; release-please matches the markers inside a `<details>` element. A PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) closes its details section with:
 
 ```text
 BEGIN_COMMIT_OVERRIDE
 <conventional subject line>
 
-<one footer per line, consecutive>
+<footer>: <value, one line per break>
 END_COMMIT_OVERRIDE
 ```
 
