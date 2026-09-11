@@ -54,13 +54,38 @@ Specimen: an extractor had fifteen tests each asserting one key of the returned 
 
 Full detail: `references/tests.md`.
 
-### Comments only for what code cannot show
+### Comments carry only what the code cannot show
 
-Comments exist only for non-obvious constraints, cross-file invariants, and external-system quirks; the code is the single source of truth.
+A comment is read by humans and agents, the human first. It carries only what the code cannot show, in a shape a reader skims in one pass; the code is the single source of truth.
 
-- Keep them SHORT: one to three lines.
-- Delete comments that restate the code outright.
-- A comment grown into a paragraph holds either narration (delete it) or a workaround defense (fix the code, not the comment).
+- **Content**, the kinds a comment may carry:
+  - the reason a choice was made when the obvious choice was rejected
+  - an invariant another file relies on; name the file
+  - an external system's quirk and what breaks without the workaround
+  - a consequence of changing the line that is not visible here
+  - the one input that motivated a guard
+- **Never a comment:** what the code does, its types, its control flow, its history, the alternatives. History and alternatives go in the commit message.
+- **Shape:** one idea per sentence, short sentences, plain words. A multi-line comment is a list of separate facts, one per line, never a paragraph that wraps.
+- **Ceiling:** usual length one to three lines; at most 10 lines per block and 25 for a file header, the numbers the fleet's file-size check warns at.
+- **Test, before writing or keeping one:** "What does this say that the code does not?" and "Could a tired human read it in one pass?" Fail either: rewrite or delete.
+- A comment grown into a paragraph holds narration (delete it) or a workaround defense (fix the code, not the comment).
+
+Specimen, the header above a regex that detects generated files:
+
+```text
+BEFORE, one paragraph, wrapped:
+/** A comment in the file's first lines declaring it generated: the common
+ *  phrasings, anywhere on the line. Only comment lines count, so a string
+ *  literal holding "do not edit" is not a header; prose that merely uses the
+ *  word "generate" ("copies generated from the manifests") matches no
+ *  phrasing; and a generator's path is no signal at all, since hand-written
+ *  headers name the generators they serve. */
+
+AFTER, three facts, one per line:
+/** Only comment lines count: a string holding "do not edit" is data.
+ *  The word "generate" alone is not a signal; hand-written headers use it.
+ *  A generator's path is not a signal either: hand-written headers name the generators they serve. */
+```
 
 Full detail, including the TODO ban: `references/comments.md`.
 
@@ -111,7 +136,9 @@ Full detail: `references/artifacts.md`.
 - Tests that assert only a shape, a type, or that something exists; hand-written test functions that differ only along one input axis and should be one parametrized case list; a guard test never seen failing on the bug it guards.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
-- Comments that restate the code, and paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
+- Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
+- Comments a reader cannot take in one pass: a paragraph that wraps, several ideas in one sentence, a block over 10 lines or a header over 25. The ceiling exemption in `references/comments.md` applies.
+- Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md edits that duplicate implementation detail derivable from the code.
@@ -132,6 +159,6 @@ Triage findings against the standards above; each criterion maps to one.
 
 - `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort
 - `references/tests.md`: the minimum standard for tests, what counts as weak, proving a guard test with a negative control
-- `references/comments.md`: the comment rules in full, the TODO ban, planning references
+- `references/comments.md`: what a good comment carries, its shape and ceiling, the two-question test, the specimen, the TODO ban, planning references
 - `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging
 - `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions
