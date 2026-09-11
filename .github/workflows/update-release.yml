@@ -1,0 +1,33 @@
+# Repo-owned: written once by Vivswan/repo-platform, never
+# overwritten by a later sync. Packaging, asset uploads, and note edits
+# go here; publishing waits for every job, and every asset uploaded here
+# is attested at publish time.
+
+name: Update Release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The draft release's tag (forced at creation, so it is checkout-able before publication)
+        required: true
+        type: string
+
+jobs:
+  update-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # also what makes the draft visible to gh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Update the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        # Repository-specific release preparation goes here, e.g.:
+        #   ./build.sh
+        #   gh release upload "$RELEASE_TAG" ./artifact --clobber
+        run: echo "nothing to add to $RELEASE_TAG yet"
