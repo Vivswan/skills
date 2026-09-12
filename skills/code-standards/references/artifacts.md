@@ -4,15 +4,21 @@ Standards for the artifacts around the code: agent instruction files and commit/
 
 ## Lean AGENTS.md
 
-Keep AGENTS.md (and CLAUDE.md) reduced to the essentials of the project: what it is, the non-negotiable conventions, safety rules, and pointers to where things live. Implementation details do not belong there: they can be seen in the code directly, and code is always the single source of truth.
+AGENTS.md (and CLAUDE.md) is the project's guiding principles: what it is, the conventions the owner wants kept, safety rules, toolchain entry points, and pointers. Nothing an agent can deduce from the code or another file belongs there; code is the single source of truth.
 
-Why: duplicated detail in agent docs drifts from the code and then misleads every future session; a pointer cannot drift.
+Why: duplicated detail drifts from the code and then misleads every future session; a pointer cannot drift. A long file is also skimmed, not read, so the rules that matter get lost among the ones that do not.
 
 How to apply:
 
-- When writing or reviewing an AGENTS.md, cut anything an agent could learn by reading the code, docstrings, or dedicated docs: architecture internals, per-module behavior, data-structure layouts. Keep a one-line pointer instead.
-- Keep: project purpose, toolchain entry points, conventions CI enforces, safety constraints, commit/review gates, and reading pointers.
-- The same principle applies to prose docs generally: describe intent and invariants, link to code for mechanics. A copy that must not drift needs a guard test; a pointer needs nothing.
+- Cut anything a specific file answers, even when it is essential to the project: layout trees (`ls` shows them), the commands block (the package manifest and the hooks are the source), naming conventions (the linter carries them), commit-format rules a release tool enforces, checklists a test enforces, per-module behavior, data layouts, history. Keep a one-line pointer to where it lives.
+- Keep only what no file answers: purpose, hard rules, decisions a reader would otherwise reverse (one file pointer each), safety constraints, release rules.
+- Short bullets a human skims. No long paragraphs, no walls of text.
+- Delete any test that pins AGENTS.md text. Guidance is not a fixture; a test that checks paths a doc names still exist is a stale-pointer guard and stays.
+- An AGENTS.md-only change skips the review loop: no codex or Copilot round, `git commit --no-verify`, PR opened ready, CI the only gate, the owner merges.
+- When a file already meets this, leave it and say so.
+- The same principle applies to prose docs generally: describe intent and invariants, link to code for mechanics.
+
+Specimen: one repository's tail carried a directory tree, a 17-item authoring checklist the smoke test already enforced, and release notes, 66 lines. It became one line on what the repository is, five principles, and two working rules; the checklist facts that lived only there moved to the authoring doc; the smoke-test assertion on the file's text was deleted.
 
 ## Commit messages carry content only
 

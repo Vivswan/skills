@@ -141,7 +141,7 @@ function checkCodexManifestVersionBan(codex: CodexManifest): void {
   if ("version" in codex.plugin) {
     fail(
       `${rel(codex.path)}: unexpected 'version' field -- the single source of truth is` +
-        " marketplace.json metadata.version (see AGENTS.md > Releases)",
+        " marketplace.json metadata.version (see docs/authoring.md)",
     );
   }
 }
@@ -199,7 +199,7 @@ function checkRootManifestVersion(manifest: RootManifest): void {
   if ("version" in manifest.raw) {
     fail(
       ".claude-plugin/plugin.json: unexpected 'version' field -- the single source of truth is" +
-        " marketplace.json metadata.version (see AGENTS.md > Releases)",
+        " marketplace.json metadata.version (see docs/authoring.md)",
     );
   }
 }
@@ -360,17 +360,6 @@ function checkAuthorIdentity(
     .find((line) => line.includes("Copyright") && line.includes(authorName));
   if (copyright === undefined) {
     fail(`LICENSE.md: copyright line must name '${authorName}'`);
-  }
-
-  const agents = readTextFile(join(ROOT, "AGENTS.md"));
-  const commitRulesHeading = "### Commit rules";
-  const headingIndex = agents.indexOf(commitRulesHeading);
-  if (headingIndex === -1) fail("AGENTS.md: missing the '### Commit rules' section");
-  const afterHeading = agents.slice(headingIndex + commitRulesHeading.length);
-  const nextHeading = afterHeading.search(/^#{1,3} /m);
-  const commitRules = nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
-  if (!commitRules.includes(authorEmail)) {
-    fail(`AGENTS.md: Commit rules section must state the Git author email '${authorEmail}'`);
   }
 }
 

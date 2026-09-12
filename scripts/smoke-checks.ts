@@ -9,15 +9,14 @@
 import type { Frontmatter } from "./lib";
 import { errorMessage, fail, isRecord, KEBAB_CASE } from "./lib";
 
-// The frontmatter description is a trigger, not a summary (AGENTS.md >
-// "Creating a new skill"); make the convention self-enforcing. A bare
+// The frontmatter description is a trigger, not a summary; make the convention self-enforcing. A bare
 // "Use when " with nothing after it is a summary-shaped dodge, not a trigger.
 export function checkDescriptionTriggerForm(displayPath: string, frontmatter: Frontmatter): void {
   const description = frontmatter.description;
   if (typeof description !== "string" || !/^Use when \S/.test(description)) {
     fail(
       `${displayPath}: description must be trigger-form, starting with "Use when ..."` +
-        " followed by the actual trigger (see AGENTS.md > Creating a new skill)",
+        " followed by the actual trigger (see docs/authoring.md)",
     );
   }
 }
@@ -86,7 +85,7 @@ export function checkMarketplacePluginVersionBan(
     if ("version" in plugin) {
       fail(
         `${displayPath}: plugin '${String(plugin.name)}' carries a 'version' field -- the single` +
-          " source of truth is marketplace.json metadata.version (see AGENTS.md > Releases)",
+          " source of truth is marketplace.json metadata.version (see docs/authoring.md)",
       );
     }
   }
