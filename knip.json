@@ -1,0 +1,17 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "entry": [
+    "scripts/*.ts",
+    ".githooks/**/*.{ts,mts}",
+    "skills/*/scripts/**/*.{ts,mts}",
+    "tests/**/*.{ts,mts}"
+  ],
+  "project": [
+    "scripts/**/*.ts",
+    ".githooks/**/*.{ts,mts}",
+    "skills/*/scripts/**/*.{ts,mts}",
+    "tests/**/*.{ts,mts}"
+  ],
+  "ignoreBinaries": ["uvx"]
+}
