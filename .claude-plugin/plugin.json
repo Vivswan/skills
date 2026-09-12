@@ -11,6 +11,7 @@
   "license": "SEE LICENSE IN LICENSE.md",
   "keywords": ["agent-skills", "natural-writing", "code-review", "type-safety", "orchestration"],
   "skills": [
+    "./skills/architecture-page",
     "./skills/code-standards",
     "./skills/codex-browser-fix",
     "./skills/craft-skills-and-memories",

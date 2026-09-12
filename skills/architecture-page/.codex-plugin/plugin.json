@@ -1,0 +1,36 @@
+{
+  "name": "architecture-page",
+  "description": "One layering declaration, a two-way import lint, a generated module map, and a page test that keeps every architecture diagram naming real code.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/architecture-page",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "architecture",
+    "import-layering",
+    "mermaid",
+    "docs",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Architecture Page",
+    "shortDescription": "Architecture pages and import layering that cannot rot.",
+    "longDescription": "Declares a repository's import layering once in architecture.yml, lints the source tree against it in both directions (forbidden imports and stale allowances both fail), renders the module map from the same declaration into the docs page, and checks that every hand-authored diagram names files that exist, symbols they export, and a test that demonstrates the concept.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/architecture-page",
+    "defaultPrompt": [
+      "Add an architecture page with a module map for this repository.",
+      "Declare the import layering of src/ and lint it.",
+      "The architecture diagram names a function that was renamed; fix the page."
+    ],
+    "brandColor": "#0F766E"
+  }
+}
