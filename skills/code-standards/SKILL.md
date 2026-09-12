@@ -107,7 +107,16 @@ Full detail: `references/comments.md`.
 
 ### Lean AGENTS.md
 
-Agent instruction files (AGENTS.md, CLAUDE.md) hold only project essentials: purpose, toolchain entry points, conventions CI enforces, safety constraints, and pointers. Cut anything an agent could learn by reading the code and keep a one-line pointer instead: duplicated detail drifts and then misleads; a pointer cannot drift.
+AGENTS.md (and CLAUDE.md) holds the project's guiding principles and nothing an agent can deduce elsewhere. Code is the source of truth; implementation detail lives there. The same shape rule covers the other repository-level Markdown GitHub reads (README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT); product documentation, changelogs, and license texts are out of scope.
+
+- **Keep:** what the project is, the conventions the owner wants kept, safety constraints, the toolchain entry points, and pointers.
+- **Cut:** anything a specific file answers, even when essential: layout trees, the commands block (the manifest and hooks are the source), naming conventions a linter carries, checklists a test enforces, per-module behavior. A one-line pointer replaces each.
+- **Shape:** short bullets a human skims; no long paragraphs, no walls of text.
+- **No tests pin it.** A test asserting AGENTS.md text turns guidance into a fixture; delete it.
+- **No review loop.** A change touching only these repository-level Markdown files gets no codex or Copilot round and is committed with `git commit --no-verify`; the PR opens ready and its CI is the only gate.
+- Already lean: leave it alone and say so.
+
+Specimen: a tail of 66 lines (a layout tree, a 17-item authoring checklist the smoke test enforced, release notes) became 15: one line on what the repo is, five principles, two working rules; the checklist moved to the authoring doc it was duplicating.
 
 Full detail: `references/artifacts.md`.
 
@@ -137,7 +146,7 @@ Full detail: `references/artifacts.md`.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
-- AGENTS.md or CLAUDE.md edits that duplicate implementation detail derivable from the code.
+- AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
 - Wall-of-text prose in docs, reports, or PR text where bullets, tables, or numbered steps would scan better.
 

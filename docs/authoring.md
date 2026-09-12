@@ -38,7 +38,9 @@ This keeps the repo compatible with:
 7. Update the root [`README.md`](../README.md) catalog: the Available Skills entry under the matching invocation heading, and a node in the mermaid skill-reference graph with edges only for hand-offs the skill's text actually makes.
 8. List the new skill in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json).
 9. Add the skill to the `skill` dropdown in [`.github/ISSUE_TEMPLATE/bug_report.yml`](../.github/ISSUE_TEMPLATE/bug_report.yml).
-10. Run `bun run check`.
+10. Ship a byte-identical copy of the root `LICENSE.md` in the skill folder, set frontmatter `metadata.author` to the plugin author's first name, and never set `metadata.internal` or add a `metadata.json` (the install CLI drops both silently).
+11. Explicit-invocation-only skills set `disable-model-invocation: true` in the frontmatter AND `policy.allow_implicit_invocation: false` in `agents/openai.yaml`; the README entry then goes under "Invoked by you", otherwise under "Automatic".
+12. Run `bun run check`; the smoke test enforces every item above plus frontmatter limits (`name` <= 64 characters, `description` <= 1024), the codex manifest's `homepage` and `keywords`, and `interface.short_description` at 25 to 64 characters.
 
 ## Contributing Criteria to Reviews
 
@@ -83,6 +85,7 @@ skills/my-skill/
 - `.codex-plugin/plugin.json` exists and parses as JSON
 - `agents/openai.yaml` exists and its interface mirrors the codex manifest
 - `.claude-plugin/plugin.json` lists the skill directory, and `.claude-plugin/marketplace.json` stays consistent with it
+- the catalog version lives only in `.claude-plugin/marketplace.json` (`metadata.version`); no `version` in any `SKILL.md`, `.codex-plugin/plugin.json`, or `.claude-plugin/plugin.json`
 - optional MCP files parse as JSON when present
 
 ## Template Notes
