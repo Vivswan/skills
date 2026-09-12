@@ -56,7 +56,7 @@ Full detail: `references/tests.md`.
 
 ### Comments carry only what the code cannot show
 
-A comment is read by humans and agents, the human first. It carries only what the code cannot show, in a shape a reader skims in one pass; the code is the single source of truth.
+A comment is read by humans and agents, the human first; the code is the single source of truth.
 
 - **Content**, the kinds a comment may carry:
   - the reason a choice was made when the obvious choice was rejected
@@ -65,31 +65,24 @@ A comment is read by humans and agents, the human first. It carries only what th
   - a consequence of changing the line that is not visible here
   - the one input that motivated a guard
 - **Never a comment:** what the code does, its types, its control flow, its history, the alternatives. History and alternatives go in the commit message.
-- **Shape:** one idea per sentence, short sentences, plain words. A multi-line comment is a list of separate facts, one per line, never a paragraph that wraps. Lines stay at or under 100 characters; a fact that runs longer continues on the next line, split at a clause boundary.
-- **Never pack:** a block is never shortened by packing prose to the line width. A wall of text under the cap is worse than the original, and a `comment-cap: ignore` marker on a packed block is the worst of both.
-- **Ceiling:** usual length one to three lines; at most 10 lines per block and 25 for a file header, the numbers the fleet's file-size check warns at. Exempt only text that is not the author's to shape (a license header, an upstream block), marked `comment-cap: ignore <reason>`; a block still over the cap after honest cutting is reported to the lead, never marked.
+- **Tell first, then show.** One or two sentences say what the code cannot show; a block follows only when it shows the fact faster: an arrow flow for a sequence, aligned rows for facts that share a shape. Uniform shape is the wall: a paragraph, or a stack of sentences or fragments one per line, both fail.
+- **No limits here.** Length and width caps are the fleet's file-size check. Never pack prose to fit a cap; cut honestly.
 - **Test, before writing or keeping one:** "What does this say that the code does not?" and "Could a tired human read it in one pass?" Fail either: rewrite or delete.
-- A comment grown into a paragraph holds narration (delete it) or a workaround defense (fix the code, not the comment).
 
-Specimen, the header above a regex that detects generated files:
+Specimen, a stack of eight one-fact sentences rewritten as tell, then rows:
 
-```text
-BEFORE, one paragraph, wrapped:
-/** A comment in the file's first lines declaring it generated: the common
- *  phrasings, anywhere on the line. Only comment lines count, so a string
- *  literal holding "do not edit" is not a header; prose that merely uses the
- *  word "generate" ("copies generated from the manifests") matches no
- *  phrasing; and a generator's path is no signal at all, since hand-written
- *  headers name the generators they serve. */
-
-AFTER, three facts, one per line; the third continues at its colon:
-/** Only comment lines count: a string holding "do not edit" is data.
- *  The word "generate" alone is not a signal; hand-written headers use it.
- *  A generator's path is not a signal either:
- *  hand-written headers name the generators they serve. */
+```ts
+/**
+ * The ONE "entry uses this credential field" judgment; it judges the ENTRY alone, so it errs toward "uses it".
+ * Wire narrowing still drops what cannot ride, so consumers gate refusals, never the send.
+ *
+ * Authorization-named header resolved  -> skips the OAuth exchange
+ * X-API-Key-named header resolved      -> owns that carrier
+ * declared header, value unknown       -> lowers no other field's judgment
+ */
 ```
 
-Full detail, including the TODO ban: `references/comments.md`.
+Full detail, the before/after specimens, and the TODO ban: `references/comments.md`.
 
 ### No barrel files or pass-through functions
 
@@ -139,7 +132,7 @@ Full detail: `references/artifacts.md`.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
-- Comments a reader cannot take in one pass: a paragraph that wraps, several ideas in one sentence, prose packed to the line width, a block over 10 lines or a header over 25. Exempt only when the block is text the author does not shape (a license header, an upstream block) and carries a `comment-cap: ignore <reason>` marker.
+- Comments a reader cannot take in one pass: uniform shape (a paragraph, or a stack of sentences or fragments one per line), several ideas in one sentence, prose packed to fit a cap.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
@@ -161,6 +154,6 @@ Triage findings against the standards above; each criterion maps to one.
 
 - `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort
 - `references/tests.md`: the minimum standard for tests, what counts as weak, proving a guard test with a negative control
-- `references/comments.md`: what a good comment carries, its shape and ceiling, the two-question test, the specimen, the TODO ban, planning references
+- `references/comments.md`: what a good comment carries, tell then show, the two-question test, the specimens, the TODO ban, planning references
 - `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging
 - `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions

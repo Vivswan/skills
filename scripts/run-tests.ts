@@ -88,18 +88,12 @@ try {
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
-// A run of zero tests must fail HOWEVER it was reached: bun exits 1 when no
-// test file matches, but exits 0 with "Ran 0 tests" for --pass-with-no-tests
-// and for --only with no .only test - a vacuous green from a test launcher.
-// ANSI color sequences are stripped first (under FORCE_COLOR bun wraps the
-// summary's timing bracket in SGR codes, which would hide a genuine summary
-// and fail a passing run). The match is anchored to a full line-start
-// summary with bun's timing suffix, and the LAST one wins: bun echoes CLI
-// values mid-line in its own diagnostics (-t "Ran 1 test across 1 file. [x]"
-// appears inside an "error: regex ..." line), so an unanchored search could
-// be spoofed into seeing tests that never ran. A missing summary on exit 0
-// fails too, so a bun wording change breaks loudly here instead of silently
-// disarming the guard.
+// bun exits 0 with "Ran 0 tests" under --pass-with-no-tests and --only, so a zero-test run must fail here.
+// The summary match is anchored at a line start: bun echoes CLI values mid-line ("Ran 1 test across 1 file. [x]" inside an error line).
+//
+// FORCE_COLOR wraps the timing bracket in SGR codes  -> stripped first, or a green run would fail
+// several anchored summaries                         -> the LAST is the run's
+// no summary on exit 0                               -> fails, so a bun wording change breaks loudly
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the ESC escape is exactly what is being stripped
 const plain = summary.replace(/\u001b\[[0-9;]*m/g, "");
 const ran = [...plain.matchAll(/(?:^|\n)Ran (\d+) tests? across \d+ files?\. \[/g)].at(-1);
