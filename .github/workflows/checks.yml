@@ -42,8 +42,8 @@ jobs:
           bun-version-file: .bun-version
       - run: bun scripts/cli-discovery-test.ts
 
-  # The validate-skills composite action lives here and the fleet CI calls
-  # it on every skills-hosting repository, so it also runs on this checkout:
+  # The validate-skills composite action lives here and repo-platform's own
+  # ci.yml calls it on its skills directory, so it also runs on this checkout:
   # a regression in the action fails this repository first.
   validate-skills-action:
     runs-on: ubuntu-latest

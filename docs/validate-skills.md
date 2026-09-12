@@ -53,7 +53,7 @@ Structure mode, in the order it reports:
 - Symlinks are rejected anywhere on a validated path, ancestors included. A link can point outside the checkout, so what ships would not be what was validated.
 - The one exception: a marketplace plugin's `source` may pass through in-repo links while its physical path stays inside the repository.
 
-Discovery mode downloads the CLI from the npm registry at the exact version `validate_skills.ts` records in `SKILLS_CLI_VERSION` (a CLI release cannot red a green catalog; the pin moves by hand), makes up to three attempts, and matches each published skill name on word boundaries in the listing. Give it its own job outside the merge gate so a registry hiccup cannot block merges.
+Discovery mode downloads the CLI from the npm registry at the exact version `validate_skills.ts` records in `SKILLS_CLI_VERSION` (a CLI release cannot red a green catalog; the pin moves by hand), makes up to three attempts, and matches each published skill name on word boundaries in the listing. Give it its own job; a caller decides whether discovery gates its merges (repo-platform gates it).
 
 Exit codes:
 

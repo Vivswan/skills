@@ -13,6 +13,7 @@
 
 import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
+import { SKILLS_CLI_VERSION } from "../.github/actions/validate-skills/validate_skills";
 import { checkListing, stripAnsi } from "./cli-discovery-checks";
 import {
   fail,
@@ -50,7 +51,7 @@ function main(): void {
     fail("template/SKILL.md: frontmatter must declare a kebab-case internal skill name");
   }
 
-  const proc = spawnSync("npx", ["-y", "skills", "add", ROOT, "--list"], {
+  const proc = spawnSync("npx", ["-y", `skills@${SKILLS_CLI_VERSION}`, "add", ROOT, "--list"], {
     encoding: "utf-8",
     timeout: 300_000,
   });
