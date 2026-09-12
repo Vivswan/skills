@@ -98,7 +98,7 @@ Or install everything as a Claude Code plugin:
 
 Once installed, a skill fires on its own when its trigger matches the task.
 
-- Explicit-invocation-only skills load only when you invoke them: [`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/).
+Skills marked explicit-invocation-only ([`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/)) load only when you invoke them.
 
 **Examples:**
 
