@@ -109,14 +109,14 @@ export function mermaidFences(markdown: string): Fence[] {
   return readPage(markdown).fences.filter((fence) => fence.mermaid);
 }
 
-interface Page {
+export interface Page {
   lines: readonly string[];
   fences: readonly Fence[];
   /** `lines[i]` when line i is page text, undefined inside any fence: headings, region markers, and demonstration lines are read from here only, so a quoted example never steers the walk. */
   text: ReadonlyArray<string | undefined>;
 }
 
-function readPage(markdown: string): Page {
+export function readPage(markdown: string): Page {
   const lines = normalizedLines(markdown);
   const all = fences(lines);
   const text = lines.map((line, index) =>
@@ -128,8 +128,28 @@ function readPage(markdown: string): Page {
 // A node definition wherever it sits: an id, an opening shape run (`[`, `((`, `{{`, `[/`, `[\`, `>` ...), and what follows it.
 const NODE_DEFINITION = /(?<![\w"-])([A-Za-z_][\w-]*)([[({>]+[/\\]?)(?![-|])/g;
 const QUOTED_LABEL = /^"([^"]*)"[/\\]?[\])}]+/;
+// Edge-label text is not a node: `-->|run()|`, `-- run() -->`, `== run() ==>`, `-. run() .->`.
+// Text-form label text holds no node or arrow character, so `a --- b["x"] --> c` is two bare links, not one label.
+const EDGE_LABEL = /\|[^|\n]*\||(?:--|==|-\.)\s[^\n[\](){}|>=.-]+\s(?:-->|---|==>|===|\.->|\.-)/g;
 // The flowchart header alone is dropped, not its whole line: `flowchart LR; a["x"]` defines a node.
 const FLOWCHART_HEADER = /^\s*(?:flowchart|graph)(?:\s+(?:TB|TD|BT|LR|RL))?\b\s*;?/;
+
+/**
+ * `text` with every edge-label span blanked to spaces, offsets kept. A `|` or
+ * arrow inside a quoted label is label text, so the spans are found on a copy
+ * whose quoted contents are masked, then blanked in the original.
+ */
+function blankEdgeLabels(text: string): string {
+  // Regex offsets are UTF-16 indices; slicing the string keeps that unit, where a
+  // code-point array would shift every span after an astral character.
+  const masked = text.replace(/"[^"\n]*"/g, (quoted) => `"${"_".repeat(quoted.length - 2)}"`);
+  let blanked = text;
+  for (const match of masked.matchAll(EDGE_LABEL)) {
+    const end = match.index + match[0].length;
+    blanked = `${blanked.slice(0, match.index)}${" ".repeat(match[0].length)}${blanked.slice(end)}`;
+  }
+  return blanked;
+}
 
 /** The quoted labels of a mermaid block's nodes; an unquoted label is reported, since the pins cannot read it. */
 export function nodeLabels(mermaid: string): { labels: string[]; problems: string[] } {
@@ -140,10 +160,12 @@ export function nodeLabels(mermaid: string): { labels: string[]; problems: strin
     ? mermaid.replace(FLOWCHART_HEADER, "")
     : mermaid.split("\n").slice(1).join("\n");
   // A `%%` line is a Mermaid comment: a node written there is not drawn, so it is not checked.
-  const body = headed
+  // Blanking keeps every offset, so a reported line is read back from `drawn` as written.
+  const drawn = headed
     .split("\n")
     .map((line) => (line.trimStart().startsWith("%%") ? "" : line))
     .join("\n");
+  const body = blankEdgeLabels(drawn);
   const quotedSpans = [...body.matchAll(/"[^"]*"/g)].map(
     (span) => [span.index, span.index + span[0].length] as const,
   );
@@ -155,7 +177,7 @@ export function nodeLabels(mermaid: string): { labels: string[]; problems: strin
       const lineStart = body.lastIndexOf("\n", match.index) + 1;
       if (!reportedLines.has(lineStart)) {
         reportedLines.add(lineStart);
-        const line = body.slice(lineStart).split("\n")[0] ?? "";
+        const line = drawn.slice(lineStart).split("\n")[0] ?? "";
         problems.push(
           `node "${line.trim()}" has an unquoted label; quote it so the pins can read it`,
         );

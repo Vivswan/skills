@@ -11,6 +11,7 @@ import {
   readArchitecture,
   renderArchitectureMermaid,
 } from "./arch-lint.mts";
+import { readPage } from "./check-architecture-page.mts";
 
 export const DEFAULT_REGION = "architecture-map";
 
@@ -27,8 +28,15 @@ export function regionBounds(text: string, name: string): { bodyStart: number; b
   if (!REGION_NAME.test(name)) {
     throw new Error(`a region name is lowercase letters, digits, and dashes; got "${name}"`);
   }
-  const begins = [...text.matchAll(markerPattern("BEGIN", name))];
-  const ends = [...text.matchAll(markerPattern("END", name))];
+  // A marker quoted inside a fence is page text about markers, not a region;
+  // line counting on the raw text keeps the offsets the splice needs.
+  const page = readPage(text);
+  const live = (match: RegExpExecArray): boolean => {
+    const line = text.slice(0, match.index).split("\n").length - 1;
+    return page.text[line] !== undefined;
+  };
+  const begins = [...text.matchAll(markerPattern("BEGIN", name))].filter(live);
+  const ends = [...text.matchAll(markerPattern("END", name))].filter(live);
   const [begin] = begins;
   const [end] = ends;
   if (begin === undefined || end === undefined || begins.length !== 1 || ends.length !== 1) {

@@ -74,6 +74,26 @@ export function readArchitecture(path: string, label = path): Architecture {
       }
     }
   }
+  // layerOf takes the first match in YAML order, so an overlap would hand
+  // one layer's files to another silently; the declaration refuses it instead.
+  const owned = Object.entries(layers).flatMap(([layer, paths]) =>
+    paths.map((path) => ({ layer, path })),
+  );
+  for (const [i, a] of owned.entries()) {
+    for (const b of owned.slice(i + 1)) {
+      if (a.layer === b.layer) continue;
+      const overlap =
+        a.path === b.path ||
+        (a.path.endsWith("/") && b.path.startsWith(a.path)) ||
+        (b.path.endsWith("/") && a.path.startsWith(b.path));
+      if (overlap) {
+        const inner = a.path.length >= b.path.length ? a.path : b.path;
+        throw new Error(
+          `${label}: layers ${a.layer} and ${b.layer} overlap on ${inner}; a file has one owner`,
+        );
+      }
+    }
+  }
   return { layers, exclude, edges };
 }
 

@@ -238,6 +238,26 @@ describe("arch-lint.mts", () => {
     });
   });
 
+  test.each<[string, string, string]>([
+    [
+      "a directory nested inside another layer's directory",
+      CONFIG.replace("layers:\n", "layers:\n  all: [src/]\n"),
+      "layers all and main overlap on src/main.ts; a file has one owner",
+    ],
+    [
+      "the same path in two layers",
+      CONFIG.replace("types: [src/types.ts]", "types: [src/types.ts, src/main.ts]"),
+      "layers main and types overlap on src/main.ts; a file has one owner",
+    ],
+  ])("overlapping layers are a declaration error: %s (exit 2)", (name, config, message) => {
+    const root = variant(name.replace(/\W+/g, "-"), { "architecture.yml": config });
+    expect(run(ARCH_LINT, [], root)).toEqual({
+      status: 2,
+      stdout: "",
+      stderr: `arch-lint: architecture.yml: ${message}\n`,
+    });
+  });
+
   test("--mermaid prints one node per layer and one arrow per declared edge", () => {
     expect(run(ARCH_LINT, ["--mermaid"], fixture)).toEqual({
       status: 0,
@@ -423,6 +443,37 @@ describe("render-architecture-map.mts", () => {
       stderr: "",
     });
     expect(readFileSync(page, "utf8")).toBe(PAGE_HEAD + RENDERED_REGION);
+  });
+
+  test("a marker pair quoted inside a fence is text: the real pair renders and reads current", () => {
+    const quoted = `Put this in the page:\n\n\`\`\`markdown\n${REGION}\`\`\`\n\n`;
+    const root = variant("render-quoted-pair", {
+      "docs/architecture.md": PAGE_HEAD + quoted + REGION,
+    });
+    const page = join(root, "docs", "architecture.md");
+    expect(run(RENDER, ["--page", page], root)).toEqual({
+      status: 0,
+      stdout: "render-architecture-map: wrote docs/architecture.md region architecture-map\n",
+      stderr: "",
+    });
+    expect(readFileSync(page, "utf8")).toBe(PAGE_HEAD + quoted + RENDERED_REGION);
+    expect(run(RENDER, ["--page", page, "--check"], root)).toEqual({
+      status: 0,
+      stdout: "render-architecture-map: docs/architecture.md region architecture-map is current\n",
+      stderr: "",
+    });
+  });
+
+  test("a page whose only marker pair is fenced has no region (exit 2, counts 0 and 0)", () => {
+    const root = variant("render-only-fenced", {
+      "docs/architecture.md": `${PAGE_HEAD}\`\`\`markdown\n${REGION}\`\`\`\n`,
+    });
+    expect(run(RENDER, ["--page", join(root, "docs", "architecture.md")], root)).toEqual({
+      status: 2,
+      stdout: "",
+      stderr:
+        'render-architecture-map: region "architecture-map" needs exactly one BEGIN and one END marker, found 0 and 0\n',
+    });
   });
 
   test("a page without the region exits 2 naming the marker count", () => {
@@ -625,6 +676,77 @@ describe("check-architecture-page.mts", () => {
     const markdown = `# T\n\n\`\`\`mermaid\nflowchart LR\n  ${shaped}\n\`\`\`\n\n${demo}\n`;
     expect(check(markdown)).toEqual(
       failing(['"src/engine/run.ts nothing()": src/engine/run.ts exports no nothing']),
+    );
+  });
+
+  test("edge-label text is not a node, in every label form", () => {
+    const edges = [
+      '  a["src/engine/run.ts run()"] -->|run()| b["src/engine/nowhere.ts"]',
+      '  a -- goes to --> c["src/types.ts Config"]',
+      "  a == and then ==> c",
+      "  a -. or maybe .-> c",
+    ].join("\n");
+    const markdown = `# T\n\n\`\`\`mermaid\nflowchart LR\n${edges}\n\`\`\`\n\n${demo}\n`;
+    expect(check(markdown)).toEqual(
+      failing(['"src/engine/nowhere.ts": src/engine/nowhere.ts does not exist']),
+    );
+  });
+
+  test.each<[string, string]>([
+    ["dashed links", '  a --- b["src/engine/does-not-exist.ts"] --> c["src/engine/run.ts run()"]'],
+    ["thick links", '  a === b["src/engine/does-not-exist.ts"] ==> c["src/engine/run.ts run()"]'],
+  ])("a chain of bare %s holds no label: every node on it is read", (_case, line) => {
+    const markdown = `# T\n\n\`\`\`mermaid\nflowchart LR\n${line}\n\`\`\`\n\n${demo}\n`;
+    expect(check(markdown)).toEqual(
+      failing(['"src/engine/does-not-exist.ts": src/engine/does-not-exist.ts does not exist']),
+    );
+  });
+
+  test.each<[string, string]>([
+    ["a dashed text label", '  a -- text --> b["src/engine/run.ts nothing()"]'],
+    ["a thick text label", '  a == text ==> b["src/engine/run.ts nothing()"]'],
+    ["a dotted text label", '  a -. text .-> b["src/engine/run.ts nothing()"]'],
+  ])("%s is blanked and its target read", (_case, line) => {
+    const markdown = `# T\n\n\`\`\`mermaid\nflowchart LR\n${line}\n\`\`\`\n\n${demo}\n`;
+    expect(check(markdown)).toEqual(
+      failing(['"src/engine/run.ts nothing()": src/engine/run.ts exports no nothing']),
+    );
+  });
+
+  test("a | inside a quoted edge label does not end the label: the target node is still read", () => {
+    const line = '  a -->|"left | right"| b["src/engine/does-not-exist.ts"]';
+    const markdown = `# T\n\n\`\`\`mermaid\nflowchart LR\n${line}\n\`\`\`\n\n${demo}\n`;
+    expect(check(markdown)).toEqual(
+      failing(['"src/engine/does-not-exist.ts": src/engine/does-not-exist.ts does not exist']),
+    );
+  });
+
+  test("a | inside a quoted node label opens no edge label: both nodes are read", () => {
+    const line = '  a["left | right"] -->|label| b["src/engine/run.ts nothing()"]';
+    const markdown = `# T\n\n\`\`\`mermaid\nflowchart LR\n${line}\n\`\`\`\n\n${demo}\n`;
+    expect(check(markdown)).toEqual(
+      failing(['"src/engine/run.ts nothing()": src/engine/run.ts exports no nothing']),
+    );
+  });
+
+  test("an astral character earlier on the line does not shift the blanked span", () => {
+    const line = '  a["\u{1F600}\u{1F600}"] -->|"text"| b["src/engine/does-not-exist.ts"]';
+    const markdown = `# T\n\n\`\`\`mermaid\nflowchart LR\n${line}\n\`\`\`\n\n${demo}\n`;
+    expect(check(markdown)).toEqual(
+      failing(['"src/engine/does-not-exist.ts": src/engine/does-not-exist.ts does not exist']),
+    );
+    const blankedAfterEmoji =
+      '  a["\u{1F600} caption"] -->|run()| b["src/engine/run.ts nothing()"]';
+    expect(
+      check(`# T\n\n\`\`\`mermaid\nflowchart LR\n${blankedAfterEmoji}\n\`\`\`\n\n${demo}\n`),
+    ).toEqual(failing(['"src/engine/run.ts nothing()": src/engine/run.ts exports no nothing']));
+  });
+
+  test("an unquoted node beside a labelled edge is still reported", () => {
+    const line = '  a["src/engine/run.ts run()"] -->|run()| b[src/engine/run.ts run()]';
+    const markdown = `# T\n\n\`\`\`mermaid\nflowchart LR\n${line}\n\`\`\`\n\n${demo}\n`;
+    expect(check(markdown)).toEqual(
+      failing([`node "${line.trim()}" has an unquoted label; quote it so the pins can read it`]),
     );
   });
 

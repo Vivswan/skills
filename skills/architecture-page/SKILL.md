@@ -111,6 +111,7 @@ bun .github/scripts/render-architecture-map.mts --page docs/reference/architectu
 One hand-authored mermaid flowchart per concept, above the module map. Rules per box and per diagram:
 
 - A box that names a file lists the exported symbols it means: `src/engine/layers.ts<br>stripNulls() mergeLayers()`. Open the file and copy the names; never write one from memory. The exported name counts, so `export { oldName as newName }` exports `newName`, a default export is `default()`, and `export * from` carries the target's names.
+- An edge label that carries brackets or parentheses (`run()`) is quoted or in the `|...|` form: `-- "run()" -->` or `-->|run()|`.
 - A caption-only box is allowed (`mode`, `the live repository`); a box that mixes prose after a path is read as symbols and fails.
 - Quote every label. The check cannot read an unquoted one and says so.
 - Under each diagram, 3 to 6 bullets stating only what the diagram cannot show: the reason, the invariant, the consequence.
