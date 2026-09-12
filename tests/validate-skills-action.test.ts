@@ -69,6 +69,14 @@ describe("parseFrontmatter", () => {
     });
   });
 
+  test("accepts CRLF line endings around and inside the frontmatter", () => {
+    const path = tempFile("---\r\nname: crlf-skill\r\ndescription: d\r\n---\r\nbody\r\n");
+    expect(parseFrontmatter(path, "SKILL.md")).toEqual({ name: "crlf-skill", description: "d" });
+    const run = () => parseFrontmatter(tempFile("# no frontmatter\r\n"), "fixture/SKILL.md");
+    expect(run).toThrow(CheckFailure);
+    expect(run).toThrow(/^fixture\/SKILL\.md: missing YAML frontmatter start/);
+  });
+
   test("parses folded block scalars as their full text", () => {
     const path = tempFile("---\ndescription: >-\n  first line\n  second line\n---\n");
     expect(parseFrontmatter(path, "SKILL.md")).toEqual({ description: "first line second line" });
@@ -397,6 +405,69 @@ describe("validateMarketplace", () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]).toMatch(message);
     }
+  });
+
+  test("accepts a single skill path string, as the marketplace schema allows", () => {
+    const root = tempDir();
+    mkdirSync(join(root, "skills", "one-skill"), { recursive: true });
+    writeFileSync(join(root, "skills", "one-skill", "SKILL.md"), "---\nname: one-skill\n---\n");
+    const plugin = { name: "x-y", source: "./", skills: "./skills/one-skill" };
+    expect(run(root, { name: "x-y", plugins: [plugin] })).toEqual([]);
+    const errors = run(root, { name: "x-y", plugins: [{ ...plugin, skills: 3 }] });
+    expect(errors).toEqual(["marketplace.json: plugin 'x-y' skills must be a list"]);
+  });
+
+  test("resolves a sub-plugin's skill paths anywhere under its source", () => {
+    const root = tempDir();
+    const plugin = { name: "sub-plugin", source: "./plugins/foo" };
+    const manifest = (skills: string[]) => ({ name: "x-y", plugins: [{ ...plugin, skills }] });
+    mkdirSync(join(root, "plugins", "foo", "extra"), { recursive: true });
+    expect(run(root, manifest(["./extra/bar"]))).toEqual([
+      "marketplace.json: plugin 'sub-plugin': skill path ./extra/bar (plugins/foo/extra/bar): has no SKILL.md",
+    ]);
+    mkdirSync(join(root, "plugins", "foo", "extra", "bar"));
+    writeFileSync(
+      join(root, "plugins", "foo", "extra", "bar", "SKILL.md"),
+      "---\nname: bar\n---\n",
+    );
+    expect(run(root, manifest(["./extra/bar"]))).toEqual([]);
+    mkdirSync(join(root, "plugins", "foo", "extra", "Bad_Leaf"));
+    writeFileSync(join(root, "plugins", "foo", "extra", "Bad_Leaf", "SKILL.md"), "---\n---\n");
+    expect(run(root, manifest(["./extra/Bad_Leaf"]))).toEqual([
+      "marketplace.json: plugin 'sub-plugin': skill path ./extra/Bad_Leaf (plugins/foo/extra/Bad_Leaf): " +
+        "skill folder name 'Bad_Leaf' must be kebab-case",
+    ]);
+    // Escaping the source, and a repository-root path that would pass for `source: "./"`, both fail.
+    for (const outside of ["../x", "../../skills/bar", "./extra/../.."]) {
+      expect(run(root, manifest([outside]))).toEqual([
+        `marketplace.json: plugin 'sub-plugin': skill path ${outside} escapes the plugin source`,
+      ]);
+    }
+  });
+
+  test("a sub-plugin's skill path must be symlink-free from the repository root down", () => {
+    const root = tempDir();
+    const outside = tempDir();
+    mkdirSync(join(outside, "bar"));
+    writeFileSync(join(outside, "bar", "SKILL.md"), "---\nname: bar\n---\n");
+    mkdirSync(join(root, "plugins", "foo"), { recursive: true });
+    symlinkSync(outside, join(root, "plugins", "foo", "skills"));
+    const manifest = {
+      name: "x-y",
+      plugins: [{ name: "sub-plugin", source: "./plugins/foo", skills: ["./skills/bar"] }],
+    };
+    const errors = run(root, manifest);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(
+      /^marketplace\.json: plugin 'sub-plugin': skill path \.\/skills\/bar \(plugins\/foo\/skills\/bar\): resolves through a symlink to /,
+    );
+    // The same shape through validateStructure, so the whole-tree entry point reports it too.
+    mkdirSync(join(root, ".claude-plugin"));
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), '{"name": "x-y", "skills": []}');
+    writeFileSync(join(root, ".claude-plugin", "marketplace.json"), JSON.stringify(manifest));
+    expect(validateStructure(root, "skills", ".claude-plugin/plugin.json")).toEqual([
+      `.claude-plugin/${errors[0]}`,
+    ]);
   });
 
   test("aggregates across entries instead of stopping at the first bad one", () => {

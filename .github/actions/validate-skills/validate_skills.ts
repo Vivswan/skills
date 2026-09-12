@@ -108,7 +108,8 @@ export function loadJsonObject(path: string, where: string): Record<string, unkn
 export function parseFrontmatter(path: string, where: string): Record<string, unknown> {
   let text: string;
   try {
-    text = readFileSync(path, "utf-8");
+    // A checkout with autocrlf writes CRLF; Claude Code loads such a SKILL.md, so the markers match either ending.
+    text = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
   } catch (error) {
     fail(`${where}: cannot read file (${errorMessage(error)})`);
   }
@@ -173,6 +174,29 @@ export function checkSkillPath(
   if (!skillMd?.isFile()) {
     fail(`${where}: referenced skill ${skillPath} has no SKILL.md`);
   }
+}
+
+/** A sub-plugin's `skills` entries are custom skill directories added to its default skills/ scan, so they resolve
+ *  under the plugin's source and may sit anywhere inside it. The source may itself be an in-repo symlink (allowed
+ *  for existence), but a skill path is validated content, so the walk from the repository root to SKILL.md must be
+ *  symlink-free like every other validated path. */
+export function checkPluginSkillPath(
+  where: string,
+  skillPath: string,
+  root: string,
+  pluginSource: string,
+): void {
+  const resolved = resolve(pluginSource, skillPath);
+  if (!resolved.startsWith(`${pluginSource}/`)) {
+    fail(`${where}: skill path ${skillPath} escapes the plugin source`);
+  }
+  const at = `${where}: skill path ${skillPath} (${relative(root, resolved)})`;
+  const skillMd = join(resolved, "SKILL.md");
+  const linkError = symlinkFreeError(root, skillMd, at);
+  if (linkError) fail(linkError);
+  const leaf = basename(resolved);
+  if (!KEBAB_CASE.test(leaf)) fail(`${at}: skill folder name '${leaf}' must be kebab-case`);
+  if (!lstatOf(skillMd)?.isFile()) fail(`${at}: has no SKILL.md`);
 }
 
 export function validateSkillDir(skillDir: string, where: string): string[] {
@@ -282,12 +306,19 @@ export function validateMarketplace(
             `manifest names it '${rootPlugin.name}' - the two manifests must agree`,
         );
       }
-      const skills = plugin.skills;
+      // Claude Code's marketplace schema types `skills` as string|array.
+      const skills = typeof plugin.skills === "string" ? [plugin.skills] : plugin.skills;
       if (skills !== undefined) {
         if (!Array.isArray(skills)) fail(`${where}: plugin '${name}' skills must be a list`);
+        // The root plugin publishes the repository's own skills directory, so its entries keep plugin.json's
+        // direct-child rule; any other plugin's entries resolve under that plugin's source.
         for (const skillPath of skills) {
           if (typeof skillPath !== "string") fail(`${where}: skill paths must be strings`);
-          checkSkillPath(where, skillPath, root, skillsRoot, skillsDir);
+          if (resolvedSource === root) {
+            checkSkillPath(where, skillPath, root, skillsRoot, skillsDir);
+          } else {
+            checkPluginSkillPath(`${where}: plugin '${name}'`, skillPath, root, resolvedSource);
+          }
         }
       }
     });

@@ -48,6 +48,7 @@ Structure mode, in the order it reports:
 - A `.mcp.json` in a skill folder, when present, parses as JSON.
 - `marketplace.json`, when present next to the manifest, has a kebab-case `name` and a non-empty `plugins` list.
 - Each marketplace plugin's `source` stays inside the repository.
+- A marketplace plugin's `skills` (one path or a list) resolve under its `source` and must stay inside it, each a kebab-case folder with a `SKILL.md`; the root plugin (`source: "./"`) keeps the repository's skills directory rule.
 - A plugin publishing the repository root carries the same `name` as `plugin.json`.
 - Symlinks are rejected anywhere on a validated path, ancestors included. A link can point outside the checkout, so what ships would not be what was validated.
 - The one exception: a marketplace plugin's `source` may pass through in-repo links while its physical path stays inside the repository.
