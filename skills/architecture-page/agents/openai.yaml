@@ -1,0 +1,4 @@
+interface:
+  display_name: "Architecture Page"
+  short_description: "Architecture pages and import layering that cannot rot."
+  brand_color: "#0F766E"
