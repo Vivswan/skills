@@ -469,6 +469,9 @@ export function kebabToTitle(name: string): string {
     .join(" ");
 }
 
+/** An exact version, so a CLI release cannot red discovery on a green catalog; bump by hand (`npm view skills version`). */
+export const SKILLS_CLI_VERSION = "1.5.26";
+
 const DISCOVERY_ATTEMPTS = 3;
 const DISCOVERY_RETRY_DELAY_MS = 5_000;
 
@@ -491,7 +494,7 @@ function runDiscovery(root: string, manifestRel: string): string[] {
   // shadow the CLI.
   let proc: SpawnSyncReturns<string> | undefined;
   for (let attempt = 1; attempt <= DISCOVERY_ATTEMPTS; attempt++) {
-    proc = spawnSync("npx", ["-y", "skills", "add", root, "--list"], {
+    proc = spawnSync("npx", ["-y", `skills@${SKILLS_CLI_VERSION}`, "add", root, "--list"], {
       encoding: "utf-8",
       timeout: 300_000,
     });

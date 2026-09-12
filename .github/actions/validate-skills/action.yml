@@ -1,17 +1,17 @@
-# Vivswan/skills' own validator, called by the fleet CI (repo-platform's
-# ci.yml) on every repository that hosts agent skills, and by this
-# repository's checks.yml on itself. Contract: docs/validate-skills.md.
+# Vivswan/skills' validator for a repository hosting agent skills. Its callers: this repository's
+# checks.yml on this checkout, and repo-platform's own ci.yml on repo-platform's skills/ directory.
+# Contract: docs/validate-skills.md.
 
 name: Validate Skills
 description: >-
-  Validates a repository hosting agent skills (Vivswan/skills' validator,
-  run by the fleet CI). Two modes: structure (offline; the plugin manifests
-  parse and reference real skill folders, and every folder under the skills
-  directory satisfies the SKILL.md frontmatter contract) and discovery (runs
-  the real `npx skills add <repo> --list` against the checkout and asserts
-  every published skill appears in the listing - needs network for the npx
-  download, so callers give it its own job). An empty skills catalog (the
-  starter's seeded state) passes both modes.
+  Validates a repository hosting agent skills (Vivswan/skills' validator).
+  Two modes: structure (offline; the plugin manifests parse and reference
+  real skill folders, and every folder under the skills directory satisfies
+  the SKILL.md frontmatter contract) and discovery (runs the real skills CLI,
+  `npx skills add <repo> --list` at a pinned version, against the checkout
+  and asserts every published skill appears in the listing - needs network
+  for the npx download, so callers give it its own job). An empty skills
+  catalog (the starter's seeded state) passes both modes.
 
 inputs:
   skills-dir:
