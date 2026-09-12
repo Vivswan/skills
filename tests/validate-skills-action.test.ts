@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CheckFailure,
@@ -9,6 +10,7 @@ import {
   loadJsonObject,
   loadPluginManifest,
   parseFrontmatter,
+  SKILLS_CLI_VERSION,
   skillDirs,
   validateMarketplace,
   validateSkillDir,
@@ -640,4 +642,56 @@ describe("discovery helpers", () => {
     expect(kebabToTitle("vivswan-skills")).toBe("Vivswan Skills");
     expect(kebabToTitle("x")).toBe("X");
   });
+});
+
+describe("discovery mode", () => {
+  const script = join(
+    import.meta.dir,
+    "..",
+    ".github",
+    "actions",
+    "validate-skills",
+    "validate_skills.ts",
+  );
+  // A fake `npx` ahead on PATH records its argv and prints the listing, so the exact CLI invocation is observed offline.
+  const cases = [
+    {
+      listing: ["a-skill", "b-skill"],
+      status: 0,
+      output: "CLI discovery passed (2 skill(s), plugin 'fixture-skills').",
+    },
+    {
+      listing: ["a-skill"],
+      status: 1,
+      output: "error: skill 'b-skill' missing from the CLI listing",
+    },
+  ];
+  test.each(cases)(
+    "runs the pinned CLI and judges its listing: %p",
+    ({ listing, status, output }) => {
+      expect(SKILLS_CLI_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+      const root = realpathSync(fixtureRepo({ skillNames: ["a-skill", "b-skill"] }));
+      const bin = tempDir();
+      const argvFile = join(bin, "argv");
+      writeFileSync(
+        join(bin, "npx"),
+        `#!/bin/sh\nprintf '%s\\n' "$@" > '${argvFile}'\nprintf '%s\\n' 'Fixture Skills' ${listing.map((name) => `'${name}'`).join(" ")}\n`,
+        { mode: 0o755 },
+      );
+      const proc = spawnSync("bun", [script], {
+        cwd: root,
+        encoding: "utf-8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MODE: "discovery" },
+      });
+      expect(readFileSync(argvFile, "utf-8").trimEnd().split("\n")).toEqual([
+        "-y",
+        `skills@${SKILLS_CLI_VERSION}`,
+        "add",
+        root,
+        "--list",
+      ]);
+      expect(proc.status).toBe(status);
+      expect(`${proc.stdout}${proc.stderr}`).toContain(output);
+    },
+  );
 });

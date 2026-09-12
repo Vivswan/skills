@@ -1,6 +1,6 @@
 # The validate-skills action
 
-`.github/actions/validate-skills` is this repository's validator for repositories that host agent skills. The fleet CI (Vivswan/repo-platform's `ci.yml`) calls it on every skills-hosting repository; this repository runs it on itself in `checks.yml`.
+`.github/actions/validate-skills` is this repository's validator for repositories that host agent skills. Vivswan/repo-platform's own `ci.yml` runs it on repo-platform's skills directory; this repository runs it on itself in `checks.yml`.
 
 The layout it validates:
 
@@ -34,7 +34,7 @@ An empty catalog (`"skills": []`) passes both modes: a freshly adopted repositor
 | Mode | Network | What a red means |
 |---|---|---|
 | `structure` | offline | the catalog structure is broken; cheap, so it belongs in the merge gate |
-| `discovery` | needs npm | the real `npx -y skills add . --list` does not list every skill in `plugin.json` |
+| `discovery` | needs npm | the real `npx -y skills@<pinned> add . --list` does not list every skill in `plugin.json` |
 
 Structure mode, in the order it reports:
 
@@ -53,7 +53,7 @@ Structure mode, in the order it reports:
 - Symlinks are rejected anywhere on a validated path, ancestors included. A link can point outside the checkout, so what ships would not be what was validated.
 - The one exception: a marketplace plugin's `source` may pass through in-repo links while its physical path stays inside the repository.
 
-Discovery mode downloads the CLI from the npm registry, makes up to three attempts, and matches each published skill name on word boundaries in the listing. Give it its own job outside the merge gate so a registry hiccup cannot block merges.
+Discovery mode downloads the CLI from the npm registry at the exact version `validate_skills.ts` records in `SKILLS_CLI_VERSION` (a CLI release cannot red a green catalog; the pin moves by hand), makes up to three attempts, and matches each published skill name on word boundaries in the listing. Give it its own job; a caller decides whether discovery gates its merges (repo-platform gates it).
 
 Exit codes:
 
@@ -67,7 +67,7 @@ The full rule set is the source, [validate_skills.ts](../.github/actions/validat
 
 ## How repo-platform calls it
 
-The fleet CI pins the action to a commit on `main` (the comment records which main it took) and passes the repository's registered skills directory:
+repo-platform's `ci.yml` pins the action to a commit on `main` (the comment records which main it took) and passes its skills directory:
 
 ```yaml
 - uses: Vivswan/skills/.github/actions/validate-skills@<sha> # main, <date>
@@ -90,4 +90,4 @@ SKILLS_DIR=skills PLUGIN_MANIFEST=.claude-plugin/plugin.json MODE=structure bun 
 - Discovery, the same command with `MODE=discovery` (needs network).
 - `bun run test` covers the action's unit tests along with the rest of the suite.
 
-This repository's own richer checks (`bun run validate`, `bun run smoke`) stay in `scripts/`; the action is the fleet-wide baseline every skills repository shares.
+This repository's own richer checks (`bun run validate`, `bun run smoke`) stay in `scripts/`; the action is the baseline any repository hosting skills can call.
