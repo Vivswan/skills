@@ -1,0 +1,46 @@
+# Vivswan/skills' own validator, called by the fleet CI (repo-platform's
+# ci.yml) on every repository that hosts agent skills, and by this
+# repository's checks.yml on itself. Contract: docs/validate-skills.md.
+
+name: Validate Skills
+description: >-
+  Validates a repository hosting agent skills (Vivswan/skills' validator,
+  run by the fleet CI). Two modes: structure (offline; the plugin manifests
+  parse and reference real skill folders, and every folder under the skills
+  directory satisfies the SKILL.md frontmatter contract) and discovery (runs
+  the real `npx skills add <repo> --list` against the checkout and asserts
+  every published skill appears in the listing - needs network for the npx
+  download, so callers give it its own job). An empty skills catalog (the
+  starter's seeded state) passes both modes.
+
+inputs:
+  skills-dir:
+    description: Directory holding the repository's agent skills (relative to the repo root)
+    required: false
+    default: skills
+  plugin-manifest:
+    description: Path of the plugin manifest listing the published skills
+    required: false
+    default: .claude-plugin/plugin.json
+  mode:
+    description: structure (offline manifest and skill-folder checks) or discovery (npx skills CLI listing)
+    required: false
+    default: structure
+
+runs:
+  using: composite
+  steps:
+    # The action pins its own bun: the caller's checkout may carry any
+    # .bun-version or none at all.
+    - name: Set up the action's bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version-file: ${{ github.action_path }}/.bun-version
+
+    - name: Validate skills
+      shell: bash
+      env:
+        SKILLS_DIR: ${{ inputs.skills-dir }}
+        PLUGIN_MANIFEST: ${{ inputs.plugin-manifest }}
+        MODE: ${{ inputs.mode }}
+      run: bun "${{ github.action_path }}/validate_skills.ts"

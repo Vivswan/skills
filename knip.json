@@ -4,12 +4,14 @@
   "entry": [
     "scripts/*.ts",
     ".githooks/**/*.{ts,mts}",
+    ".github/actions/**/*.ts",
     "skills/*/scripts/**/*.{ts,mts}",
     "tests/**/*.{ts,mts}"
   ],
   "project": [
     "scripts/**/*.ts",
     ".githooks/**/*.{ts,mts}",
+    ".github/actions/**/*.ts",
     "skills/*/scripts/**/*.{ts,mts}",
     "tests/**/*.{ts,mts}"
   ],
