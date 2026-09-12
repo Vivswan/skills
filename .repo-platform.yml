@@ -2,7 +2,6 @@
 # reads this file and never rewrites it.
 modules:
   - bun
-  - issue-templates
   - pr-title
 project:
   name: Skills
