@@ -312,11 +312,11 @@ Where a merge queue owns the ordering, the author's prepared action is enqueuein
 **The `merge-when-green` label is the owner's standing approval on one PR.** The owner applies it, never an agent; it says "merge this once every gate is green" and needs no second ask. It is a convention, not proof: the operator runs three checks before acting on it, and a PR without the label follows the rules above.
 
 ```bash
+head="$(gh pr view <n> --json headRefOid --jq .headRefOid)"   # first: a push after this fails the merge below
 gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
   | if .event == "labeled" and .label.name == "merge-when-green" then "\(.created_at) label \(.actor.login)"
     elif .event == "head_ref_force_pushed" then "\(.created_at) force-push"
     else empty end'
-head="$(gh pr view <n> --json headRefOid --jq .headRefOid)"
 gh run list --commit "$head" --event pull_request --branch <head-branch> --json createdAt --jq '[.[].createdAt] | max'
 ```
 
