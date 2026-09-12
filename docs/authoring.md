@@ -85,6 +85,7 @@ skills/my-skill/
 - `.codex-plugin/plugin.json` exists and parses as JSON
 - `agents/openai.yaml` exists and its interface mirrors the codex manifest
 - `.claude-plugin/plugin.json` lists the skill directory, and `.claude-plugin/marketplace.json` stays consistent with it
+- the catalog version lives only in `.claude-plugin/marketplace.json` (`metadata.version`); no `version` in any `SKILL.md`, `.codex-plugin/plugin.json`, or `.claude-plugin/plugin.json`
 - optional MCP files parse as JSON when present
 
 ## Template Notes

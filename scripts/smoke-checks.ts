@@ -85,7 +85,7 @@ export function checkMarketplacePluginVersionBan(
     if ("version" in plugin) {
       fail(
         `${displayPath}: plugin '${String(plugin.name)}' carries a 'version' field -- the single` +
-          " source of truth is marketplace.json metadata.version (see docs/authoring.md)",
+          " source of truth is marketplace.json metadata.version (see docs/authoring.md > Validation Checklist)",
       );
     }
   }

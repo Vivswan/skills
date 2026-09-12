@@ -141,7 +141,7 @@ function checkCodexManifestVersionBan(codex: CodexManifest): void {
   if ("version" in codex.plugin) {
     fail(
       `${rel(codex.path)}: unexpected 'version' field -- the single source of truth is` +
-        " marketplace.json metadata.version (see docs/authoring.md)",
+        " marketplace.json metadata.version (see docs/authoring.md > Validation Checklist)",
     );
   }
 }
@@ -199,7 +199,7 @@ function checkRootManifestVersion(manifest: RootManifest): void {
   if ("version" in manifest.raw) {
     fail(
       ".claude-plugin/plugin.json: unexpected 'version' field -- the single source of truth is" +
-        " marketplace.json metadata.version (see docs/authoring.md)",
+        " marketplace.json metadata.version (see docs/authoring.md > Validation Checklist)",
     );
   }
 }
