@@ -16,7 +16,7 @@ How to apply:
 - Delete any test that pins AGENTS.md text. Guidance is not a fixture; a test that checks paths a doc names still exist is a stale-pointer guard and stays.
 - An AGENTS.md-only change skips the review loop: no codex or Copilot round, `git commit --no-verify`, PR opened ready, CI the only gate, the owner merges.
 - When a file already meets this, leave it and say so.
-- The same principle applies to prose docs generally: describe intent and invariants, link to code for mechanics.
+- The same shape rule covers the repository-level Markdown GitHub reads: README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT. Product documentation, user guides, changelogs, and license texts are out of scope.
 
 Specimen: one repository's tail carried a directory tree, a 17-item authoring checklist the smoke test already enforced, and release notes, 66 lines. It became one line on what the repository is, five principles, and two working rules; the checklist facts that lived only there moved to the authoring doc; the smoke-test assertion on the file's text was deleted.
 

@@ -107,7 +107,7 @@ Full detail: `references/comments.md`.
 
 ### Lean AGENTS.md
 
-AGENTS.md (and CLAUDE.md) holds the project's guiding principles and nothing an agent can deduce elsewhere. Code is the source of truth; implementation detail lives there.
+AGENTS.md (and CLAUDE.md) holds the project's guiding principles and nothing an agent can deduce elsewhere. Code is the source of truth; implementation detail lives there. The same shape rule covers the other repository-level Markdown GitHub reads (README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT); product documentation, changelogs, and license texts are out of scope.
 
 - **Keep:** what the project is, the conventions the owner wants kept, safety constraints, the toolchain entry points, and pointers.
 - **Cut:** anything a specific file answers, even when essential: layout trees, the commands block (the manifest and hooks are the source), naming conventions a linter carries, checklists a test enforces, per-module behavior. A one-line pointer replaces each.
