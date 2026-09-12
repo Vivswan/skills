@@ -38,8 +38,8 @@ The carrier follows the fact at that spot. Real-shaped examples, tell first in e
 ```
 
 ```ts
-// The lock file name is also the key the sweep probes; renaming it silently disarms the probe.
-// See skills/orchestrator-mode/scripts/probe.mts, lockName.
+// tests/doc-drift.test.ts pins this usage text to SKILL.md; change both together or CI fails.
+// See its "rubber-duck-review/SKILL.md <-> run-review.mts" entry.
 ```
 
 ```ts
