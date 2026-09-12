@@ -11,7 +11,7 @@
 - **Template check, once per session, at plan time**: when the target repository ships a PR or issue template, ask the user once, up front, whether to use it or the skill's shapes, then carry that answer for the whole session; no template means the shapes apply directly, and `CONTRIBUTING` guidance is honored either way
 - **Draft discipline**: open as draft, flip ready the moment the PR converges, flip back to draft the moment new commit-requiring work appears
 - **Comment convergence**: every review round triaged the same cycle (valid findings fixed, invalid ones replied to and resolved), with thread state read via GraphQL `isResolved`, never inferred from timestamps
-- **Who merges**: the human by default; a trivial mechanical fix and a pipeline blocked on a merge are the only standing exceptions, and every landing is exit-conditioned on the gate's own verdict, never chained onto a command that displayed a log
+- **Who merges**: the human by default; a trivial mechanical fix, a pipeline blocked on a merge, and the owner's `merge-when-green` label (owner-applied, voided by a later push) are the only standing exceptions, and every landing is exit-conditioned on the gate's own verdict, never chained onto a command that displayed a log
 
 ## Install
 
