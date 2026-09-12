@@ -14,7 +14,7 @@ How to apply:
 - Keep only what no file answers: purpose, hard rules, decisions a reader would otherwise reverse (one file pointer each), safety constraints, release rules.
 - Short bullets a human skims. No long paragraphs, no walls of text.
 - Delete any test that pins AGENTS.md text. Guidance is not a fixture; a test that checks paths a doc names still exist is a stale-pointer guard and stays.
-- An AGENTS.md-only change skips the review loop: no codex or Copilot round, `git commit --no-verify`, PR opened ready, CI the only gate, the owner merges.
+- A change touching only these repository-level Markdown files skips the review loop: no codex or Copilot round, `git commit --no-verify`, PR opened ready, CI the only gate, the owner merges.
 - When a file already meets this, leave it and say so.
 - The same shape rule covers the repository-level Markdown GitHub reads: README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT. Product documentation, user guides, changelogs, and license texts are out of scope.
 
