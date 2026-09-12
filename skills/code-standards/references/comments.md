@@ -18,10 +18,53 @@ Never a comment: what the code does, its types, its control flow, its history, t
 
 - One or two sentences say what the code cannot show. That is the whole comment when nothing more is needed.
 - A block follows only when it shows the fact faster: an arrow flow for a sequence (`re-derive -> read credentials -> re-derive again -> must match`), aligned rows for facts that share a shape (`input  -> outcome`). Nothing else is mandated.
-- Combine as the spot needs; a blank comment line separates the parts. One carrier per point: rows followed by prose re-explaining them mean the rows failed.
-- Uniform shape is the wall. A paragraph fails; so does a stack of sentences or fragments one per line, however true each line is.
+- Combine as the spot needs; a blank comment line separates groups when there are more than a tell and its block. One carrier per point: rows followed by prose re-explaining them mean the rows failed.
+- Uniform shape is the wall. A paragraph fails; so does every fact as its own line with nothing shown, however true each line is. The tell is one or two sentences; past that, a fact is shown or cut.
 - A paragraph that has grown holds narration (delete it) or a workaround defense (fix the code, not the comment).
 - No limits here: length and width caps are the fleet's file-size check. Never pack prose to fit a cap; a wall under the cap is worse than the original, and a marker on a packed block is the worst of both. Cut honestly; a block still over the cap after that is reported to the lead.
+
+## Combinations
+
+The carrier follows the fact at that spot. Real-shaped examples, tell first in each:
+
+```ts
+// The report is built before any request fails, so the last line is the one still waiting.
+//   Fetching from:: "https://<host>/v1/model/info"    <- last line, no answer yet
+```
+
+```ts
+// Servers send the model list in three spellings; callers only ever compare the normalized form.
+//   "GPT-4o", "gpt_4o", "gpt-4o " -> "gpt-4o"
+```
+
+```ts
+// The lock file name is also the key the sweep probes; renaming it silently disarms the probe.
+// See skills/orchestrator-mode/scripts/probe.mts, lockName.
+```
+
+```ts
+// Registration replies arrived in all of these shapes in one week, so the guard names each.
+//   []            -> no models, keep the old list
+//   null          -> broken read, retry
+//   {models: []}  -> empty on purpose, clear the list
+```
+
+```ts
+// Lowercase before comparing: GitHub returns SUCCESS, the fixtures use success.
+```
+
+```ts
+// The editor's definition may be stale, so credentials attach only to a freshly derived one.
+//   re-derive from setting -> read credentials -> re-derive again -> whole descriptor must match
+// Guaranteed after that: same label, same endpoint, same origin.
+```
+
+- A quoted literal with an arrow note, when the comment explains a log line or wire format the code matches.
+- A value example, for a transformation or a threshold change.
+- A pointer, for a cross-file invariant; the other file holds the detail, so nothing is restated.
+- Inputs with outcomes, for a guard with several motivating inputs.
+- The tell alone, when one sentence is the whole comment.
+- A flow with a closing sentence, when a guarantee holds after the sequence.
 
 ## The test
 

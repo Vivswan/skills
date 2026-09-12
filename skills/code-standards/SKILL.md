@@ -65,7 +65,8 @@ A comment is read by humans and agents, the human first; the code is the single 
   - a consequence of changing the line that is not visible here
   - the one input that motivated a guard
 - **Never a comment:** what the code does, its types, its control flow, its history, the alternatives. History and alternatives go in the commit message.
-- **Tell first, then show.** One or two sentences say what the code cannot show; a block follows only when it shows the fact faster: an arrow flow for a sequence, aligned rows for facts that share a shape. Uniform shape is the wall: a paragraph, or a stack of sentences or fragments one per line, both fail.
+- **Tell first, then show.** One or two sentences say what the code cannot show; a block follows only when it shows the fact faster: an arrow flow for a sequence, aligned rows for facts that share a shape.
+- **Uniform shape is the wall:** a paragraph, or every fact as its own line with nothing shown. Past the two sentences, a fact is shown or cut.
 - **No limits here.** Length and width caps are the fleet's file-size check. Never pack prose to fit a cap; cut honestly.
 - **Test, before writing or keeping one:** "What does this say that the code does not?" and "Could a tired human read it in one pass?" Fail either: rewrite or delete.
 
@@ -132,7 +133,7 @@ Full detail: `references/artifacts.md`.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
-- Comments a reader cannot take in one pass: uniform shape (a paragraph, or a stack of sentences or fragments one per line), several ideas in one sentence, prose packed to fit a cap.
+- Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), several ideas in one sentence, prose packed to fit a cap.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
