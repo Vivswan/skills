@@ -302,28 +302,35 @@ Production shape of one round:
 
 ## Who Merges
 
-The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges. Where a merge queue owns the ordering, the author's prepared action is enqueueing the converged PR; enqueue is not merged, so watch until the commit actually lands. Two standing exceptions, each only when the user has granted it:
+The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges.
+
+Where a merge queue owns the ordering, the author's prepared action is enqueueing the converged PR; enqueue is not merged, so watch until the commit actually lands. Two standing exceptions, each only when the user has granted it:
 
 - **A trivial mechanical fix.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) merges directly once its gates are green; the human gate is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
 - **A pipeline blocked on a merge.** When a converged PR gates queued work and the human is not acting, merge it and say so in the next report. Waiting idle on a merge the author could perform is the defect; the notification preserves the human's oversight.
 
-**The `merge-when-green` label is the owner's standing approval on one PR.** The owner applies it, never an agent; it says "merge this once every gate is green" and needs no second ask. It is a convention, not proof: the operator runs two checks on the PR's timeline before acting on it, and a PR without the label follows the rules above.
+**The `merge-when-green` label is the owner's standing approval on one PR.** The owner applies it, never an agent; it says "merge this once every gate is green" and needs no second ask. It is a convention, not proof: the operator runs three checks before acting on it, and a PR without the label follows the rules above.
 
 ```bash
 gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
-  | if .event == "labeled" and .label.name == "merge-when-green" then "label \(.actor.login)"
-    elif .event == "committed" then "push \(.sha[0:8])"
-    elif .event == "head_ref_force_pushed" then "force-push"
+  | if .event == "labeled" and .label.name == "merge-when-green" then "\(.created_at) label \(.actor.login)"
+    elif .event == "head_ref_force_pushed" then "\(.created_at) force-push"
     else empty end'
+head="$(gh pr view <n> --json headRefOid --jq .headRefOid)"
+gh run list --commit "$head" --event pull_request --branch <head-branch> --json createdAt --jq '[.[].createdAt] | max'
 ```
 
 ```text
 1. the LAST label line names the repository owner
-2. no push line comes after that label line
-   -> a later push voids the approval: remove the label, say so, the owner re-applies it
+2. no force-push line comes after that label line
+3. the head's LATEST pull_request run on this branch was created BEFORE that label line
+   -> any failure voids the approval: remove the label, say so, the owner re-applies it
+   -> check 3 prints null (no pull_request workflow): stop, the owner merges
 ```
 
-Read the lines in the order the API returns them and never sort them: the timeline is in the order events happened, while a commit's own date is when it was authored, so a commit authored before the label and pushed after it still shows up after it. Both checks pass and every check is green: merge, and report it. Either fails: leave the PR ready and report why.
+Check 3 is the push-time test: GitHub starts a new `pull_request` run every time a commit becomes this branch's head, so the latest run dates the last push even when the commit ran before (on another branch, in a fork, or on this branch before a reset), while a timeline `committed` event sits at its author date. It needs one `pull_request` workflow with the default activity types (`opened`, `synchronize`, `reopened`) and no `paths` or `branches` filter, which the fleet's `ci.yml` is; a repository without one gets `null` and the owner merges.
+
+All three pass and every check is green: merge with `gh pr merge <n> --squash --match-head-commit "$head"`, so a push racing the merge fails it instead of landing, and report. Any fails: leave the PR ready and report why.
 
 **The landing action is exit-conditioned, never chained**, for a PR merge and a direct push alike. Read the gate's own verdict and STOP; land in a separate command only after the gate itself reports green. Green means the gate's exit code AND its verdict, and a review gate is green only when its findings are triaged, not merely when its process exits 0.
 
