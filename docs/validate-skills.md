@@ -90,4 +90,4 @@ SKILLS_DIR=skills PLUGIN_MANIFEST=.claude-plugin/plugin.json MODE=structure bun 
 - Discovery, the same command with `MODE=discovery` (needs network).
 - `bun run test` covers the action's unit tests along with the rest of the suite.
 
-This repository's own richer checks (`bun run validate`, `bun run smoke`) stay in `scripts/`; the action is the fleet-wide baseline every skills repository shares.
+This repository's own richer checks (`bun run validate`, `bun run smoke`) stay in `scripts/`; the action is the baseline any repository hosting skills can call.
