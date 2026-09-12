@@ -129,7 +129,10 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
     - 1: review failed or `--wait timed out` (relaunch).
     - 2: wrong reviewer or file, or no launch record beside the output file.
 - `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>` without `--wait` reads a finished run once: it exits 1 (`no exit status recorded`) while the reviewer is still running instead of blocking.
-- Every run that reached the reviewer keeps its scratch dir (under the OS tmp dir, never the working tree): the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). `rm -rf` that directory once the verdict is triaged. A foreground launch whose reviewer binary is missing (exit 2) captured nothing and leaves nothing behind; a `--background` one keeps its dir so `--extract` can report the missing binary, so remove it after that. The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the prompt directory you minted remains yours to remove.
+- Every run that reached the reviewer keeps its scratch dir (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). The script snapshots your prompt into that dir, so all review artifacts travel and clean up together; the prompt directory you minted remains yours to remove.
+  - Remove exactly those two directories once the verdict is triaged, never a glob over the shared temp dir: one sweep of `rubber-duck-*` there deleted 53 directories and killed two other sessions' in-flight reviews.
+  - A session that wants a sweepable space sets its own `TMPDIR` to a directory it created before launching; `prepare` and the launch both honor it.
+  - A foreground launch whose reviewer binary is missing (exit 2) captured nothing and leaves nothing behind; a `--background` one keeps its dir so `--extract` can report the missing binary, so remove it after that.
 
 ### 5. Large change sets: fan out one review per section
 

@@ -1,6 +1,6 @@
 {
   "name": "pr-and-issue-discipline",
-  "description": "PR bodies and issues that show the change instead of describing it, draft state that tracks convergence, same-cycle review-comment triage, and a human hand on the merge by default.",
+  "description": "PR bodies and issues that show the change instead of describing it, draft state that tracks convergence, same-cycle review-comment triage, and a human hand on the merge by default (an owner-applied merge-when-green label is the standing approval).",
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",
