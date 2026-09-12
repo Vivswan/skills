@@ -96,7 +96,9 @@ Or install everything as a Claude Code plugin:
 
 ## Usage
 
-Skills are automatically available once installed. The agent will use them when relevant tasks are detected. Skills marked explicit-invocation-only ([`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/)) load only when you invoke them (e.g. [`/natural-writing`](./skills/natural-writing/) in Claude Code).
+Once installed, a skill fires on its own when its trigger matches the task.
+
+- Explicit-invocation-only skills load only when you invoke them: [`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/).
 
 **Examples:**
 
