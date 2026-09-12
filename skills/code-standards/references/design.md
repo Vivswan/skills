@@ -46,7 +46,7 @@ Canonical case: one page grew THREE independent problem-band renderers across th
 - The mandatory unification target is the concept's whole pipeline: what must agree, agrees through one pipeline with a guard.
 - Below that level, sharing any given function is a per-function judgment with no mechanical rule: share when sharing is easy and uncomplicating (or when consistency is itself the point); duplicate when a shared helper would accrete flags as its callers diverge. Not-DRY sometimes makes growth simpler than DRY.
 - Only unify where divergence is user-visible or correctness-relevant. Incidental duplication that is clearer duplicated stays duplicated, and deliberate test oracles exist precisely to disagree.
-- The unified pipeline itself follows `/no-invalid-states`: a discriminated union over the variants, not a flag soup a caller can mis-set. A "one pipeline" whose inputs can express nonsense states has traded N drift sites for one corruption site.
+- The unified pipeline itself follows `/no-invalid-states`: a discriminated union over the variants, not a flag soup a caller can set wrong. A "one pipeline" whose inputs can express nonsense states has traded N drift sites for one corruption site.
 
 ## Maintainability Over Effort
 

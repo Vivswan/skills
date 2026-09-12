@@ -84,7 +84,7 @@ Rewrite the affected step so it is correct as written and meets the quality bar.
 
 **Code first for mechanical failures.** Where each kind of fix lands:
 
-- A skill's script-backed **mechanical** behavior fails in practice (a probe misreads, a command mis-parses, an edge case crashes): the fix lands in the script, plus a regression test that reproduces the incident.
+- A skill's script-backed **mechanical** behavior fails in practice (a probe misreads, a command parses wrongly, an edge case crashes): the fix lands in the script, plus a regression test that reproduces the incident.
 - **Incident-warning** prose is the scoped reservation: trap narratives and priors stay judgment-lesson-only, because the script embodies the mechanism.
 - Public **contract** documentation (CLI shapes, schemas, output fields) is different: it moves together with the interface change it describes. Where a drift gate pins doc to source, the gate enforces exactly that pairing.
 - **Documentation-only** defects (activation metadata, invocation examples, workflow prose) fix in their actual source, never by touching a script that was not the failure.
