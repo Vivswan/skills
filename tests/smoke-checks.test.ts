@@ -203,7 +203,7 @@ describe("checkReadmeMermaidGraph", () => {
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/defined twice/);
   });
 
-  test("rejects an unparseable edge endpoint instead of skipping it", () => {
+  test("rejects an unparsable edge endpoint instead of skipping it", () => {
     const graph = `${goodGraph}  a --> b & c\n`;
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
   });
@@ -216,17 +216,14 @@ describe("checkReadmeMermaidGraph", () => {
     },
     { id: "a bare standalone alias", line: "orphan" },
     { id: "a second header line", line: "graph TB" },
-  ])(
-    "negative control: an unparseable line fails instead of slipping past: $id",
-    ({ id, line }) => {
-      const graph = `${goodGraph}  ${line}\n`;
-      expectCheckFailure(
-        () => checkReadmeMermaidGraph(withGraph(graph), names),
-        `cannot parse mermaid graph line '${line}'`,
-        id,
-      );
-    },
-  );
+  ])("negative control: an unparsable line fails instead of slipping past: $id", ({ id, line }) => {
+    const graph = `${goodGraph}  ${line}\n`;
+    expectCheckFailure(
+      () => checkReadmeMermaidGraph(withGraph(graph), names),
+      `cannot parse mermaid graph line '${line}'`,
+      id,
+    );
+  });
 
   test("rejects 'end' as a node alias (reserved flowchart keyword)", () => {
     // Mermaid silently breaks the rendering on an 'end' node instead of
