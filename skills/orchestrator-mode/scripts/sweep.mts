@@ -360,7 +360,7 @@ function lastEventInTail(tail: string): LastEvent {
 /**
  * Widen the tail window until some line parses, so a single truncated event
  * larger than the base window cannot quietly erase the previous event. The
- * window is still capped: a transcript with megabytes of unparseable tail
+ * window is still capped: a transcript with megabytes of unparsable tail
  * honestly reads null rather than turning the sweep O(file).
  */
 function lastEventType(fd: number, sizeBytes: number): string | null {
@@ -648,7 +648,7 @@ async function worktreeRow(
       return {
         worktree: path,
         ok: false,
-        error: `unparseable rev-list count: ${counts.stdout.toString("utf8")}`,
+        error: `unparsable rev-list count: ${counts.stdout.toString("utf8")}`,
       };
     }
   }

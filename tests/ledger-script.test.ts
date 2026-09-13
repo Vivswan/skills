@@ -306,7 +306,7 @@ describe("grants", () => {
 });
 
 describe("corrupt ledger files", () => {
-  test("unparseable JSON is a loud error on every command and is never clobbered", () => {
+  test("unparsable JSON is a loud error on every command and is never clobbered", () => {
     const file = freshFile();
     const garbage = "{ this is not json";
     writeFileSync(file, garbage);

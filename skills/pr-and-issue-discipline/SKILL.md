@@ -1,6 +1,6 @@
 ---
 name: pr-and-issue-discipline
-description: Use when opening a pull request, changing its body, title, or draft state, triaging review comments, writing an issue, replying to an issue reporter or outside contributor, or deciding who merges.
+description: Use when opening a pull request, writing or changing its body or title, writing an issue, or replying to an issue reporter or outside contributor.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -8,17 +8,18 @@ metadata:
 
 # PR and Issue Discipline
 
-> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, in the shape that fits the change; anything written for a tool or another agent sits in one collapsed section at the bottom; keep draft state honest, converge reviews, and leave the merge to a human by default.
+> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, in the shape that fits the change; anything written for a tool or another agent sits in one collapsed section at the bottom.
 
-These rules apply to any session that opens or updates a PR, triages a review round, writes an issue, replies to an issue reporter or outside contributor, or decides who merges. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session.
+These rules apply to any session that opens or updates a PR, writes an issue, or replies to an issue reporter or outside contributor. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session. What happens after the PR exists (draft flips, review rounds, who merges, the gates before landing) is the `/pr-landing-discipline` skill's moment.
 
 ## When to Apply
 
-- Opening or updating a pull request (body, title, draft state)
+- Opening a pull request, or writing or changing its body or title
 - Writing a bug report or issue
 - Replying to an issue reporter or outside contributor
-- A review round just landed on an open PR
-- Deciding whether a PR merges, and by whose hand
+- Re-reading the body before the PR is offered to its reader
+
+Open every PR as a DRAFT; from there the `/pr-landing-discipline` skill owns it: the draft flips, the babysit loop, who merges, and the gates before landing.
 
 ## PR Bodies: Show the Change, Shaped to It
 
@@ -35,7 +36,8 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 </details>
 ```
 
-- **Into part two:** reviewer guidance for bot reviewers such as Copilot, mechanism detail beyond `## How`, the recorded-not-built and accepted-deviation lists, gate and codex round counts, file-by-file notes.
+- **Into part two:** reviewer guidance for bot reviewers such as Copilot, mechanism detail beyond `## How`, the recorded-not-built and accepted-deviation lists, gate and codex round counts, file-by-file notes, line counts that fit the stated purpose.
+- **The test is the reader, not the item type.** Part one holds whatever the human needs to know or decide about this change; part two holds everything else. The list above is the default sorting, decided case by case: the codex round count is part two, but a finding from that round that changed what the change does, or left something undone, is part one.
 - **Nothing in part one depends on part two.** A PR whose detail fits in part one has no part two.
 - **The summary line is a heading.** The Readability rules below govern it: "Technical details" names content.
 
@@ -165,7 +167,7 @@ For every form:
 - Blocks show, prose tells. Where behavior is observable, the opening block is an actual command and its actual output, complete enough to stand alone; never manufacture output or add it only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
 - `## How` has no mandated carrier. Use terse bullets, a small diagram, a table, or two short paragraphs, whichever explains the mechanism fastest. One carrier per point: a diagram followed by a paragraph re-explaining it means the diagram failed.
 - `## Proof` names focused behavioral tests or stable checks, with numbers where they exist (tests, gates). Do not turn it into transient CI, approval, or review status.
-- Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above. The diff carries the detail; part one never narrates the implementation process, reduction history, line counts, transient status, future work, or the entire diff. Reviewer guidance, scope caveats, and gate or review round counts go in part two or nowhere.
+- Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above. The diff carries the detail; part one never narrates the implementation process, reduction history, transient status, future work, or the entire diff, and carries line counts only when they contradict the stated purpose (the `/pr-landing-discipline` skill's line accounting says when, and the reason comes with them). Reviewer guidance and gate or review round counts go in part two or nowhere; a scope caveat follows the reader test, part one when the reader must act on it or would be misled without it, part two otherwise.
 
 **Redact captured output before publishing.** Strip secrets, tokens, and credentials; genericize machine-specific absolute paths and usernames (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example). Redaction is not paraphrase: the command and the output structure stay verbatim.
 
@@ -184,6 +186,17 @@ BEGIN_COMMIT_OVERRIDE
 <footer>: <value, one line per break>
 END_COMMIT_OVERRIDE
 ```
+
+## Re-read Before the Human Reads
+
+The body is written when the PR opens and read when the PR is offered; the diff moves in between. Before the offer (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session. How hard to look depends on how far the PR moved: a one-commit PR gets a glance at the Proof numbers, a PR that went through eight review rounds gets every claim re-checked. What usually drifts:
+
+- **Every claim still true.** The opening block is still accurate (its After side, or its only side, is what the code does now), the Proof numbers are the final run's, and every file named as current still exists under that name.
+- **Scope drift.** Work the review rounds added or removed is in the body, or its absence is deliberate.
+- **Sorting.** Part one holds what the reader needs about the change as it is now. Anything that became detail moved down; anything that became important (a review finding that changed the change, a line count that contradicts the purpose) moved up.
+- **Title.** Type and subject name what landed, not the opening plan.
+
+A body that no longer matches is edited before the flip, never after the reader finds it.
 
 ## Issues: Same Principle
 
@@ -262,85 +275,3 @@ The rules the specimen follows:
   - A reply that says everything in plain words has no part two. An "expected behavior, here is the setting" answer needs no details block; the specimen's does, because the buffer size and timeout explain why the log stops where it does.
 - **A guess goes last in part one and is labeled a guess.** It saves a round trip without steering the reader before they answer.
 - The Readability rules and the redaction rule above apply unchanged.
-
-## Draft Discipline
-
-- Open every PR as a DRAFT, and keep it draft through its review loop.
-- Flip READY the moment it converges: never batched, never held back.
-- Flip BACK TO DRAFT the moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding), before the fix round starts.
-- Draft state tracks pending commits; CONVERGENCE gates the merge offer. A fresh comment needing only a reply does not bounce a ready PR back to draft (its reply-and-resolve lands the same cycle, no commit), but a PR is offered for merge only while the full converged definition below holds.
-
-**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes.
-
-## Babysit to Comment Convergence
-
-An open PR is live work until it merges: bot reviewers (e.g. Copilot code review) and humans leave comments on every push. Per PR, loop until quiescent:
-
-1. Every push gets a CI watcher (Companion Gates, below).
-2. When a review lands, triage EVERY comment the same cycle it appears, never batched:
-   - A valid finding is fixed in that same round.
-   - An invalid or not-valid-here comment gets a reply stating why, and its thread resolved.
-3. A fix push restarts the loop: new CI watch, re-gate on the changed content, and the bot may re-review.
-
-**Toil budget.** When rounds keep yielding one finding at a time (around ten rounds in), stop fixing instances one at a time: enumerate the recurring finding classes, sweep each whole class across the change in one pass, then resume the loop. One 35-round convergence collapsed to a few batch sweeps once the finding classes were enumerated.
-
-Read thread state via GraphQL, never from comment timestamps (a thread with no new comments can still be unresolved):
-
-```text
-reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage endCursor } }
-```
-
-Paginate with `after: <endCursor>` while `hasNextPage` is true; a fixed first page is not the full set.
-
-Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft; prefer balanced or high reasoning where the repo exposes the setting). Requesting a Copilot review via the REST reviewers endpoint takes the reviewer login `Copilot`, exactly: `copilot-pull-request-reviewer[bot]` silently no-ops (a 201 response with empty `requested_reviewers`), and GraphQL `reviewRequests` hides a pending Copilot request either way, so the issue timeline is the only confirmation the request registered. Between rounds, never poll: where the `/watch-ci-after-push` skill is installed, sleep on its `wait-for-pr-event` script, a background waiter whose exit wakes the session and names what changed.
-
-Production shape of one round:
-
-- "empty manifest passes vacuously": valid. Fixed with a regression test in the same cycle.
-- "script not wired into the docs": sequencing by design. Replied with the plan (a docs pass wires all scripts post-merge) and resolved.
-- "symlink following": split. The leaf-fidelity half fixed after confirming it empirically; the escape half declined with the recorded design rationale.
-
-## Who Merges
-
-The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges.
-
-Where a merge queue owns the ordering, the author's prepared action is enqueueing the converged PR; enqueue is not merged, so watch until the commit actually lands. Two standing exceptions, each only when the user has granted it:
-
-- **A trivial mechanical fix.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) merges directly once its gates are green; the human gate is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
-- **A pipeline blocked on a merge.** When a converged PR gates queued work and the human is not acting, merge it and say so in the next report. Waiting idle on a merge the author could perform is the defect; the notification preserves the human's oversight.
-
-**The `merge-when-green` label is the owner's standing approval on one PR.** The owner applies it, never an agent; it says "merge this once every gate is green" and needs no second ask. It is a convention, not proof: the operator runs three checks before acting on it, and a PR without the label follows the rules above.
-
-```bash
-head="$(gh pr view <n> --json headRefOid --jq .headRefOid)"   # first: a push after this fails the merge below
-gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
-  | if .event == "labeled" and .label.name == "merge-when-green" then "\(.created_at) label \(.actor.login)"
-    elif .event == "head_ref_force_pushed" then "\(.created_at) force-push"
-    else empty end'
-gh run list --commit "$head" --event pull_request --branch <head-branch> --json createdAt --jq '[.[].createdAt] | max'
-```
-
-```text
-1. the LAST label line names the repository owner
-2. no force-push line comes after that label line
-3. the head's LATEST pull_request run on this branch was created BEFORE that label line
-   -> any failure voids the approval: remove the label, say so, the owner re-applies it
-   -> check 3 prints null (no pull_request workflow): stop, the owner merges
-```
-
-Check 3 is the push-time test: GitHub starts a new `pull_request` run every time a commit becomes this branch's head, so the latest run dates the last push even when the commit ran before (on another branch, in a fork, or on this branch before a reset), while a timeline `committed` event sits at its author date. It needs one `pull_request` workflow with the default activity types (`opened`, `synchronize`, `reopened`) and no `paths` or `branches` filter, which the fleet's `ci.yml` is; a repository without one gets `null` and the owner merges.
-
-All three pass and every check is green: merge with `gh pr merge <n> --squash --match-head-commit "$head"`, so a push racing the merge fails it instead of landing, and report. Any fails: leave the PR ready and report why.
-
-**The landing action is exit-conditioned, never chained**, for a PR merge and a direct push alike. Read the gate's own verdict and STOP; land in a separate command only after the gate itself reports green. Green means the gate's exit code AND its verdict, and a review gate is green only when its findings are triaged, not merely when its process exits 0.
-
-```bash
-tail gate.log; git merge && git push    # WRONG: the merge runs whatever the log said
-tail gate.log && git merge && git push  # WRONG: && conditions on tail printing the log,
-                                        # not on the gate's verdict; a red log still merges
-```
-
-## Companion Gates
-
-- After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it. A MERGE is watched the same way, on the mainline tip's SHA (fetch the mainline from the remote the PR merged into and watch `FETCH_HEAD`): after `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
-- Before anything lands, an independent review that can block the landing, scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.
