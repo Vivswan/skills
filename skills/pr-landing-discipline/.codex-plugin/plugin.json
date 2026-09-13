@@ -1,0 +1,37 @@
+{
+  "name": "pr-landing-discipline",
+  "description": "Carries a pull request from opened to landed: draft state that tracks convergence, same-cycle review-comment triage, line accounting against the stated purpose, and a human hand on the merge by default (an owner-applied merge-when-green label is the standing approval).",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/pr-landing-discipline",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "pull-requests",
+    "code-review",
+    "draft-prs",
+    "merge-discipline",
+    "line-accounting",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "PR Landing Discipline",
+    "shortDescription": "Drafts, review rounds, line accounting, and the merge hand.",
+    "longDescription": "Fires once a pull request exists: when a review round lands, when the PR converges or gets new commit-requiring work, when deciding who merges, or when a change is about to land by PR merge or direct push. Drafts flip with convergence in both directions, every review round is triaged the same cycle with thread state read via GraphQL, additions and deletions are summed per kind of file and read against the change's stated purpose before it lands, and the human merges by default with two narrow standing exceptions and an exit-conditioned landing.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Review"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/pr-landing-discipline",
+    "defaultPrompt": [
+      "A review round just landed on the PR; triage it to convergence.",
+      "Run the line accounting on this PR before it lands.",
+      "The PR is converged and green. Who merges it?"
+    ],
+    "brandColor": "#0E7490"
+  }
+}

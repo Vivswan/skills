@@ -1,6 +1,6 @@
 {
   "name": "pr-and-issue-discipline",
-  "description": "PR bodies and issues that show the change instead of describing it, draft state that tracks convergence, same-cycle review-comment triage, and a human hand on the merge by default (an owner-applied merge-when-green label is the standing approval).",
+  "description": "PR bodies and issues that show the change instead of describing it, shaped to the change, with the human part short and anything written for a tool collapsed at the bottom; plain-first replies to issue reporters.",
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",
@@ -9,28 +9,20 @@
   "homepage": "https://github.com/Vivswan/skills/tree/main/skills/pr-and-issue-discipline",
   "repository": "https://github.com/Vivswan/skills",
   "license": "SEE LICENSE IN LICENSE.md",
-  "keywords": [
-    "agent-skills",
-    "pull-requests",
-    "issues",
-    "code-review",
-    "draft-prs",
-    "merge-discipline",
-    "plugin-ready"
-  ],
+  "keywords": ["agent-skills", "pull-requests", "issues", "pr-bodies", "plugin-ready"],
   "skills": "./",
   "interface": {
     "displayName": "PR and Issue Discipline",
     "shortDescription": "PRs and issues that show the change instead of describing it.",
-    "longDescription": "Fires when an agent opens or updates a pull request, triages a review round, writes an issue, replies to an issue reporter or outside contributor, or decides who merges. Bodies show the change in a block (captured output where behavior is observable, a diagram or table where not) inside the shape or repository template chosen once per session at plan time, keep the human-facing part short, and collapse anything written for a bot reviewer or another agent into one Technical details section at the bottom. Those replies lead with a plain-language part opening with a TL;DR list of what would help, adding a collapsed technical part only when it carries more. Drafts flip with convergence in both directions, every review round is triaged the same cycle with thread state read via GraphQL, and the human merges by default with two narrow standing exceptions.",
+    "longDescription": "Fires when an agent opens a pull request, writes or changes its body or title, writes an issue, or replies to an issue reporter or outside contributor. Bodies show the change in a block (captured output where behavior is observable, a diagram or table where not) inside the shape or repository template chosen once per session at plan time, keep the human-facing part short, and collapse anything written for a bot reviewer or another agent into one Technical details section at the bottom. Replies to reporters lead with a plain-language part opening with a TL;DR list of what would help, adding a collapsed technical part only when it carries more. Every PR opens as a draft and is handed to the pr-landing-discipline skill from there.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
-    "capabilities": ["Read", "Write", "Review"],
+    "capabilities": ["Read", "Write"],
     "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/pr-and-issue-discipline",
     "defaultPrompt": [
       "Open a draft PR for this branch with a body that shows the change.",
-      "A review round just landed on the PR; triage it to convergence.",
-      "The PR is converged and green. Who merges it?"
+      "Write the issue for this bug so the failure is shown, not described.",
+      "Reply to this issue reporter in plain language first."
     ],
     "brandColor": "#0E7490"
   }

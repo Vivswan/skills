@@ -1,0 +1,134 @@
+---
+name: pr-landing-discipline
+description: Use when a review round lands on an open PR, when flipping its draft state, deciding who merges, or landing a change by PR merge or direct push.
+license: SEE LICENSE IN LICENSE.md
+metadata:
+  author: Vivswan
+---
+
+# PR Landing Discipline
+
+> A PR is live work until it lands: draft while commits are pending, ready the moment it converges, every review round triaged the cycle it appears, the line counts read against the stated purpose, and the merge left to a human by default.
+
+These rules apply to any session that carries a change from "opened" to "landed": a PR through its review rounds to the merge, or a patch to a direct push. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session. Writing the PR body or an issue is the `/pr-and-issue-discipline` skill's moment; this skill starts once the PR exists.
+
+## When to Apply
+
+- A review round just landed on an open PR
+- A PR converges, or new commit-requiring work appears on a ready PR
+- Deciding who merges a converged PR
+- A change is about to land, by PR merge or direct push
+
+## Draft Discipline
+
+- Open every PR as a DRAFT, and keep it draft through its review loop.
+- Flip READY the moment it converges: never batched, never held back, and only after the body re-read the `/pr-and-issue-discipline` skill defines (the body was written at open; the diff has moved since).
+- Flip BACK TO DRAFT the moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding), before the fix round starts.
+- Draft state tracks pending commits; CONVERGENCE gates the merge offer. A fresh comment needing only a reply does not bounce a ready PR back to draft (its reply-and-resolve lands the same cycle, no commit), but a PR is offered for merge only while the full converged definition below holds.
+
+**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes.
+
+## Babysit to Comment Convergence
+
+An open PR is live work until it merges: bot reviewers (e.g. Copilot code review) and humans leave comments on every push. Per PR, loop until quiescent:
+
+1. Every push gets a CI watcher (Companion Gates, below).
+2. When a review lands, triage EVERY comment the same cycle it appears, never batched:
+   - A valid finding is fixed in that same round.
+   - An invalid or not-valid-here comment gets a reply stating why, and its thread resolved.
+3. A fix push restarts the loop: new CI watch, re-gate on the changed content, and the bot may re-review.
+
+**Toil budget.** When rounds keep yielding one finding at a time (around ten rounds in), stop fixing instances one at a time: enumerate the recurring finding classes, sweep each whole class across the change in one pass, then resume the loop. One 35-round convergence collapsed to a few batch sweeps once the finding classes were enumerated.
+
+Read thread state via GraphQL, never from comment timestamps (a thread with no new comments can still be unresolved):
+
+```text
+reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage endCursor } }
+```
+
+Paginate with `after: <endCursor>` while `hasNextPage` is true; a fixed first page is not the full set.
+
+Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft; prefer balanced or high reasoning where the repo exposes the setting). Requesting a Copilot review via the REST reviewers endpoint takes the reviewer login `Copilot`, exactly: `copilot-pull-request-reviewer[bot]` silently no-ops (a 201 response with empty `requested_reviewers`), and GraphQL `reviewRequests` hides a pending Copilot request either way, so the issue timeline is the only confirmation the request registered. Between rounds, never poll: where the `/watch-ci-after-push` skill is installed, sleep on its `wait-for-pr-event` script, a background waiter whose exit wakes the session and names what changed.
+
+Production shape of one round:
+
+- "empty manifest passes vacuously": valid. Fixed with a regression test in the same cycle.
+- "script not wired into the docs": sequencing by design. Replied with the plan (a docs pass wires all scripts post-merge) and resolved.
+- "symlink following": split. The leaf-fidelity half fixed after confirming it empirically; the escape half declined with the recorded design rationale.
+
+## Who Merges
+
+The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges.
+
+Where a merge queue owns the ordering, the author's prepared action is enqueueing the converged PR; enqueue is not merged, so watch until the commit actually lands. Two standing exceptions, each only when the user has granted it:
+
+- **A trivial mechanical fix.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) merges directly once its gates are green; the human gate is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
+- **A pipeline blocked on a merge.** When a converged PR gates queued work and the human is not acting, merge it and say so in the next report. Waiting idle on a merge the author could perform is the defect; the notification preserves the human's oversight.
+
+**The `merge-when-green` label is the owner's standing approval on one PR.** The owner applies it, never an agent; it says "merge this once every gate is green" and needs no second ask. It hands the operator the MERGE, not a verdict on the content: the owner agreed with the PR's idea and shape, at craft time or before, and may not have read the code. Every check the owner would run at the merge is now the operator's, and the label skips none of them: Converged as defined above, the line accounting below, the body re-read the `/pr-and-issue-discipline` skill defines, and the three label checks here. It is a convention, not proof: the operator runs those three checks before acting on it, and a PR without the label follows the rules above.
+
+```bash
+head="$(gh pr view <n> --json headRefOid --jq .headRefOid)"   # first: a push after this fails the merge below
+gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
+  | if .event == "labeled" and .label.name == "merge-when-green" then "\(.created_at) label \(.actor.login)"
+    elif .event == "head_ref_force_pushed" then "\(.created_at) force-push"
+    else empty end'
+gh run list --commit "$head" --event pull_request --branch <head-branch> --json createdAt --jq '[.[].createdAt] | max'
+```
+
+```text
+1. the LAST label line names the repository owner
+2. no force-push line comes after that label line
+3. the head's LATEST pull_request run on this branch was created BEFORE that label line
+   -> any failure voids the approval: remove the label, say so, the owner re-applies it
+   -> check 3 prints null (no pull_request workflow): stop, the owner merges
+```
+
+Check 3 is the push-time test: GitHub starts a new `pull_request` run every time a commit becomes this branch's head, so the latest run dates the last push even when the commit ran before (on another branch, in a fork, or on this branch before a reset), while a timeline `committed` event sits at its author date. It needs one `pull_request` workflow with the default activity types (`opened`, `synchronize`, `reopened`) and no `paths` or `branches` filter, which the fleet's `ci.yml` is; a repository without one gets `null` and the owner merges.
+
+All three pass and every check is green: merge with `gh pr merge <n> --squash --match-head-commit "$head"`, so a push racing the merge fails it instead of landing, and report. Any fails: leave the PR ready and report why.
+
+**The landing action is exit-conditioned, never chained**, for a PR merge and a direct push alike. Read the gate's own verdict and STOP; land in a separate command only after the gate itself reports green. Green means the gate's exit code AND its verdict, and a review gate is green only when its findings are triaged, not merely when its process exits 0.
+
+```bash
+tail gate.log; git merge && git push    # WRONG: the merge runs whatever the log said
+tail gate.log && git merge && git push  # WRONG: && conditions on tail printing the log,
+                                        # not on the gate's verdict; a red log still merges
+```
+
+## Line Accounting Before Landing
+
+Before a change lands, the author reads its additions and deletions per kind of file and checks the sums against the change's stated purpose: the title's type plus the body's first heading, or the commit subject's type when there is no PR. It is a count, not a code-quality judgment: a replacement as large as what it replaced has not simplified anything, however clean it reads, and only the numbers say so.
+
+```bash
+git diff --cached --numstat                          # landing a still-uncommitted patch
+git diff --numstat "<base-remote>/<base>...HEAD"     # a branch; the remote the PR merges into, never a fork remote
+gh api --paginate "repos/<owner>/<repo>/pulls/<n>/files" --jq '.[] | "\(.additions)\t\(.deletions)\t\(.filename)"'   # an open or landed PR
+```
+
+Sum the rows per kind. The kinds are whatever the repository keeps apart: source, scripts, tests, docs, workflows, and generated files (lockfiles, snapshots, rendered output). Generated files and binary rows (`-` in both columns) are named and left out of every sum; a rename row (`{old => new}`) counts only its edited lines, so leave rename detection on. The TARGET below is the kind the purpose acts on: source for a library change, scripts for a script rewrite, workflows for a CI change.
+
+| Stated purpose | Expected shape | Blocks the landing when |
+| --- | --- | --- |
+| Simplification, consolidation, retirement | target net negative; tests down only for the behavior removed | target net zero or up |
+| Bug fix | target touched at the defect site; tests up by the regression case | target grows well past the defect site, or tests +0 |
+| Feature | target and tests both up | tests +0 |
+| Behavior-preserving refactor | existing tests pass unchanged (restructuring or strengthening them is fine) | an existing test now expects a different output: the behavior changed, so the purpose is misstated |
+| Docs or contract change | only docs and contract files change | executable code changes |
+
+Where a row says tests +0, naming the existing test that already covers the change answers it: a fix an existing assertion now pins, a feature an existing data-driven suite already exercises.
+
+A mismatch blocks the landing until the author trims the change or explains the growth per hunk or function; "cleaner" is not an explanation. Two explanations recur, and each is checked rather than taken: a staged cutover whose deletion lands in a named sibling PR (the pair's sums must fit the row), and a guard or rule the purpose never stated (then the title is wrong: fix it, and the row it now falls under applies). Where the sums go depends on what they say. A count that fits its row needs no words; if carried at all, it sits in the PR body's technical-details section. A count that needed an explanation is part-one material: the reader's assumption (a consolidation shrinks) was wrong, so the sums and the reason stand in the human part where the user sees them, under the `/pr-and-issue-discipline` skill's Readability rules. With no PR, both go in the landing report.
+
+```markdown
+## Line accounting
+
+- **Source +41 -12, tests +30 -0.** The consolidation grew source by 29: the merged entry point carries a guard the three old paths each skipped. The three paths themselves go with the sibling PR #N (-88), so the pair is net -59.
+```
+
+Production: a release-script rewrite retiring a build-branch chain deleted 18 functions and added 18, leaving the script the same size. The review read every replacement as clean; only the count showed nothing had been retired. A pass over the 68 PRs landed around it, one `pulls/<n>/files` call each, found none the same size and four that grew by a guard no title mentioned or a deletion staged into a sibling PR.
+
+## Companion Gates
+
+- After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it. A MERGE is watched the same way, on the mainline tip's SHA (fetch the mainline from the remote the PR merged into and watch `FETCH_HEAD`): after `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
+- Before anything lands, an independent review that can block the landing, scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.

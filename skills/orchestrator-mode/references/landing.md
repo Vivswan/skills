@@ -7,7 +7,7 @@ A landing is two independent choices:
 
 The two sections below are the gate's two values. The base choice exists in direct mode too: dependent tracks still build branch-on-branch, they just land serially instead of via stacked PRs.
 
-Who merges, the standing merge exceptions, show-the-change PR bodies, draft discipline, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-and-issue-discipline` skill. Review-before-landing and the CI watcher after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode; their definitions and defaults live there, not here.
+Who merges, the standing merge exceptions, draft discipline, line accounting, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-landing-discipline` skill; show-the-change PR bodies in the `/pr-and-issue-discipline` skill. Review-before-landing and the CI watcher after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode; their definitions and defaults live there, not here.
 
 ## Direct Commits to the Mainline
 
@@ -24,7 +24,7 @@ Who merges, the standing merge exceptions, show-the-change PR bodies, draft disc
 
 The shared mechanics, for every PR in the session regardless of its base:
 
-1. Each track's branch becomes its own PR, opened as a DRAFT (title and description per the repo's conventions); it stays draft through its babysit loop, with the flip rules in both directions per `/pr-and-issue-discipline`. The spawn brief says who does what: either the builder pushes its branch and opens the draft PR, reporting the URL in its signal, or the builder stays no-push and the lead pushes from the worktree and opens it. Creating and iterating many PRs in parallel is fine: the file whitelists that keep worktrees disjoint keep the PRs disjoint too.
+1. Each track's branch becomes its own PR, opened as a DRAFT (title and description per the repo's conventions); it stays draft through its babysit loop, with the flip rules in both directions per `/pr-landing-discipline`. The spawn brief says who does what: either the builder pushes its branch and opens the draft PR, reporting the URL in its signal, or the builder stays no-push and the lead pushes from the worktree and opens it. Creating and iterating many PRs in parallel is fine: the file whitelists that keep worktrees disjoint keep the PRs disjoint too.
 2. What stays serial is merging into the shared base: merge one at a time in plan order (or hand the ordering to the repo's merge queue), and rebase or update each successor PR after the previous merge. The lead prepares each PR (gates green, landing-gate review converged, CI watched) and reports "ready to merge"; the merge itself is executed by the hand the setup interview named.
 3. The landing-gate review runs on each PR's final state before merge; re-run it after any rebase or restack that changes content.
 
@@ -120,11 +120,11 @@ gh pr ready <num> --undo             # BEFORE the lower link is even OFFERED as 
 #                                      plus base deletion mean a successor taken by auto-merge
 #                                      or a fast user action in that window lands unrestacked
 #                                      and un-regated. One successor draft span per link merge,
-#                                      from offer to reconvergence (/pr-and-issue-discipline's
+#                                      from offer to reconvergence (/pr-landing-discipline's
 #                                      both-directions draft rule, applied at the restack site).
 gh pr merge <pr> --squash            # DELEGATED PATH ONLY: this line runs when the interview
 #                                      delegated merging to the lead, a merge queue owns the
-#                                      ordering, or a standing /pr-and-issue-discipline
+#                                      ordering, or a standing /pr-landing-discipline
 #                                      exception applies.
 #                                      The DEFAULT hand is the user, so the default loop stops
 #                                      at flip-ready plus a "ready to merge" report per link.
