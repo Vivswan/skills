@@ -189,14 +189,14 @@ END_COMMIT_OVERRIDE
 
 ## Re-read Before the Human Reads
 
-The body is written when the PR opens and read when the PR is offered; the diff moves in between. Before the offer (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session:
+The body is written when the PR opens and read when the PR is offered; the diff moves in between. Before the offer (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session. How hard to look depends on how far the PR moved: a one-commit PR gets a glance at the Proof numbers, a PR that went through eight review rounds gets every claim re-checked. What usually drifts:
 
 - **Every claim still true.** The opening block is still accurate (its After side, or its only side, is what the code does now), the Proof numbers are the final run's, and every file named as current still exists under that name.
 - **Scope drift.** Work the review rounds added or removed is in the body, or its absence is deliberate.
 - **Sorting.** Part one holds what the reader needs about the change as it is now. Anything that became detail moved down; anything that became important (a review finding that changed the change, a line count that contradicts the purpose) moved up.
 - **Title.** Type and subject name what landed, not the opening plan.
 
-A body that fails any of these is edited before the flip, never after the reader finds it.
+A body that no longer matches is edited before the flip, never after the reader finds it.
 
 ## Issues: Same Principle
 
