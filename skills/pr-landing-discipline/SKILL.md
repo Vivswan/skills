@@ -98,7 +98,7 @@ tail gate.log && git merge && git push  # WRONG: && conditions on tail printing 
 
 ## Line Accounting Before Landing
 
-Before a change lands, the author reads its additions and deletions per kind of file and checks the sums against the change's stated purpose: the title's type plus the body's first heading, or the commit subject's type when there is no PR. It is a count, not a code-quality judgment: a replacement as large as what it replaced has not simplified anything, however clean it reads, and only the numbers say so.
+Before a change lands, the author reads its additions and deletions per kind of file and checks the sums against the change's stated purpose: the title's type plus the body's first heading, or the commit subject's type when there is no PR. The count is a signal, not the verdict: it catches the rewrite as large as what it replaced that every reviewer read as clean, and it asks why. Whether the change is good is the judgment, and a good change lands whatever the count says; what it never does is land with the surprise unexplained.
 
 ```bash
 git diff --cached --numstat                          # landing a still-uncommitted patch
@@ -108,7 +108,7 @@ gh api --paginate "repos/<owner>/<repo>/pulls/<n>/files" --jq '.[] | "\(.additio
 
 Sum the rows per kind. The kinds are whatever the repository keeps apart: source, scripts, tests, docs, workflows, and generated files (lockfiles, snapshots, rendered output). Generated files and binary rows (`-` in both columns) are named and left out of every sum; a rename row (`{old => new}`) counts only its edited lines, so leave rename detection on. The TARGET below is the kind the purpose acts on: source for a library change, scripts for a script rewrite, workflows for a CI change. The rows are the usual shapes, read the way a reviewer would read them, not a law: a purpose that fits none is read on its own terms.
 
-| Stated purpose | Expected shape | Blocks the landing when |
+| Stated purpose | Expected shape | Asks why when |
 | --- | --- | --- |
 | Simplification, consolidation, retirement | target net negative; tests down only for the behavior removed | target net zero or up |
 | Bug fix | target touched at the defect site; tests up by the regression case | target grows well past the defect site, or tests +0 |
@@ -118,7 +118,7 @@ Sum the rows per kind. The kinds are whatever the repository keeps apart: source
 
 Where a row says tests +0, naming the existing test that already covers the change answers it: a fix an existing assertion now pins, a feature an existing data-driven suite already exercises.
 
-A mismatch is a question the author answers before the landing: trim the change, or explain the growth at whatever grain makes it checkable (per function for a rewrite, per file for a sweep); "cleaner" is not an answer. Two explanations recur, and each is checked rather than taken: a staged cutover whose deletion lands in a named sibling PR (the pair's sums must fit the row), and a guard or rule the purpose never stated (then the title is wrong: fix it, and the row it now falls under applies). Where the sums go depends on what they say. A count that fits its row needs no words; if carried at all, it sits in the PR body's technical-details section. A count that needed an explanation is part-one material: the reader's assumption (a consolidation shrinks) was wrong, so the sums and the reason stand in the human part where the user sees them, under the `/pr-and-issue-discipline` skill's Readability rules. With no PR, both go in the landing report.
+A mismatch is a question the author answers before the landing, not a stop: either the change is trimmed, or it is judged good as it is and the growth is explained at whatever grain makes it checkable (per function for a rewrite, per file for a sweep). More lines for a better change is a fine answer; "cleaner" alone is not. Two explanations recur, and each is checked rather than taken: a staged cutover whose deletion lands in a named sibling PR (the pair's sums are read together), and a guard or rule the purpose never stated (then the title is wrong: fix it, and the row it now falls under applies). Where the sums go depends on what they say. A count that fits its row needs no words; if carried at all, it sits in the PR body's technical-details section. A count that went against the purpose is part-one material: the reader's assumption (a consolidation shrinks) was wrong, so the sums and the reason stand in the human part where the user sees them, under the `/pr-and-issue-discipline` skill's Readability rules, and the user is told when the change is offered. With no PR, both go in the landing report.
 
 ```markdown
 ## Line accounting
@@ -126,7 +126,7 @@ A mismatch is a question the author answers before the landing: trim the change,
 - **Source +41 -12, tests +30 -0.** The consolidation grew source by 29: the merged entry point carries a guard the three old paths each skipped. The three paths themselves go with the sibling PR #N (-88), so the pair is net -59.
 ```
 
-Production: a release-script rewrite retiring a build-branch chain deleted 18 functions and added 18, leaving the script the same size. The review read every replacement as clean; only the count showed nothing had been retired. A pass over the 68 PRs landed around it, one `pulls/<n>/files` call each, found none the same size and four that grew by a guard no title mentioned or a deletion staged into a sibling PR.
+Production: a release-script rewrite retiring a build-branch chain deleted 18 functions and added 18, leaving the script the same size. The review read every replacement as clean; only the count raised the question, and the answer was that nothing had been retired. A pass over the 68 PRs landed around it, one `pulls/<n>/files` call each, found none the same size and four that grew by a guard no title mentioned or a deletion staged into a sibling PR.
 
 ## Companion Gates
 
