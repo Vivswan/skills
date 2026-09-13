@@ -91,7 +91,7 @@ gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
    -> the head moved since the review: re-read head, review the delta, then merge
 ```
 
-**Folding PRs and the label.** The approval covers the idea and shape the owner agreed to on THAT PR. Folding another PR into a labeled one brings in content the owner never agreed to, so the label stays only when every PR folded in carried it too; otherwise the operator removes it, says so, and the owner re-applies after reading the folded content. A fresh combined PR starts unlabeled like any PR. The PR's own review rounds (new commits on the same branch) are not a fold; they keep the label. Prefer stacking or a fresh PR over folding into a labeled PR.
+**Folding PRs and the label.** The approval covers the idea and shape the owner agreed to on THAT PR. Folding another PR into a labeled one brings in content the owner never agreed to, so the label stays only when every PR folded in passes check 1 on its own timeline (an owner-set label, not merely a label); otherwise the operator removes it, says so, and the owner re-applies after reading the folded content. A fresh combined PR starts unlabeled like any PR. The PR's own review rounds (new commits on the same branch) are not a fold; they keep the label. Prefer stacking or a fresh PR over folding into a labeled PR.
 
 The operator removes the label in exactly two cases: set by someone other than the owner, or a fold that brought in unapproved content. A red check, an open thread, a gate finding, or a moved head never removes it: they hold the merge, not the approval.
 
