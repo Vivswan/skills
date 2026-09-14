@@ -19,7 +19,11 @@ skills-lock.json
 .claude/settings.local.json
 
 ## CI workspace paths (repo-platform)
+/.repo-platform-judge/
+/.zizmor-fleet-policy.yml
 /results.sarif
+/trivy_envs.txt
+/typos-v*.tar.gz
 
 ## Windows (github/gitignore Global/Windows.gitignore)
 # Windows thumbnail cache files
