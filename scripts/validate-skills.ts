@@ -9,7 +9,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   fail,
   isRecord,
@@ -26,7 +26,12 @@ import {
   runChecks,
   SKILLS_DIR,
   skillDirs,
+  XENO_DIR,
+  xenoSkillDirs,
 } from "./lib";
+
+/** The marketplace plugin that groups the vendored copies under their own CLI heading ("Xeno"). */
+export const XENO_PLUGIN = "xeno";
 
 // Claude Code rejects skills whose frontmatter exceeds these limits.
 const MAX_NAME_LENGTH = 64;
@@ -39,10 +44,13 @@ function validateMarketplace(): void {
     if (typeof name !== "string" || !KEBAB_CASE.test(name)) {
       fail(`${rel(path)}: plugin name ${JSON.stringify(name)} must be kebab-case`);
     }
-    // This repo publishes itself: every entry must resolve to the repo root,
-    // and the smoke test's entry-vs-manifest drift check relies on that.
-    if (plugin.source !== "./") {
-      fail(`${rel(path)}: plugin '${name}' source must be "./"`);
+    // This repo publishes itself: every entry resolves to the repo root, except
+    // the `xeno` plugin, which publishes the vendored copies under
+    // xeno/ as their own CLI group (the smoke test pins its roster).
+    const xeno = name === XENO_PLUGIN;
+    const source = xeno ? `./${relative(ROOT, XENO_DIR)}` : "./";
+    if (plugin.source !== source) {
+      fail(`${rel(path)}: plugin '${name}' source must be "${source}"`);
     }
     const skills = plugin.skills;
     if (skills !== undefined) {
@@ -51,11 +59,20 @@ function validateMarketplace(): void {
         if (typeof skillPath !== "string") {
           fail(`${rel(path)}: skill paths must be strings`);
         }
-        if (!existsSync(join(ROOT, skillPath))) {
-          fail(`${rel(path)}: missing referenced path ${skillPath}`);
+        if (!existsSync(join(ROOT, plugin.source, skillPath, "SKILL.md"))) {
+          fail(`${rel(path)}: missing referenced skill ${plugin.source}/${skillPath}`);
         }
       }
     }
+  }
+  // The root plugin is what marketplace installs and the CLI grouping key on; it must be there, once, under plugin.json's name.
+  const rootName = loadRootManifest().name;
+  const roots = plugins.filter((plugin) => plugin.name !== XENO_PLUGIN);
+  if (roots.length !== 1 || roots[0]?.name !== rootName) {
+    fail(
+      `${rel(path)}: exactly one plugin must publish the repository root, named '${rootName}'` +
+        " like .claude-plugin/plugin.json",
+    );
   }
 }
 
@@ -85,6 +102,22 @@ export function validateSkillDir(skillDir: string): void {
   requireFile(readme);
   requireFile(pluginJson);
 
+  checkSkillFrontmatter(skillMd, folder);
+
+  const plugin = loadJsonObject(pluginJson);
+  if (plugin.name !== folder) {
+    fail(`${rel(pluginJson)}: name does not match folder '${folder}'`);
+  }
+
+  const mcpJson = join(skillDir, ".mcp.json");
+  if (existsSync(mcpJson)) loadJson(mcpJson);
+}
+
+/**
+ * The frontmatter every published SKILL.md must carry, ours or vendored: name matching the folder,
+ * a description, both within the limits Claude Code loads, and no metadata.internal.
+ */
+export function checkSkillFrontmatter(skillMd: string, folder: string): void {
   const frontmatter = parseFrontmatter(skillMd);
   const name = frontmatter.name;
   const description = frontmatter.description;
@@ -114,17 +147,17 @@ export function validateSkillDir(skillDir: string): void {
     fail(
       `${rel(skillMd)}: metadata.internal is not allowed on a published skill --` +
         " the npx skills CLI silently drops internal skills at install time" +
-        " (only template/SKILL.md carries it)",
+        " (only template/SKILL.md carries it; on a xeno copy, remove it with a" +
+        " frontmatter override in xeno/sources.yml)",
     );
   }
+}
 
-  const plugin = loadJsonObject(pluginJson);
-  if (plugin.name !== folder) {
-    fail(`${rel(pluginJson)}: name does not match folder '${folder}'`);
-  }
-
-  const mcpJson = join(skillDir, ".mcp.json");
-  if (existsSync(mcpJson)) loadJson(mcpJson);
+/** A vendored copy carries only what its upstream folder carries, so only its SKILL.md frontmatter is checked. */
+export function validateExternalSkillDir(skillDir: string): void {
+  const skillMd = join(skillDir, "SKILL.md");
+  requireFile(skillMd);
+  checkSkillFrontmatter(skillMd, basename(skillDir));
 }
 
 function validateTemplate(): void {
@@ -156,8 +189,10 @@ function main(): void {
   validateRootPluginManifest();
   const dirs = skillDirs();
   for (const dir of dirs) validateSkillDir(dir);
+  const xeno = xenoSkillDirs();
+  for (const dir of xeno) validateExternalSkillDir(dir);
   validateTemplate();
-  console.log(`Skill validation passed (${dirs.length} skill(s) checked).`);
+  console.log(`Skill validation passed (${dirs.length} skill(s), ${xeno.length} xeno, checked).`);
 }
 
 // Importable for tests (tests/validate-skills.test.ts exercises

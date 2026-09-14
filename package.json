@@ -16,11 +16,13 @@
     "lint:yaml": "uvx --no-config yamllint -s .",
     "lint:json": "uvx --no-config check-jsonschema --schemafile https://json.schemastore.org/package.json package.json && uvx --no-config check-jsonschema --builtin-schema vendor.github-issue-forms .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml && uvx --no-config check-jsonschema --schemafile https://json.schemastore.org/github-issue-config.json .github/ISSUE_TEMPLATE/config.yml",
     "check:fix": "biome check --write .",
-    "check": "bun run typecheck && bun run lint && bun run lint:yaml && bun run lint:json && bun run test && bun run validate && bun run smoke"
+    "check": "bun run typecheck && bun run lint && bun run lint:yaml && bun run lint:json && bun run test && bun run validate && bun run smoke",
+    "sync-xeno": "bun scripts/sync-xeno.mts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.11",
     "@types/bun": "^1.4.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "yaml": "^2.9.1"
   }
 }

@@ -56,6 +56,8 @@ import {
   SKILLS_DIR,
   skillDirs,
   walkFiles,
+  XENO_DIR,
+  xenoSkillDirs,
 } from "./lib";
 import {
   checkDescriptionTriggerForm,
@@ -66,6 +68,8 @@ import {
   checkReadmeSkillList,
   checkReadmeUsageExplicitRoster,
 } from "./smoke-checks";
+import { parseSources } from "./sync-xeno.mts";
+import { XENO_PLUGIN } from "./validate-skills";
 
 // Strings that should only ever appear in template/, never in a published skill.
 const PLACEHOLDER_MARKERS = ["Replace with", "Replace this", "template-skill", "Template Skill"];
@@ -218,6 +222,7 @@ function checkCatalogCoverage(manifest: RootManifest, dirs: readonly string[]): 
 
 function checkMarketplaceAgainstManifest(marketplace: Marketplace, manifest: RootManifest): void {
   for (const plugin of marketplace.plugins) {
+    if (plugin.name === XENO_PLUGIN) continue;
     // strict defaults to true (plugin.json is the authority). strict:false
     // alongside a component-declaring plugin.json is a load-time conflict.
     if (plugin.strict === false && COMPONENT_FIELDS.some((field) => field in manifest.raw)) {
@@ -552,6 +557,73 @@ function checkPlaceholderMarkersStillInTemplate(): void {
   }
 }
 
+/** The `xeno` marketplace plugin exists exactly when vendored copies do, and its roster is exactly their folders. */
+function checkExternalPlugin(marketplace: Marketplace, xenoNames: ReadonlySet<string>): void {
+  const plugin = marketplace.plugins.find((entry) => entry.name === XENO_PLUGIN);
+  const where = rel(marketplace.path);
+  if (xenoNames.size === 0) {
+    if (plugin)
+      fail(`${where}: plugin '${XENO_PLUGIN}' has no vendored copies to publish -- remove it`);
+    return;
+  }
+  if (!plugin) {
+    fail(
+      `${where}: missing the '${XENO_PLUGIN}' plugin (source "./xeno", skills ./<name>)` +
+        " that groups the vendored copies under their own CLI heading",
+    );
+  }
+  if (typeof plugin.description !== "string" || plugin.description.trim() === "") {
+    fail(`${where}: plugin '${XENO_PLUGIN}' needs a description`);
+  }
+  const listed = isUnknownArray(plugin.skills) ? plugin.skills : [];
+  const expected = [...xenoNames].sort().map((name) => `./${name}`);
+  if (JSON.stringify([...listed].sort()) !== JSON.stringify(expected)) {
+    fail(
+      `${where}: plugin '${XENO_PLUGIN}' skills must be exactly ${JSON.stringify(expected)}` +
+        ` (one './<name>' per folder under xeno/), got ${JSON.stringify(listed)}`,
+    );
+  }
+}
+
+/** Every folder under xeno/ is a pinned copy (in sources.yml, named for its folder, indexed in the group README). */
+function checkExternalSources(xenoDirs: readonly string[]): void {
+  const sourcesPath = join(XENO_DIR, "sources.yml");
+  if (xenoDirs.length === 0 && !existsSync(sourcesPath)) return;
+  requireFile(sourcesPath);
+  const indexPath = join(XENO_DIR, "README.md");
+  requireFile(indexPath);
+  let sources: ReturnType<typeof parseSources>;
+  try {
+    sources = parseSources(readTextFile(sourcesPath), rel(sourcesPath));
+  } catch (error) {
+    fail(errorMessage(error));
+  }
+  const folders = new Set(xenoDirs.map((dir) => basename(dir)));
+  for (const name of Object.keys(sources)) {
+    if (!folders.has(name)) {
+      fail(`${rel(sourcesPath)}: '${name}' has no xeno/${name}/ folder -- run bun run sync-xeno`);
+    }
+  }
+  const indexText = readTextFile(indexPath);
+  for (const dir of xenoDirs) {
+    const name = basename(dir);
+    if (!Object.hasOwn(sources, name)) {
+      fail(
+        `${rel(dir)}: not in ${rel(sourcesPath)} -- external folders are written only by the sync`,
+      );
+    }
+    const frontmatter = parseFrontmatter(join(dir, "SKILL.md"));
+    if (frontmatter.name !== name) {
+      fail(
+        `${rel(dir)}/SKILL.md: frontmatter name '${frontmatter.name}' does not match folder '${name}'`,
+      );
+    }
+    if (!indexText.includes(`[\`${name}\`](./${name}/)`)) {
+      fail(`${rel(indexPath)}: the table is missing a row for '${name}' linking ./${name}/`);
+    }
+  }
+}
+
 // rubber-duck-review auto-discovers companions: every installed skill that
 // declares a '## Review Criteria' section joins the reviewer prompt, no
 // registry. Guard both halves: the SKILL.md must still state that rule, and
@@ -805,6 +877,9 @@ function main(): void {
   const manifest = loadRootManifest();
   const dirs = skillDirs();
   const skillNames: ReadonlySet<string> = new Set(dirs.map((dir) => basename(dir)));
+  const xenoDirs = xenoSkillDirs();
+  const xenoNames: ReadonlySet<string> = new Set(xenoDirs.map((dir) => basename(dir)));
+  const allNames: ReadonlySet<string> = new Set([...skillNames, ...xenoNames]);
 
   checkCatalogVersion(marketplace);
   checkMarketplacePluginVersionBan(rel(marketplace.path), marketplace.plugins);
@@ -847,15 +922,24 @@ function main(): void {
 
   checkManifestEntriesHaveFolders(manifest, skillNames);
   const readmeText = readTextFile(join(ROOT, "README.md"));
-  checkReadmeSkillList(readmeText, skillNames);
-  checkReadmeMermaidGraph(readmeText, skillNames);
-  const groupingEntries = skillFrontmatters.map(({ path, frontmatter }) => ({
-    name: basename(dirname(path)),
-    disabled: frontmatter["disable-model-invocation"] === true,
-  }));
+  checkReadmeSkillList(readmeText, skillNames, xenoNames);
+  checkReadmeMermaidGraph(readmeText, allNames);
+  const groupingEntries = [
+    ...skillFrontmatters.map(({ path, frontmatter }) => ({
+      name: basename(dirname(path)),
+      disabled: frontmatter["disable-model-invocation"] === true,
+    })),
+    ...xenoDirs.map((dir) => ({
+      name: basename(dir),
+      disabled: parseFrontmatter(join(dir, "SKILL.md"))["disable-model-invocation"] === true,
+      xeno: true,
+    })),
+  ];
   checkReadmeInvocationGrouping(readmeText, groupingEntries);
   checkReadmeUsageExplicitRoster(readmeText, groupingEntries);
-  checkIssueTemplateOptionsMatchFolders(skillNames);
+  checkIssueTemplateOptionsMatchFolders(allNames);
+  checkExternalSources(xenoDirs);
+  checkExternalPlugin(marketplace, xenoNames);
   // The metadata.author loop is the only consumer of the frontmatter list in
   // checkAuthorIdentity, so appending the template holds its pre-filled
   // author to the canonical one without joining any other per-skill check.
@@ -871,7 +955,7 @@ function main(): void {
   checkGrepTermsCoveredByWordList();
   checkReviewerPreamble();
 
-  console.log(`Smoke test passed (${dirs.length} skill(s) checked).`);
+  console.log(`Smoke test passed (${dirs.length} skill(s), ${xenoDirs.length} xeno, checked).`);
 }
 
 runChecks(main);

@@ -14,6 +14,12 @@
       "description": "Installable, plugin-ready skills that give coding agents disciplined workflows, from code standards and review gates to multi-agent orchestration",
       "homepage": "https://vivswan.github.io/",
       "source": "./"
+    },
+    {
+      "name": "xeno",
+      "description": "Vendored copies of other repositories' skills, pinned to an upstream commit and refreshed weekly",
+      "source": "./xeno",
+      "skills": ["./unslop"]
     }
   ]
 }
