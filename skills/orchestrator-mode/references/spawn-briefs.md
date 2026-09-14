@@ -20,6 +20,7 @@ Every brief includes:
 12. **Scratch files go to /tmp, never the worktree, at a unique per-agent path.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit. And the /tmp path is a `mktemp -d` taken once or an agent-named directory, never a fixed name like `/tmp/commit-msg.txt`: three builders in one session wrote their commit messages to that same path, and one track's commit carried another track's message (content unaffected).
 13. **Prompt and scratch files are written with the Write tool, one plain command per step.** In Claude Code, a builder inside an agent worktree has a sandbox that refuses Bash heredocs and compound commands whose text contains the word `git` (even inside a quoted prompt) as too complex to verify they stay inside the worktree; five builders in one wave each rediscovered it. So the brief says: write prompt and scratch files with the Write tool, and restore a mutated source with `cp` from a `/tmp` backup rather than a git command chained into the mutation.
 14. **Every git command in the brief names the worktree: `git -C <absolute worktree path> ...`**, never `cd <worktree> && git ...` (the compound form trips the same sandbox rule as item 13; `git -C` is one command). A shell's cwd is not a fact about the worktree: a teammate's cwd reset to the main checkout between turns, and its `git reset --soft` moved local main for a minute (restored, nothing pushed). And the builder's FIRST command is the preflight `git -C <worktree> rev-parse --show-toplevel`, which must print back the ABSOLUTE worktree path the brief declares (never the main checkout's path, and never a mere "somewhere under the harness's default worktree directory" test: Claude Code's `.claude/worktrees/` is one harness's default, not a fact about the worktree) before any install or edit: a worktree-isolated spawn once did not materialize, and the builder was editing the main checkout.
+15. **The test rule: red-then-green for BEHAVIOR changes only.** A deletion with no behavior of its own (a setting, a step, a dead path) is proved by a census in the PR body, grep counts before and after, never by a test manufactured so that something goes red; every new test says in its name or first line what would drift silently without it, and one that restates the source it reads is deleted, not committed. Where the `/code-standards` skill is installed, its `references/tests.md` owns the rule; briefs demanding red-then-green for every change produced eleven PRs of yaml-restating workflow tests in one day.
 
 ## The Stop-and-Wait Ban
 
@@ -102,7 +103,10 @@ Environment: FIRST run `git -C /repo/.claude/worktrees/wt-rate-limit
   command names the worktree the same way, `git -C <that path> ...`,
   never `cd && git`.
 Gates: run `bun run check` FOREGROUND until green, then run your own
-  review loop and fix findings before signaling. In Claude Code spawn
+  review loop and fix findings before signaling. Red-then-green for
+  behavior changes only; a deletion with no behavior of its own is proved
+  by a census in the PR body, not a test. Every new test names what would drift silently without it;
+  one that restates the source it reads is deleted. In Claude Code spawn
   reviewers UNNAMED (named spawns detach there); write scratch/prompt
   files under your own `mktemp -d` in /tmp with your Write tool, never
   here, never a fixed name like /tmp/commit-msg.txt, and never via a

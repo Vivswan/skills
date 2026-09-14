@@ -46,11 +46,15 @@ Full detail: `references/design.md`.
 
 A floor every test clears, not a recipe for which tests to write: fuzzing, property-based, integration, and other richer tests are welcome, and each of them still meets this bar. A test asserts a whole outcome, not one field of it. Agents drift toward many small weak tests; the fix is tests that each pin a whole outcome, which leaves fewer of them as a side effect, not a goal.
 
+- Every test answers "what would drift silently without this?" in its name or first line. Three answers count: an external fact the platform does not enforce for us, a cross-file consistency the source cannot express, or a regression with a named incident. "The source says so" means no test.
 - Delete tests that only assert a shape, a type, or that something exists. If that fact matters, assert it inside a test that also checks the value.
 - When hand-written cases differ only along one input axis, replace them with one parametrized case list.
 - Prove each guard test: show it failing on the bug it guards, and for that reason. Reintroducing the bug is the standard form; a pre-fix red run is the same control.
+- Red-then-green is for behavior changes, a fix made by deleting code included. A deletion with no behavior of its own (a setting, a step, a dead path) proves itself with a census in the PR body (grep counts before and after), never with a test manufactured so that something goes red.
 
 Specimen: an extractor had fifteen tests each asserting one key of the returned dict. Folded into one parametrized test pinning the whole dict per scenario, the file went from 81 test functions to 44 while every one of the seven bugs the suite existed to catch still failed when reintroduced. A test that ignores a column cannot catch a regression in it.
+
+Specimen: builders on a workflows repository shipped shape tests that restated the yaml they had just read (a census that no workflow sets `cancel-in-progress: false`, a pin that a job's `needs` equals the list in the file), eleven PRs of them in one day. Such a test changes in the same commit as the source, so nothing can drift under it: delete it.
 
 Full detail: `references/tests.md`.
 
@@ -139,6 +143,7 @@ Full detail: `references/artifacts.md`.
 - Instance-only fixes: does the change prevent recurrence (test, type, tooling), or just patch the case at hand?
 - A recurring or recurrence-prone problem fixed again without a guard test, tripwire, or pipeline fix (or a proposal to the user when the pipeline is out of reach).
 - Tests that assert only a shape, a type, or that something exists; hand-written test functions that differ only along one input axis and should be one parametrized case list; a guard test never seen failing on the bug it guards.
+- A new test that restates the source it reads (a workflow test pinning `needs` to the list in the yaml), or whose name or first line does not say what would drift silently without it; a test manufactured for a deletion in place of a census in the PR body.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
@@ -163,7 +168,7 @@ Triage findings against the standards above; each criterion maps to one.
 ## References
 
 - `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort
-- `references/tests.md`: the minimum standard for tests, what counts as weak, proving a guard test with a negative control
+- `references/tests.md`: the minimum standard for tests, what counts as weak, the drift question every test answers, proving a guard test with a negative control, the census rule for deletions
 - `references/comments.md`: what a good comment carries, tell then show, the two-question test, the specimens, the TODO ban, planning references
 - `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging
 - `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions
