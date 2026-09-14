@@ -112,7 +112,7 @@ describe("update", () => {
       xeno,
     );
     expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).toBe(
-      "---\nname: alpha\ndescription: Use when testing.\nlicense: MIT\n---\n\n# Alpha\n\nbody\n",
+      "---\nname: alpha\ndescription: Use when testing.\nlicense: MIT\n\n# Modified from upstream by the xeno sync of Vivswan/skills: disable-model-invocation removed, license set\n---\n\n# Alpha\n\nbody\n",
     );
     expect(readFileSync(join(xeno, "alpha", "x.md"), "utf8")).toBe("x\n");
   });
@@ -201,7 +201,7 @@ describe("what a copy must keep", () => {
       xeno,
     );
     expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).toBe(
-      "---\r\nname: alpha\r\ndescription: >-\r\n  Use when testing.\r\n---\r\n\r\n# Alpha\r\n",
+      "---\r\nname: alpha\r\ndescription: >-\r\n  Use when testing.\r\n\r\n# Modified from upstream by the xeno sync of Vivswan/skills: description set, disable-model-invocation removed\r\n---\r\n\r\n# Alpha\r\n",
     );
   });
 
@@ -255,8 +255,8 @@ describe("changing an override is not a hand edit", () => {
       alpha: { ...(synced.alpha as Source), frontmatter: { "disable-model-invocation": null } },
     };
     expect(update(withOverride, xeno).reports[0]?.status).toBe("updated");
-    expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).not.toContain(
-      "disable-model-invocation",
+    expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).not.toMatch(
+      /^disable-model-invocation:/m,
     );
   });
 });

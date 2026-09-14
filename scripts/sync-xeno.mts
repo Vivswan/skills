@@ -197,7 +197,7 @@ export const SOURCES_HEADER = `# Vendored external skills, one mapping per folde
 #   commit       the upstream commit the copy was taken from; the sync moves it, nobody edits it
 #   license      SPDX id of the upstream license, or "none published"
 #   license_file repository-relative path of the upstream license text, copied in under its basename when the folder carries none
-#   frontmatter  SKILL.md keys set (scalar) or removed (null) in the copy, the only allowed difference from upstream
+#   frontmatter  SKILL.md keys set (scalar) or removed (null) in the copy; with license_file, the only allowed differences from upstream
 `;
 
 /** Updates the existing document in place, so its comments and scalar styles survive a pin move; a missing file is rendered fresh. */
@@ -344,6 +344,8 @@ export function fetchSnapshot(
  * so a folded description or a nested mapping is removed or kept whole, and the file's own line
  * ending is used throughout.
  */
+export const MODIFIED_NOTICE = "Modified from upstream by the xeno sync of Vivswan/skills";
+
 export function applyOverrides(files: Files, overrides: Source["frontmatter"]): Files {
   if (!overrides || Object.keys(overrides).length === 0) return files;
   const skill = files.get("SKILL.md");
@@ -364,10 +366,14 @@ export function applyOverrides(files: Files, overrides: Source["frontmatter"]): 
       `SKILL.md frontmatter is not a YAML mapping: ${doc.errors[0]?.message ?? "no mapping"}`,
     );
   }
+  const changes: string[] = [];
   for (const [key, value] of Object.entries(overrides)) {
     if (value === null) doc.delete(key);
     else doc.set(key, value);
+    changes.push(`${key} ${value === null ? "removed" : "set"}`);
   }
+  // Apache 2.0 section 4(b) wants a modified file to say so; every modified copy says so the same way.
+  doc.comment = ` ${MODIFIED_NOTICE}: ${changes.join(", ")}`;
   const block = doc.toString({ lineWidth: 0 }).replace(/\n$/, "").replace(/\n/g, eol);
   const rewritten = Buffer.concat([Buffer.from(`---${eol}${block}${eol}---`, "utf8"), split.rest]);
   return new Map([...files, ["SKILL.md", { ...skill, bytes: rewritten }]]);
