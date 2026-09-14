@@ -1172,3 +1172,36 @@ describe("eighth Copilot round on the moved scripts", () => {
     expect([out.status, out.stderr]).toEqual([0, ""]);
   });
 });
+
+describe("ninth Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const demo = `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`;
+
+  test("a layer path with a . segment is a declaration error, since the scanner never emits one", () => {
+    const root = variant("dot-segment", {
+      "architecture.yml":
+        "layers:\n  main: [./src/main.ts]\n  engine: [src/engine/]\nedges:\n  main: [engine]\n",
+    });
+    const out = run(ARCH_LINT, [], root);
+    expect(out.status).toBe(2);
+    expect(out.stderr).toContain("layer main names ./src/main.ts; write it without the . segment");
+  });
+
+  test("a fence inside a block quote, and a four-space-indented fence-like line inside a fence, are both quoted text", () => {
+    const quoted =
+      "> ```markdown\n> <!-- BEGIN GENERATED: architecture-map -->\n> <!-- END GENERATED: architecture-map -->\n> ```";
+    const nested =
+      "````markdown\n    ```\n<!-- BEGIN GENERATED: architecture-map -->\n<!-- END GENERATED: architecture-map -->\n````";
+    const root = variant("quoted-fences", {
+      "docs/quoted.md": `# T\n\n${quoted}\n\n${nested}\n\n\`\`\`mermaid\nflowchart LR\n  a["src/engine/run.ts<br>run()"]\n\`\`\`\n\n${demo}\n\n## Map\n\n<!-- BEGIN GENERATED: architecture-map -->\n<!-- END GENERATED: architecture-map -->\n`,
+    });
+    const page = run(
+      CHECK_PAGE,
+      ["--page", "docs/quoted.md", "--repo-url", REPO_URL, "--expect-diagrams", "1"],
+      root,
+    );
+    expect([page.status, page.stderr]).toEqual([0, ""]);
+    const rendered = run(RENDER, ["--page", "docs/quoted.md"], root);
+    expect([rendered.status, rendered.stderr]).toEqual([0, ""]);
+  });
+});

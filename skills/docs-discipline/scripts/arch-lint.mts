@@ -81,6 +81,10 @@ export function readArchitecture(path: string, label = path): Architecture {
           `${label}: layer ${layer} names ${path}, which leaves the repository; paths are repository-relative`,
         );
       }
+      // The scanner emits src/main.ts, never ./src/main.ts, so a dot segment could own nothing.
+      if (path.split("/").includes(".")) {
+        throw new Error(`${label}: layer ${layer} names ${path}; write it without the . segment`);
+      }
     }
   }
   // layerOf takes the first match in YAML order, so an overlap would hand

@@ -80,8 +80,9 @@ export interface Fence {
   body: string;
 }
 
-// Up to three spaces of indent, as Markdown allows; four make indented code, which is quoted text.
-const FENCE_OPEN = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+// A fence may sit inside block quotes (`> `), then up to three spaces of indent, as Markdown allows;
+// four spaces make indented code, which is quoted text. The closer carries the same quote prefix.
+const FENCE_OPEN = /^((?:>[ ]?)*)( {0,3})(`{3,}|~{3,})(.*)$/;
 const MERMAID_INFO = /^\s*mermaid\s*$/;
 
 /** `markdown` with CRLF line ends folded, so every reader counts the same lines. */
@@ -100,10 +101,13 @@ function fences(lines: readonly string[]): Fence[] {
   for (let index = 0; index < lines.length; index++) {
     const open = FENCE_OPEN.exec(lines[index] ?? "");
     if (open === null) continue;
-    const indent = open[1] ?? "";
-    const ticks = open[2] ?? "```";
-    // A closer repeats the opener's marker character at least as many times.
-    const close = new RegExp(`^[ \\t]*${ticks[0] === "~" ? "~" : "`"}{${ticks.length},}[ \\t]*$`);
+    const quote = open[1] ?? "";
+    const indent = quote + (open[2] ?? "");
+    const ticks = open[3] ?? "```";
+    // A closer repeats the opener's marker character at least as many times, under the same quote prefix and at most three spaces in.
+    const close = new RegExp(
+      `^${escapeRe(quote)} {0,3}${ticks[0] === "~" ? "~" : "`"}{${ticks.length},}[ \\t]*$`,
+    );
     const body: string[] = [];
     let cursor = index + 1;
     while (cursor < lines.length && !close.test(lines[cursor] ?? "")) {
@@ -114,7 +118,7 @@ function fences(lines: readonly string[]): Fence[] {
     found.push({
       line: index,
       end: Math.min(cursor, lines.length - 1),
-      mermaid: MERMAID_INFO.test(open[3] ?? ""),
+      mermaid: MERMAID_INFO.test(open[4] ?? ""),
       body: body.join("\n"),
     });
     index = cursor;
