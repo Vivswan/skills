@@ -151,7 +151,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - Skip a valid finding only when the fix would conflict with the design, reach outside the change under review, or go against an explicit user decision; record why.
   - A finding you judge incorrect or inapplicable is not skipped but rejected, per the next bullet.
 - Do not blindly accept every finding. If you disagree, explain why, and watch for fixes that would conflict with the design (e.g. a suggested guard that breaks a legitimate path).
-- An "add a test" finding that names no fact the test would pin beyond what the source says is rejected with that reason, whichever reviewer raised it; a deletion with no behavior of its own is proved by the census in the PR body, not a test.
+- An "add a test" finding that names no fact the test would pin beyond what the source says is rejected with that reason, whichever reviewer raised it; a deletion with no behavior of its own is proved by the census in the PR body or landing report, not a test.
 - If a finding conflicts with an explicit user decision, follow the user and record that the issue was intentionally skipped.
 - Re-validate after each batch of fixes (typecheck / lint / tests) before re-reviewing.
 

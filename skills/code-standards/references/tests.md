@@ -53,7 +53,7 @@ Specimen: eleven PRs landed in one day on a repository of GitHub Actions workflo
 
 ## Deletions: census, not test
 
-Red-then-green is for behavior changes: a fix or a feature has a behavior to see red first, and a fix made by deleting code (a faulty early return removed) is a behavior change like any other. A deletion with no behavior of its own (a setting, a step, a dead path removed) has nothing to see red, so it proves itself with a census in the PR body: the grep that counts the removed thing, run before and after at the same path.
+Red-then-green is for behavior changes: a fix or a feature has a behavior to see red first, and a fix made by deleting code (a faulty early return removed) is a behavior change like any other. A deletion with no behavior of its own (an unused setting, a dead path; removing a deploy step is a behavior change) has nothing to see red, so it proves itself with a census: the grep that counts the removed thing, run before and after at the same path. The census goes in the PR body, or in the landing report when the change lands by direct push with no PR.
 
 ```markdown
 ## Proof

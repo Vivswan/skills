@@ -55,7 +55,7 @@ Production shape of one round:
 - "empty manifest passes vacuously": valid. Fixed with a regression test in the same cycle.
 - "script not wired into the docs": sequencing by design. Replied with the plan (a docs pass wires all scripts post-merge) and resolved.
 - "symlink following": split. The leaf-fidelity half fixed after confirming it empirically; the escape half declined with the recorded design rationale.
-- "add a regression test" on a deletion: declined. The comment named no fact the test would pin that the source does not say (the `/rubber-duck-review` skill's standing test question); the body's census is the proof. Replied with the rule and resolved.
+- "add a regression test" on a deletion with no behavior of its own: declined. The comment named no fact the test would pin that the source does not say (the `/rubber-duck-review` skill's standing test question); the body's census is the proof. Replied with the rule and resolved.
 
 ## Who Merges
 

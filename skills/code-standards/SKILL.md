@@ -50,7 +50,7 @@ A floor every test clears, not a recipe for which tests to write: fuzzing, prope
 - Delete tests that only assert a shape, a type, or that something exists. If that fact matters, assert it inside a test that also checks the value.
 - When hand-written cases differ only along one input axis, replace them with one parametrized case list.
 - Prove each guard test: show it failing on the bug it guards, and for that reason. Reintroducing the bug is the standard form; a pre-fix red run is the same control.
-- Red-then-green is for behavior changes, a fix made by deleting code included. A deletion with no behavior of its own (a setting, a step, a dead path) proves itself with a census in the PR body (grep counts before and after), never with a test manufactured so that something goes red.
+- Red-then-green is for behavior changes, a fix made by deleting code included. A deletion with no behavior of its own (an unused setting, a dead path) proves itself with a census (grep counts before and after) in the PR body, or in the landing report with no PR, never with a test manufactured so that something goes red.
 
 Specimen: an extractor had fifteen tests each asserting one key of the returned dict. Folded into one parametrized test pinning the whole dict per scenario, the file went from 81 test functions to 44 while every one of the seven bugs the suite existed to catch still failed when reintroduced. A test that ignores a column cannot catch a regression in it.
 
@@ -143,7 +143,7 @@ Full detail: `references/artifacts.md`.
 - Instance-only fixes: does the change prevent recurrence (test, type, tooling), or just patch the case at hand?
 - A recurring or recurrence-prone problem fixed again without a guard test, tripwire, or pipeline fix (or a proposal to the user when the pipeline is out of reach).
 - Tests that assert only a shape, a type, or that something exists; hand-written test functions that differ only along one input axis and should be one parametrized case list; a guard test never seen failing on the bug it guards.
-- A new test that restates the source it reads (a workflow test pinning `needs` to the list in the yaml), or whose name or first line does not say what would drift silently without it; a test manufactured for a deletion in place of a census in the PR body.
+- A new test that restates the source it reads (a workflow test pinning `needs` to the list in the yaml), or whose name or first line does not say what would drift silently without it; a test manufactured for a deletion with no behavior of its own in place of a census in the PR body or landing report.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
