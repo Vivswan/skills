@@ -379,6 +379,20 @@ describe("license_file", () => {
     expect(existsSync(join(xeno, "alpha", "LICENSE"))).toBe(true);
   });
 
+  test("a license_file cannot stand in for a missing folder, and cannot point inside the folder", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "MIT License\n" });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const typo = {
+      ...source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }),
+      path: "plugins/skills/typo",
+    };
+    expect(() => update({ alpha: typo }, xeno)).toThrow(/no files under plugins\/skills\/typo\//);
+    const inside = `alpha:\n  url: u\n  path: plugins/skills/alpha\n  commit: ${"a".repeat(40)}\n  license: MIT\n  license_file: plugins/skills/alpha/LICENSE\n`;
+    expect(() => parseSources(inside)).toThrow(
+      /is inside plugins\/skills\/alpha\/ and travels with the folder already/,
+    );
+  });
+
   test("a license_file that does not exist upstream, or one the folder already carries, is an error", () => {
     const up = upstream({
       "plugins/skills/alpha/SKILL.md": SKILL,

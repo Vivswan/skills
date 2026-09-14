@@ -112,6 +112,12 @@ export function parseSources(text: string, where = "sources.yml"): Sources {
       ) {
         throw new Error(`${where}: ${name}.license_file must be a repository-relative file path`);
       }
+      // A file inside the folder is already copied and pinned as upstream's; naming it here would make it registry-owned.
+      if (file.startsWith(`${path}/`)) {
+        throw new Error(
+          `${where}: ${name}.license_file ${file} is inside ${path}/ and travels with the folder already`,
+        );
+      }
     }
     const source: Source = {
       url: entry.url as string,
@@ -282,6 +288,7 @@ export function fetchSnapshot(
       ...(source.licenseFile ? [`:(literal)${source.licenseFile}`] : []),
     ];
     const listing = git(["ls-tree", "-r", "-z", "FETCH_HEAD", "--", ...pathspecs], work);
+    const licenseName = source.licenseFile ? basename(source.licenseFile) : undefined;
     if (
       source.licenseFile &&
       !listing.split("\0").some((row) => row.endsWith(`\t${source.licenseFile}`))
@@ -312,14 +319,16 @@ export function fetchSnapshot(
       });
       if (blob.status !== 0) throw new Error(`git show ${path}: ${blob.stderr.toString().trim()}`);
       const inFolder = path.startsWith(`${source.path}/`);
-      const name = inFolder ? relative(source.path, path) : basename(path);
+      const name = inFolder ? relative(source.path, path) : (licenseName as string);
       if (!inFolder && files.has(name)) {
         throw new Error(`${source.url}: the folder already carries ${name}; drop license_file`);
       }
       files.set(name, { bytes: blob.stdout, executable: mode === "100755" });
     }
-    if (files.size === 0)
+    // The license row alone is not a folder: a mistyped path must not yield a copy holding only LICENSE.
+    if (![...files.keys()].some((name) => name !== licenseName)) {
       throw new Error(`${source.url}@${commit}: no files under ${source.path}/`);
+    }
     return { commit, files };
   } finally {
     rmSync(work, { recursive: true, force: true });
