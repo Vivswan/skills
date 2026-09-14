@@ -58,9 +58,10 @@ const isBlockKind = (ch: string | undefined) => ch === "P" || ch === "L" || ch =
 function blankFrontMatter(text: string): string[] {
   const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
   const out = [...lines];
+  // Only a closed block is front matter; a lone --- is a thematic break and the page is prose.
   if (lines[0] === "---") {
     const close = lines.indexOf("---", 1);
-    for (let i = 0; i <= (close === -1 ? lines.length - 1 : close); i++) out[i] = "";
+    if (close !== -1) for (let i = 0; i <= close; i++) out[i] = "";
   }
   return out;
 }
@@ -119,6 +120,21 @@ function stripComments(text: string): string {
   return out;
 }
 
+/** Cuts each BEGIN region through the END marker of the same name; a BEGIN with no matching END, or a stray END, hides nothing. */
+function dropGeneratedRegions(stream: string): string {
+  let out = stream;
+  const begin = new RegExp(`${OPEN}G([^${BLOCK_END}]*)${BLOCK_END}`);
+  for (let m = begin.exec(out); m; m = begin.exec(out)) {
+    const close = `${OPEN}g${m[1]}${BLOCK_END}`;
+    const at = out.indexOf(close, m.index + m[0].length);
+    out =
+      at === -1
+        ? out.slice(0, m.index) + out.slice(m.index + m[0].length)
+        : out.slice(0, m.index) + out.slice(at + close.length);
+  }
+  return out.replace(new RegExp(`${OPEN}g[^${BLOCK_END}]*${BLOCK_END}`, "g"), "");
+}
+
 export function scanPage(text: string): Scan {
   const lines = blankFrontMatter(text);
   const nothing = () => "";
@@ -134,8 +150,11 @@ export function scanPage(text: string): Scan {
     code: nothing,
     table: (c: string) => `${OPEN}N${c}${BLOCK_END}`,
     html: (c: string) => {
-      if (c.includes("BEGIN GENERATED")) return `${OPEN}G${BLOCK_END}`;
-      if (c.includes("END GENERATED")) return `${OPEN}g${BLOCK_END}`;
+      // Only the documented marker comment, with its name, opens or closes a region.
+      const begin = /^\s*<!-- BEGIN GENERATED: (\S+)/.exec(c);
+      const end = /^\s*<!-- END GENERATED: (\S+)/.exec(c);
+      if (begin) return `${OPEN}G${begin[1]}${BLOCK_END}`;
+      if (end) return `${OPEN}g${end[1]}${BLOCK_END}`;
       return "";
     },
     hr: nothing,
@@ -146,10 +165,7 @@ export function scanPage(text: string): Scan {
     listItem: (c: string) => `${OPEN}L${c}${BLOCK_END}`,
   });
 
-  const prose = stream.replace(
-    new RegExp(`${OPEN}G${BLOCK_END}[\\s\\S]*?(?:${OPEN}g${BLOCK_END}|$)`, "g"),
-    "",
-  );
+  const prose = dropGeneratedRegions(stream);
 
   const scan: Scan = { units: [], codespans: [], links: [] };
   let cursor = 0;
@@ -220,6 +236,12 @@ export function pathCandidate(token: string): string | null {
   return path.includes("/") && EXTENSION.test(path) ? path : null;
 }
 
+/** True when `file` sits under `root`, judged by the relative path so the host's separator does not matter. */
+function withinRoot(root: string, file: string): boolean {
+  const rel = relative(resolve(root), file);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
 /** The root, the page's directory, and every directory between: a skill's reference page names `scripts/x.mts` from the skill folder. */
 function bases(root: string, pageDir: string): string[] {
   const out = [pageDir];
@@ -233,9 +255,15 @@ function bases(root: string, pageDir: string): string[] {
  * `agents/openai.yaml` in a page about some other layout names nothing here and is left alone,
  * while `skills/gone/SKILL.md` under a real `skills/` is the stale pointer the probe exists for.
  */
-function verdict(root: string, pageDir: string, path: string): "ok" | "missing" | "foreign" {
+function verdict(
+  root: string,
+  pageDir: string,
+  path: string,
+): "ok" | "missing" | "foreign" | "outside" {
   const dirs = path.startsWith("./") || path.startsWith("../") ? [pageDir] : bases(root, pageDir);
-  if (dirs.some((base) => existsSync(resolve(base, path)))) return "ok";
+  const hits = dirs.map((base) => resolve(base, path)).filter((file) => existsSync(file));
+  if (hits.some((file) => withinRoot(root, file))) return "ok";
+  if (hits.length > 0) return "outside";
   const first = path.split("/")[0] ?? "";
   const anchored =
     first === "." || first === ".." || dirs.some((base) => existsSync(resolve(base, first)));
@@ -270,14 +298,18 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
   if (!options.paths) return findings;
   for (const { text: code, line } of scan.codespans) {
     const path = pathCandidate(code);
-    if (path && verdict(options.root, pageDir, path) === "missing") {
-      findings.push({ file, line, message: `\`${path}\` does not exist` });
-    }
+    const state = path ? verdict(options.root, pageDir, path) : "foreign";
+    if (state === "missing") findings.push({ file, line, message: `\`${path}\` does not exist` });
+    if (state === "outside")
+      findings.push({ file, line, message: `\`${path}\` escapes the repository` });
   }
   for (const { href, line } of scan.links) {
     const target = linkPath(href);
     if (target === "" || SCHEME.test(target) || isAbsolute(target)) continue;
-    if (!existsSync(resolve(pageDir, target))) {
+    const resolved = resolve(pageDir, target);
+    if (!withinRoot(options.root, resolved)) {
+      findings.push({ file, line, message: `link target ${target} escapes the repository` });
+    } else if (!existsSync(resolved)) {
       findings.push({ file, line, message: `link target ${target} does not exist` });
     }
   }

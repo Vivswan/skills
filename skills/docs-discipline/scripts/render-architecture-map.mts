@@ -33,7 +33,9 @@ export function regionBounds(text: string, name: string): { bodyStart: number; b
   const page = readPage(text);
   const live = (match: RegExpExecArray): boolean => {
     const line = text.slice(0, match.index).split("\n").length - 1;
-    return page.text[line] !== undefined;
+    const lineText = page.text[line];
+    // Indented code is quoted text as much as a fence is.
+    return lineText !== undefined && !/^( {4}|\t)/.test(lineText);
   };
   const begins = [...text.matchAll(markerPattern("BEGIN", name))].filter(live);
   const ends = [...text.matchAll(markerPattern("END", name))].filter(live);

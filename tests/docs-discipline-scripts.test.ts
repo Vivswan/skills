@@ -1100,3 +1100,47 @@ describe("fourth Copilot round on the moved scripts", () => {
     expect(out.stderr).toContain("line 3: BEGIN GENERATED: typo is never closed");
   });
 });
+
+describe("sixth Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const diagram = (label: string) => `\`\`\`mermaid\nflowchart LR\n  a["${label}"]\n\`\`\``;
+  const demo = `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`;
+
+  test("a root-level file is a path: a box naming a missing main.ts is a finding", () => {
+    const root = variant("root-file-box", {
+      "docs/root.md": `# T\n\n${diagram("missing-main.ts")}\n\n${demo}\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/root.md", "--repo-url", REPO_URL], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("missing-main.ts does not exist");
+  });
+
+  test("a reference-style demonstration link resolves through its definition", () => {
+    const root = variant("ref-demo", {
+      "docs/ref.md": `# T\n\n${diagram("src/engine/run.ts<br>run()")}\n\nDemonstrated by: [case][run].\n\n[run]: ${REPO_URL}test/engine/run.test.ts\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/ref.md", "--repo-url", REPO_URL], root);
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+
+  test("an absolute demonstration URL that traverses past the prefix is a finding", () => {
+    const root = variant("url-traverse", {
+      "docs/url.md": `# T\n\n${diagram("src/engine/run.ts<br>run()")}\n\nDemonstrated by: [x](${REPO_URL}../../../../../../../../etc/passwd).\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/url.md", "--repo-url", REPO_URL], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("resolves outside the repository");
+  });
+
+  test("a name two star re-exports both carry is ambiguous, so a box naming it is a finding", () => {
+    const root = variant("star-ambiguity", {
+      "src/engine/a.ts": "export const value = 1;\n",
+      "src/engine/b.ts": "export const value = 2;\n",
+      "src/engine/both.ts": 'export * from "./a.ts";\nexport * from "./b.ts";\n',
+      "docs/star.md": `# T\n\n${diagram("src/engine/both.ts<br>value")}\n\n${demo}\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/star.md", "--repo-url", REPO_URL], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("src/engine/both.ts exports no value");
+  });
+});

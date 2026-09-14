@@ -13,8 +13,8 @@
 // and need no demonstration line.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { parseSync, pathLabel, resolveImport } from "./arch-lint.mts";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { parseSync, pathLabel, resolveImport, SOURCE_EXTENSIONS } from "./arch-lint.mts";
 
 // An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
 const SYMBOL_TOKEN = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*(?:\(\))?$/u;
@@ -38,6 +38,8 @@ export function exportedNames(
   const inner = new Set([...visiting, file]);
   const { module } = parseSync(file, readFileSync(file, "utf8"));
   const names = new Set<string>();
+  // A name two star targets both export is ambiguous in ECMAScript and is not exported at all.
+  const starred = new Map<string, Set<string>>();
   for (const statement of module.staticExports) {
     for (const entry of statement.entries) {
       if (entry.exportName.kind === "Default") {
@@ -45,11 +47,18 @@ export function exportedNames(
       } else if (entry.exportName.name !== null) {
         names.add(entry.exportName.name);
       } else if (entry.moduleRequest && /^\.\.?\//.test(entry.moduleRequest.value)) {
-        for (const name of exportedNames(resolveImport(file, entry.moduleRequest.value), inner)) {
-          if (name !== "default") names.add(name);
+        const target = resolveImport(file, entry.moduleRequest.value);
+        for (const name of exportedNames(target, inner)) {
+          if (name === "default") continue;
+          const targets = starred.get(name) ?? new Set<string>();
+          targets.add(target);
+          starred.set(name, targets);
         }
       }
     }
+  }
+  for (const [name, targets] of starred) {
+    if (targets.size === 1) names.add(name);
   }
   if (visiting.size === 0) exportedNamesByFile.set(file, names);
   return names;
@@ -220,7 +229,11 @@ export function labelProblems(
   root: string,
   pathRoots: readonly string[] = defaultPathRoots(root),
 ): string[] {
-  const pathToken = new RegExp(`^(?:${pathRoots.map(escapeRe).join("|")})/[\\w./-]*$`);
+  // A path starts under a top-level directory, or is a root-level file with a source or document extension (main.ts, README.md).
+  const rootFile = `[\\w.-]+(?:${[...SOURCE_EXTENSIONS, ".md", ".yml", ".yaml", ".json"].map(escapeRe).join("|")})`;
+  const pathToken = new RegExp(
+    `^(?:(?:${pathRoots.map(escapeRe).join("|")})/[\\w./-]*|${rootFile})$`,
+  );
   const problems: string[] = [];
   const missing = new Set<string>();
   let bound: string | undefined;
@@ -346,7 +359,10 @@ function resolveLink(
     if (!target.startsWith(options.repoUrl)) {
       return { problem: `"${link}" is not a ${options.repoUrl} link` };
     }
-    return { file: join(options.root, target.slice(options.repoUrl.length)) };
+    const file = resolve(options.root, target.slice(options.repoUrl.length));
+    if (!withinRoot(options.root, file))
+      return { problem: `"${link}" resolves outside the repository` };
+    return { file };
   }
   if (options.pagePath === undefined) {
     return { problem: `"${link}" is a relative link, but the page's own path is unknown` };
@@ -365,9 +381,13 @@ function conceptFences(page: Page): Fence[] {
 
 /** The lines of page text matching `pattern`. */
 /** Link destinations as Markdown reads them, so a title or angle brackets never become part of the path. */
-function markdownLinks(line: string): string[] {
+function markdownLinks(line: string, page: Page): string[] {
   const links: string[] = [];
-  Bun.markdown.render(line, {
+  // Reference-style links resolve through definitions elsewhere on the page, so those ride along.
+  const definitions = page.text.filter(
+    (text): text is string => text !== undefined && /^ {0,3}\[[^\]]+\]:\s+\S/.test(text),
+  );
+  Bun.markdown.render([line, "", ...definitions].join("\n"), {
     link: (children: string, attrs: { href?: string }) => {
       links.push(attrs.href ?? "");
       return children;
@@ -429,7 +449,7 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
       continue;
     }
     const demo = page.lines[demoLine] ?? "";
-    const links = markdownLinks(demo);
+    const links = markdownLinks(demo, page);
     if (links.length === 0) {
       problems.push(`${at}: the "${DEMONSTRATED}" line links nothing`);
     }

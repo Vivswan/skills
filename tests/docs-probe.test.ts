@@ -73,6 +73,24 @@ describe("what Markdown renders as prose", () => {
       [["paragraph", 5, "after"]],
     ],
     [
+      "a lone leading --- is a thematic break, not front matter",
+      "---\n\n# Guide\n\nafter\n",
+      [["paragraph", 5, "after"]],
+    ],
+    [
+      "raw HTML that merely contains the words BEGIN GENERATED opens no region",
+      "<div>BEGIN GENERATED</div>\n\nafter\n",
+      [["paragraph", 3, "after"]],
+    ],
+    [
+      "a BEGIN whose END carries another name, or none, hides nothing",
+      "<!-- BEGIN GENERATED: a -->\n\nkept\n\n<!-- END GENERATED: b -->\n\nafter\n",
+      [
+        ["paragraph", 3, "kept"],
+        ["paragraph", 7, "after"],
+      ],
+    ],
+    [
       "a paragraph inside a blockquote, once",
       "> quoted words\n",
       [["paragraph", 1, "quoted words"]],
@@ -202,6 +220,20 @@ describe("the path check", () => {
     const page = "[q](b.md?plain=1) [e](b%2Emd) [g](gone%2Emd)\n";
     expect(probePage(page, "docs/a.md", options(root)).map((f) => f.message)).toEqual([
       "link target gone.md does not exist",
+    ]);
+  });
+});
+
+describe("repository containment", () => {
+  test("a path or link that resolves to an existing file outside the repository escapes, it does not pass", () => {
+    const root = repo({ "docs/a.md": "" });
+    const page =
+      "See `../../../../../../../../etc/passwd` and [p](../../../../../../../../etc/passwd).\n";
+    expect(
+      probePage(page, "docs/a.md", { root, maxWords: 70, paths: true }).map((f) => f.message),
+    ).toEqual([
+      "`../../../../../../../../etc/passwd` escapes the repository",
+      "link target ../../../../../../../../etc/passwd escapes the repository",
     ]);
   });
 });
