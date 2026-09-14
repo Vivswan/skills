@@ -345,9 +345,6 @@ export function fetchSnapshot(
  * so a folded description or a nested mapping is removed or kept whole, and the file's own line
  * ending is used throughout.
  */
-/** The names a license text travels under; only the registry puts one into a copy whose upstream folder lacks it. */
-const LICENSE_NAME = /^(LICENSE|LICENCE|COPYING|NOTICE)(\.[A-Za-z]+)?$/;
-
 export const MODIFIED_NOTICE = "Modified from upstream by the xeno sync of Vivswan/skills";
 
 export function applyOverrides(files: Files, overrides: Source["frontmatter"]): Files {
@@ -532,20 +529,19 @@ export function update(
       const pinned = applyOverrides(fetchSnapshot(source, source.commit).files, source.frontmatter);
       // sources.yml owns SKILL.md's frontmatter, so a changed override is not a hand edit; the body is.
       // sources.yml owns the frontmatter and the license file it names; a difference there is a registry change, not a hand edit.
-      // The registry also owns a license-named file the upstream folder does not carry: the copy of a
-      // license_file that has since been renamed or dropped, which a re-sync replaces rather than preserves.
-      const registryOwned = (path: string): boolean =>
-        (source.licenseFile !== undefined && path === basename(source.licenseFile)) ||
-        (!pinned.has(path) && LICENSE_NAME.test(path));
+      // The registry owns exactly the current license_file's copy; a renamed or dropped one leaves
+      // its old copy behind as a difference, and the message below says what to do with it.
+      const registryOwned = source.licenseFile ? basename(source.licenseFile) : undefined;
       const edited = differences(local, pinned).filter(
         (path) =>
-          !registryOwned(path) &&
+          path !== registryOwned &&
           (path !== "SKILL.md" || !sameOutsideFrontmatter(local.get(path), pinned.get(path))),
       );
       if (edited.length > 0) {
         throw new Error(
           `${name}: ${relative(ROOT, dir)}/ differs from its pin ${short(source.commit)} (${edited.join(", ")});` +
-            " the sync never overwrites a hand edit: restore the folder from git, or send the change upstream",
+            " the sync never overwrites a hand edit: restore the folder from git, send the change upstream," +
+            " or, after renaming or removing license_file, delete its old copy first",
         );
       }
     }

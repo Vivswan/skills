@@ -392,7 +392,7 @@ describe("license_file", () => {
     expect(existsSync(join(xeno, "alpha"))).toBe(false);
   });
 
-  test("renaming the license_file re-syncs: the old copy is registry-owned, not a hand edit", () => {
+  test("renaming the license_file stops on the old copy and says to delete it first; an unregistered NOTICE is a hand edit", () => {
     const up = upstream({
       "plugins/skills/alpha/SKILL.md": SKILL,
       LICENSE: "MIT\n",
@@ -404,9 +404,10 @@ describe("license_file", () => {
       xeno,
     ).sources;
     const renamed = { alpha: { ...(synced.alpha as Source), licenseFile: "COPYING" } };
-    expect(update(renamed, xeno).reports[0]?.status).toBe("updated");
-    expect(existsSync(join(xeno, "alpha", "LICENSE"))).toBe(false);
-    expect(readFileSync(join(xeno, "alpha", "COPYING"), "utf8")).toBe("MIT too\n");
+    expect(() => update(renamed, xeno)).toThrow(/\(LICENSE\).*delete its old copy first/);
+    writeFileSync(join(xeno, "alpha", "NOTICE"), "mine\n");
+    expect(() => update(synced, xeno)).toThrow(/\(NOTICE\).*never overwrites a hand edit/);
+    expect(readFileSync(join(xeno, "alpha", "NOTICE"), "utf8")).toBe("mine\n");
   });
 
   test("a license_file with a dot segment is refused up front", () => {

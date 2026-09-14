@@ -28,7 +28,7 @@ bun run sync-xeno -- --check   exit 1 when a pin is behind its ref or a copy dif
 ## Adding one
 
 1. Add an entry to `sources.yml` with any 40-hex `commit` (the sync replaces it) and the upstream license's SPDX id, or `none published` when the upstream has no license file.
-2. When the license text sits outside the folder, name it in `license_file`; the sync copies it in beside the skill, as MIT and Apache require of a copy. A `frontmatter` mapping sets or removes (`null`) SKILL.md keys in the copy; it is the only allowed difference from upstream.
+2. When the license text sits outside the folder, name it in `license_file`; the sync copies it in beside the skill, as MIT and Apache require of a copy. Renaming or removing `license_file` later: delete its old copy first, then sync. A `frontmatter` mapping sets or removes (`null`) SKILL.md keys in the copy; it is the only allowed difference from upstream.
 3. Run `bun run sync-xeno`; the folder appears and the pin moves to the ref's head.
 4. List it as `./<name>` under the `xeno` plugin in `.claude-plugin/marketplace.json` (that plugin is the CLI's "Xeno" heading), in the root README under Xeno, and in the bug report form's skill dropdown; `bun run check` names anything missed.
 
