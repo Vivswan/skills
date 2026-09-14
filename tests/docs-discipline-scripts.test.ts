@@ -1005,3 +1005,49 @@ describe("second Copilot round on the moved scripts", () => {
     expect([out.status, out.stderr]).toEqual([0, ""]);
   });
 });
+
+describe("third Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const mermaid = (fence: string, label: string) =>
+    `${fence}mermaid\nflowchart LR\n  a["${label}"]\n${fence}`;
+
+  test("module.require loads a module, so its undeclared edge is forbidden", () => {
+    const root = variant("module-require", { "src/main.ts": 'module.require("./types.ts");\n' });
+    const out = run(ARCH_LINT, [], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("forbidden import main -> types: src/main.ts -> src/types.ts");
+  });
+
+  test("a tilde-fenced diagram is a diagram: its missing path is reported and it is counted", () => {
+    const root = variant("tilde-fence", {
+      "docs/tilde.md": `# T\n\n${mermaid("~~~", "src/engine/nowhere.ts")}\n\nDemonstrated by: [x](${REPO_URL}test/engine/run.test.ts).\n`,
+    });
+    const out = run(
+      CHECK_PAGE,
+      ["--page", "docs/tilde.md", "--repo-url", REPO_URL, "--expect-diagrams", "1"],
+      root,
+    );
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("src/engine/nowhere.ts does not exist");
+    expect(out.stderr).not.toContain("expected 1 concept diagrams");
+  });
+
+  test("a demonstration link with a query or percent escapes resolves to the file", () => {
+    const root = variant("query-demo", {
+      "docs/query.md": `# T\n\n${mermaid("```", "src/engine/run.ts<br>run()")}\n\nDemonstrated by: [a](${REPO_URL}test/engine/run.test.ts?plain=1), [b](${REPO_URL}test/engine/run%2Etest.ts).\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/query.md", "--repo-url", REPO_URL], root);
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+
+  test("a Setext heading closes a section, so a demonstration under it does not prove the diagram above", () => {
+    const root = variant("setext-section", {
+      "docs/setext.md": `# T\n\n${mermaid("```", "src/engine/run.ts<br>run()")}\n\nNext section\n------------\n\nDemonstrated by: [x](${REPO_URL}test/engine/run.test.ts).\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/setext.md", "--repo-url", REPO_URL], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(
+      'line 3: the diagram has no "Demonstrated by:" line before the next heading',
+    );
+  });
+});

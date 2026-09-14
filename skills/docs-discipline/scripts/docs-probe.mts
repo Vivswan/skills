@@ -47,10 +47,12 @@ export interface Scan {
   readonly links: { readonly href: string; readonly line: number }[];
 }
 
-// Marker bytes the renderer callbacks emit; blocks nest, inlines do not.
+// Marker bytes the renderer callbacks emit; blocks nest, inlines do not. P and L are prose
+// (paragraph, list item); N is a block whose paths and links are checked but whose words are not counted.
 const OPEN = "";
 const INLINE_END = "";
 const BLOCK_END = "";
+const isBlockKind = (ch: string | undefined) => ch === "P" || ch === "L" || ch === "N";
 
 /** The page with front matter blanked, line for line, so line numbers still match the file. */
 function blankFrontMatter(text: string): string[] {
@@ -79,7 +81,7 @@ function ownText(s: string): string {
   let depth = 0;
   for (let i = 0; i < s.length; i++) {
     const ch = s[i] as string;
-    if (ch === OPEN && (s[i + 1] === "P" || s[i + 1] === "L")) depth++;
+    if (ch === OPEN && isBlockKind(s[i + 1])) depth++;
     else if (ch === BLOCK_END) depth--;
     else if (depth === 0) out += ch;
   }
@@ -93,7 +95,7 @@ function nestedBlocks(s: string): string[] {
   let start = -1;
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
-    if (ch === OPEN && (s[i + 1] === "P" || s[i + 1] === "L")) {
+    if (ch === OPEN && isBlockKind(s[i + 1])) {
       if (depth === 0) start = i;
       depth++;
     } else if (ch === BLOCK_END) {
@@ -128,9 +130,9 @@ export function scanPage(text: string): Scan {
     strikethrough: same,
     blockquote: same,
     list: same,
-    heading: nothing,
+    heading: (c: string) => `${OPEN}N${c}${BLOCK_END}`,
     code: nothing,
-    table: nothing,
+    table: (c: string) => `${OPEN}N${c}${BLOCK_END}`,
     html: (c: string) => {
       if (c.includes("BEGIN GENERATED")) return `${OPEN}G${BLOCK_END}`;
       if (c.includes("END GENERATED")) return `${OPEN}g${BLOCK_END}`;
@@ -164,6 +166,7 @@ export function scanPage(text: string): Scan {
     return cursor;
   };
   const visit = (block: string) => {
+    const prose = block[1] !== "N";
     const kind = block[1] === "L" ? "item" : "paragraph";
     const inner = block.slice(2, -1);
     const own = ownText(inner);
@@ -175,8 +178,9 @@ export function scanPage(text: string): Scan {
     const plain = stripComments(withoutTags);
     const firstLine = plain.split("\n").find((l) => l.trim() !== "") ?? "";
     const line = locate(firstLine);
-    if (plain.trim() !== "")
+    if (prose && plain.trim() !== "") {
       scan.units.push({ kind, line: line + 1, text: unescapeEntities(plain) });
+    }
     for (const m of own.matchAll(new RegExp(`${OPEN}C([^${INLINE_END}]*)${INLINE_END}`, "g"))) {
       const code = unescapeEntities(m[1] ?? "");
       scan.codespans.push({ text: code, line: locate(`\`${code}\``) + 1 });
@@ -186,7 +190,7 @@ export function scanPage(text: string): Scan {
       scan.links.push({ href, line: locate(href) + 1 });
     }
     // The next unit starts after this one, so a repeated opening line finds its own line, not this one again.
-    if (plain.trim() !== "") cursor = line + plain.trim().split("\n").length;
+    if (prose && plain.trim() !== "") cursor = line + plain.trim().split("\n").length;
     for (const nested of nestedBlocks(inner)) visit(nested);
   };
   for (const block of nestedBlocks(prose)) visit(block);

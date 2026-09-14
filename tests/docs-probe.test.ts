@@ -201,6 +201,20 @@ describe("the path check", () => {
   });
 });
 
+describe("paths outside prose", () => {
+  test("a path in a table cell or a link in a heading is checked, and neither counts as words", () => {
+    const root = repo({ "docs/a.md": "", "src/here.ts": "" });
+    const page =
+      "# See [gone](gone.md)\n\n| File |\n| --- |\n| `src/gone.ts` |\n| `src/here.ts` |\n";
+    const findings = probePage(page, "docs/a.md", { root, maxWords: 70, paths: true });
+    expect(findings.map((f) => [f.line, f.message])).toEqual([
+      [1, "link target gone.md does not exist"],
+      [5, "`src/gone.ts` does not exist"],
+    ]);
+    expect(scanPage(page).units).toEqual([]);
+  });
+});
+
 describe("the CLI", () => {
   test("clean pages exit 0 with the count line; findings exit 1 as page:line: message relative to --root", () => {
     const root = repo({

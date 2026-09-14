@@ -170,7 +170,7 @@ export function importSpecifiers(text: string, file: string): string[] {
       found.add(literalSpecifier(node.source) ?? computed(node.start));
     } else if (node.type === "CallExpression") {
       const callee = unwrapped(node.callee);
-      if (callee.type === "Identifier" && callee.name === "require") {
+      if (isRequireCallee(callee)) {
         found.add(literalSpecifier(node.arguments[0]) ?? computed(node.start));
       }
     } else if (node.type === "TSImportType") {
@@ -180,6 +180,19 @@ export function importSpecifiers(text: string, file: string): string[] {
     }
   }
   return [...found].filter((specifier) => /^\.\.?\//.test(specifier));
+}
+
+/** `require(...)` and CommonJS's `module.require(...)` both load; `require.resolve(...)` does not. */
+function isRequireCallee(callee: Node): boolean {
+  if (callee.type === "Identifier") return callee.name === "require";
+  if (callee.type !== "MemberExpression" || callee.computed) return false;
+  const { object, property } = callee as unknown as { object: Node; property: Node };
+  return (
+    object.type === "Identifier" &&
+    object.name === "module" &&
+    property.type === "Identifier" &&
+    property.name === "require"
+  );
 }
 
 function isFile(path: string): boolean {

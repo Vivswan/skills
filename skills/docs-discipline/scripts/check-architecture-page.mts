@@ -65,7 +65,7 @@ export interface Fence {
   body: string;
 }
 
-const FENCE_OPEN = /^([ \t]*)(`{3,})(.*)$/;
+const FENCE_OPEN = /^([ \t]*)(`{3,}|~{3,})(.*)$/;
 const MERMAID_INFO = /^\s*mermaid\s*$/;
 
 /** `markdown` with CRLF line ends folded, so every reader counts the same lines. */
@@ -86,7 +86,8 @@ function fences(lines: readonly string[]): Fence[] {
     if (open === null) continue;
     const indent = open[1] ?? "";
     const ticks = open[2] ?? "```";
-    const close = new RegExp(`^[ \\t]*\`{${ticks.length},}[ \\t]*$`);
+    // A closer repeats the opener's marker character at least as many times.
+    const close = new RegExp(`^[ \\t]*${ticks[0] === "~" ? "~" : "`"}{${ticks.length},}[ \\t]*$`);
     const body: string[] = [];
     let cursor = index + 1;
     while (cursor < lines.length && !close.test(lines[cursor] ?? "")) {
@@ -282,12 +283,22 @@ function insideGeneratedRegion(page: Page, line: number): boolean {
   return open;
 }
 
+/** The file a link addresses: no fragment, no query, percent-escapes decoded when they are valid. */
+function linkFile(link: string): string {
+  const bare = link.split("#")[0]?.split("?")[0] ?? "";
+  try {
+    return decodeURIComponent(bare);
+  } catch {
+    return bare;
+  }
+}
+
 /** The repository file a demonstration link names, or a problem string. */
 function resolveLink(
   link: string,
   options: PageCheckOptions,
 ): { file: string } | { problem: string } {
-  const target = link.split("#")[0] ?? "";
+  const target = linkFile(link);
   if (/^[a-z]+:\/\//.test(target)) {
     if (options.repoUrl === undefined) {
       return {
@@ -347,7 +358,19 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
       problems.push(...labelProblems(label, options.root, pathRoots));
     }
   }
-  const headings = textLines(page, /^#{1,6}\s/);
+  // ATX headings, plus Setext ones: a text line under a line of = or - signs.
+  const headings = [
+    ...textLines(page, /^#{1,6}\s/),
+    ...textLines(page, /\S/).filter((line) => {
+      const under = page.text[line + 1];
+      const text = page.text[line] ?? "";
+      return (
+        under !== undefined &&
+        /^ {0,3}(=+|-+)\s*$/.test(under) &&
+        !/^\s*([-*+]|\d+\.)\s|^\s*\|/.test(text)
+      );
+    }),
+  ].sort((x, y) => x - y);
   const demonstrations = textLines(page, /^Demonstrated by:/);
   // One demonstration line proves one diagram: two fences under one heading need two lines.
   const claimed = new Set<number>();
