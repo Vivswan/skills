@@ -21,6 +21,7 @@ Delete or fold these:
 | `assert grad is not None` | existence is not correctness; if there is no custom gradient, delete the test |
 | `assert output.dtype == dtype` as its own test | assert it inside the test that checks the values |
 | five tests differing only in an input value | one parametrized case list |
+| `expect(job.needs).toEqual(["lint", "test"])` after reading the workflow that says so | restates the source; it changes in the same commit, so nothing drifts under it |
 
 A shape or dtype claim is not forbidden; it is forbidden *as the whole test*. Move it into the correctness test that also compares values.
 
@@ -31,7 +32,40 @@ A shape or dtype claim is not forbidden; it is forbidden *as the whole test*. Mo
 - **Reuse the repo's existing harness.** If there is already a comparison helper for the thing being tested, use it rather than hand-rolling the plumbing.
 - **Give a shared outcome shape one helper.** When several tests check the same shape (exit code plus complete output; error class plus message), a small helper that asserts the whole shape makes strength the default for the next test; a pointwise fix to one test invites the next weak one. Observed: every one of 16 files got the same partial-assertion finding at one landing gate, and three of them independently wrote the same helper.
 
+## The drift question
+
+Every test answers "what would drift silently without this?" in its name or first line. Three answers count:
+
+| Answer | Example |
+|---|---|
+| An external fact the platform does not enforce for us | every PAT-reading job declares its `environment`; `secrets: inherit` sits on exactly the callers whose call reaches an environment job; an absent step output expands to the empty string, which a numeric comparison reads as `0` |
+| A cross-file consistency the source cannot express | the codex manifest's `shortDescription` equals the `interface.short_description` in `agents/openai.yaml` |
+| A regression with a named incident | the empty manifest that passed validation vacuously |
+
+"The source says so" is not an answer. A test that restates what it read is edited in the same commit as the source, so nothing can drift under it; it is deleted, in the PR that notices it, and a reviewer asking for one is declined with this rule.
+
+Specimen: eleven PRs landed in one day on a repository of GitHub Actions workflows, and their builders shipped shape tests that restated the yaml: a census asserting no workflow sets `cancel-in-progress: false`, a pin that a job's `needs` equals the list in the file. Four pressures produced them, each with its answer:
+
+- briefs demanded red-then-green for EVERY change, deletions included, so a test was manufactured to have something go red: the census rule below
+- reviewers defaulted to "add a regression test" and nobody asked what it pinned: the standing question in the `/rubber-duck-review` reviewer prompt
+- the line-accounting gate read `tests +0` as a question: the `/pr-landing-discipline` skill's census clause
+- no deletion norm existed, so tests only accumulated: the question above, applied to every test at review time
+
+## Deletions: census, not test
+
+Red-then-green is for behavior changes: a fix or a feature has a behavior to see red first, and a fix made by deleting code (a faulty early return removed) is a behavior change like any other. A deletion with no behavior of its own (an unused setting, a dead path; removing a deploy step is a behavior change) has nothing to see red, so it proves itself with a census: the grep that counts the removed thing, run before and after at the same path. The census goes in the PR body, or in the landing report when the change lands by direct push with no PR.
+
+```markdown
+## Proof
+
+- **Census:** `grep -rl 'cancel-in-progress: false' .github/workflows | wc -l`, 3 before, 0 after.
+```
+
+The before count is the control: a nonzero count at the same path proves the grep reaches the files, so the zero after is evidence and not a mistyped path (the `/verify-with-controls` rule). A test written so the deletion has something to turn red restates the source and is not written. A test deleted under the drift question records "restated the source" as its reason; that satisfies the dropped-coverage rule under Boundaries.
+
 ## Prove the test
+
+This proves a test that exists for a behavior; it does not ask for a test on every change (Deletions, above).
 
 A guard test that has never failed is not yet evidence. This is the `/verify-with-controls` rule (*a checker that has never been seen failing proves nothing when it passes*) applied to a test suite. Before claiming a test covers a bug, show it failing on that bug through the same assertion path its green run takes. Reintroducing the bug is the standard form:
 

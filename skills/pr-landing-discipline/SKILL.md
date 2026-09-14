@@ -55,6 +55,7 @@ Production shape of one round:
 - "empty manifest passes vacuously": valid. Fixed with a regression test in the same cycle.
 - "script not wired into the docs": sequencing by design. Replied with the plan (a docs pass wires all scripts post-merge) and resolved.
 - "symlink following": split. The leaf-fidelity half fixed after confirming it empirically; the escape half declined with the recorded design rationale.
+- "add a regression test" on a deletion with no behavior of its own: declined. The comment named no fact the test would pin that the source does not say (the `/rubber-duck-review` skill's standing test question); the body's census is the proof. Replied with the rule and resolved.
 
 ## Who Merges
 
@@ -125,7 +126,7 @@ Sum the rows per kind. The kinds are whatever the repository keeps apart: source
 | Behavior-preserving refactor | existing tests pass unchanged (restructuring or strengthening them is fine) | an existing test now expects a different output: the behavior changed, so the purpose is misstated |
 | Docs or contract change | only docs and contract files change | executable code changes |
 
-Where a row says tests +0, naming the existing test that already covers the change answers it: a fix an existing assertion now pins, a feature an existing data-driven suite already exercises.
+Where a row says tests +0, naming the existing test that already covers the change answers it: a fix an existing assertion now pins, a feature an existing data-driven suite already exercises. Tests +0 on a deletion with no behavior of its own needs no words when the body carries the census (grep counts of the removed thing, before and after; the `/code-standards` skill's `references/tests.md` sets it). A test written so the row has something to show is the defect the count exists to catch, never an answer to it.
 
 A mismatch is a question the author answers before the landing, not a stop: either the change is trimmed, or it is judged good as it is and the growth is explained at whatever grain makes it checkable (per function for a rewrite, per file for a sweep). More lines for a better change is a fine answer; "cleaner" alone is not. Two explanations recur, and each is checked rather than taken: a staged cutover whose deletion lands in a named sibling PR (the pair's sums are read together), and a guard or rule the purpose never stated (then the title is wrong: fix it, and the row it now falls under applies). Where the sums go depends on what they say. A count that fits its row needs no words; if carried at all, it sits in the PR body's technical-details section. A count that went against the purpose is part-one material: the reader's assumption (a consolidation shrinks) was wrong, so the sums and the reason stand in the human part where the user sees them, under the `/pr-and-issue-discipline` skill's Readability rules, and the user is told when the change is offered. With no PR, both go in the landing report.
 

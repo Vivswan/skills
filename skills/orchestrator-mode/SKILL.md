@@ -56,7 +56,7 @@ Before creating the board or spawning anything, ask the user these in ONE messag
 5. **Pre-mortem the wave brief.** Before launching a wave, spend five minutes writing the answer to "it is tomorrow and this wave failed. Why?" Each named risk becomes a constraint line in the brief: the risk "builders will re-wrap every paragraph they touch" becomes the brief line "never re-wrap paragraphs; one line per paragraph". This is for waves, not trivial single tasks.
 6. **Pilot first when tracks share one brief.** When N similar tasks would launch from ONE brief, launch a single pilot, review it through the session's ordinary landing gate (its PR review, or the direct-mode review), and fold every amendment into the corrected brief; only then fan the remaining N-1 out with it. Production shape: a 10-surface prose wave launched all at once hit the same three brief defects on every surface and needed live broadcast amendments to every builder; one pilot would have caught all three in one ordinary review. Independent tracks with distinct briefs do not pilot: this rule is about brief risk, not parallelism.
 7. **Fan out builders** for the independent tracks, in the isolation the interview chose.
-   - Every spawn brief is self-contained per `references/spawn-briefs.md`: the full task contract inline, the territory whitelist, the gates, the signal format, the stop-and-wait ban, and the TODO ban. Where the `/code-standards` skill is installed, briefs point builders at it for the comment rules and the rest of the house standards.
+   - Every spawn brief is self-contained per `references/spawn-briefs.md`: the full task contract inline, the territory whitelist, the gates, the signal format, the stop-and-wait ban, the TODO ban, and the test rule (red-then-green for behavior changes only). Where the `/code-standards` skill is installed, briefs point builders at it for the comment rules and the rest of the house standards.
    - One-shot watchers and gate reviewers spawn UNNAMED where the harness delivers a completed agent's output automatically: a named watcher must remember to report at exactly the seam where agents strand (details in `references/spawn-briefs.md`).
 8. **Rely on harness notifications** for subagent completion; the lead never sleeps or polls while waiting on a subagent, and spawn briefs propagate the rule to workers. The fleet monitor's periodic sweeps are different: they probe for stalls, not completion.
 
@@ -134,6 +134,6 @@ Triage findings against sections 2 (Decompose, Board, Monitor, Builders) and 7 (
 
 ## References
 
-- `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, unnamed one-shot watchers, git-fixture hygiene for test suites)
+- `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, the test rule, unnamed one-shot watchers, git-fixture hygiene for test suites)
 - `references/fleet-monitor.md`: the monitor's script wiring (sweep, probe, ledger, baseline) and the judgment rules learned from production false alarms
 - `references/landing.md`: the two landing gates (direct commits; PRs with per-track bases, including the stacked-chain flow and the worktree rules around it)
