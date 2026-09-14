@@ -232,11 +232,11 @@ An issue reply or a review comment to an outside contributor is read by someone 
 Specimen: a diagnostics-only bug report whose log ended mid-request. The first reply opened with three paragraphs on hidden provider groups, tombstones, and silent refreshes. The rewrite:
 
 `````markdown
-## TL;DR
+## Questions
 
 1. **What went wrong?** One or two sentences, or a screenshot.
 2. **Is `https://<host>/@<user>` a LiteLLM proxy?** If yes, does it need an API key?
-3. **The log lines after the last request.** In VS Code: `View > Output`, pick `LiteLLM`, copy everything after the line starting with `Fetching from::`.
+3. **Can you paste the log lines after the last request?** In VS Code: `View > Output`, pick `LiteLLM`, copy everything after the line starting with `Fetching from::`.
 
 Number 3 would help the most. The rest of this comment explains why, if you are curious.
 
@@ -264,7 +264,7 @@ Fetching from:: "https://<host>/@<user>/v1/model/info"    <- last line, still wa
 
 The rules the specimen follows:
 
-- **Requests first, as a bare `TL;DR`.** A numbered list, three items at most. Say which one would help most.
+- **Questions first, under a `## Questions` heading.** They are questions, so ask them as questions: a numbered list, three at most, and say which one would help most.
   - Give the exact click path or command when one exists.
   - "What would help" rather than "what we need": the reporter is doing you a favor. The reader may stop after the list.
 - **Part one is plain language, and never says so** (the Readability rules above own the heading rule).
