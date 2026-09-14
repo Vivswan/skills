@@ -445,7 +445,8 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
   }
   // ATX headings, plus Setext ones: a text line under a line of = or - signs.
   const headings = [
-    ...textLines(page, /^#{1,6}\s/),
+    // Up to three leading spaces and an empty heading are still ATX headings to Markdown.
+    ...textLines(page, /^ {0,3}#{1,6}(?:\s|$)/),
     ...textLines(page, /\S/).filter((line) => {
       const under = page.text[line + 1];
       const text = page.text[line] ?? "";

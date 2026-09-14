@@ -18,9 +18,10 @@ export const DEFAULT_REGION = "architecture-map";
 // The name is spliced into a regex unescaped, so only regex-literal characters are admitted.
 const REGION_NAME = /^[a-z0-9-]+$/;
 
+/** A marker is a line of its own (up to three spaces in); one quoted mid-line or under `> ` is page text. */
 function markerPattern(kind: "BEGIN" | "END", name: string): RegExp {
   const hint = kind === "BEGIN" ? String.raw`(?: \([^)\n]*\))?` : "";
-  return new RegExp(`<!-- ${kind} GENERATED: ${name}${hint} -->`, "g");
+  return new RegExp(`^ {0,3}<!-- ${kind} GENERATED: ${name}${hint} -->[ \\t]*$`, "gm");
 }
 
 /** Exactly one BEGIN then one END for `name`, else a throw naming the counts: a second marker pair would splice into the wrong one silently. */

@@ -1238,3 +1238,34 @@ describe("eleventh Copilot round on the moved scripts", () => {
     expect(out.stderr).not.toContain("expected 2 concept diagrams");
   });
 });
+
+describe("twelfth Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const diagram = '```mermaid\nflowchart LR\n  a["src/engine/run.ts<br>run()"]\n```';
+  const demo = `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`;
+
+  test("an indented ATX heading closes the section, so a demonstration under it does not prove the diagram above", () => {
+    const root = variant("indented-heading", {
+      "docs/indented-heading.md": `# T\n\n${diagram}\n\n  ## Next\n\n${demo}\n`,
+    });
+    const out = run(
+      CHECK_PAGE,
+      ["--page", "docs/indented-heading.md", "--repo-url", REPO_URL],
+      root,
+    );
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(
+      'line 3: the diagram has no "Demonstrated by:" line before the next heading',
+    );
+  });
+
+  test("a block-quoted marker pair is page text to the renderer; the one real pair renders", () => {
+    const quoted =
+      "> <!-- BEGIN GENERATED: architecture-map -->\n> <!-- END GENERATED: architecture-map -->";
+    const root = variant("quoted-markers", {
+      "docs/quoted-markers.md": `# T\n\n${quoted}\n\n## Map\n\n<!-- BEGIN GENERATED: architecture-map -->\n<!-- END GENERATED: architecture-map -->\n`,
+    });
+    const out = run(RENDER, ["--page", "docs/quoted-markers.md"], root);
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+});
