@@ -112,6 +112,19 @@ function nestedBlocks(s: string): string[] {
   return blocks;
 }
 
+/** Repeats until nothing changes, so a comment nested in a comment's remains is gone too. */
+function stripComments(text: string): string {
+  let out = text;
+  for (
+    let next = out.replace(/<!--[\s\S]*?-->/g, "");
+    next !== out;
+    next = out.replace(/<!--[\s\S]*?-->/g, "")
+  ) {
+    out = next;
+  }
+  return out;
+}
+
 export function scanPage(text: string): Scan {
   const lines = blankNonProse(text);
   const nothing = () => "";
@@ -154,11 +167,11 @@ export function scanPage(text: string): Scan {
     const inner = block.slice(2, -1);
     const own = ownText(inner);
     // Inline HTML is invisible to the reader: a comment says nothing, a tag is at most a break.
-    const plain = own
+    const withoutTags = own
       .replace(new RegExp(`${OPEN}A[^${INLINE_END}]*${INLINE_END}`, "g"), "")
       .replace(new RegExp(`${OPEN}C([^${INLINE_END}]*)${INLINE_END}`, "g"), "$1")
-      .replace(/<!--[\s\S]*?-->/g, "")
       .replace(/<\/?[a-zA-Z][^>]*>/g, " ");
+    const plain = stripComments(withoutTags);
     const firstLine = plain.split("\n").find((l) => l.trim() !== "") ?? "";
     const line = locate(firstLine);
     if (plain.trim() !== "")

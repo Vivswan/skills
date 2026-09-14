@@ -16,7 +16,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseSync, pathLabel, resolveImport } from "./arch-lint.mts";
 
-const SYMBOL_TOKEN = /^[A-Za-z_]\w*(?:\(\))?$/;
+// An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
+const SYMBOL_TOKEN = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*(?:\(\))?$/u;
 const DEMONSTRATED = "Demonstrated by:";
 
 const exportedNamesByFile = new Map<string, ReadonlySet<string>>();
@@ -336,9 +337,14 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
   }
   const headings = textLines(page, /^#{1,6}\s/);
   const demonstrations = textLines(page, /^Demonstrated by:/);
+  // One demonstration line proves one diagram: two fences under one heading need two lines.
+  const claimed = new Set<number>();
   for (const fence of conceptFences(page)) {
     const sectionEnd = headings.find((line) => line > fence.end) ?? page.lines.length;
-    const demoLine = demonstrations.find((line) => line > fence.end && line < sectionEnd);
+    const demoLine = demonstrations.find(
+      (line) => line > fence.end && line < sectionEnd && !claimed.has(line),
+    );
+    if (demoLine !== undefined) claimed.add(demoLine);
     const at = `line ${fence.line + 1}`;
     if (demoLine === undefined) {
       problems.push(`${at}: the diagram has no "${DEMONSTRATED}" line before the next heading`);

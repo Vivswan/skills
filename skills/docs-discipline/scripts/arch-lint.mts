@@ -69,7 +69,7 @@ export function readArchitecture(path: string, label = path): Architecture {
   }
   for (const [from, targets] of Object.entries(edges)) {
     for (const name of [from, ...targets]) {
-      if (!(name in layers)) {
+      if (!Object.hasOwn(layers, name)) {
         throw new Error(`${label}: edges name "${name}", which is not a layer`);
       }
     }
@@ -288,9 +288,22 @@ export function lintArchitecture(
   return problems;
 }
 
-/** The module map over the DECLARED edges; a hyphen in a layer name is edge syntax to mermaid, so ids use underscores. */
+/**
+ * The module map over the DECLARED edges. A hyphen in a layer name is edge syntax to mermaid, so ids
+ * use underscores; two names that collapse to one id (api-v1, api_v1) get a numbered suffix, so no
+ * node is drawn over another.
+ */
 export function renderArchitectureMermaid(arch: Architecture): string {
-  const id = (layer: string): string => layer.replace(/-/g, "_");
+  const ids = new Map<string, string>();
+  const taken = new Set<string>();
+  for (const layer of Object.keys(arch.layers)) {
+    const base = layer.replace(/[^A-Za-z0-9_]/g, "_");
+    let candidate = base;
+    for (let n = 2; taken.has(candidate); n++) candidate = `${base}_${n}`;
+    taken.add(candidate);
+    ids.set(layer, candidate);
+  }
+  const id = (layer: string): string => ids.get(layer) ?? layer;
   return [
     "graph TD",
     ...Object.entries(arch.layers).map(([name, paths]) => `  ${id(name)}["${paths.join("<br>")}"]`),

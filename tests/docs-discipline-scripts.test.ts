@@ -3,7 +3,10 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
-import { importSpecifiers } from "../skills/docs-discipline/scripts/arch-lint.mts";
+import {
+  importSpecifiers,
+  renderArchitectureMermaid,
+} from "../skills/docs-discipline/scripts/arch-lint.mts";
 
 // Contract tests for the architecture-page scripts of /docs-discipline against a small fixture
 // tree. Every CLI case asserts the whole outcome (exit code, full stdout, full
@@ -911,5 +914,61 @@ describe("check-architecture-page.mts", () => {
       stdout: "",
       stderr: `--page is required\n${USAGE.page}\n`,
     });
+  });
+});
+
+describe("review findings on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+
+  test("an edge naming a prototype property (constructor) is a declaration error, not a node", () => {
+    const root = variant("constructor-edge", {
+      "architecture.yml":
+        "layers:\n  main: [src/main.ts]\n  engine: [src/engine/]\nedges:\n  main: [constructor]\n",
+    });
+    const out = run(ARCH_LINT, [], root);
+    expect(out.status).toBe(2);
+    expect(out.stderr).toContain('edges name "constructor", which is not a layer');
+  });
+
+  test("two layer names that collapse to one mermaid id get distinct ids", () => {
+    const map = renderArchitectureMermaid({
+      layers: { "api-v1": ["src/a/"], api_v1: ["src/b/"] },
+      exclude: [],
+      edges: { "api-v1": ["api_v1"] },
+    });
+    expect(map).toContain('api_v1["src/a/"]');
+    expect(map).toContain('api_v1_2["src/b/"]');
+    expect(map).toContain("api_v1 --> api_v1_2");
+  });
+
+  test("an export named with $ is a symbol, as ECMAScript allows", () => {
+    const root = variant("dollar-export", {
+      "src/engine/dollar.ts": "export const $run = 1;\n",
+      "docs/dollar.md": [
+        "# T",
+        "",
+        "```mermaid",
+        "flowchart LR",
+        '  a["src/engine/dollar.ts<br>$run"]',
+        "```",
+        "",
+        `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`,
+        "",
+      ].join("\n"),
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/dollar.md", "--repo-url", REPO_URL], root);
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+
+  test("one demonstration line proves one diagram: two fences under one heading need two lines", () => {
+    const fence = '```mermaid\nflowchart LR\n  a["src/engine/run.ts<br>run()"]\n```';
+    const root = variant("shared-demo", {
+      "docs/shared.md": `# T\n\n${fence}\n\n${fence}\n\nDemonstrated by: [x](${REPO_URL}test/engine/run.test.ts).\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/shared.md", "--repo-url", REPO_URL], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(
+      'line 8: the diagram has no "Demonstrated by:" line before the next heading',
+    );
   });
 });
