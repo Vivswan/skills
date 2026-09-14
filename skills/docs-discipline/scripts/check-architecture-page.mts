@@ -111,17 +111,19 @@ function fences(lines: readonly string[]): Fence[] {
   for (let index = 0; index < lines.length; index++) {
     const open = FENCE_OPEN.exec(lines[index] ?? "");
     if (open === null) continue;
-    const quote = open[1] ?? "";
-    const indent = quote + (open[2] ?? "");
+    // Block-quote depth is what carries over line to line; the space after each `>` is optional on every line.
+    const depth = (open[1] ?? "").split(">").length - 1;
+    const quotePrefix = new RegExp(`^(?:>[ ]?){${depth}}`);
+    const indent = open[2] ?? "";
     const ticks = open[3] ?? "```";
-    // A closer repeats the opener's marker character at least as many times, under the same quote prefix and at most three spaces in.
+    // A closer repeats the opener's marker character at least as many times, at the same quote depth and at most three spaces in.
     const close = new RegExp(
-      `^${escapeRe(quote)} {0,3}${ticks[0] === "~" ? "~" : "`"}{${ticks.length},}[ \\t]*$`,
+      `^(?:>[ ]?){${depth}} {0,3}${ticks[0] === "~" ? "~" : "`"}{${ticks.length},}[ \\t]*$`,
     );
     const body: string[] = [];
     let cursor = index + 1;
     while (cursor < lines.length && !close.test(lines[cursor] ?? "")) {
-      const text = lines[cursor] ?? "";
+      const text = (lines[cursor] ?? "").replace(quotePrefix, "");
       body.push(text.startsWith(indent) ? text.slice(indent.length) : text);
       cursor += 1;
     }

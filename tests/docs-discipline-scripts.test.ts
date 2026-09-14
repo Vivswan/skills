@@ -1218,3 +1218,23 @@ describe("ninth Copilot round on the moved scripts", () => {
     expect([rendered.status, rendered.stderr]).toEqual([0, ""]);
   });
 });
+
+describe("eleventh Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const demo = `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`;
+
+  test("a block-quoted fence closes on a > line without the optional space, so the page after it is read", () => {
+    const quoted = '> ```mermaid\n> flowchart LR\n>   a["src/engine/nowhere.ts"]\n>```';
+    const root = variant("quote-closer", {
+      "docs/closer.md": `# T\n\n${quoted}\n\n\`\`\`mermaid\nflowchart LR\n  a["src/engine/run.ts<br>run()"]\n\`\`\`\n\n${demo}\n`,
+    });
+    const out = run(
+      CHECK_PAGE,
+      ["--page", "docs/closer.md", "--repo-url", REPO_URL, "--expect-diagrams", "2"],
+      root,
+    );
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("src/engine/nowhere.ts does not exist");
+    expect(out.stderr).not.toContain("expected 2 concept diagrams");
+  });
+});
