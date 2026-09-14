@@ -63,27 +63,43 @@ There is no mandated carrier. Ask what the reader must see, then use the device 
 | how a change reads | a before block and an after block | the comparison is the visualization |
 | plain facts | bullets, each opened by a bold lead-in that names the fact | the reader scans the lead-ins and stops where it matters |
 
-Two rules hold across every device:
+Four rules hold across every device:
 
+- **Every device is a choice.** A table, a bullet list, a link, or a diagram appears because it shows this content faster than prose would, never because the previous section had one. The test is the skim: a reader who takes in only the headings, the first sentences, the tables, the diagrams, the captured blocks, and the emphasized text gets the whole story.
 - **One carrier per point.** A diagram followed by a paragraph re-explaining it means the diagram failed; fix the diagram or drop the paragraph.
+- **A bullet is for a list.** Bullets carry items that are a list or a checklist; a line of reasoning stays prose. Turning every sentence into a bullet hides which ones are the same kind of thing.
 - **Break a convention when the content reads better without it.** Troubleshooting pages that dropped their tables for the three-line triple read better than the tables did. Say why in the review, not in the page.
 
 ## Write for the reader who skims
 
-Every reader of these pages skims, so:
+Every reader of these pages skims, then reads one section closely. Both readers are served by the same rules, and the page holds enough detail to be useful without becoming exhaustive.
 
-- **Short sentences.** One idea each, about 20 words. A paragraph is 1 to 3 sentences and under 70 words.
+Shape:
+
+- **The most important point opens each section.** A reader who stops after the first sentence leaves with the right fact.
+- **Headings tell the story on their own** ("What gates what", "When the pin moves"), never the reader's level ("Simple version"). Read in sequence, the headings are the page's outline; they appear only on a page above about 500 words.
+- **One idea per paragraph,** 1 to 3 sentences, under 70 words. **Short sentences,** one idea each, about 20 words.
+- **No nesting past one level.** A list inside a list is content asking for a different device: a table, a tree, a subsection, whichever shows it.
+- **The page reads from beginning to end.** Sections follow the order a reader meets the subject; a fact is introduced before it is used.
+
+Words:
+
+- **Plain, direct, active.** "The sync moves the pin" rather than "the pin is moved by the sync". One term per thing, kept for the whole page; a name the reader has not met is defined where it first appears, in plain words before the mechanism name ("the check that judges every job" comes before `all-green`).
 - **Example first, then the rule.** The block or the row shows it; the sentence after says what it means.
-- **Plain words before mechanism names.** "The check that judges every job" comes before `all-green`; a name the reader has not met is defined where it first appears.
-- **One owner per fact.** A fact lives on one page; other pages link to it ("the undeclared-policy page owns this knob") and never restate it.
 - **Show the artifact.** Log lines, error text, and tree output are quoted verbatim, never paraphrased.
-- **Open with one orienting sentence** saying what the page is and what it is not, then whatever the reader needs first. Never background.
-- **Headings name the content** ("What gates what"), never the reader's level ("Simple version"), and appear only on a page above about 500 words.
 - **Programmer register.** Precise nouns, the repository's own names, no marketing. `/unslop`, where installed, removes the AI tells that survive.
+
+Facts:
+
+- **One owner per fact.** A fact lives on one page; other pages link to it in the sentence that needs it (`the [undeclared-policy page](undeclared.md#the-knob) owns this knob`) and never restate it. A separate links or navigation section exists only when the page is an index.
+- **Every internal link works.** The target exists and the anchor names a heading on it; the probe checks the targets, the anchors are read.
+- **Mark what kind of fact it is.** A confirmed fact stands bare; an assumption, a claim supplied by someone else, a risk, a recommendation, or anything not independently verified is labeled as such where it appears ("a guess, to save a round trip"; "reported by the user, not reproduced").
+- **Cut only what the reader does not need.** Implementation detail, repetition, and filler go; definitions, reasoning, limitations, and next steps stay. A cut is a content change the PR names; a restructure (below) moves every fact and cuts none.
+- **Open with one orienting sentence** saying what the page is and what it is not, then whatever the reader needs first. Never background.
 
 ## The probe
 
-`scripts/docs-probe.mts` ships with this skill. It reads a page's prose units (paragraphs and list items; front matter, headings, fences, tables, comments, and generated regions are not prose) and reports two things:
+The probe reports the two readings a reviewer otherwise takes by eye. `scripts/docs-probe.mts` ships with this skill and reads a page's prose units (paragraphs and list items; front matter, headings, fences, tables, comments, and generated regions are not prose):
 
 - a unit over the cap (`--max-words`, default 70), with the line it starts on
 - a repository path the prose names that does not exist: a backticked `<dir>/<file>.<ext>`, `./<file>`, `../<file>`, or `<dir>/`, or a relative link target
@@ -123,14 +139,14 @@ The page kind with the most to rot has its own recipe in `references/architectur
 - A paragraph or list item over 70 words (run `docs-probe.mts`; do not count by eye), or a paragraph over three sentences.
 - Prose that describes what a device would show in one glance: a command without its output, a rule the reader must reconstruct from a paragraph, a break whose observable symptom is not stated.
 - A device followed by a paragraph re-explaining it, or a bullet under a diagram that restates an arrow.
-- A fact restated on a second page where a link to its owner would do.
-- A heading naming the reader's level instead of the content, or headings on a page under about 500 words.
+- A fact restated on a second page where a link to its owner would do; an internal link whose target or anchor does not resolve; a links or navigation section on a page that is not an index.
+- A heading naming the reader's level instead of the content, headings that do not outline the page when read in sequence, or headings on a page under about 500 words.
+- A section whose key point sits after the setup, a list nested inside a list, bullets carrying a line of reasoning that should be prose, or a device used because the last section had one.
+- A page whose headings, first sentences, tables, diagrams, captured blocks, and emphasized text do not carry the story on their own.
+- An assumption, a supplied claim, a risk, a recommendation, or an unverified reading presented as a confirmed fact.
+- A shortened page that dropped a definition, a reason, a limitation, or a next step the reader needed.
 - A path, link, symbol, or check the page names that does not exist (the probe for paths and links; `check-architecture-page.mts` for diagram boxes).
 - A reshaped page that lost a fact, added one, or dropped a heading anchor another page links to.
 - An architecture page whose module map shows an edge the code does not draw, a box naming a symbol its file does not export, or a concept diagram with no `Demonstrated by:` line.
 - Wall-of-text prose anywhere a human skims: docs, reports, PR text (the `/pr-and-issue-discipline` skill's Readability rules own the PR body).
 
-## References
-
-- `references/architecture-page.md`: the architecture page kind: `architecture.yml`, `arch-lint.mts`, `render-architecture-map.mts`, `check-architecture-page.mts`, and what a review of that page checks
-- `scripts/docs-probe.mts`: the paragraph cap and the path check
