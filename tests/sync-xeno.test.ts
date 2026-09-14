@@ -1,8 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
-import { check, parseSources, renderSources, type Source, update } from "../scripts/sync-xeno.mts";
+import {
+  check,
+  parseSources,
+  renderSources,
+  type Source,
+  update,
+  writeSources,
+} from "../scripts/sync-xeno.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
 const temp = tempDirs();
@@ -273,5 +288,35 @@ describe("sources.yml round-trips through Bun.YAML", () => {
   test("a misspelled key (refs for ref) is rejected instead of silently following the default branch", () => {
     const text = `alpha:\n  url: u\n  path: p\n  refs: stable\n  commit: ${"a".repeat(40)}\n  license: MIT\n`;
     expect(() => parseSources(text)).toThrow(/alpha has unknown key\(s\) refs/);
+  });
+});
+
+describe("Copilot round on PR 136", () => {
+  test("a glob in path is refused before git could read it as a pattern", () => {
+    const text = `alpha:\n  url: u\n  path: "*/*"\n  commit: ${"a".repeat(40)}\n  license: MIT\n`;
+    expect(() => parseSources(text)).toThrow(/glob characters are not allowed/);
+  });
+
+  test("a symlink added to a copy is refused, never read as absent", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update({ alpha: source(up.url, "0".repeat(40)) }, xeno).sources;
+    symlinkSync("/tmp/nowhere", join(xeno, "alpha", "extra"));
+    expect(() => check(synced, xeno)).toThrow(
+      /extra: a symlink; the copy carries plain files only/,
+    );
+  });
+
+  test("a pin move keeps the inline comments and styles of sources.yml", () => {
+    const dir = temp.dir("sync-xeno-sources-");
+    const path = join(dir, "sources.yml");
+    writeFileSync(
+      path,
+      `# header\nalpha:\n  url: u # reviewed by the owner\n  path: p\n  commit: ${"a".repeat(40)} # pinned 2026-09-14\n  license: "MIT"\n`,
+    );
+    writeSources({ alpha: { url: "u", path: "p", commit: "b".repeat(40), license: "MIT" } }, path);
+    expect(readFileSync(path, "utf8")).toBe(
+      `# header\nalpha:\n  url: u # reviewed by the owner\n  path: p\n  commit: ${"b".repeat(40)} # pinned 2026-09-14\n  license: "MIT"\n`,
+    );
   });
 });

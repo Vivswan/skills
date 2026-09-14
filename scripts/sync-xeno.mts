@@ -15,17 +15,18 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { Document, isMap, parse, parseDocument } from "yaml";
-import { ROOT, walkFiles, XENO_DIR } from "./lib";
+import { ROOT, XENO_DIR } from "./lib";
 
 export const SOURCES_FILE = join(XENO_DIR, "sources.yml");
 const SHA = /^[0-9a-f]{40}$/;
@@ -84,6 +85,9 @@ export function parseSources(text: string, where = "sources.yml"): Sources {
     const path = entry.path as string;
     if (path.startsWith("/") || path.endsWith("/") || path.split("/").includes("..")) {
       throw new Error(`${where}: ${name}.path must be repository-relative with no trailing slash`);
+    }
+    if (/[*?[\]\\]/.test(path)) {
+      throw new Error(`${where}: ${name}.path names one folder; glob characters are not allowed`);
     }
     if (!SHA.test(entry.commit as string))
       throw new Error(`${where}: ${name}.commit must be a 40-hex commit sha`);
@@ -147,13 +151,30 @@ export const SOURCES_HEADER = `# Vendored external skills, one mapping per folde
 #   frontmatter  SKILL.md keys set (scalar) or removed (null) in the copy, the only allowed difference from upstream
 `;
 
+/** Updates the existing document in place, so its comments and scalar styles survive a pin move; a missing file is rendered fresh. */
 export function writeSources(sources: Sources, path = SOURCES_FILE): void {
-  const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-  const header = existing
-    .split("\n")
-    .filter((line) => line.startsWith("#"))
-    .join("\n");
-  writeFileSync(path, renderSources(sources, header || SOURCES_HEADER));
+  if (!existsSync(path)) {
+    writeFileSync(path, renderSources(sources));
+    return;
+  }
+  const doc = parseDocument(readFileSync(path, "utf8"));
+  if (doc.errors.length > 0 || !isMap(doc.contents)) {
+    writeFileSync(path, renderSources(sources));
+    return;
+  }
+  for (const key of [...doc.contents.items].map((item) => String(item.key))) {
+    if (!Object.hasOwn(sources, key)) doc.delete(key);
+  }
+  for (const [name, source] of Object.entries(sources)) {
+    if (!doc.has(name)) {
+      doc.set(name, source);
+      continue;
+    }
+    for (const [field, value] of Object.entries(source)) {
+      if (value !== undefined) doc.setIn([name, field], value);
+    }
+  }
+  writeFileSync(path, doc.toString({ lineWidth: 0 }));
 }
 
 function git(args: readonly string[], cwd?: string): string {
@@ -163,6 +184,7 @@ function git(args: readonly string[], cwd?: string): string {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: BLOB_LIMIT,
   });
   if (proc.status !== 0)
     throw new Error(`git ${args.join(" ")}: ${proc.stderr.trim() || `exit ${proc.status}`}`);
@@ -206,7 +228,11 @@ export function fetchSnapshot(source: Pick<Source, "url" | "path">, commit: stri
     const fetched = git(["rev-parse", "FETCH_HEAD"], work).trim();
     if (fetched !== commit)
       throw new Error(`${source.url}: asked for ${commit}, fetched ${fetched}`);
-    const listing = git(["ls-tree", "-r", "-z", "FETCH_HEAD", `${source.path}/`], work);
+    // A literal pathspec: a path with glob characters is refused by parseSources, and this keeps git from reading it as a pattern either way.
+    const listing = git(
+      ["ls-tree", "-r", "-z", "FETCH_HEAD", "--", `:(literal)${source.path}/`],
+      work,
+    );
     const files = new Map<string, Entry>();
     for (const row of listing.split("\0").filter(Boolean)) {
       // "<mode> <type> <sha>\t<path>"
@@ -303,13 +329,25 @@ function sameOutsideFrontmatter(ours: Entry | undefined, theirs: Entry | undefin
   return body(ours).equals(body(theirs));
 }
 
+/** Every entry under the copy, read without following links: a symlink or a device is refused, never silently absent. */
 export function localSnapshot(dir: string): Files {
   const files = new Map<string, Entry>();
   if (!existsSync(dir)) return files;
-  for (const path of walkFiles(dir)) {
-    const executable = (statSync(path).mode & 0o111) !== 0;
-    files.set(relative(dir, path), { bytes: readFileSync(path), executable });
-  }
+  const walk = (at: string) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const full = join(at, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) {
+        const executable = (lstatSync(full).mode & 0o111) !== 0;
+        files.set(relative(dir, full), { bytes: readFileSync(full), executable });
+      } else {
+        throw new Error(
+          `${relative(ROOT, full)}: ${entry.isSymbolicLink() ? "a symlink" : "not a regular file"}; the copy carries plain files only`,
+        );
+      }
+    }
+  };
+  walk(dir);
   return files;
 }
 

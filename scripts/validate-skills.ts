@@ -65,6 +65,15 @@ function validateMarketplace(): void {
       }
     }
   }
+  // The root plugin is what marketplace installs and the CLI grouping key on; it must be there, once, under plugin.json's name.
+  const rootName = loadRootManifest().name;
+  const roots = plugins.filter((plugin) => plugin.name !== XENO_PLUGIN);
+  if (roots.length !== 1 || roots[0]?.name !== rootName) {
+    fail(
+      `${rel(path)}: exactly one plugin must publish the repository root, named '${rootName}'` +
+        " like .claude-plugin/plugin.json",
+    );
+  }
 }
 
 function validateRootPluginManifest(): void {
