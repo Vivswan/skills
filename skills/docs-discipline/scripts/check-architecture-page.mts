@@ -13,7 +13,7 @@
 // and need no demonstration line.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseSync, pathLabel, resolveImport } from "./arch-lint.mts";
 
 // An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
@@ -248,7 +248,7 @@ export function labelProblems(
     }
     bound = path;
     const file = resolve(root, path);
-    if (path.split("/").includes("..") || !file.startsWith(`${resolve(root)}/`)) {
+    if (path.split("/").includes("..") || !withinRoot(root, file)) {
       problems.push(`"${label}": ${path} escapes the repository`);
       continue;
     }
@@ -315,6 +315,12 @@ function insideGeneratedRegion(page: Page, line: number): boolean {
   return open;
 }
 
+/** True when `file` sits under `root`, judged by the relative path so the host's separator does not matter. */
+function withinRoot(root: string, file: string): boolean {
+  const rel = relative(resolve(root), file);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
 /** The file a link addresses: no fragment, no query, percent-escapes decoded when they are valid. */
 function linkFile(link: string): string {
   const bare = link.split("#")[0]?.split("?")[0] ?? "";
@@ -346,7 +352,7 @@ function resolveLink(
     return { problem: `"${link}" is a relative link, but the page's own path is unknown` };
   }
   const file = resolve(dirname(options.pagePath), target);
-  if (!file.startsWith(`${resolve(options.root)}/`)) {
+  if (!withinRoot(options.root, file)) {
     return { problem: `"${link}" resolves outside the repository` };
   }
   return { file };
