@@ -25,3 +25,7 @@ CLAUDE.md -text
 # below the END marker; they stay yours across every sync, and the
 # LAST matching line wins, so entries there override the managed ones.
 # END REPO-PLATFORM MANAGED
+
+# Vendored copies under xeno/ keep their upstream bytes, line endings included;
+# scripts/sync-xeno.mts compares them against the pin byte for byte.
+xeno/** -text

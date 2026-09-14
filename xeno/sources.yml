@@ -1,0 +1,15 @@
+# Vendored external skills, one mapping per folder under xeno/.
+#   url          clone URL of the upstream repository
+#   path         the skill folder inside it (copied whole)
+#   ref          branch or tag the weekly sync follows (absent: the upstream's default branch)
+#   commit       the upstream commit the copy was taken from; the sync moves it, nobody edits it
+#   license      SPDX id of the upstream license, or "none published"
+#   frontmatter  SKILL.md keys set (scalar) or removed (null) in the copy, the only allowed difference from upstream
+
+unslop:
+  url: https://github.com/cursor/plugins.git
+  path: pstack/skills/unslop
+  commit: 5bf2b1544db739998121a306340631963c2ff3de
+  license: none published
+  frontmatter:
+    disable-model-invocation: null

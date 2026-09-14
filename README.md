@@ -6,7 +6,7 @@ A collection of skills for AI coding agents. Skills are packaged instructions an
 
 ## About This Repository
 
-This repo keeps the collection-style catalog and install flow from `vercel-labs/agent-skills`, while also keeping each skill folder plugin-ready so MCP servers, hooks, or app integrations can be added later without changing the layout. The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes the whole catalog as a single `vivswan-skills` plugin for Claude Code marketplace installs, with [`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) as the plugin manifest, but the main experience stays centered on `npx skills add ...`.
+This repo keeps the collection-style catalog and install flow from `vercel-labs/agent-skills`, while also keeping each skill folder plugin-ready so MCP servers, hooks, or app integrations can be added later without changing the layout. The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes the catalog as the `vivswan-skills` plugin for Claude Code marketplace installs, with [`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) as the plugin manifest, plus a `xeno` plugin that groups the skills vendored from other repositories under their own heading, but the main experience stays centered on `npx skills add ...`.
 
 ## Available Skills
 
@@ -32,6 +32,12 @@ Load only when you invoke them (`/skill-name` in Claude Code, `$skill-name` in C
 
 - [/natural-writing](./skills/natural-writing/) - Prose without AI writing tells
 - [/orchestrator-mode](./skills/orchestrator-mode/) - Parallel worktree subagents with gated landings, direct or PR-based
+
+### Xeno
+
+Xeno, from the Greek for foreign: skills written in other repositories, vendored here from their upstream at a pinned commit and refreshed weekly ([how](./xeno/README.md)):
+
+- [/unslop](./xeno/unslop/) - Cut AI tells from any writing (from [cursor/plugins](https://github.com/cursor/plugins))
 
 How the skills reference each other (an arrow means "mentions and hands off to, where installed"):
 
@@ -62,6 +68,7 @@ graph LR
   om --> vwc["/verify-with-controls"]
   vwc --> rdr
   csm["/craft-skills-and-memories"] --> nw["/natural-writing"]
+  us["/unslop"]
   csm --> nt
 ```
 
@@ -96,6 +103,7 @@ Or install everything as a Claude Code plugin:
 ```text
 /plugin marketplace add Vivswan/skills
 /plugin install vivswan-skills@vivswan-skills
+/plugin install xeno@vivswan-skills
 ```
 
 ## Usage

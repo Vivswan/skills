@@ -23,7 +23,9 @@ import {
   ROOT,
   runChecks,
   skillDirs,
+  xenoSkillDirs,
 } from "./lib";
+import { XENO_PLUGIN } from "./validate-skills";
 
 // Mirrors the CLI's kebabToTitle: capitalize the first letter of each segment.
 function kebabToTitle(name: string): string {
@@ -36,7 +38,10 @@ function kebabToTitle(name: string): string {
 function main(): void {
   const manifest = loadRootManifest();
   const groupTitle = kebabToTitle(manifest.name);
-  const expected = skillDirs().map((dir) => basename(dir));
+  const xeno = xenoSkillDirs().map((dir) => basename(dir));
+  const expected = [...skillDirs().map((dir) => basename(dir)), ...xeno];
+  // The marketplace's `xeno` plugin gives the vendored copies their own heading.
+  const groups = new Map(xeno.map((name) => [name, kebabToTitle(XENO_PLUGIN)]));
   // Listing rows only ever hold kebab-case names, so a non-kebab folder could
   // never match one; fail with the real cause up front (this job runs on its
   // own, without validate-skills before it).
@@ -59,9 +64,11 @@ function main(): void {
   const output = stripAnsi(`${proc.stdout ?? ""}\n${proc.stderr ?? ""}`);
   if (proc.status !== 0) fail(`npx skills exited with ${proc.status}:\n${output}`);
 
-  checkListing(expected, groupTitle, templateName, output);
+  checkListing(expected, groupTitle, templateName, output, groups);
 
-  console.log(`CLI discovery test passed (${expected.length} skill(s) under '${groupTitle}').`);
+  console.log(
+    `CLI discovery test passed (${expected.length - xeno.length} skill(s) under '${groupTitle}', ${xeno.length} under '${kebabToTitle(XENO_PLUGIN)}').`,
+  );
 }
 
 runChecks(main);

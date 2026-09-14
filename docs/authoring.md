@@ -42,6 +42,10 @@ This keeps the repo compatible with:
 11. Explicit-invocation-only skills set `disable-model-invocation: true` in the frontmatter AND `policy.allow_implicit_invocation: false` in `agents/openai.yaml`; the README entry then goes under "Invoked by you", otherwise under "Automatic".
 12. Run `bun run check`; the smoke test enforces every item above plus frontmatter limits (`name` <= 64 characters, `description` <= 1024), the codex manifest's `homepage` and `keywords`, and `interface.short_description` at 25 to 64 characters.
 
+## Xeno Skills
+
+A skill written elsewhere ships from this catalog as a vendored copy under `xeno/<name>/`, pinned to an upstream commit in `xeno/sources.yml` and rewritten only by `bun run sync-xeno`. The layout above does not apply to a copy; [`xeno/README.md`](../xeno/README.md) has the three steps to add one and the weekly refresh.
+
 ## Contributing Criteria to Reviews
 
 A skill contributes to `/rubber-duck-review` second-opinion passes by declaring a `## Review Criteria` section in its `SKILL.md`. That alone joins it to every review; there is no registry to update. Keep the section short: a few bullets the reviewer can act on, plus a pointer to the skill's own workflow for triaging findings. The smoke test rejects a section without list items.

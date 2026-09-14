@@ -80,6 +80,8 @@ export function checkListing(
   groupTitle: string,
   templateName: string,
   output: string,
+  /** Skills listed under another heading than `groupTitle` (the vendored copies under "Xeno"). */
+  groups: ReadonlyMap<string, string> = new Map(),
 ): void {
   const expectedNames = new Set(expected);
   const listedGroups = new Map<string, string>();
@@ -100,8 +102,9 @@ export function checkListing(
     if (group === undefined) {
       fail(`skill '${name}' missing from the CLI listing rows:\n${output}`);
     }
-    if (group !== groupTitle) {
-      fail(`skill '${name}' listed under '${group}', not '${groupTitle}':\n${output}`);
+    const wanted = groups.get(name) ?? groupTitle;
+    if (group !== wanted) {
+      fail(`skill '${name}' listed under '${group}', not '${wanted}':\n${output}`);
     }
   }
 }

@@ -117,29 +117,52 @@ function readmeSection(readmeText: string, title: string): string {
 // entry whose folder is gone is stale documentation, each link must point at
 // the skill's own folder, and a duplicate entry is drift. Only kebab-case
 // names count as skill entries, so prose bullets are left alone.
-export function checkReadmeSkillList(readmeText: string, skillNames: ReadonlySet<string>): void {
+/** Vendored skills sit under '### Xeno' and link into xeno/; our own never do. */
+export function checkReadmeSkillList(
+  readmeText: string,
+  skillNames: ReadonlySet<string>,
+  xenoNames: ReadonlySet<string> = new Set(),
+): void {
   const scannable = readmeSection(readmeText, "Available Skills");
-  const listed = new Map<string, string>();
+  const xenoStart = scannable.indexOf("### Xeno");
+  if (xenoNames.size > 0 && xenoStart === -1) {
+    fail("README.md: missing the '### Xeno' subsection for the vendored skills");
+  }
+  const nextHeading = xenoStart === -1 ? -1 : scannable.indexOf("\n### ", xenoStart + 1);
+  const xenoEnd = nextHeading === -1 ? scannable.length : nextHeading;
+  const listed = new Map<string, { target: string; underExternal: boolean }>();
   for (const match of scannable.matchAll(/^- \[\/?([^\]]+)\]\(([^)]+)\)/gm)) {
     const name = (match[1] ?? "").trim();
     if (!KEBAB_CASE.test(name)) continue;
     if (listed.has(name)) {
       fail(`README.md: duplicate Available Skills entry for '${name}'`);
     }
-    listed.set(name, match[2] ?? "");
+    listed.set(name, {
+      target: match[2] ?? "",
+      underExternal:
+        xenoStart !== -1 && (match.index ?? 0) > xenoStart && (match.index ?? 0) < xenoEnd,
+    });
   }
-  for (const [name, target] of listed) {
-    if (!skillNames.has(name)) {
+  for (const [name, { target, underExternal }] of listed) {
+    const xeno = xenoNames.has(name);
+    if (!xeno && !skillNames.has(name)) {
       fail(
         `README.md: '[${name}]' in the Available Skills list has no matching` +
           ` skills/${name}/ folder -- remove the stale entry or restore the folder`,
       );
     }
-    if (target !== `./skills/${name}/` && target !== `./skills/${name}`) {
-      fail(`README.md: the '[${name}]' entry must link to ./skills/${name}/`);
+    const folder = xeno ? `./xeno/${name}/` : `./skills/${name}/`;
+    if (target !== folder && target !== folder.slice(0, -1)) {
+      fail(`README.md: the '[${name}]' entry must link to ${folder}`);
+    }
+    if (xeno !== underExternal) {
+      fail(
+        `README.md: '${name}' must be listed ${xeno ? "under" : "outside"} '### Xeno'` +
+          ` -- it is ${xeno ? "a vendored copy" : "one of this repository's own skills"}`,
+      );
     }
   }
-  for (const name of skillNames) {
+  for (const name of [...skillNames, ...xenoNames]) {
     if (!listed.has(name)) {
       fail(`README.md: the Available Skills list is missing an entry for '${name}'`);
     }
@@ -259,6 +282,8 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
 export interface InvocationGroupingEntry {
   readonly name: string;
   readonly disabled: boolean;
+  /** A vendored copy under xeno/: grouped under '### Xeno', not by invocation. */
+  readonly xeno?: boolean;
 }
 
 // The README's Automatic vs "Invoked by you" grouping must track the
@@ -273,7 +298,8 @@ export function checkReadmeInvocationGrouping(
   const invokedIndex = area.indexOf("### Invoked by you");
   if (invokedIndex === -1) fail("README.md: missing the '### Invoked by you' subsection");
   const invokedArea = area.slice(invokedIndex);
-  for (const { name, disabled } of skills) {
+  for (const { name, disabled, xeno } of skills) {
+    if (xeno) continue;
     const inInvoked = invokedArea.includes(`- [/${name}](`);
     if (disabled !== inInvoked) {
       fail(
@@ -308,7 +334,7 @@ export function checkReadmeUsageExplicitRoster(
   }
   const named = new Set<string>();
   for (const entry of (sentence[1] ?? "").split(", ")) {
-    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/skills\/\1\/\)$/.exec(entry);
+    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/(?:skills|(xeno))\/\1\/\)$/.exec(entry);
     if (link === null) {
       fail(
         `README.md: cannot parse Usage explicit-invocation-only roster entry '${entry}'` +
@@ -320,6 +346,13 @@ export function checkReadmeUsageExplicitRoster(
       fail(`README.md: duplicate Usage explicit-invocation-only roster entry for '${name}'`);
     }
     named.add(name);
+    const xeno = skills.find((skill) => skill.name === name)?.xeno === true;
+    if (xeno !== (link[2] !== undefined)) {
+      fail(
+        `README.md: the Usage roster entry for '${name}' must link to` +
+          ` ./${xeno ? "xeno" : "skills"}/${name}/`,
+      );
+    }
   }
   const known = new Set(skills.map(({ name }) => name));
   for (const name of named) {

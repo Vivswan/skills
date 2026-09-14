@@ -219,7 +219,6 @@ describe("loadMarketplace", () => {
   test("loads the repo marketplace from the default path", () => {
     const marketplace = loadMarketplace();
     expect(marketplace.path).toBe(join(ROOT, ".claude-plugin", "marketplace.json"));
-    expect(marketplace.plugins.map((plugin) => plugin.name)).toEqual([loadRootManifest().name]);
   });
 
   test("fails when the root is not an object", () => {

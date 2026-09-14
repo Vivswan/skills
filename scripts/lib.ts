@@ -10,6 +10,8 @@ import { join, relative, resolve } from "node:path";
 
 export const ROOT = resolve(import.meta.dir, "..");
 export const SKILLS_DIR = join(ROOT, "skills");
+/** Vendored copies of other repositories' skills, beside skills/ (ours); scripts/sync-xeno.mts is their only writer. */
+export const XENO_DIR = join(ROOT, "xeno");
 
 export const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -143,6 +145,8 @@ export function parseFrontmatter(path: string): Frontmatter {
   } catch (error) {
     fail(`${rel(path)}: cannot read file (${errorMessage(error)})`);
   }
+  // A checkout with autocrlf, or a vendored copy whose upstream commits CRLF, still loads in Claude Code.
+  text = text.replace(/\r\n/g, "\n");
   if (!text.startsWith("---\n")) fail(`${rel(path)}: missing YAML frontmatter start`);
   const end = text.indexOf("\n---\n", 4);
   if (end === -1) fail(`${rel(path)}: missing YAML frontmatter end`);
@@ -157,6 +161,7 @@ export function parseFrontmatter(path: string): Frontmatter {
   return data;
 }
 
+/** This repository's own skills: every directory under skills/. */
 export function skillDirs(): string[] {
   if (!statSync(SKILLS_DIR, { throwIfNoEntry: false })?.isDirectory()) {
     fail("skills/: missing skills directory");
@@ -167,6 +172,15 @@ export function skillDirs(): string[] {
     .sort();
   if (dirs.length === 0) fail("skills/: no public skills found");
   return dirs;
+}
+
+/** The vendored external skills, one directory each under xeno/; none when the folder is absent. */
+export function xenoSkillDirs(): string[] {
+  if (!statSync(XENO_DIR, { throwIfNoEntry: false })?.isDirectory()) return [];
+  return readdirSync(XENO_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(XENO_DIR, entry.name))
+    .sort();
 }
 
 export function walkFiles(dir: string): string[] {
