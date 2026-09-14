@@ -332,7 +332,13 @@ function sameOutsideFrontmatter(ours: Entry | undefined, theirs: Entry | undefin
 /** Every entry under the copy, read without following links: a symlink or a device is refused, never silently absent. */
 export function localSnapshot(dir: string): Files {
   const files = new Map<string, Entry>();
-  if (!existsSync(dir)) return files;
+  const rootStat = lstatSync(dir, { throwIfNoEntry: false });
+  if (!rootStat) return files;
+  if (!rootStat.isDirectory()) {
+    throw new Error(
+      `${relative(ROOT, dir)}: ${rootStat.isSymbolicLink() ? "a symlink" : "not a directory"}; a copy is a plain folder`,
+    );
+  }
   const walk = (at: string) => {
     for (const entry of readdirSync(at, { withFileTypes: true })) {
       const full = join(at, entry.name);

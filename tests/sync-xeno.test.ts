@@ -297,6 +297,15 @@ describe("Copilot round on PR 136", () => {
     expect(() => parseSources(text)).toThrow(/glob characters are not allowed/);
   });
 
+  test("a copy root that is a symlink is refused, not followed", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
+    const elsewhere = temp.dir("sync-xeno-elsewhere-");
+    const synced = update({ alpha: source(up.url, "0".repeat(40)) }, elsewhere).sources;
+    const xeno = temp.dir("sync-xeno-copy-");
+    symlinkSync(join(elsewhere, "alpha"), join(xeno, "alpha"));
+    expect(() => check(synced, xeno)).toThrow(/alpha: a symlink; a copy is a plain folder/);
+  });
+
   test("a symlink added to a copy is refused, never read as absent", () => {
     const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
     const xeno = temp.dir("sync-xeno-copy-");
