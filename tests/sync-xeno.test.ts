@@ -269,4 +269,9 @@ describe("sources.yml round-trips through Bun.YAML", () => {
     expect(parseSources(text)).toEqual(sources);
     expect(parseSources(renderSources({}, "# empty"))).toEqual({});
   });
+
+  test("a misspelled key (refs for ref) is rejected instead of silently following the default branch", () => {
+    const text = `alpha:\n  url: u\n  path: p\n  refs: stable\n  commit: ${"a".repeat(40)}\n  license: MIT\n`;
+    expect(() => parseSources(text)).toThrow(/alpha has unknown key\(s\) refs/);
+  });
 });

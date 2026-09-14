@@ -52,6 +52,9 @@ export interface Source {
 
 export type Sources = Record<string, Source>;
 
+/** A misspelled key (refs for ref) would otherwise be dropped and the copy would follow the wrong branch. */
+const KNOWN_KEYS = new Set(["url", "path", "ref", "commit", "license", "frontmatter"]);
+
 export function parseSources(text: string, where = "sources.yml"): Sources {
   const raw: unknown = parse(text);
   if (raw === null || raw === undefined) return {};
@@ -65,6 +68,12 @@ export function parseSources(text: string, where = "sources.yml"): Sources {
     if (typeof value !== "object" || value === null)
       throw new Error(`${where}: ${name} must be an object`);
     const entry = value as Record<string, unknown>;
+    const unknown = Object.keys(entry).filter((key) => !KNOWN_KEYS.has(key));
+    if (unknown.length > 0) {
+      throw new Error(
+        `${where}: ${name} has unknown key(s) ${unknown.join(", ")}; the schema is ${[...KNOWN_KEYS].join(", ")}`,
+      );
+    }
     for (const key of ["url", "path", "commit", "license"] as const) {
       if (typeof entry[key] !== "string" || entry[key] === "")
         throw new Error(`${where}: ${name}.${key} must be a non-empty string`);
