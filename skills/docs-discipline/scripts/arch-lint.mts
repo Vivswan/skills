@@ -251,6 +251,11 @@ export function lintArchitecture(
     for (const path of paths) {
       if (!existsSync(join(root, path))) {
         problems.push(`layer ${layer} names ${path}, which does not exist`);
+      } else if (!path.endsWith("/") && statSync(join(root, path)).isDirectory()) {
+        // Without the slash no scan root reaches the directory, and the layer would lint as empty.
+        problems.push(
+          `layer ${layer} names ${path}, a directory; write it as ${path}/ so its files are scanned`,
+        );
       }
     }
   }

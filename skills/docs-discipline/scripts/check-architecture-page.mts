@@ -65,7 +65,8 @@ export interface Fence {
   body: string;
 }
 
-const FENCE_OPEN = /^([ \t]*)(`{3,}|~{3,})(.*)$/;
+// Up to three spaces of indent, as Markdown allows; four make indented code, which is quoted text.
+const FENCE_OPEN = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const MERMAID_INFO = /^\s*mermaid\s*$/;
 
 /** `markdown` with CRLF line ends folded, so every reader counts the same lines. */
@@ -246,7 +247,11 @@ export function labelProblems(
       continue;
     }
     bound = path;
-    const file = join(root, path);
+    const file = resolve(root, path);
+    if (path.split("/").includes("..") || !file.startsWith(`${resolve(root)}/`)) {
+      problems.push(`"${label}": ${path} escapes the repository`);
+      continue;
+    }
     if (!existsSync(file)) {
       if (!missing.has(path)) {
         missing.add(path);
@@ -269,6 +274,33 @@ export function labelProblems(
       }
     }
   }
+  return problems;
+}
+
+/** Every BEGIN GENERATED marker needs the END marker of the same name after it; an unmatched one would hide every later diagram. */
+function regionProblems(page: Page): string[] {
+  const problems: string[] = [];
+  let open: { name: string; line: number } | undefined;
+  for (const [index, text] of page.text.entries()) {
+    if (text === undefined) continue;
+    const begin = /^<!-- BEGIN GENERATED: (\S+)/.exec(text);
+    const end = /^<!-- END GENERATED: (\S+)/.exec(text);
+    if (begin) {
+      if (open)
+        problems.push(
+          `line ${index + 1}: BEGIN GENERATED: ${begin[1]} opens inside the region ${open.name} opened at line ${open.line + 1}`,
+        );
+      open = { name: begin[1] ?? "", line: index };
+    } else if (end) {
+      if (!open) problems.push(`line ${index + 1}: END GENERATED: ${end[1]} closes no open region`);
+      else if (open.name !== end[1])
+        problems.push(
+          `line ${index + 1}: END GENERATED: ${end[1]} closes the region ${open.name} opened at line ${open.line + 1}`,
+        );
+      open = undefined;
+    }
+  }
+  if (open) problems.push(`line ${open.line + 1}: BEGIN GENERATED: ${open.name} is never closed`);
   return problems;
 }
 
@@ -313,7 +345,11 @@ function resolveLink(
   if (options.pagePath === undefined) {
     return { problem: `"${link}" is a relative link, but the page's own path is unknown` };
   }
-  return { file: resolve(dirname(options.pagePath), target) };
+  const file = resolve(dirname(options.pagePath), target);
+  if (!file.startsWith(`${resolve(options.root)}/`)) {
+    return { problem: `"${link}" resolves outside the repository` };
+  }
+  return { file };
 }
 
 /** The concept diagrams of a page: the mermaid fences outside generated regions. */
@@ -350,6 +386,7 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
   const pathRoots = options.pathRoots ?? defaultPathRoots(options.root);
   const problems: string[] = [];
   const page = readPage(markdown);
+  problems.push(...regionProblems(page));
   for (const fence of page.fences) {
     if (!fence.mermaid) continue;
     const nodes = nodeLabels(fence.body);

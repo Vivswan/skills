@@ -1051,3 +1051,52 @@ describe("third Copilot round on the moved scripts", () => {
     );
   });
 });
+
+describe("fourth Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const diagram = (label: string) => `\`\`\`mermaid\nflowchart LR\n  a["${label}"]\n\`\`\``;
+  const demo = `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`;
+
+  test("a directory named without its trailing slash is a finding, not an empty layer", () => {
+    const root = variant("dir-no-slash", {
+      "architecture.yml":
+        "layers:\n  main: [src/main.ts]\n  engine: [src/engine]\n  types: [src/types.ts]\nedges:\n  main: [engine]\n  engine: [types]\n",
+    });
+    const out = run(ARCH_LINT, [], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(
+      "layer engine names src/engine, a directory; write it as src/engine/",
+    );
+  });
+
+  test("a four-space-indented mermaid fence is quoted code, not a diagram", () => {
+    const root = variant("indented-fence", {
+      "docs/indented.md": `# T\n\n    ${diagram("src/engine/nowhere.ts").split("\n").join("\n    ")}\n\n${diagram("src/engine/run.ts<br>run()")}\n\n${demo}\n`,
+    });
+    const out = run(
+      CHECK_PAGE,
+      ["--page", "docs/indented.md", "--repo-url", REPO_URL, "--expect-diagrams", "1"],
+      root,
+    );
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+
+  test("a box path or a demonstration link that resolves outside the repository is a finding", () => {
+    const root = variant("escape", {
+      "docs/escape.md": `# T\n\n${diagram("src/../../etc/passwd")}\n\nDemonstrated by: [x](../../../../../../../../etc/passwd).\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/escape.md", "--repo-url", REPO_URL], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("src/../../etc/passwd escapes the repository");
+    expect(out.stderr).toContain("resolves outside the repository");
+  });
+
+  test("an unmatched BEGIN GENERATED marker is reported instead of hiding every later diagram", () => {
+    const root = variant("unmatched-region", {
+      "docs/region.md": `# T\n\n<!-- BEGIN GENERATED: typo -->\n\n${diagram("src/engine/run.ts<br>run()")}\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/region.md", "--repo-url", REPO_URL], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("line 3: BEGIN GENERATED: typo is never closed");
+  });
+});

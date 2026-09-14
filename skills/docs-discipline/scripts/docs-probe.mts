@@ -190,7 +190,7 @@ export function scanPage(text: string): Scan {
       scan.links.push({ href, line: locate(href) + 1 });
     }
     // The next unit starts after this one, so a repeated opening line finds its own line, not this one again.
-    if (prose && plain.trim() !== "") cursor = line + plain.trim().split("\n").length;
+    if (plain.trim() !== "") cursor = line + plain.trim().split("\n").length;
     for (const nested of nestedBlocks(inner)) visit(nested);
   };
   for (const block of nestedBlocks(prose)) visit(block);

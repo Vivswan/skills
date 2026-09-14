@@ -87,6 +87,11 @@ describe("what Markdown renders as prose", () => {
       ],
     ],
     [
+      "a heading with the same words does not take the line of the paragraph after it",
+      "# Same words\n\nSame words again here.\n",
+      [["paragraph", 3, "Same words again here."]],
+    ],
+    [
       "a paragraph led by bold or a link is found on its own line",
       "# T\n\n**Important** words here.\n\n[read](x.md) this too.\n",
       [
