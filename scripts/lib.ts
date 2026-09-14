@@ -5,7 +5,7 @@
  * `bun scripts/<name>.ts` works on a fresh checkout without an install step.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 export const ROOT = resolve(import.meta.dir, "..");
@@ -176,7 +176,9 @@ export function skillDirs(): string[] {
 
 /** The vendored external skills, one directory each under xeno/; none when the folder is absent. */
 export function xenoSkillDirs(): string[] {
-  if (!statSync(XENO_DIR, { throwIfNoEntry: false })?.isDirectory()) return [];
+  const stat = lstatSync(XENO_DIR, { throwIfNoEntry: false });
+  if (!stat) return [];
+  if (!stat.isDirectory()) fail("xeno/: must be a real directory, not a symlink");
   return readdirSync(XENO_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => join(XENO_DIR, entry.name))

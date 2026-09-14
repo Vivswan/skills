@@ -303,7 +303,21 @@ describe("Copilot round on PR 136", () => {
     const synced = update({ alpha: source(up.url, "0".repeat(40)) }, elsewhere).sources;
     const xeno = temp.dir("sync-xeno-copy-");
     symlinkSync(join(elsewhere, "alpha"), join(xeno, "alpha"));
-    expect(() => check(synced, xeno)).toThrow(/alpha: a symlink; a copy is a plain folder/);
+    expect(() => check(synced, xeno)).toThrow(/alpha: the copy root is a symlink/);
+  });
+
+  test("a dangling copy-root link with a placeholder pin, and a symlinked xeno folder, are refused before staging", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
+    const xeno = temp.dir("sync-xeno-copy-");
+    symlinkSync(join(xeno, "nowhere"), join(xeno, "alpha"));
+    expect(() => update({ alpha: source(up.url, "0".repeat(40)) }, xeno)).toThrow(
+      /alpha: the copy root is a symlink/,
+    );
+    const parent = temp.dir("sync-xeno-parent-");
+    symlinkSync(xeno, join(parent, "xeno"));
+    expect(() => update({ alpha: source(up.url, "0".repeat(40)) }, join(parent, "xeno"))).toThrow(
+      /the xeno folder is a symlink/,
+    );
   });
 
   test("a symlink added to a copy is refused, never read as absent", () => {

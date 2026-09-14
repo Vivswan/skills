@@ -385,8 +385,23 @@ export interface Report {
   readonly detail: string;
 }
 
+/**
+ * The xeno folder and every copy root are plain directories or absent; a link at either level
+ * (dangling included) is refused before anything is read or written through it.
+ */
+function assertPlainFolder(path: string, what: string): void {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
+    throw new Error(
+      `${relative(ROOT, path) || path}: ${what} is ${stat.isSymbolicLink() ? "a symlink" : "not a directory"}; a copy is a plain folder`,
+    );
+  }
+}
+
 export function check(sources: Sources, externalDir = XENO_DIR): Report[] {
+  assertPlainFolder(externalDir, "the xeno folder");
   return Object.entries(sources).map(([name, source]) => {
+    assertPlainFolder(join(externalDir, name), "the copy root");
     const pinned = fetchSnapshot(source, source.commit);
     const drift = differences(
       localSnapshot(join(externalDir, name)),
@@ -417,8 +432,10 @@ export function update(
   sources: Sources,
   externalDir = XENO_DIR,
 ): { sources: Sources; reports: Report[] } {
+  assertPlainFolder(externalDir, "the xeno folder");
   const staged = Object.entries(sources).map(([name, source]) => {
     const dir = join(externalDir, name);
+    assertPlainFolder(dir, "the copy root");
     if (existsSync(dir) && !PLACEHOLDER.test(source.commit)) {
       const local = localSnapshot(dir);
       const pinned = applyOverrides(fetchSnapshot(source, source.commit).files, source.frontmatter);
