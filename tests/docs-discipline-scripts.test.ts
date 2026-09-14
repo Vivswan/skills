@@ -1161,6 +1161,19 @@ describe("eighth Copilot round on the moved scripts", () => {
   const diagram = (label: string) => `\`\`\`mermaid\nflowchart LR\n  a["${label}"]\n\`\`\``;
   const demo = `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`;
 
+  test("a named re-export and an imported-then-exported name keep the binding they forward", () => {
+    const root = variant("named-reexport-binding", {
+      "src/engine/a.ts": "export const value = 1;\n",
+      "src/engine/b.ts": 'export { value } from "./a.ts";\n',
+      "src/engine/c.ts": 'import { value } from "./a.ts";\nexport { value };\n',
+      "src/engine/both.ts":
+        'export * from "./a.ts";\nexport * from "./b.ts";\nexport * from "./c.ts";\n',
+      "docs/named.md": `# T\n\n${diagram("src/engine/both.ts<br>value")}\n\n${demo}\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/named.md", "--repo-url", REPO_URL], root);
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+
   test("two star paths to the same binding are one export, not an ambiguity", () => {
     const root = variant("star-same-binding", {
       "src/engine/a.ts": "export const value = 1;\n",

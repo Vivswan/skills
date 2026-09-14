@@ -43,12 +43,22 @@ export function exportOrigins(
   const starred = new Map<string, Set<string>>();
   for (const statement of module.staticExports) {
     for (const entry of statement.entries) {
+      const request = entry.moduleRequest?.value;
+      const relativeRequest = request !== undefined && /^\.\.?\//.test(request);
       if (entry.exportName.kind === "Default") {
         direct.set("default", `${file}#default`);
       } else if (entry.exportName.name !== null) {
-        direct.set(entry.exportName.name, `${file}#${entry.exportName.name}`);
-      } else if (entry.moduleRequest && /^\.\.?\//.test(entry.moduleRequest.value)) {
-        const target = resolveImport(file, entry.moduleRequest.value);
+        // `export { x as y } from "./m"`, and `import { x } from "./m"; export { x as y }`, which the
+        // module record already folds into the same shape, keep the binding of ./m, not a new one here.
+        const imported = entry.importName.kind === "Name" ? entry.importName.name : null;
+        const origin =
+          relativeRequest && imported !== null
+            ? (exportOrigins(resolveImport(file, request), inner).get(imported) ??
+              `${resolveImport(file, request)}#${imported}`)
+            : `${file}#${entry.exportName.name}`;
+        direct.set(entry.exportName.name, origin);
+      } else if (relativeRequest) {
+        const target = resolveImport(file, request);
         for (const [name, origin] of exportOrigins(target, inner)) {
           if (name === "default") continue;
           const origins = starred.get(name) ?? new Set<string>();
