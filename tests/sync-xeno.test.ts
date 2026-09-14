@@ -112,7 +112,7 @@ describe("update", () => {
       xeno,
     );
     expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).toBe(
-      "---\nname: alpha\ndescription: Use when testing.\nlicense: MIT\n---\n\n# Alpha\n\nbody\n",
+      "---\nname: alpha\ndescription: Use when testing.\nlicense: MIT\n\n# Modified from upstream by the xeno sync of Vivswan/skills: disable-model-invocation removed, license set\n---\n\n# Alpha\n\nbody\n",
     );
     expect(readFileSync(join(xeno, "alpha", "x.md"), "utf8")).toBe("x\n");
   });
@@ -201,7 +201,7 @@ describe("what a copy must keep", () => {
       xeno,
     );
     expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).toBe(
-      "---\r\nname: alpha\r\ndescription: >-\r\n  Use when testing.\r\n---\r\n\r\n# Alpha\r\n",
+      "---\r\nname: alpha\r\ndescription: >-\r\n  Use when testing.\r\n\r\n# Modified from upstream by the xeno sync of Vivswan/skills: description set, disable-model-invocation removed\r\n---\r\n\r\n# Alpha\r\n",
     );
   });
 
@@ -255,8 +255,8 @@ describe("changing an override is not a hand edit", () => {
       alpha: { ...(synced.alpha as Source), frontmatter: { "disable-model-invocation": null } },
     };
     expect(update(withOverride, xeno).reports[0]?.status).toBe("updated");
-    expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).not.toContain(
-      "disable-model-invocation",
+    expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).not.toMatch(
+      /^disable-model-invocation:/m,
     );
   });
 });
@@ -354,5 +354,115 @@ describe("Copilot round on PR 136", () => {
     expect(readFileSync(path, "utf8")).toBe(
       `# header\nalpha:\n  url: u # reviewed by the owner\n  path: p\n  commit: ${"b".repeat(40)} # pinned 2026-09-14\n  license: "MIT"\n`,
     );
+  });
+});
+
+describe("license_file", () => {
+  test("a license outside the folder is copied in under its basename and pinned like every other file", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "MIT License\n" });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update(
+      { alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) },
+      xeno,
+    ).sources;
+    expect(readFileSync(join(xeno, "alpha", "LICENSE"), "utf8")).toBe("MIT License\n");
+    writeFileSync(join(xeno, "alpha", "LICENSE"), "edited\n");
+    expect(check(synced, xeno)[0]?.status).toBe("modified");
+  });
+
+  test("adding license_file to a synced source re-syncs instead of stopping as a hand edit", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "MIT License\n" });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update({ alpha: source(up.url, "0".repeat(40)) }, xeno).sources;
+    const withLicense = { alpha: { ...(synced.alpha as Source), licenseFile: "LICENSE" } };
+    expect(update(withLicense, xeno).reports[0]?.status).toBe("updated");
+    expect(existsSync(join(xeno, "alpha", "LICENSE"))).toBe(true);
+  });
+
+  test("a license basename that matches a directory in the folder is a collision too", () => {
+    const up = upstream({
+      "plugins/skills/alpha/SKILL.md": SKILL,
+      "plugins/skills/alpha/LICENSE/notice.txt": "n\n",
+      LICENSE: "MIT\n",
+    });
+    const xeno = temp.dir("sync-xeno-copy-");
+    expect(() =>
+      update({ alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) }, xeno),
+    ).toThrow(/already carries LICENSE; drop license_file/);
+    expect(existsSync(join(xeno, "alpha"))).toBe(false);
+  });
+
+  test("renaming the license_file stops on the old copy and says to delete it first; an unregistered NOTICE is a hand edit", () => {
+    const up = upstream({
+      "plugins/skills/alpha/SKILL.md": SKILL,
+      LICENSE: "MIT\n",
+      COPYING: "MIT too\n",
+    });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update(
+      { alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) },
+      xeno,
+    ).sources;
+    const renamed = { alpha: { ...(synced.alpha as Source), licenseFile: "COPYING" } };
+    expect(() => update(renamed, xeno)).toThrow(/\(LICENSE\).*delete its old copy first/);
+    writeFileSync(join(xeno, "alpha", "NOTICE"), "mine\n");
+    expect(() => update(synced, xeno)).toThrow(/\(NOTICE\).*never overwrites a hand edit/);
+    expect(readFileSync(join(xeno, "alpha", "NOTICE"), "utf8")).toBe("mine\n");
+  });
+
+  test("a license_file with a dot segment is refused up front", () => {
+    const text = `alpha:\n  url: u\n  path: p\n  commit: ${"a".repeat(40)}\n  license: MIT\n  license_file: ./LICENSE\n`;
+    expect(() => parseSources(text)).toThrow(
+      /license_file must be a repository-relative file path/,
+    );
+  });
+
+  test("a trailing comment upstream keeps in its frontmatter survives the modification notice", () => {
+    const commented =
+      "---\nname: alpha\ndescription: Use when testing.\ndisable-model-invocation: true\n# Copyright Example\n---\n\n# Alpha\n";
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": commented });
+    const xeno = temp.dir("sync-xeno-copy-");
+    update(
+      {
+        alpha: source(up.url, "0".repeat(40), {
+          frontmatter: { "disable-model-invocation": null },
+        }),
+      },
+      xeno,
+    );
+    const text = readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8");
+    expect(text).toContain("# Copyright Example\n");
+    expect(text).toContain(
+      "# Modified from upstream by the xeno sync of Vivswan/skills: disable-model-invocation removed",
+    );
+  });
+
+  test("a license_file cannot stand in for a missing folder, and cannot point inside the folder", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "MIT License\n" });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const typo = {
+      ...source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }),
+      path: "plugins/skills/typo",
+    };
+    expect(() => update({ alpha: typo }, xeno)).toThrow(/no files under plugins\/skills\/typo\//);
+    const inside = `alpha:\n  url: u\n  path: plugins/skills/alpha\n  commit: ${"a".repeat(40)}\n  license: MIT\n  license_file: plugins/skills/alpha/LICENSE\n`;
+    expect(() => parseSources(inside)).toThrow(
+      /is inside plugins\/skills\/alpha\/ and travels with the folder already/,
+    );
+  });
+
+  test("a license_file that does not exist upstream, or one the folder already carries, is an error", () => {
+    const up = upstream({
+      "plugins/skills/alpha/SKILL.md": SKILL,
+      "plugins/skills/alpha/LICENSE": "x\n",
+      LICENSE: "y\n",
+    });
+    const xeno = temp.dir("sync-xeno-copy-");
+    expect(() =>
+      update({ alpha: source(up.url, "0".repeat(40), { licenseFile: "NOTICE" }) }, xeno),
+    ).toThrow(/license_file NOTICE does not exist/);
+    expect(() =>
+      update({ alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) }, xeno),
+    ).toThrow(/already carries LICENSE; drop license_file/);
   });
 });
