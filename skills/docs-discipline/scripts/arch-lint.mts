@@ -242,6 +242,13 @@ export function lintArchitecture(
     }
   }
   const files: string[] = [];
+  // A layer may own a root-level file (main.ts); no scan root reaches it, so it is seeded by name.
+  for (const paths of Object.values(arch.layers)) {
+    for (const path of paths) {
+      if (path.includes("/") || !SOURCE_EXTENSIONS.some((ext) => path.endsWith(ext))) continue;
+      if (isFile(join(root, path)) && !excluded.some((glob) => glob.match(path))) files.push(path);
+    }
+  }
   for (const scanRoot of scanRoots(arch)) {
     if (!existsSync(join(root, scanRoot))) continue;
     for (const entry of readdirSync(join(root, scanRoot), { recursive: true, encoding: "utf8" })) {

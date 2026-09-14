@@ -311,6 +311,18 @@ function conceptFences(page: Page): Fence[] {
 }
 
 /** The lines of page text matching `pattern`. */
+/** Link destinations as Markdown reads them, so a title or angle brackets never become part of the path. */
+function markdownLinks(line: string): string[] {
+  const links: string[] = [];
+  Bun.markdown.render(line, {
+    link: (children: string, attrs: { href?: string }) => {
+      links.push(attrs.href ?? "");
+      return children;
+    },
+  });
+  return links;
+}
+
 function textLines(page: Page, pattern: RegExp): number[] {
   return [...page.text.keys()].filter((line) => {
     const text = page.text[line];
@@ -351,7 +363,7 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
       continue;
     }
     const demo = page.lines[demoLine] ?? "";
-    const links = [...demo.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1] ?? "");
+    const links = markdownLinks(demo);
     if (links.length === 0) {
       problems.push(`${at}: the "${DEMONSTRATED}" line links nothing`);
     }

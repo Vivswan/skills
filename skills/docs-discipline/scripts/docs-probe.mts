@@ -6,7 +6,9 @@
 // Block structure comes from Bun's Markdown renderer, so what counts as prose
 // is what Markdown renders as a paragraph or a tight list item: headings,
 // code (fenced or indented), tables, raw HTML, and images contribute nothing.
-// Front matter and BEGIN/END GENERATED regions are blanked before rendering.
+// Front matter is blanked before rendering; a BEGIN/END GENERATED region is
+// dropped where the renderer sees its markers as HTML blocks, so a marker
+// quoted inside a fence is code and changes nothing.
 // A path is a backticked token with a slash and an extension (or ./, ../, a
 // trailing slash), or a relative link destination; placeholders (<...>),
 // globs, owner/repo slugs, and bare file names are left alone, since a page
@@ -50,20 +52,13 @@ const OPEN = "";
 const INLINE_END = "";
 const BLOCK_END = "";
 
-/** The page with front matter and generated regions blanked, line for line, so line numbers still match the file. */
-function blankNonProse(text: string): string[] {
+/** The page with front matter blanked, line for line, so line numbers still match the file. */
+function blankFrontMatter(text: string): string[] {
   const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
   const out = [...lines];
   if (lines[0] === "---") {
     const close = lines.indexOf("---", 1);
     for (let i = 0; i <= (close === -1 ? lines.length - 1 : close); i++) out[i] = "";
-  }
-  let generated = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    if (line.includes("<!-- BEGIN GENERATED")) generated = true;
-    if (generated) out[i] = "";
-    if (line.includes("<!-- END GENERATED")) generated = false;
   }
   return out;
 }
@@ -112,21 +107,18 @@ function nestedBlocks(s: string): string[] {
   return blocks;
 }
 
-/** Repeats until nothing changes, so a comment nested in a comment's remains is gone too. */
+/** Removes HTML comments innermost-first until none opens, so remains never reassemble into one. */
 function stripComments(text: string): string {
   let out = text;
-  for (
-    let next = out.replace(/<!--[\s\S]*?-->/g, "");
-    next !== out;
-    next = out.replace(/<!--[\s\S]*?-->/g, "")
-  ) {
-    out = next;
+  for (let open = out.indexOf("<!--"); open !== -1; open = out.indexOf("<!--")) {
+    const close = out.indexOf("-->", open + 4);
+    out = close === -1 ? out.slice(0, open) : out.slice(0, open) + out.slice(close + 3);
   }
   return out;
 }
 
 export function scanPage(text: string): Scan {
-  const lines = blankNonProse(text);
+  const lines = blankFrontMatter(text);
   const nothing = () => "";
   const same = (c: string) => c;
   const stream = Bun.markdown.render(lines.join("\n"), {
@@ -139,7 +131,11 @@ export function scanPage(text: string): Scan {
     heading: nothing,
     code: nothing,
     table: nothing,
-    html: nothing,
+    html: (c: string) => {
+      if (c.includes("BEGIN GENERATED")) return `${OPEN}G${BLOCK_END}`;
+      if (c.includes("END GENERATED")) return `${OPEN}g${BLOCK_END}`;
+      return "";
+    },
     hr: nothing,
     image: nothing,
     codespan: (c: string) => `${OPEN}C${c}${INLINE_END}`,
@@ -147,6 +143,11 @@ export function scanPage(text: string): Scan {
     paragraph: (c: string) => `${OPEN}P${c}${BLOCK_END}`,
     listItem: (c: string) => `${OPEN}L${c}${BLOCK_END}`,
   });
+
+  const prose = stream.replace(
+    new RegExp(`${OPEN}G${BLOCK_END}[\\s\\S]*?(?:${OPEN}g${BLOCK_END}|$)`, "g"),
+    "",
+  );
 
   const scan: Scan = { units: [], codespans: [], links: [] };
   let cursor = 0;
@@ -188,7 +189,7 @@ export function scanPage(text: string): Scan {
     if (plain.trim() !== "") cursor = line + plain.trim().split("\n").length;
     for (const nested of nestedBlocks(inner)) visit(nested);
   };
-  for (const block of nestedBlocks(stream)) visit(block);
+  for (const block of nestedBlocks(prose)) visit(block);
   return scan;
 }
 

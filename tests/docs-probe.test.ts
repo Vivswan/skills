@@ -68,6 +68,11 @@ describe("what Markdown renders as prose", () => {
       ],
     ],
     [
+      "a generated-region marker quoted in a fence is code and hides nothing",
+      "```markdown\n<!-- BEGIN GENERATED: example -->\n```\n\nafter\n",
+      [["paragraph", 5, "after"]],
+    ],
+    [
       "a paragraph inside a blockquote, once",
       "> quoted words\n",
       [["paragraph", 1, "quoted words"]],
@@ -103,6 +108,9 @@ describe("what Markdown renders as prose", () => {
       wordCount(scanPage(`${words(70)} <!-- hidden words here -->\n`).units[0]?.text ?? ""),
     ).toBe(70);
     expect(wordCount(scanPage(`${words(35)}<br>${words(36)}\n`).units[0]?.text ?? "")).toBe(71);
+    expect(wordCount(scanPage(`${words(70)} <!-<!-- x -->- y -->\n`).units[0]?.text ?? "")).toBe(
+      70,
+    );
   });
 
   test("markup is not prose: a link counts its label, a code span its text, an image nothing", () => {

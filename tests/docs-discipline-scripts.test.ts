@@ -972,3 +972,36 @@ describe("review findings on the moved scripts", () => {
     );
   });
 });
+
+describe("second Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+
+  test("a root-level file a layer owns is scanned, so its undeclared import is forbidden", () => {
+    const root = variant("root-level-file", {
+      "architecture.yml": "layers:\n  app: [main.ts]\n  lib: [src/lib.ts]\nedges: {}\n",
+      "main.ts": 'import { x } from "./src/lib.ts";\nvoid x;\n',
+      "src/lib.ts": "export const x = 1;\n",
+    });
+    const out = run(ARCH_LINT, [], root);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("forbidden import app -> lib: main.ts -> src/lib.ts");
+  });
+
+  test("a demonstration link with a title resolves to its destination, not to the title", () => {
+    const root = variant("titled-demo", {
+      "docs/titled.md": [
+        "# T",
+        "",
+        "```mermaid",
+        "flowchart LR",
+        '  a["src/engine/run.ts<br>run()"]',
+        "```",
+        "",
+        `Demonstrated by: [case](${REPO_URL}test/engine/run.test.ts "scenario").`,
+        "",
+      ].join("\n"),
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/titled.md", "--repo-url", REPO_URL], root);
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+});
