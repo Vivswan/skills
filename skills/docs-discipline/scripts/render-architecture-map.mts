@@ -21,7 +21,7 @@ const REGION_NAME = /^[a-z0-9-]+$/;
 /** A marker is a line of its own (up to three spaces in); one quoted mid-line or under `> ` is page text. */
 function markerPattern(kind: "BEGIN" | "END", name: string): RegExp {
   const hint = kind === "BEGIN" ? String.raw`(?: \([^)\n]*\))?` : "";
-  return new RegExp(`^ {0,3}<!-- ${kind} GENERATED: ${name}${hint} -->[ \\t]*$`, "gm");
+  return new RegExp(`^ {0,3}<!-- ${kind} GENERATED: ${name}${hint} -->[ \\t]*\\r?$`, "gm");
 }
 
 /** Exactly one BEGIN then one END for `name`, else a throw naming the counts: a second marker pair would splice into the wrong one silently. */

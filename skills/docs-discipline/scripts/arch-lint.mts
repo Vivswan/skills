@@ -331,11 +331,26 @@ export function lintArchitecture(
  * use underscores; two names that collapse to one id (api-v1, api_v1) get a numbered suffix, so no
  * node is drawn over another.
  */
+const MERMAID_KEYWORDS = new Set([
+  "end",
+  "graph",
+  "flowchart",
+  "subgraph",
+  "style",
+  "class",
+  "classdef",
+  "click",
+  "linkstyle",
+  "direction",
+]);
+
 export function renderArchitectureMermaid(arch: Architecture): string {
   const ids = new Map<string, string>();
   const taken = new Set<string>();
   for (const layer of Object.keys(arch.layers)) {
-    const base = layer.replace(/[^A-Za-z0-9_]/g, "_");
+    const sanitized = layer.replace(/[^A-Za-z0-9_]/g, "_");
+    // `end` and the other flowchart keywords break the parse as node ids; a trailing underscore keeps the name readable.
+    const base = MERMAID_KEYWORDS.has(sanitized.toLowerCase()) ? `${sanitized}_` : sanitized;
     let candidate = base;
     for (let n = 2; taken.has(candidate); n++) candidate = `${base}_${n}`;
     taken.add(candidate);

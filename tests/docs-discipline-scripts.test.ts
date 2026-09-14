@@ -1269,3 +1269,47 @@ describe("twelfth Copilot round on the moved scripts", () => {
     expect([out.status, out.stderr]).toEqual([0, ""]);
   });
 });
+
+describe("thirteenth Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const diagram = '```mermaid\nflowchart LR\n  a["src/engine/run.ts<br>run()"]\n```';
+  const demo = `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`;
+
+  test("a layer named end gets an id mermaid can parse", () => {
+    const map = renderArchitectureMermaid({
+      layers: { end: ["src/end/"] },
+      exclude: [],
+      edges: {},
+    });
+    expect(map).toContain('end_["src/end/"]');
+    expect(map).not.toMatch(/^ {2}end\[/m);
+  });
+
+  test("indented markers are markers to the page check too: an unmatched one is reported and a matched pair hides its map", () => {
+    const root = variant("indented-markers", {
+      "docs/unmatched.md": `# T\n\n  <!-- BEGIN GENERATED: typo -->\n\n${diagram}\n\n${demo}\n`,
+      "docs/matched.md": `# T\n\n${diagram}\n\n${demo}\n\n## Map\n\n  <!-- BEGIN GENERATED: architecture-map -->\n${diagram}\n  <!-- END GENERATED: architecture-map -->\n`,
+    });
+    const unmatched = run(
+      CHECK_PAGE,
+      ["--page", "docs/unmatched.md", "--repo-url", REPO_URL],
+      root,
+    );
+    expect(unmatched.stderr).toContain("line 3: BEGIN GENERATED: typo is never closed");
+    const matched = run(
+      CHECK_PAGE,
+      ["--page", "docs/matched.md", "--repo-url", REPO_URL, "--expect-diagrams", "1"],
+      root,
+    );
+    expect([matched.status, matched.stderr]).toEqual([0, ""]);
+  });
+
+  test("CRLF marker lines render", () => {
+    const root = variant("crlf-markers", {
+      "docs/crlf.md":
+        "# T\r\n\r\n<!-- BEGIN GENERATED: architecture-map -->\r\n<!-- END GENERATED: architecture-map -->\r\n",
+    });
+    const out = run(RENDER, ["--page", "docs/crlf.md"], root);
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+});
