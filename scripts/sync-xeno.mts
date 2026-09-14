@@ -5,11 +5,12 @@
 //   sync-xeno.mts            refresh every copy to its ref's head and move the pins
 //   sync-xeno.mts --check    exit 1 when a pin is behind its ref or a copy differs from its pin
 // A source may declare frontmatter overrides (a key set or removed in the
-// copy's SKILL.md); the copy is then upstream plus exactly those, and the
-// check compares against that. A copy whose body or other files differ from
-// its pin is a hand edit, and the sync refuses to overwrite it; the frontmatter
-// is sources.yml's. Fetches go through git (a depth-1 fetch of one commit), so
-// a local file:// repository works as an upstream in tests.
+// copy's SKILL.md) and a license_file copied in from the upstream root; the
+// copy is then upstream plus exactly those, and the check compares against
+// that. A copy whose body or other files differ from its pin is a hand edit,
+// and the sync refuses to overwrite it; the frontmatter and the license file
+// are sources.yml's. Fetches go through git (a depth-1 fetch of one commit),
+// so a local file:// repository works as an upstream in tests.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -107,7 +108,7 @@ export function parseSources(text: string, where = "sources.yml"): Sources {
         typeof file !== "string" ||
         file === "" ||
         file.startsWith("/") ||
-        file.split("/").includes("..") ||
+        file.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ||
         /[*?[\]\\]/.test(file)
       ) {
         throw new Error(`${where}: ${name}.license_file must be a repository-relative file path`);
@@ -344,6 +345,9 @@ export function fetchSnapshot(
  * so a folded description or a nested mapping is removed or kept whole, and the file's own line
  * ending is used throughout.
  */
+/** The names a license text travels under; only the registry puts one into a copy whose upstream folder lacks it. */
+const LICENSE_NAME = /^(LICENSE|LICENCE|COPYING|NOTICE)(\.[A-Za-z]+)?$/;
+
 export const MODIFIED_NOTICE = "Modified from upstream by the xeno sync of Vivswan/skills";
 
 export function applyOverrides(files: Files, overrides: Source["frontmatter"]): Files {
@@ -373,7 +377,9 @@ export function applyOverrides(files: Files, overrides: Source["frontmatter"]): 
     changes.push(`${key} ${value === null ? "removed" : "set"}`);
   }
   // Apache 2.0 section 4(b) wants a modified file to say so; every modified copy says so the same way.
-  doc.comment = ` ${MODIFIED_NOTICE}: ${changes.join(", ")}`;
+  // Appended, so a comment upstream already keeps at the end of its frontmatter survives.
+  const upstreamComment = doc.comment?.trimEnd();
+  doc.comment = `${upstreamComment ? `${upstreamComment}\n` : ""} ${MODIFIED_NOTICE}: ${changes.join(", ")}`;
   const block = doc.toString({ lineWidth: 0 }).replace(/\n$/, "").replace(/\n/g, eol);
   const rewritten = Buffer.concat([Buffer.from(`---${eol}${block}${eol}---`, "utf8"), split.rest]);
   return new Map([...files, ["SKILL.md", { ...skill, bytes: rewritten }]]);
@@ -526,10 +532,14 @@ export function update(
       const pinned = applyOverrides(fetchSnapshot(source, source.commit).files, source.frontmatter);
       // sources.yml owns SKILL.md's frontmatter, so a changed override is not a hand edit; the body is.
       // sources.yml owns the frontmatter and the license file it names; a difference there is a registry change, not a hand edit.
-      const registryOwned = source.licenseFile ? basename(source.licenseFile) : undefined;
+      // The registry also owns a license-named file the upstream folder does not carry: the copy of a
+      // license_file that has since been renamed or dropped, which a re-sync replaces rather than preserves.
+      const registryOwned = (path: string): boolean =>
+        (source.licenseFile !== undefined && path === basename(source.licenseFile)) ||
+        (!pinned.has(path) && LICENSE_NAME.test(path));
       const edited = differences(local, pinned).filter(
         (path) =>
-          path !== registryOwned &&
+          !registryOwned(path) &&
           (path !== "SKILL.md" || !sameOutsideFrontmatter(local.get(path), pinned.get(path))),
       );
       if (edited.length > 0) {
@@ -569,7 +579,7 @@ function short(sha: string): string {
 
 const USAGE = [
   "usage: sync-xeno.mts [--check] [--report <file>]",
-  "  (default)  refresh every xeno/<name>/ to its ref's head and move the pin in sources.yml; a copy hand-edited outside its frontmatter stops the run",
+  "  (default)  refresh every xeno/<name>/ to its ref's head and move the pin in sources.yml; a copy hand-edited outside its frontmatter and license file stops the run",
   "  --check    fetch nothing into the tree; exit 1 when a pin is behind its ref or a copy differs from its pin",
   "  --report   also write the per-skill lines to <file>, one markdown bullet each",
   "exit 0: every copy current (or refreshed); 1: --check found drift; 2: usage, an unreadable sources.yml, a hand-edited copy, or a failed fetch",

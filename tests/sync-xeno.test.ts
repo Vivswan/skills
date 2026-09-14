@@ -392,6 +392,50 @@ describe("license_file", () => {
     expect(existsSync(join(xeno, "alpha"))).toBe(false);
   });
 
+  test("renaming the license_file re-syncs: the old copy is registry-owned, not a hand edit", () => {
+    const up = upstream({
+      "plugins/skills/alpha/SKILL.md": SKILL,
+      LICENSE: "MIT\n",
+      COPYING: "MIT too\n",
+    });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update(
+      { alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) },
+      xeno,
+    ).sources;
+    const renamed = { alpha: { ...(synced.alpha as Source), licenseFile: "COPYING" } };
+    expect(update(renamed, xeno).reports[0]?.status).toBe("updated");
+    expect(existsSync(join(xeno, "alpha", "LICENSE"))).toBe(false);
+    expect(readFileSync(join(xeno, "alpha", "COPYING"), "utf8")).toBe("MIT too\n");
+  });
+
+  test("a license_file with a dot segment is refused up front", () => {
+    const text = `alpha:\n  url: u\n  path: p\n  commit: ${"a".repeat(40)}\n  license: MIT\n  license_file: ./LICENSE\n`;
+    expect(() => parseSources(text)).toThrow(
+      /license_file must be a repository-relative file path/,
+    );
+  });
+
+  test("a trailing comment upstream keeps in its frontmatter survives the modification notice", () => {
+    const commented =
+      "---\nname: alpha\ndescription: Use when testing.\ndisable-model-invocation: true\n# Copyright Example\n---\n\n# Alpha\n";
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": commented });
+    const xeno = temp.dir("sync-xeno-copy-");
+    update(
+      {
+        alpha: source(up.url, "0".repeat(40), {
+          frontmatter: { "disable-model-invocation": null },
+        }),
+      },
+      xeno,
+    );
+    const text = readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8");
+    expect(text).toContain("# Copyright Example\n");
+    expect(text).toContain(
+      "# Modified from upstream by the xeno sync of Vivswan/skills: disable-model-invocation removed",
+    );
+  });
+
   test("a license_file cannot stand in for a missing folder, and cannot point inside the folder", () => {
     const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "MIT License\n" });
     const xeno = temp.dir("sync-xeno-copy-");
