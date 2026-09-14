@@ -12,6 +12,7 @@ import {
 import { join } from "node:path";
 import {
   check,
+  loadSources,
   parseSources,
   renderSources,
   type Source,
@@ -327,6 +328,18 @@ describe("Copilot round on PR 136", () => {
     symlinkSync("/tmp/nowhere", join(xeno, "alpha", "extra"));
     expect(() => check(synced, xeno)).toThrow(
       /extra: a symlink; the copy carries plain files only/,
+    );
+  });
+
+  test("a symlinked registry file is refused on read and on write", () => {
+    const dir = temp.dir("sync-xeno-sources-");
+    writeFileSync(join(dir, "real.yml"), "");
+    symlinkSync(join(dir, "real.yml"), join(dir, "sources.yml"));
+    expect(() => loadSources(join(dir, "sources.yml"))).toThrow(
+      /a symlink; the registry is a plain file/,
+    );
+    expect(() => writeSources({}, join(dir, "sources.yml"))).toThrow(
+      /a symlink; the registry is a plain file/,
     );
   });
 

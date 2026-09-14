@@ -128,7 +128,18 @@ export function parseSources(text: string, where = "sources.yml"): Sources {
   return sources;
 }
 
+/** The registry is a plain file; a link would make the sync read and write some other file. */
+function assertPlainFile(path: string): void {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat && !stat.isFile()) {
+    throw new Error(
+      `${relative(ROOT, path) || path}: ${stat.isSymbolicLink() ? "a symlink" : "not a regular file"}; the registry is a plain file`,
+    );
+  }
+}
+
 export function loadSources(path = SOURCES_FILE): Sources {
+  assertPlainFile(path);
   return parseSources(readFileSync(path, "utf8"), relative(ROOT, path));
 }
 
@@ -153,6 +164,7 @@ export const SOURCES_HEADER = `# Vendored external skills, one mapping per folde
 
 /** Updates the existing document in place, so its comments and scalar styles survive a pin move; a missing file is rendered fresh. */
 export function writeSources(sources: Sources, path = SOURCES_FILE): void {
+  assertPlainFile(path);
   if (!existsSync(path)) {
     writeFileSync(path, renderSources(sources));
     return;
