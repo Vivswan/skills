@@ -15,7 +15,9 @@ repository:
       status: enabled
     secret_scanning_push_protection:
       status: enabled
-  description: Installable, plugin-ready skills that give coding agents disciplined workflows, from code standards and review gates to multi-agent orchestration
+  description: Installable, plugin-ready skills that give coding agents
+    disciplined workflows, from code standards and review gates to multi-agent
+    orchestration
   homepage: https://vivswan.github.io/
   topics: agent-skills,agents,ai,claude-code,codex,github-copilot,llm,mcp,plugins,skills
   private: false
@@ -27,6 +29,7 @@ repository:
   allow_auto_merge: true
   enable_vulnerability_alerts: true
 labels:
+  _undeclared: delete
   entries:
     - name: dependencies
       color: 0366d6
@@ -52,8 +55,8 @@ labels:
     - name: javascript
       color: "168700"
       description: Pull requests that update javascript code
-  _undeclared: delete
 rulesets:
+  _undeclared: keep
   entries:
     - name: pr-title
       target: branch
@@ -132,4 +135,3 @@ rulesets:
         - type: deletion
         - type: required_linear_history
       bypass_actors: []
-  _undeclared: keep
