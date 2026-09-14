@@ -19,7 +19,7 @@
       "name": "xeno",
       "description": "Vendored copies of other repositories' skills, pinned to an upstream commit and refreshed weekly",
       "source": "./xeno",
-      "skills": ["./unslop"]
+      "skills": ["./design-taste-frontend", "./frontend-design", "./unslop"]
     }
   ]
 }

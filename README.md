@@ -38,6 +38,8 @@ Load only when you invoke them (`/skill-name` in Claude Code, `$skill-name` in C
 Xeno, from the Greek for foreign: skills written in other repositories, vendored here from their upstream at a pinned commit and refreshed weekly ([how](./xeno/README.md)):
 
 - [/unslop](./xeno/unslop/) - Cut AI tells from any writing (from [cursor/plugins](https://github.com/cursor/plugins))
+- [/frontend-design](./xeno/frontend-design/) - Distinctive visual design for new or reshaped UI, invoked by you in Claude Code (from [anthropics/skills](https://github.com/anthropics/skills))
+- [/design-taste-frontend](./xeno/design-taste-frontend/) - Anti-slop frontend for landing pages, portfolios, and redesigns, invoked by you in Claude Code (from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill))
 
 How the skills reference each other (an arrow means "mentions and hands off to, where installed"):
 
@@ -69,6 +71,8 @@ graph LR
   vwc --> rdr
   csm["/craft-skills-and-memories"] --> nw["/natural-writing"]
   us["/unslop"]
+  fd["/frontend-design"]
+  dtf["/design-taste-frontend"]
   csm --> nt
 ```
 
@@ -110,7 +114,7 @@ Or install everything as a Claude Code plugin:
 
 Once installed, a skill fires on its own when its trigger matches the task.
 
-Skills marked explicit-invocation-only ([`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/)) load only when you invoke them.
+Skills marked explicit-invocation-only ([`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/), [`/frontend-design`](./xeno/frontend-design/), [`/design-taste-frontend`](./xeno/design-taste-frontend/)) load only when you invoke them. For the two xeno copies that holds in Claude Code; Codex reads the upstream policy, which lets the model invoke them.
 
 **Examples:**
 

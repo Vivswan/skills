@@ -22,6 +22,8 @@ body:
         - watch-ci-after-push
         - worktree-hygiene
         - unslop
+        - frontend-design
+        - design-taste-frontend
         - Not skill-specific (catalog, install, or tooling)
     validations:
       required: true

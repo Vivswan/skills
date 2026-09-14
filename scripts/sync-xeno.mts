@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { Document, isMap, parse, parseDocument } from "yaml";
 import { ROOT, XENO_DIR } from "./lib";
 
@@ -47,6 +47,8 @@ export interface Source {
   readonly commit: string;
   /** SPDX id of the upstream license, or the words "none published". */
   readonly license: string;
+  /** Repository-relative path of the upstream license text, when the folder itself carries none; copied in under its basename. */
+  readonly licenseFile?: string;
   /** SKILL.md frontmatter keys to set (a string, number, or boolean) or remove (null) in the copy. */
   readonly frontmatter?: Readonly<Record<string, string | number | boolean | null>>;
 }
@@ -54,7 +56,15 @@ export interface Source {
 export type Sources = Record<string, Source>;
 
 /** A misspelled key (refs for ref) would otherwise be dropped and the copy would follow the wrong branch. */
-const KNOWN_KEYS = new Set(["url", "path", "ref", "commit", "license", "frontmatter"]);
+const KNOWN_KEYS = new Set([
+  "url",
+  "path",
+  "ref",
+  "commit",
+  "license",
+  "license_file",
+  "frontmatter",
+]);
 
 export function parseSources(text: string, where = "sources.yml"): Sources {
   const raw: unknown = parse(text);
@@ -91,12 +101,25 @@ export function parseSources(text: string, where = "sources.yml"): Sources {
     }
     if (!SHA.test(entry.commit as string))
       throw new Error(`${where}: ${name}.commit must be a 40-hex commit sha`);
+    if (entry.license_file !== undefined) {
+      const file = entry.license_file;
+      if (
+        typeof file !== "string" ||
+        file === "" ||
+        file.startsWith("/") ||
+        file.split("/").includes("..") ||
+        /[*?[\]\\]/.test(file)
+      ) {
+        throw new Error(`${where}: ${name}.license_file must be a repository-relative file path`);
+      }
+    }
     const source: Source = {
       url: entry.url as string,
       path,
       ...(typeof entry.ref === "string" ? { ref: entry.ref } : {}),
       commit: entry.commit as string,
       license: entry.license as string,
+      ...(typeof entry.license_file === "string" ? { licenseFile: entry.license_file } : {}),
     };
     if (entry.frontmatter !== undefined) {
       if (
@@ -143,8 +166,16 @@ export function loadSources(path = SOURCES_FILE): Sources {
   return parseSources(readFileSync(path, "utf8"), relative(ROOT, path));
 }
 
+/** The YAML shape of a source: the file spells license_file where the code says licenseFile. */
+function toYaml(source: Source): Record<string, unknown> {
+  const { licenseFile, ...rest } = source;
+  return licenseFile === undefined ? rest : { ...rest, license_file: licenseFile };
+}
+
 export function renderSources(sources: Sources, header = SOURCES_HEADER): string {
-  const doc = new Document(sources);
+  const doc = new Document(
+    Object.fromEntries(Object.entries(sources).map(([name, source]) => [name, toYaml(source)])),
+  );
   doc.commentBefore = header
     .trimEnd()
     .split("\n")
@@ -159,6 +190,7 @@ export const SOURCES_HEADER = `# Vendored external skills, one mapping per folde
 #   ref          branch or tag the weekly sync follows (absent: the upstream's default branch)
 #   commit       the upstream commit the copy was taken from; the sync moves it, nobody edits it
 #   license      SPDX id of the upstream license, or "none published"
+#   license_file repository-relative path of the upstream license text, copied in under its basename when the folder carries none
 #   frontmatter  SKILL.md keys set (scalar) or removed (null) in the copy, the only allowed difference from upstream
 `;
 
@@ -179,10 +211,10 @@ export function writeSources(sources: Sources, path = SOURCES_FILE): void {
   }
   for (const [name, source] of Object.entries(sources)) {
     if (!doc.has(name)) {
-      doc.set(name, source);
+      doc.set(name, toYaml(source));
       continue;
     }
-    for (const [field, value] of Object.entries(source)) {
+    for (const [field, value] of Object.entries(toYaml(source))) {
       if (value !== undefined) doc.setIn([name, field], value);
     }
   }
@@ -232,7 +264,10 @@ export interface Snapshot {
 }
 
 /** The upstream folder at one commit, through a throwaway depth-1 fetch of that sha. */
-export function fetchSnapshot(source: Pick<Source, "url" | "path">, commit: string): Snapshot {
+export function fetchSnapshot(
+  source: Pick<Source, "url" | "path" | "licenseFile">,
+  commit: string,
+): Snapshot {
   const work = mkdtempSync(join(tmpdir(), "sync-xeno-"));
   try {
     git(["init", "-q", work]);
@@ -241,12 +276,27 @@ export function fetchSnapshot(source: Pick<Source, "url" | "path">, commit: stri
     if (fetched !== commit)
       throw new Error(`${source.url}: asked for ${commit}, fetched ${fetched}`);
     // A literal pathspec: a path with glob characters is refused by parseSources, and this keeps git from reading it as a pattern either way.
-    const listing = git(
-      ["ls-tree", "-r", "-z", "FETCH_HEAD", "--", `:(literal)${source.path}/`],
-      work,
-    );
+    // The license file rides along under its basename when the folder itself carries no notice.
+    const pathspecs = [
+      `:(literal)${source.path}/`,
+      ...(source.licenseFile ? [`:(literal)${source.licenseFile}`] : []),
+    ];
+    const listing = git(["ls-tree", "-r", "-z", "FETCH_HEAD", "--", ...pathspecs], work);
+    if (
+      source.licenseFile &&
+      !listing.split("\0").some((row) => row.endsWith(`\t${source.licenseFile}`))
+    ) {
+      throw new Error(`${source.url}@${commit}: license_file ${source.licenseFile} does not exist`);
+    }
     const files = new Map<string, Entry>();
-    for (const row of listing.split("\0").filter(Boolean)) {
+    // The folder's own files first, so a license file that collides with one is caught whatever git's listing order.
+    const rows = listing
+      .split("\0")
+      .filter(Boolean)
+      .sort(
+        (a, b) => Number(b.includes(`\t${source.path}/`)) - Number(a.includes(`\t${source.path}/`)),
+      );
+    for (const row of rows) {
       // "<mode> <type> <sha>\t<path>"
       const [meta, path] = row.split("\t", 2) as [string, string];
       const mode = meta.split(" ")[0];
@@ -261,7 +311,12 @@ export function fetchSnapshot(source: Pick<Source, "url" | "path">, commit: stri
         maxBuffer: BLOB_LIMIT,
       });
       if (blob.status !== 0) throw new Error(`git show ${path}: ${blob.stderr.toString().trim()}`);
-      files.set(relative(source.path, path), { bytes: blob.stdout, executable: mode === "100755" });
+      const inFolder = path.startsWith(`${source.path}/`);
+      const name = inFolder ? relative(source.path, path) : basename(path);
+      if (!inFolder && files.has(name)) {
+        throw new Error(`${source.url}: the folder already carries ${name}; drop license_file`);
+      }
+      files.set(name, { bytes: blob.stdout, executable: mode === "100755" });
     }
     if (files.size === 0)
       throw new Error(`${source.url}@${commit}: no files under ${source.path}/`);
@@ -452,8 +507,12 @@ export function update(
       const local = localSnapshot(dir);
       const pinned = applyOverrides(fetchSnapshot(source, source.commit).files, source.frontmatter);
       // sources.yml owns SKILL.md's frontmatter, so a changed override is not a hand edit; the body is.
+      // sources.yml owns the frontmatter and the license file it names; a difference there is a registry change, not a hand edit.
+      const registryOwned = source.licenseFile ? basename(source.licenseFile) : undefined;
       const edited = differences(local, pinned).filter(
-        (path) => path !== "SKILL.md" || !sameOutsideFrontmatter(local.get(path), pinned.get(path)),
+        (path) =>
+          path !== registryOwned &&
+          (path !== "SKILL.md" || !sameOutsideFrontmatter(local.get(path), pinned.get(path))),
       );
       if (edited.length > 0) {
         throw new Error(

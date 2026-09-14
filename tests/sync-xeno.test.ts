@@ -356,3 +356,41 @@ describe("Copilot round on PR 136", () => {
     );
   });
 });
+
+describe("license_file", () => {
+  test("a license outside the folder is copied in under its basename and pinned like every other file", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "MIT License\n" });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update(
+      { alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) },
+      xeno,
+    ).sources;
+    expect(readFileSync(join(xeno, "alpha", "LICENSE"), "utf8")).toBe("MIT License\n");
+    writeFileSync(join(xeno, "alpha", "LICENSE"), "edited\n");
+    expect(check(synced, xeno)[0]?.status).toBe("modified");
+  });
+
+  test("adding license_file to a synced source re-syncs instead of stopping as a hand edit", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "MIT License\n" });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update({ alpha: source(up.url, "0".repeat(40)) }, xeno).sources;
+    const withLicense = { alpha: { ...(synced.alpha as Source), licenseFile: "LICENSE" } };
+    expect(update(withLicense, xeno).reports[0]?.status).toBe("updated");
+    expect(existsSync(join(xeno, "alpha", "LICENSE"))).toBe(true);
+  });
+
+  test("a license_file that does not exist upstream, or one the folder already carries, is an error", () => {
+    const up = upstream({
+      "plugins/skills/alpha/SKILL.md": SKILL,
+      "plugins/skills/alpha/LICENSE": "x\n",
+      LICENSE: "y\n",
+    });
+    const xeno = temp.dir("sync-xeno-copy-");
+    expect(() =>
+      update({ alpha: source(up.url, "0".repeat(40), { licenseFile: "NOTICE" }) }, xeno),
+    ).toThrow(/license_file NOTICE does not exist/);
+    expect(() =>
+      update({ alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) }, xeno),
+    ).toThrow(/already carries LICENSE; drop license_file/);
+  });
+});
