@@ -19,7 +19,8 @@ Scope: this skill is a guideline, not law. Skimmability for the reader outranks 
 
 - "humanize this text" / "make this sound less like AI" / "remove the AI tells"
 - "does this read as AI-generated?"
-- Drafting or rewriting any prose a human will read: documentation, READMEs, articles, blog posts, reports, emails, announcements, PR descriptions
+- Drafting or rewriting prose for readers outside the repository: articles, blog posts, reports, emails, announcements, PR descriptions
+- Not repository documentation (READMEs, guides, reference pages): those are programmer-register pages of the `/docs-discipline` skill
 - Any writing task where the user cares about tone, voice, or naturalness
 
 ## Source of truth

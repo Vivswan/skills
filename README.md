@@ -17,6 +17,7 @@ The agent applies these on its own when the task matches:
 - [/code-standards](./skills/code-standards/) - House standards for maintainable code, folded into reviews
 - [/codex-browser-fix](./skills/codex-browser-fix/) - Codex only: keeps the bundled Chrome plugin driving Brave and other Chromium browsers through app updates and custom model providers
 - [/craft-skills-and-memories](./skills/craft-skills-and-memories/) - Create and repair skills and memories at their canonical source
+- [/docs-discipline](./skills/docs-discipline/) - Repository docs that skim well and name real code: shape rules, a paragraph-cap and path probe, and an architecture page that cannot rot
 - [/never-twice](./skills/never-twice/) - Climb every repeated failure to the most durable fix reachable
 - [/no-invalid-states](./skills/no-invalid-states/) - Invariants in the type system instead of runtime checks
 - [/pr-and-issue-discipline](./skills/pr-and-issue-discipline/) - PRs and issues that show the change instead of describing it
@@ -46,6 +47,11 @@ How the skills reference each other (an arrow means "mentions and hands off to, 
 ```mermaid
 graph LR
   cbf["/codex-browser-fix"]
+  dd["/docs-discipline"] --> rdr
+  dd --> pid
+  dd --> cs
+  cs --> dd
+  nw --> dd
   om["/orchestrator-mode"] --> rdr["/rubber-duck-review"]
   om --> wca["/watch-ci-after-push"]
   om --> cs["/code-standards"]
@@ -73,6 +79,7 @@ graph LR
   us["/unslop"]
   fd["/frontend-design"]
   dtf["/design-taste-frontend"]
+  dd --> us
   csm --> nt
 ```
 

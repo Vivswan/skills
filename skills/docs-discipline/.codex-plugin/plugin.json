@@ -1,0 +1,36 @@
+{
+  "name": "docs-discipline",
+  "description": "Repository documentation that skims well and names real code: the device picked from the content, a paragraph-cap and path probe, fact-preserving restructures, and the architecture page whose boxes name real symbols.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/docs-discipline",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "documentation",
+    "readme",
+    "architecture",
+    "mermaid",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Docs Discipline",
+    "shortDescription": "Repository docs that skim well and name real code.",
+    "longDescription": "Fires when a page of a repository's documentation is written or reviewed. Each fact is shown by the device that shows it fastest (a tree for precedence, captured output for a command, the see/means/do triple for a symptom), paragraphs stay under 70 words, and a probe measures the cap and checks that every path the page names exists. Restructures preserve every fact; the architecture page kind adds a layering declaration, a two-way import lint, a generated module map, and a page test that every diagram box names real code.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/docs-discipline",
+    "defaultPrompt": [
+      "This guide is a wall of text; reshape it without losing a fact.",
+      "Run the docs probe over docs/ and fix what it names.",
+      "Add an architecture page with a module map for this repository."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

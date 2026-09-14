@@ -111,13 +111,13 @@ Full detail: `references/comments.md`.
 
 ### Lean AGENTS.md
 
-AGENTS.md (and CLAUDE.md) holds the project's guiding principles and nothing an agent can deduce elsewhere. Code is the source of truth; implementation detail lives there. The same shape rule covers the other repository-level Markdown GitHub reads (README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT); product documentation, changelogs, and license texts are out of scope.
+AGENTS.md (and CLAUDE.md) holds the project's guiding principles and nothing an agent can deduce elsewhere. Code is the source of truth; implementation detail lives there. README, CONTRIBUTING, and the rest of the repository's documentation are the `/docs-discipline` skill's pages.
 
 - **Keep:** what the project is, the conventions the owner wants kept, safety constraints, the toolchain entry points, and pointers.
 - **Cut:** anything a specific file answers, even when essential: layout trees, the commands block (the manifest and hooks are the source), naming conventions a linter carries, checklists a test enforces, per-module behavior. A one-line pointer replaces each.
 - **Shape:** short bullets a human skims; no long paragraphs, no walls of text.
 - **No tests pin it.** A test asserting AGENTS.md text turns guidance into a fixture; delete it.
-- **No review loop.** A change touching only these repository-level Markdown files gets no codex or Copilot round and is committed with `git commit --no-verify`; the PR opens ready and its CI is the only gate.
+- **No review loop.** A change touching only AGENTS.md or CLAUDE.md gets no codex or Copilot round and is committed with `git commit --no-verify`; the PR opens ready and its CI is the only gate.
 - Already lean: leave it alone and say so.
 
 Specimen: a tail of 66 lines (a layout tree, a 17-item authoring checklist the smoke test enforced, release notes) became 15: one line on what the repo is, five principles, two working rules; the checklist moved to the authoring doc it was duplicating.
@@ -134,9 +134,7 @@ Full detail, including the email-patch exception: `references/artifacts.md`.
 
 ### No blobs of text
 
-Docs, READMEs, reports, and PR text use scannable structure: bullets for facts, tables for enumerations, numbered steps for flows, paragraphs of 1-3 sentences. When the content is enumerable, enumerate it. Short explanatory paragraphs are fine; wall-of-text prose where structure would scan better is not.
-
-Full detail: `references/artifacts.md`.
+Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences, and when the content is enumerable, enumerate it. The shape rules and the paragraph probe live in the `/docs-discipline` skill; PR bodies follow the `/pr-and-issue-discipline` skill's Readability rules.
 
 ## Review Criteria
 
@@ -153,7 +151,6 @@ Full detail: `references/artifacts.md`.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
-- Wall-of-text prose in docs, reports, or PR text where bullets, tables, or numbered steps would scan better.
 
 Triage findings against the standards above; each criterion maps to one.
 
