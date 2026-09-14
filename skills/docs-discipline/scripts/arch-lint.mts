@@ -74,6 +74,15 @@ export function readArchitecture(path: string, label = path): Architecture {
       }
     }
   }
+  for (const [layer, paths] of Object.entries(layers)) {
+    for (const path of paths) {
+      if (path.startsWith("/") || path.split("/").includes("..")) {
+        throw new Error(
+          `${label}: layer ${layer} names ${path}, which leaves the repository; paths are repository-relative`,
+        );
+      }
+    }
+  }
   // layerOf takes the first match in YAML order, so an overlap would hand
   // one layer's files to another silently; the declaration refuses it instead.
   const owned = Object.entries(layers).flatMap(([layer, paths]) =>

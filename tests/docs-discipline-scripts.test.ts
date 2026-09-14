@@ -1144,3 +1144,14 @@ describe("sixth Copilot round on the moved scripts", () => {
     expect(out.stderr).toContain("src/engine/both.ts exports no value");
   });
 });
+
+describe("seventh Copilot round on the moved scripts", () => {
+  test("a layer path with a parent segment or a leading slash is a declaration error", () => {
+    const root = variant("escaping-layer", {
+      "architecture.yml": "layers:\n  main: [src/main.ts]\n  shared: [../shared/]\nedges: {}\n",
+    });
+    const out = run(ARCH_LINT, [], root);
+    expect(out.status).toBe(2);
+    expect(out.stderr).toContain("layer shared names ../shared/, which leaves the repository");
+  });
+});
