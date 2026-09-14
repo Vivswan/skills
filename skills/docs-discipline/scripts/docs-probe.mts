@@ -236,10 +236,10 @@ export function pathCandidate(token: string): string | null {
   return path.includes("/") && EXTENSION.test(path) ? path : null;
 }
 
-/** True when `file` sits under `root`, judged by the relative path so the host's separator does not matter. */
+/** True when `file` is `root` or sits under it, judged by the relative path so the host's separator does not matter. */
 function withinRoot(root: string, file: string): boolean {
   const rel = relative(resolve(root), file);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /** The root, the page's directory, and every directory between: a skill's reference page names `scripts/x.mts` from the skill folder. */

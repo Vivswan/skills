@@ -1155,3 +1155,20 @@ describe("seventh Copilot round on the moved scripts", () => {
     expect(out.stderr).toContain("layer shared names ../shared/, which leaves the repository");
   });
 });
+
+describe("eighth Copilot round on the moved scripts", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const diagram = (label: string) => `\`\`\`mermaid\nflowchart LR\n  a["${label}"]\n\`\`\``;
+  const demo = `Demonstrated by: [x](${REPO_URL}test/engine/run.test.ts).`;
+
+  test("two star paths to the same binding are one export, not an ambiguity", () => {
+    const root = variant("star-same-binding", {
+      "src/engine/a.ts": "export const value = 1;\n",
+      "src/engine/b.ts": 'export * from "./a.ts";\n',
+      "src/engine/both.ts": 'export * from "./a.ts";\nexport * from "./b.ts";\n',
+      "docs/star.md": `# T\n\n${diagram("src/engine/both.ts<br>value")}\n\n${demo}\n`,
+    });
+    const out = run(CHECK_PAGE, ["--page", "docs/star.md", "--repo-url", REPO_URL], root);
+    expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+});

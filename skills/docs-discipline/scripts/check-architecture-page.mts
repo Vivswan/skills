@@ -20,48 +20,54 @@ import { parseSync, pathLabel, resolveImport, SOURCE_EXTENSIONS } from "./arch-l
 const SYMBOL_TOKEN = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*(?:\(\))?$/u;
 const DEMONSTRATED = "Demonstrated by:";
 
-const exportedNamesByFile = new Map<string, ReadonlySet<string>>();
+const exportOriginsByFile = new Map<string, ReadonlyMap<string, string>>();
 
 /**
- * The names `file` exports, as the module record sees them: `export { a as b }`
- * exports b, a default export is `default`, `export * from` unions the target's
- * names (its default stays behind, as in the language), `export * as ns` is `ns`.
- * A star cycle contributes nothing on the second visit; only a top-level result is cached.
+ * The names `file` exports, each with the module that declares its binding: `export { a as b }`
+ * exports b, a default export is `default`, `export * from` brings the target's names (its default
+ * stays behind, as in the language), `export * as ns` is `ns`. A name reached through two star
+ * paths is one export when both paths end at the same binding and no export at all when they do
+ * not, as ECMAScript resolves it. A star cycle contributes nothing on the second visit; only a
+ * top-level result is cached.
  */
-export function exportedNames(
+export function exportOrigins(
   file: string,
   visiting: ReadonlySet<string> = new Set(),
-): ReadonlySet<string> {
-  const cached = exportedNamesByFile.get(file);
+): ReadonlyMap<string, string> {
+  const cached = exportOriginsByFile.get(file);
   if (cached) return cached;
-  if (visiting.has(file)) return new Set();
+  if (visiting.has(file)) return new Map();
   const inner = new Set([...visiting, file]);
   const { module } = parseSync(file, readFileSync(file, "utf8"));
-  const names = new Set<string>();
-  // A name two star targets both export is ambiguous in ECMAScript and is not exported at all.
+  const direct = new Map<string, string>();
   const starred = new Map<string, Set<string>>();
   for (const statement of module.staticExports) {
     for (const entry of statement.entries) {
       if (entry.exportName.kind === "Default") {
-        names.add("default");
+        direct.set("default", `${file}#default`);
       } else if (entry.exportName.name !== null) {
-        names.add(entry.exportName.name);
+        direct.set(entry.exportName.name, `${file}#${entry.exportName.name}`);
       } else if (entry.moduleRequest && /^\.\.?\//.test(entry.moduleRequest.value)) {
         const target = resolveImport(file, entry.moduleRequest.value);
-        for (const name of exportedNames(target, inner)) {
+        for (const [name, origin] of exportOrigins(target, inner)) {
           if (name === "default") continue;
-          const targets = starred.get(name) ?? new Set<string>();
-          targets.add(target);
-          starred.set(name, targets);
+          const origins = starred.get(name) ?? new Set<string>();
+          origins.add(origin);
+          starred.set(name, origins);
         }
       }
     }
   }
-  for (const [name, targets] of starred) {
-    if (targets.size === 1) names.add(name);
+  const names = new Map(direct);
+  for (const [name, origins] of starred) {
+    if (!names.has(name) && origins.size === 1) names.set(name, [...origins][0] as string);
   }
-  if (visiting.size === 0) exportedNamesByFile.set(file, names);
+  if (visiting.size === 0) exportOriginsByFile.set(file, names);
   return names;
+}
+
+export function exportedNames(file: string): ReadonlySet<string> {
+  return new Set(exportOrigins(file).keys());
 }
 
 export interface Fence {
@@ -328,10 +334,10 @@ function insideGeneratedRegion(page: Page, line: number): boolean {
   return open;
 }
 
-/** True when `file` sits under `root`, judged by the relative path so the host's separator does not matter. */
+/** True when `file` is `root` or sits under it, judged by the relative path so the host's separator does not matter. */
 function withinRoot(root: string, file: string): boolean {
   const rel = relative(resolve(root), file);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /** The file a link addresses: no fragment, no query, percent-escapes decoded when they are valid. */

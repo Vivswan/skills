@@ -236,6 +236,11 @@ describe("repository containment", () => {
       "link target ../../../../../../../../etc/passwd escapes the repository",
     ]);
   });
+
+  test("a link to the repository root itself is inside the repository", () => {
+    const root = repo({ "docs/a.md": "" });
+    expect(probePage("[root](..)\n", "docs/a.md", { root, maxWords: 70, paths: true })).toEqual([]);
+  });
 });
 
 describe("paths outside prose", () => {
