@@ -379,6 +379,19 @@ describe("license_file", () => {
     expect(existsSync(join(xeno, "alpha", "LICENSE"))).toBe(true);
   });
 
+  test("a license basename that matches a directory in the folder is a collision too", () => {
+    const up = upstream({
+      "plugins/skills/alpha/SKILL.md": SKILL,
+      "plugins/skills/alpha/LICENSE/notice.txt": "n\n",
+      LICENSE: "MIT\n",
+    });
+    const xeno = temp.dir("sync-xeno-copy-");
+    expect(() =>
+      update({ alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) }, xeno),
+    ).toThrow(/already carries LICENSE; drop license_file/);
+    expect(existsSync(join(xeno, "alpha"))).toBe(false);
+  });
+
   test("a license_file cannot stand in for a missing folder, and cannot point inside the folder", () => {
     const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "MIT License\n" });
     const xeno = temp.dir("sync-xeno-copy-");

@@ -13,3 +13,6 @@ skills/natural-writing/
 # .typography-allow currently exempts it too, but a release-please-less
 # template may drop that line; this keeps the gate green either way.
 CHANGELOG.md
+# Vendored copies under xeno/ keep their upstream typography; the sync compares
+# them against the pin byte for byte, so a look-alike dash there is upstream's.
+xeno/

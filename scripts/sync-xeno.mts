@@ -320,7 +320,10 @@ export function fetchSnapshot(
       if (blob.status !== 0) throw new Error(`git show ${path}: ${blob.stderr.toString().trim()}`);
       const inFolder = path.startsWith(`${source.path}/`);
       const name = inFolder ? relative(source.path, path) : (licenseName as string);
-      if (!inFolder && files.has(name)) {
+      if (
+        !inFolder &&
+        (files.has(name) || [...files.keys()].some((k) => k.startsWith(`${name}/`)))
+      ) {
         throw new Error(`${source.url}: the folder already carries ${name}; drop license_file`);
       }
       files.set(name, { bytes: blob.stdout, executable: mode === "100755" });

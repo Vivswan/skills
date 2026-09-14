@@ -1,0 +1,5 @@
+# Repo-owned typos config, layered under the fleet's. Vendored copies under
+# xeno/ keep their upstream spelling (a brand name, a font name), and the sync
+# compares them against the pin byte for byte, so they are not spell-checked.
+[files]
+extend-exclude = ["xeno/"]
