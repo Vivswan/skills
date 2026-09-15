@@ -136,6 +136,14 @@ Full detail, including the email-patch exception: `references/artifacts.md`.
 
 Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences, and when the content is enumerable, enumerate it. The shape rules and the paragraph probe live in the `/docs-discipline` skill; PR bodies follow the `/pr-and-issue-discipline` skill's Readability rules.
 
+## Workflow
+
+1. Writing code: apply the standards as you go; they are cheaper at write time than at review time.
+2. Reviewing: check the Review Criteria, cite the specific standard in each finding, and prefer suggesting the class fix over the instance patch.
+3. When a standard needs its boundaries (what counts, what is exempt, how far to take it), load the matching `references/` file before acting on it.
+4. When a finding calls for enforcing invariants in the type system (lifecycle flags, must-call-X-before-Y ordering, fields that must appear together), apply the `/no-invalid-states` skill for the refactor itself.
+5. When a standard conflicts with an explicit user or project decision, follow the decision and record which standard was consciously set aside.
+
 ## Review Criteria
 
 - Instance-only fixes: does the change prevent recurrence (test, type, tooling), or just patch the case at hand?
@@ -153,14 +161,6 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
 
 Triage findings against the standards above; each criterion maps to one.
-
-## Workflow
-
-1. Writing code: apply the standards as you go; they are cheaper at write time than at review time.
-2. Reviewing: check the Review Criteria, cite the specific standard in each finding, and prefer suggesting the class fix over the instance patch.
-3. When a standard needs its boundaries (what counts, what is exempt, how far to take it), load the matching `references/` file before acting on it.
-4. When a finding calls for enforcing invariants in the type system (lifecycle flags, must-call-X-before-Y ordering, fields that must appear together), apply the `/no-invalid-states` skill for the refactor itself.
-5. When a standard conflicts with an explicit user or project decision, follow the decision and record which standard was consciously set aside.
 
 ## References
 

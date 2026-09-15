@@ -36,6 +36,10 @@ Use this skill when the code shows any of these signals:
 
 Do not use this skill to add abstraction to code that is already simple, or in place of a bug hunt. It improves representation, not behavior.
 
+## Guiding Principle
+
+Before adding another defensive check, ask: can this invalid state be removed from the program's representation instead? Use the strongest idiomatic mechanism the language offers, and keep the design simpler, not more complicated, than the problem itself.
+
 ## Workflow
 
 ### 1. Find candidate invariants
@@ -179,7 +183,3 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
 - for each finding, the stronger representation (sum type, newtype, typestate, validating constructor) or owner-side resolution that would remove the invalid state
 
 Triage the resulting findings with the workflow above.
-
-## Guiding Principle
-
-Before adding another defensive check, ask: can this invalid state be removed from the program's representation instead? Use the strongest idiomatic mechanism the language offers, and keep the design simpler, not more complicated, than the problem itself.

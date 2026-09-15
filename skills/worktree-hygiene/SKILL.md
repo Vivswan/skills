@@ -104,6 +104,16 @@ Ownership transfers explicitly, never by inference: at any moment a worktree has
 - **A removed tree's branch goes to whoever collects it.** Stopping an actor and removing its worktree transfers its branch to the collector, and only to the collector. Follow-up fixes on that branch go to a FRESH actor in a NEW worktree.
 - **Never resurrect a released actor.** A message to a stopped actor resumes it into a directory that no longer exists. Once its worktree is removed, that actor is never messaged again.
 
+## File Ownership Across Parallel Actors
+
+When several actors write into ONE worktree, or several rounds of actors work the same file set:
+
+- Every file has exactly one owner across ALL rounds; give each actor an explicit file whitelist.
+- A later round's list is computed by SUBTRACTING everything any earlier round covered, by file list, not by "looks done".
+- No round starts while a prior round's actor may still be writing.
+
+Re-assigning files a prior round still owns produces racing-writer collisions and duplicated work even when exact-match edit semantics prevent outright corruption.
+
 ## One Branch, One Worktree
 
 Git refuses, by default, to check out a branch that is already checked out in ANY worktree ("already used by worktree"). So a branch is held by at most one tree, and the holder must release it before anyone else can take it:
@@ -126,13 +136,3 @@ Every linked worktree keeps a small private git dir (HEAD, index, in-progress re
 - **Identity is shared.** A `user.email` or `user.name` write in one tree stamps every sibling's next commit. Set identity per command (`git -c user.email=...`) or in environment variables scoped to the actor, never in the shared config while others run.
 - **Branches and tags are shared.** A branch update or deletion or a tag move performed in one tree is instantly visible in all (per-tree refs are the exception: HEAD, `FETCH_HEAD` and the other pseudo-refs, `refs/worktree/*`, `refs/bisect/*`, `refs/rewritten/*`); a sibling about to start a rebase or merge onto a ref you just deleted errors in ways it cannot diagnose. Coordinate ref surgery, or schedule it when no sibling is live.
 - **Hooks are shared by default.** Installing or editing a hook from one worktree changes what every sibling's next commit runs. (A per-worktree `core.hooksPath`, or a relative hooks path resolving per tree, is the exception; absent that, assume shared.)
-
-## File Ownership Across Parallel Actors
-
-When several actors write into ONE worktree, or several rounds of actors work the same file set:
-
-- Every file has exactly one owner across ALL rounds; give each actor an explicit file whitelist.
-- A later round's list is computed by SUBTRACTING everything any earlier round covered, by file list, not by "looks done".
-- No round starts while a prior round's actor may still be writing.
-
-Re-assigning files a prior round still owns produces racing-writer collisions and duplicated work even when exact-match edit semantics prevent outright corruption.

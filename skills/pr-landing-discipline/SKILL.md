@@ -16,8 +16,8 @@ These rules apply to any session that carries a change from "opened" to "landed"
 
 - A review round just landed on an open PR
 - A PR converges, or new commit-requiring work appears on a ready PR
-- Deciding who merges a converged PR
 - A change is about to land, by PR merge or direct push
+- Deciding who merges a converged PR
 
 ## Draft Discipline
 
@@ -35,8 +35,17 @@ An open PR is live work until it merges: bot reviewers (e.g. Copilot code review
 1. Every push gets a CI watcher (Companion Gates, below).
 2. When a review lands, triage EVERY comment the same cycle it appears, never batched:
    - A valid finding is fixed in that same round.
-   - An invalid or not-valid-here comment gets a reply stating why, and its thread resolved.
+   - An invalid or not-valid-here comment gets a reply stating why, and its thread resolved. A comment with nothing to answer (praise, a restated diff) is resolved without one.
 3. A fix push restarts the loop: new CI watch, re-gate on the changed content, and the bot may re-review.
+
+**Bot comments are advisory.** A non-human reviewer (Copilot code review, any review bot) follows a repository's review instructions inconsistently, and many repositories have none, so the author runs each bot comment through the filter those instructions would have applied: comment only on a defect you can demonstrate.
+
+- **Earns a fix:** the comment names a concrete input or state and the wrong output, crash, or data loss it produces in this diff. Fixed in the round.
+- **Speculative hardening:** a hostile caller who cannot reach the code, "consider validating", "for robustness", a race in a single-user tool, a check for an input the code never receives. Declined in one sentence and recorded, not built (the `/rubber-duck-review` skill's step 6 carries the exception for repositories over 100 stars). A comment that names the input and the damage is the first bullet, whatever its wording.
+- **Style, naming, or structure opinions** the repository's linter and formatter do not enforce, and rewording that says the same thing: declined in one sentence. An opinion the linter already reports is resolved without a reply; the red check carries it.
+- **Restating the diff, praise, a summary:** resolved, no reply.
+
+The one-sentence decline IS the thread's convergence; the bot's summary verdict ("Changes recommended") is not a gate, and the bot never substitutes for the blocking review under Companion Gates.
 
 **Toil budget.** When rounds keep yielding one finding at a time (around ten rounds in), stop fixing instances one at a time: enumerate the recurring finding classes, sweep each whole class across the change in one pass, then resume the loop. One 35-round convergence collapsed to a few batch sweeps once the finding classes were enumerated.
 
@@ -55,56 +64,13 @@ Production shape of one round:
 - "empty manifest passes vacuously": valid. Fixed with a regression test in the same cycle.
 - "script not wired into the docs": sequencing by design. Replied with the plan (a docs pass wires all scripts post-merge) and resolved.
 - "symlink following": split. The leaf-fidelity half fixed after confirming it empirically; the escape half declined with the recorded design rationale.
+- "verify the manifest's provenance before applying it" from Copilot, on a script with one caller inside CI reading a file the same workflow wrote: declined as speculative hardening. Replied in one sentence and resolved; the round's "Changes recommended" verdict held no merge.
 - "add a regression test" on a deletion with no behavior of its own: declined. The comment named no fact the test would pin that the source does not say (the `/rubber-duck-review` skill's standing test question); the body's census is the proof. Replied with the rule and resolved.
 
-## Who Merges
+## Companion Gates
 
-The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges.
-
-Where a merge queue owns the ordering, the author's prepared action is enqueueing the converged PR; enqueue is not merged, so watch until the commit actually lands. Two standing exceptions, each only when the user has granted it:
-
-- **A trivial mechanical fix.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) merges directly once its gates are green; the human gate is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
-- **A pipeline blocked on a merge.** When a converged PR gates queued work and the human is not acting, merge it and say so in the next report. Waiting idle on a merge the author could perform is the defect; the notification preserves the human's oversight.
-
-**The `merge-when-green` label is the owner's standing approval on one PR, for that PR's whole life.** The repository owner applies it, never an agent, and no later push or force-push voids it. A PR without the label follows the rules above.
-
-The label hands the operator the MERGE, not a verdict on the content: the owner agreed with the PR's idea and shape, at craft time or before, and may not have read the code. So the operator stands in for the owner on the exact head that lands:
-
-- the head is converged as defined above
-- its line accounting is read against the purpose (below)
-- its body is re-read against the diff
-- the gate review with blocking power ran on THIS head
-
-Those checks are the same on every PR; the depth of reading is not. A typo fix gets a glance at the diff; a rewrite of the release script gets the diff read end to end. The gates in this skill are the toolbox for that judgment, not a checklist the label unlocks. Two confirmations precede the merge:
-
-```bash
-head="$(gh pr view <n> --json headRefOid --jq .headRefOid)"   # first: a push after this fails the merge below
-gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
-  | select((.event == "labeled" or .event == "unlabeled") and .label.name == "merge-when-green")
-  | "\(.created_at) \(.event) \(.actor.login)"'
-```
-
-```text
-1. the LAST line is a labeled event by the repository owner
-   -> labeled by anyone else: remove the label, report who set it, the owner re-applies it
-   -> unlabeled, or no line at all: no approval; the rules above apply
-2. the operator's gate review ran on THIS head and its findings are triaged
-   -> the head moved since the review: re-read head, re-review the head with the delta named, then merge
-```
-
-**Folding PRs and the label.** The approval covers the idea and shape the owner agreed to on THAT PR. Folding another PR into a labeled one brings in content the owner never agreed to, so a label that predates the fold stays only when every PR folded in passes check 1 on its own timeline (an owner-set label, not merely a label); otherwise the operator removes it, says so, and the owner re-applies after reading the folded content. A label the owner set after the fold is that approval, whatever the folded PRs carried. A fresh combined PR starts unlabeled like any PR. The PR's own review rounds (new commits on the same branch) are not a fold; they keep the label. Prefer stacking or a fresh PR over folding into a labeled PR.
-
-The operator removes the label in exactly two cases: set by someone other than the owner, or a fold that brought in unapproved content. A red check, an open thread, a gate finding, or a moved head never removes it: they hold the merge, not the approval.
-
-Both confirmations hold and the head is converged: merge with `gh pr merge <n> --squash --match-head-commit "$head"`, so a push racing the merge fails it instead of landing, and report. Check 1 fails: the label comes off and the rules above apply. Check 2 or convergence fails: the finding is triaged under Draft Discipline (a commit-requiring finding flips the PR back to draft), the label stays, and the report says why.
-
-**The landing action is exit-conditioned, never chained**, for a PR merge and a direct push alike. Read the gate's own verdict and STOP; land in a separate command only after the gate itself reports green. Green means the gate's exit code AND its verdict, and a review gate is green only when its findings are triaged, not merely when its process exits 0.
-
-```bash
-tail gate.log; git merge && git push    # WRONG: the merge runs whatever the log said
-tail gate.log && git merge && git push  # WRONG: && conditions on tail printing the log,
-                                        # not on the gate's verdict; a red log still merges
-```
+- After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it. A MERGE is watched the same way, on the mainline tip's SHA (fetch the mainline from the remote the PR merged into and watch `FETCH_HEAD`): after `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
+- Before anything lands, an independent review that can block the landing, scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.
 
 ## Line Accounting Before Landing
 
@@ -138,7 +104,51 @@ A mismatch is a question the author answers before the landing, not a stop: eith
 
 Production: a release-script rewrite retiring a build-branch chain deleted 18 functions and added 18, leaving the script the same size. The review read every replacement as clean; only the count raised the question, and the answer was that nothing had been retired. A pass over the 68 PRs landed around it, one `pulls/<n>/files` call each, found none the same size and four that grew by a guard no title mentioned or a deletion staged into a sibling PR.
 
-## Companion Gates
+## Who Merges
 
-- After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it. A MERGE is watched the same way, on the mainline tip's SHA (fetch the mainline from the remote the PR merged into and watch `FETCH_HEAD`): after `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
-- Before anything lands, an independent review that can block the landing, scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.
+The human, by default. A PR exists to put a human gate before the mainline: the author prepares it (push, gates green, a "ready to merge" report) and the human merges.
+
+Where a merge queue owns the ordering, the author's prepared action is enqueueing the converged PR; enqueue is not merged, so watch until the commit actually lands. Two standing exceptions, each only when the user has granted it:
+
+- **A trivial mechanical fix.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) merges directly once its gates are green; the human gate is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
+- **A pipeline blocked on a merge.** When a converged PR gates queued work and the human is not acting, merge it and say so in the next report. Waiting idle on a merge the author could perform is the defect; the notification preserves the human's oversight.
+
+**The `merge-when-green` label is the owner's standing approval on one PR, for that PR's whole life.** The repository owner applies it, never an agent, and no later push or force-push voids it. A PR without the label follows the rules above.
+
+The label hands the operator the MERGE, not a verdict on the content: the owner agreed with the PR's idea and shape, at craft time or before, and may not have read the code. So the operator stands in for the owner on the exact head that lands:
+
+- the head is converged as defined above
+- its line accounting is read against the purpose (above)
+- its body is re-read against the diff
+- the gate review with blocking power ran on THIS head
+
+Those checks are the same on every PR; the depth of reading is not. A typo fix gets a glance at the diff; a rewrite of the release script gets the diff read end to end. The gates in this skill are the toolbox for that judgment, not a checklist the label unlocks. Two confirmations precede the merge:
+
+```bash
+head="$(gh pr view <n> --json headRefOid --jq .headRefOid)"   # first: a push after this fails the merge below
+gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
+  | select((.event == "labeled" or .event == "unlabeled") and .label.name == "merge-when-green")
+  | "\(.created_at) \(.event) \(.actor.login)"'
+```
+
+```text
+1. the LAST line is a labeled event by the repository owner
+   -> labeled by anyone else: remove the label, report who set it, the owner re-applies it
+   -> unlabeled, or no line at all: no approval; the rules above apply
+2. the operator's gate review ran on THIS head and its findings are triaged
+   -> the head moved since the review: re-read head, re-review the head with the delta named, then merge
+```
+
+**Folding PRs and the label.** The approval covers the idea and shape the owner agreed to on THAT PR. Folding another PR into a labeled one brings in content the owner never agreed to, so a label that predates the fold stays only when every PR folded in passes check 1 on its own timeline (an owner-set label, not merely a label); otherwise the operator removes it, says so, and the owner re-applies after reading the folded content. A label the owner set after the fold is that approval, whatever the folded PRs carried. A fresh combined PR starts unlabeled like any PR. The PR's own review rounds (new commits on the same branch) are not a fold; they keep the label. Prefer stacking or a fresh PR over folding into a labeled PR.
+
+The operator removes the label in exactly two cases: set by someone other than the owner, or a fold that brought in unapproved content. A red check, an open thread, a gate finding, or a moved head never removes it: they hold the merge, not the approval.
+
+Both confirmations hold and the head is converged: merge with `gh pr merge <n> --squash --match-head-commit "$head"`, so a push racing the merge fails it instead of landing, and report. Check 1 fails: the label comes off and the rules above apply. Check 2 or convergence fails: the finding is triaged under Draft Discipline (a commit-requiring finding flips the PR back to draft), the label stays, and the report says why.
+
+**The landing action is exit-conditioned, never chained**, for a PR merge and a direct push alike. Read the gate's own verdict and STOP; land in a separate command only after the gate itself reports green. Green means the gate's exit code AND its verdict, and a review gate is green only when its findings are triaged, not merely when its process exits 0.
+
+```bash
+tail gate.log; git merge && git push    # WRONG: the merge runs whatever the log said
+tail gate.log && git merge && git push  # WRONG: && conditions on tail printing the log,
+                                        # not on the gate's verdict; a red log still merges
+```

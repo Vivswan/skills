@@ -17,6 +17,21 @@ Scope:
 - **Skills are general-purpose.** Nothing in a skill should be project-specific. A fact that only holds for one project belongs in that project's own docs or memories, not in the skill.
 - **Memories may be project-specific or common.** Create and fix a memory at the scope it belongs to: a project memory in that project's store, a common memory in the shared store.
 
+## When to Apply
+
+Creating:
+
+- "Save this as a memory" / "make this a skill" / "remember this"
+- The decision is made to encode a lesson or workflow for future sessions (deciding the response to a correction is `/never-twice`'s job; its rung 3 hands off here)
+
+Fixing:
+
+- A documented flag, command, or file in a skill no longer exists
+- A skill's copy-paste block breaks in a reproducible way
+- A skill's extraction or verification rule misses what it is supposed to catch
+- A recalled memory names a file, flag, or workflow that no longer exists or was superseded
+- The user says a skill or memory is not working properly
+
 ## The Quality Bar (creating and fixing alike)
 
 - **Example-, scenario-, or concept-led, never quote-led.** The concrete specimen (the failing command, the corrected block, a worked scenario) recalls far better in a future session than abstract explanation or the user's verbatim words.
@@ -34,21 +49,6 @@ Scope:
   - No backwards compatibility, folders included: splits, merges, and retirements are normal changes, with every deletion audited per the `/never-twice` skill (Deleting a Guard). A compatibility contract the hosting repo declares (such as published install paths) still binds folder moves there.
 - **Memories** hold one fact per file, record the why, convert relative dates to absolute, and link related memories. A wrong memory gets deleted, not patched around.
 - When rewriting prose, apply the `/natural-writing` skill if it is present and invocable. If your harness lets only the user invoke it, suggest they run `/natural-writing` rather than silently skipping the step.
-
-## When to Apply
-
-Creating:
-
-- "Save this as a memory" / "make this a skill" / "remember this"
-- The decision is made to encode a lesson or workflow for future sessions (deciding the response to a correction is `/never-twice`'s job; its rung 3 hands off here)
-
-Fixing:
-
-- A documented flag, command, or file in a skill no longer exists
-- A skill's copy-paste block breaks in a reproducible way
-- A skill's extraction or verification rule misses what it is supposed to catch
-- A recalled memory names a file, flag, or workflow that no longer exists or was superseded
-- The user says a skill or memory is not working properly
 
 ## Creating
 

@@ -75,16 +75,6 @@ In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins t
 - All green: one line ("CI passed: <workflow names>").
 - Any failure: the failing workflow and job names, the log excerpt that shows the actual error, and the run URL. Excerpt, not the full log.
 
-## Polling Budget
-
-GitHub throttles in separate buckets. The core REST bucket is 5000 authenticated requests per hour per user. The Actions REST endpoints (`gh run list`, `gh run watch`, `gh run view`) are additionally throttled as a secondary bucket: ten sessions on one account locked it for over an hour with 403 "API rate limit exceeded" while core still read 5000/5000, and every REST-based CI verdict was blind. GraphQL has its own bucket and kept answering throughout. Earlier, `gh run watch` at its 3 s default refresh across parallel watchers drained core and blinded every verdict for 45 minutes. Three rules follow:
-
-- **Discover and poll through GraphQL, never the Actions REST endpoints.** The bundled scripts read every workflow run on the commit, with its status and conclusion, in one `gh api graphql` request per page of 100 check suites per poll, and touch REST only for failed-job logs (`gh run view <id> --log-failed`, once per failed run). A hand-rolled watcher does the same (the query in step 1). A rate-limited GraphQL answer is tooling trouble (exit 2), never a reason to fall back to REST.
-- **One CI poller per session at a time.** Queue the next push behind the running watcher, or, when the branch's runs share a `concurrency` group key, watch only the newest mainline tip: an older tip's watcher can end with no verdict to report (the group behavior is spelled out below).
-- **The sustained poll interval is at least 60 s.** The bundled script sleeps 60 s between polls (`poll_interval=60`); a hand-rolled watcher does the same, never `gh run watch` at its 3 s default. The script's two bounded bursts are not what this rule is about and stay as they are: registration polling (up to five reads 3 s apart, until the runs appear) and the transient-failure retries (up to three attempts 2 s apart) each spend a handful of requests once; the minutes-long watch is where the budget goes.
-
-Stacked pushes also lose verdicts on GitHub's side. When a workflow's runs share a `concurrency` group key (commonly the workflow plus the branch), GitHub keeps at most one running plus one pending run per key: a newer push cancels the pending run (and the running one too where `cancel-in-progress` evaluates true), so that SHA never gets a verdict, which the script reports as `FAIL(cancelled)` on a latest run. Two landings in one session needed reruns for exactly this; wait for the running watcher's verdict before pushing again.
-
 ## After a Merge
 
 A merge is a push to the mainline by other hands, and nothing above covers it by accident: after `gh pr merge`, `git rev-parse HEAD` in the checkout still names the TOPIC branch's tip, while the squash or merge commit is a new SHA that exists only on the mainline. A watcher started on the topic tip proves nothing about the merged pipeline. With a merge queue, `gh pr merge` can return success on ENQUEUE, before the commits reach the mainline; wait until the PR is actually merged (`mergedAt` set) before fetching, or the fetch grabs the pre-merge tip. Then resolve the mainline tip and run the same workflow (discovery, background watch, report) on that SHA:
@@ -94,6 +84,16 @@ git fetch <base-remote> <mainline>    # origin in a plain clone; in a fork check
 #                                       canonical remote the PR merged into, never the fork
 sha="$(git rev-parse FETCH_HEAD)"     # the merged mainline tip, not the topic HEAD
 ```
+
+## Polling Budget
+
+GitHub throttles in separate buckets. The core REST bucket is 5000 authenticated requests per hour per user. The Actions REST endpoints (`gh run list`, `gh run watch`, `gh run view`) are additionally throttled as a secondary bucket: ten sessions on one account locked it for over an hour with 403 "API rate limit exceeded" while core still read 5000/5000, and every REST-based CI verdict was blind. GraphQL has its own bucket and kept answering throughout. Earlier, `gh run watch` at its 3 s default refresh across parallel watchers drained core and blinded every verdict for 45 minutes. Three rules follow:
+
+- **Discover and poll through GraphQL, never the Actions REST endpoints.** The bundled scripts read every workflow run on the commit, with its status and conclusion, in one `gh api graphql` request per page of 100 check suites per poll, and touch REST only for failed-job logs (`gh run view <id> --log-failed`, once per failed run). A hand-rolled watcher does the same (the query in step 1). A rate-limited GraphQL answer is tooling trouble (exit 2), never a reason to fall back to REST.
+- **One CI poller per session at a time.** Queue the next push behind the running watcher, or, when the branch's runs share a `concurrency` group key, watch only the newest mainline tip: an older tip's watcher can end with no verdict to report (the group behavior is spelled out below).
+- **The sustained poll interval is at least 60 s.** The bundled script sleeps 60 s between polls (`poll_interval=60`); a hand-rolled watcher does the same, never `gh run watch` at its 3 s default. The script's two bounded bursts are not what this rule is about and stay as they are: registration polling (up to five reads 3 s apart, until the runs appear) and the transient-failure retries (up to three attempts 2 s apart) each spend a handful of requests once; the minutes-long watch is where the budget goes.
+
+Stacked pushes also lose verdicts on GitHub's side. When a workflow's runs share a `concurrency` group key (commonly the workflow plus the branch), GitHub keeps at most one running plus one pending run per key: a newer push cancels the pending run (and the running one too where `cancel-in-progress` evaluates true), so that SHA never gets a verdict, which the script reports as `FAIL(cancelled)` on a latest run. Two landings in one session needed reruns for exactly this; wait for the running watcher's verdict before pushing again.
 
 ## Sleeping on PR Activity
 
