@@ -25,7 +25,7 @@ Use this skill when someone asks for:
 
 - Prefer a dedicated review tool when one is available.
 - Use a reviewer that is different from the current model when possible.
-- If no dedicated tool exists, fall back to a read-only CLI invocation through this skill's `scripts/run-review.mts` (step 3). Pick the reviewer by which model *you* are:
+- If no dedicated tool exists, fall back to a read-only CLI invocation through this skill's `scripts/run-review.mts` (step 4). Pick the reviewer by which model *you* are:
   - If you are currently using **Claude** -> `codex`, fallback `copilot`.
   - If you are currently using **Codex or GitHub Copilot** -> `claude`, fallback `copilot`.
 - **Never** let the reviewer write files, edit code, or run unrestricted shell commands.
@@ -33,7 +33,13 @@ Use this skill when someone asks for:
   - Read-only still lets the reviewer self-check: it can run read-only commands (grep, `git diff`, typecheck; copilot can only read and grep files) but writes are blocked. That self-checking makes findings concrete.
   - Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.
 
-### 2. Craft the prompt
+### 2. Large change sets: fan out one review per section
+
+- A single broad review of a big diff is shallower than several focused ones. Split the change into logical **sections** (each new command/module, each script, the CI/release config, a parity pair) and run one review per section in parallel, each scoped to its files.
+- **Don't over-parallelize.** Many simultaneous `codex exec` processes can saturate the backend and hang. If reviews stall, run them in smaller batches (2-3 at a time).
+- **Detect & recover from hangs.** With JSON streaming, compare each review's event count over ~30-60s. If one is flat while its siblings climb, it's hung: stop it (the task runner's stop, or `pkill -f "<unique substring of that prompt>"`) and relaunch just that one.
+
+### 3. Craft the prompt
 
 - Ask for a review of the relevant changes and surrounding context only.
 - Always include: `This is a review-only task. Do not edit, write, or modify any files. Only read and report findings.`
@@ -56,7 +62,7 @@ Use this skill when someone asks for:
 
 For a reusable prompt template, see `references/reviewer-prompt.md`.
 
-### 3. Run the reviewer
+### 4. Run the reviewer
 
 This skill ships `scripts/run-review.mts` (the path is relative to the installed skill folder, not the repo under review). It encapsulates the launch pitfalls:
 
@@ -67,7 +73,7 @@ This skill ships `scripts/run-review.mts` (the path is relative to the installed
 - extracts the verdict and refuses one with no tool call before it: codex fills its narration into the schema too, so a turn that ends at "I will review now" is a valid-looking empty verdict, and the missing reads are what expose it
 - prints one JSON report: the verdict, the tool-call count, the path of the kept capture, and a compact trajectory (one row per reviewer step) so you can see what the reviewer did without opening the stream
 
-Write the step-2 prompt to a tmp file and pass the reviewer name plus that file. Several agents (or several sections of one fan-out) review at once on one machine, and a predictable name such as `/tmp/rubber-duck-prompt-<section>.md` lets one writer overwrite another's prompt before the script reads it, so the script mints the path:
+Write the step-3 prompt to a tmp file and pass the reviewer name plus that file. Several agents (or several sections of one fan-out) review at once on one machine, and a predictable name such as `/tmp/rubber-duck-prompt-<section>.md` lets one writer overwrite another's prompt before the script reads it, so the script mints the path:
 
 - `prepare <section>` creates a private directory with `mkdtemp` (atomic, so two callers can never receive the same one), leaves its marker there, and prints the section's prompt file inside it.
 - A launch refuses any prompt file outside such a directory, and any symlink or hard link inside one. The marker is the proof, not the location, so the two shells need not share `TMPDIR`.
@@ -78,7 +84,7 @@ Inside an agent worktree the sandbox can refuse a Bash heredoc whose text contai
 # 1. Mint the prompt path, one call per review section. Shell state does not survive
 #    between tool calls, so copy the printed path by hand:
 bun "<skill-dir>/scripts/run-review.mts" prepare api-gateway   # prints e.g. /tmp/rubber-duck-prompt-Kq3mZp/api-gateway.md
-# 2. Write the step-2 prompt to that path with your Write tool (a heredoc with a quoted
+# 2. Write the step-3 prompt to that path with your Write tool (a heredoc with a quoted
 #    delimiter works only outside an agent worktree).
 # 3. Then, in one shell call:
 prompt_file=/tmp/rubber-duck-prompt-Kq3mZp/api-gateway.md
@@ -96,7 +102,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - Foreground (the default) blocks until the reviewer exits, so give the tool call a generous timeout. Subagents (worktree builders, spawned workers) always run foreground: a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
 - `--background` prints exactly two lines, `output-file: <path>` and `pid: <n>`.
   - `output-file` is the captured stream; a detached monitor records the reviewer's exit status beside it.
-  - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 4).
+  - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 5).
   - Killing that PID cancels the review (the signal is forwarded to the reviewer).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line). Silence in between is normal; a real review can take a while.
 - Runtime: `bun`; `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
@@ -106,7 +112,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - 2: usage error or reviewer binary not found.
 - In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the reviewer invocations, the flags, the exit codes, the failure verdict) to `scripts/run-review.mts`. A rename on either side fails CI until doc and script move together.
 
-### 4. Act on the printed verdict
+### 5. Act on the printed verdict
 
 - **Exit 0** from a foreground run or `--extract`: stdout is one JSON report. (A `--background` launch also exits 0, printing only the output path and PID; its verdict comes from `--extract`.)
   - `verdict.blocking` and `verdict.non_blocking`: the findings, each `{where, claim, evidence}`. Triage them per steps 6-7: apply or reject each one.
@@ -122,7 +128,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" > "${out%/*}/verdict.out" 2>&1
   ```
   - `<reviewer>` is the argument the review was launched with.
-  - The verdict lands in `verdict.out` inside that review's capture dir, so parallel reviews (step 5) never overwrite one another, and it travels and is removed with the dir.
+  - The verdict lands in `verdict.out` inside that review's capture dir, so parallel reviews (step 2) never overwrite one another, and it travels and is removed with the dir.
   - The script polls the launch record every 2 s until the monitor records the exit (`--timeout <seconds>`, default 3600), then prints the same JSON report.
   - It validates the reviewer and output file against what the launch recorded, so waiting on the wrong reviewer or file fails at once.
   - Exit codes, same as a foreground run:
@@ -134,12 +140,6 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - Remove exactly those two directories once the verdict is triaged, never a glob over the shared temp dir: one sweep of `rubber-duck-*` there deleted 53 directories and killed two other sessions' in-flight reviews.
   - A session that wants a sweepable space sets its own `TMPDIR` to a directory it created before launching; `prepare` and the launch both honor it.
   - A foreground launch whose reviewer binary is missing (exit 2) captured nothing and leaves nothing behind; a `--background` one keeps its dir so `--extract` can report the missing binary, so remove it after that.
-
-### 5. Large change sets: fan out one review per section
-
-- A single broad review of a big diff is shallower than several focused ones. Split the change into logical **sections** (each new command/module, each script, the CI/release config, a parity pair) and run one review per section in parallel, each scoped to its files.
-- **Don't over-parallelize.** Many simultaneous `codex exec` processes can saturate the backend and hang. If reviews stall, run them in smaller batches (2-3 at a time).
-- **Detect & recover from hangs.** With JSON streaming, compare each review's event count over ~30-60s. If one is flat while its siblings climb, it's hung: stop it (the task runner's stop, or `pkill -f "<unique substring of that prompt>"`) and relaunch just that one.
 
 ### 6. Apply findings thoughtfully
 

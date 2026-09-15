@@ -5,9 +5,9 @@
 - **Removal safety**: fresh status codes (never a stale dirty count), no live process with its cwd inside the tree, no locked tree removed blind
 - **Branch retirement**: `scripts/retire-branch.mts` retires a landed branch as one gated program (fetch into a private ref, prove the landing by ancestry or by content equivalence for squash and rebase merges, enforce the removal rules on the worktree, remove it, delete the ref pinned to the verified sha); it rehearses by default and destroys only with `--execute`
 - **Handover**: ownership transfers explicitly; stop the predecessor first, check for a live writer before editing, never message a stopped actor whose directory is gone
+- **File ownership**: one owner per file across all rounds when several actors share a tree
 - **One branch, one worktree**: git refuses a checkout a sibling tree holds; release before taking it elsewhere
 - **Shared `.git`**: config writes, identity, branches and tags, and hooks hit every sibling worktree at once
-- **File ownership**: one owner per file across all rounds when several actors share a tree
 
 ## Install
 

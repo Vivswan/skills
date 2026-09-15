@@ -23,6 +23,23 @@ The ladder is not a menu. Preference decays exponentially down it: rung 1 is the
 
 And a rung-3 or rung-4 landing is a **debt**, not a resolution: when a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
 
+## Workflow
+
+1. **Name the class** in one sentence: "any new Event member can ship without a roster entry." If you cannot, it is not a class yet: fix the instance and move on.
+2. **Find the substrate** that admits new members: two artifacts synced by convention, a string where a closed set belongs, state kept in prose, a hand-typed ritual.
+3. **Climb** as close to rung 1 as the task allows: take the most durable rung you can implement within the task's scope and authority.
+4. **Ship it.** A lower-rung fallback ships only with the gap to the more durable rung named in your report. Track that gap as its own task where you have the authority to create one. Never park it as a note: a note is state kept in prose, the substrate that admitted the class.
+
+Test whatever ships:
+
+> If a new member of this class appears tomorrow, does the fix hold, or does it silently pass the same way?
+
+Three answers:
+
+- It **silently passes**: the class is alive.
+- It **fails loudly but late** (at runtime, after shipping): an instance guard, the class is still alive.
+- It **cannot recur**, at the rung that holds it: impossible to build (1), stopped in CI (2), caught by a loaded rule (3).
+
 ## Rung 1: the class cannot recur
 
 An event enum keeps outgrowing the roster that dispatches on it:
@@ -83,23 +100,6 @@ Log timestamps are ISO 8601 (2026-08-26T14:03:00Z), never epoch.
 ```
 
 How to write the rule (where it lives, its trigger, its quality bar) is the `/craft-skills-and-memories` skill's job: this rung decides THAT a loaded rule is the response, then hands off there.
-
-## Workflow
-
-1. **Name the class** in one sentence: "any new Event member can ship without a roster entry." If you cannot, it is not a class yet: fix the instance and move on.
-2. **Find the substrate** that admits new members: two artifacts synced by convention, a string where a closed set belongs, state kept in prose, a hand-typed ritual.
-3. **Climb** as close to rung 1 as the task allows: take the most durable rung you can implement within the task's scope and authority.
-4. **Ship it.** A lower-rung fallback ships only with the gap to the more durable rung named in your report. Track that gap as its own task where you have the authority to create one. Never park it as a note: a note is state kept in prose, the substrate that admitted the class.
-
-Test whatever ships:
-
-> If a new member of this class appears tomorrow, does the fix hold, or does it silently pass the same way?
-
-Three answers:
-
-- It **silently passes**: the class is alive.
-- It **fails loudly but late** (at runtime, after shipping): an instance guard, the class is still alive.
-- It **cannot recur**, at the rung that holds it: impossible to build (1), stopped in CI (2), caught by a loaded rule (3).
 
 ## Deleting a Guard (Chesterton's Fence)
 
