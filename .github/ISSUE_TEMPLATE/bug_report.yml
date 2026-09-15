@@ -11,6 +11,7 @@ body:
         - code-standards
         - codex-browser-fix
         - craft-skills-and-memories
+        - docs-discipline
         - no-invalid-states
         - natural-writing
         - orchestrator-mode

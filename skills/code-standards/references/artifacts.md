@@ -14,9 +14,9 @@ How to apply:
 - Keep only what no file answers: purpose, hard rules, decisions a reader would otherwise reverse (one file pointer each), safety constraints, release rules.
 - Short bullets a human skims. No long paragraphs, no walls of text.
 - Delete any test that pins AGENTS.md text. Guidance is not a fixture; a test that checks paths a doc names still exist is a stale-pointer guard and stays.
-- A change touching only these repository-level Markdown files skips the review loop: no codex or Copilot round, `git commit --no-verify`, PR opened ready, CI the only gate, the owner merges.
+- A change touching only AGENTS.md or CLAUDE.md skips the review loop: no codex or Copilot round, `git commit --no-verify`, PR opened ready, CI the only gate, the owner merges.
 - When a file already meets this, leave it and say so.
-- The same shape rule covers the repository-level Markdown GitHub reads: README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT. Product documentation, user guides, changelogs, and license texts are out of scope.
+- README, CONTRIBUTING, and the rest of the repository's documentation are pages of the `/docs-discipline` skill, not this rule's.
 
 Specimen: one repository's tail carried a directory tree, a 17-item authoring checklist the smoke test already enforced, and release notes, 66 lines. It became one line on what the repository is, five principles, and two working rules; the checklist facts that lived only there moved to the authoring doc; the smoke-test assertion on the file's text was deleted.
 
@@ -33,13 +33,3 @@ Sanctioned exceptions:
 - **Email-patch projects.** Contributing to an email-patch project (e.g. the Linux kernel) follows that project's wrapping rules.
 
 How to apply: write subject and body with content only and unwrapped paragraphs; stop before any attribution footer. Pass both rules explicitly to any subagent that writes commits.
-
-## No blobs of text
-
-Paragraph-heavy prose is rejected everywhere a human reads it: docs, READMEs, reports, PR text, and messages alike. Use scannable structure instead: bullets for facts, tables for enumerations, numbered steps for flows, bold lead-ins, paragraphs of 1-3 sentences max.
-
-Boundaries:
-
-- This holds for developer-facing and non-developer text both, independent of any prose-style skill in play.
-- Short explanatory paragraphs (1-3 sentences) are fine; what is rejected is wall-of-text prose where structure would scan better.
-- When the content is enumerable, enumerate it.

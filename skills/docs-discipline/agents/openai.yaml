@@ -1,0 +1,4 @@
+interface:
+  display_name: "Docs Discipline"
+  short_description: "Repository docs that skim well and name real code."
+  brand_color: "#0F766E"
