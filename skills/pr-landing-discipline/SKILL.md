@@ -41,7 +41,7 @@ An open PR is live work until it merges: bot reviewers (e.g. Copilot code review
 **Bot comments are advisory.** A non-human reviewer (Copilot code review, any review bot) follows a repository's review instructions inconsistently, and many repositories have none, so the author runs each bot comment through the filter those instructions would have applied: comment only on a defect you can demonstrate.
 
 - **Earns a fix:** the comment names a concrete input or state and the wrong output, crash, or data loss it produces in this diff. Fixed in the round.
-- **Speculative hardening:** a hostile caller who cannot reach the code, "consider validating", "for robustness", a race in a single-user tool, a check for an input the code never receives. Declined in one sentence and recorded, not built. A comment that names the input and the damage is the first bullet, whatever its wording.
+- **Speculative hardening:** a hostile caller who cannot reach the code, "consider validating", "for robustness", a race in a single-user tool, a check for an input the code never receives. Declined in one sentence and recorded, not built (the `/rubber-duck-review` skill's step 6 carries the exception for repositories over 100 stars). A comment that names the input and the damage is the first bullet, whatever its wording.
 - **Style, naming, or structure opinions** the repository's linter and formatter do not enforce, and rewording that says the same thing: declined in one sentence. An opinion the linter already reports is resolved without a reply; the red check carries it.
 - **Restating the diff, praise, a summary:** resolved, no reply.
 
