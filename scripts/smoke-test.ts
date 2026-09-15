@@ -851,7 +851,7 @@ function checkGrepTermsCoveredByWordList(): void {
 }
 
 // The read-only preamble is quoted verbatim in the skill's prompt template;
-// extract the canonical copy from the backticked span in SKILL.md (step 2's
+// extract the canonical copy from the backticked span in SKILL.md (step 3's
 // "Always include:" bullet) so this guard tracks rewording instead of
 // hardcoding a third copy.
 function checkReviewerPreamble(): void {
