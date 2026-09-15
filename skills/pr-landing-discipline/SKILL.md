@@ -42,7 +42,7 @@ An open PR is live work until it merges: bot reviewers (e.g. Copilot code review
 
 - **Earns a fix:** the comment names a concrete input or state and the wrong output, crash, or data loss it produces in this diff. Fixed in the round.
 - **Speculative hardening:** "a hostile caller could", "consider validating", "for robustness", a race in a single-user tool, a check for an input the code never receives. Declined in one sentence and recorded, not built.
-- **Style, naming, or structure opinions** the repository's linter and formatter do not enforce, and rewording that says the same thing: declined in one sentence. One the linter already reports is resolved without a reply; the red check carries it.
+- **Style, naming, or structure opinions** the repository's linter and formatter do not enforce, and rewording that says the same thing: declined in one sentence. An opinion the linter already reports is resolved without a reply; the red check carries it.
 - **Restating the diff, praise, a summary:** resolved, no reply.
 
 The one-sentence decline IS the thread's convergence; the bot's summary verdict ("Changes recommended") is not a gate, and the bot never substitutes for the blocking review under Companion Gates.
