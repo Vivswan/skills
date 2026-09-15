@@ -187,6 +187,27 @@ BEGIN_COMMIT_OVERRIDE
 END_COMMIT_OVERRIDE
 ```
 
+**Hand the body to `gh` on stdin, never through a guessable file.** A body drafted at `/tmp/<repo>-pr-body.md` was the specimen: two sessions on one machine picked the same name, and the second overwrote the first's. `gh pr create` and `gh pr edit` take `-` as the body file and read stdin, so a quoted heredoc carries the body with nothing to race over or clean up:
+
+```bash
+gh pr create --draft --title "<type(scope): subject>" --body-file - <<'EOF'
+## What this changes
+...
+EOF
+```
+
+When the sandbox refuses the heredoc (an agent worktree can reject one whose text contains git commands, and captured output often does), stage the body in a directory `mktemp` minted, at the literal path it printed, and remove that directory in the same command that publishes, whatever `gh` returns:
+
+```bash
+# 1. Mint the directory; a harness that starts a fresh shell per tool call loses $body_dir, so copy the printed path by hand:
+mktemp -d "${TMPDIR:-/tmp}/pr-body-XXXXXX"   # prints e.g. /tmp/pr-body-Kq3mZp
+# 2. Write the body to <that path>/body.md with your Write tool.
+# 3. Then, in one shell call, publish and remove the directory on every exit, success or failure:
+body_dir="/tmp/pr-body-Kq3mZp"
+trap 'rm -rf "$body_dir"' EXIT
+gh pr create --draft --title "<type(scope): subject>" --body-file "$body_dir/body.md"
+```
+
 ## Re-read Before the Human Reads
 
 The body is written when the PR opens and read when the PR is offered; the diff moves in between. Before the offer (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session. How hard to look depends on how far the PR moved: a one-commit PR gets a glance at the Proof numbers, a PR that went through eight review rounds gets every claim re-checked. What usually drifts:

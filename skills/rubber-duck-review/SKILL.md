@@ -87,7 +87,7 @@ bun "<skill-dir>/scripts/run-review.mts" prepare api-gateway   # prints e.g. /tm
 # 2. Write the step-3 prompt to that path with your Write tool (a heredoc with a quoted
 #    delimiter works only outside an agent worktree).
 # 3. Then, in one shell call:
-prompt_file=/tmp/rubber-duck-prompt-Kq3mZp/api-gateway.md
+prompt_file="/tmp/rubber-duck-prompt-Kq3mZp/api-gateway.md"
 bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|copilot per step 1
 ```
 
