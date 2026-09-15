@@ -203,7 +203,7 @@ When the sandbox refuses the heredoc (an agent worktree can reject one whose tex
 mktemp -d "${TMPDIR:-/tmp}/pr-body-XXXXXX"   # prints e.g. /tmp/pr-body-Kq3mZp
 # 2. Write the body to <that path>/body.md with your Write tool.
 # 3. Then, in one shell call, publish and remove the directory on every exit, success or failure:
-body_dir=/tmp/pr-body-Kq3mZp
+body_dir="/tmp/pr-body-Kq3mZp"
 trap 'rm -rf "$body_dir"' EXIT
 gh pr create --draft --title "<type(scope): subject>" --body-file "$body_dir/body.md"
 ```
