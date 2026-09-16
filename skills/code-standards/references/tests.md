@@ -22,6 +22,7 @@ Delete or fold these:
 | `assert output.dtype == dtype` as its own test | assert it inside the test that checks the values |
 | five tests differing only in an input value | one parametrized case list |
 | `expect(job.needs).toEqual(["lint", "test"])` after reading the workflow that says so | restates the source; it changes in the same commit, so nothing drifts under it |
+| `expect(DEFAULT_HOME).toBe("~/.local/share/app")` | the constant is the source of the value; the test restates it and grows with every new constant |
 
 A shape or dtype claim is not forbidden; it is forbidden *as the whole test*. Move it into the correctness test that also compares values.
 
@@ -43,6 +44,25 @@ Every test answers "what would drift silently without this?" in its name or firs
 | A regression with a named incident | the empty manifest that passed validation vacuously |
 
 "The source says so" is not an answer. A test that restates what it read is edited in the same commit as the source, so nothing can drift under it; it is deleted, in the PR that notices it, and a reviewer asking for one is declined with this rule.
+
+### A constant is the source
+
+A test of a single constant, or of a variable that is itself the source of its value (a default, a key name, an argv literal, a path), is the same restatement one hop closer. The literal sits once in the source and once in the test, and every new constant invites a new one.
+
+Pin the value where it leaves the program instead: the bytes written to a file, the line printed, the request sent. Do it only when that boundary is an external contract (a path a user's shell reads, a flag the README documents, a wire format a peer parses). A value that never crosses such a boundary gets no test of its own.
+
+```ts
+// DELETE: the constant is the source; this line changes with it
+expect(DEFAULT_HOME).toBe("~/.local/share/app");
+
+// KEEP: the installer wrote there, and the user's shell reads it from there
+await runInstaller({ env: { HOME: home } });
+await expect(readFile(join(home, ".local/share/app/env.sh"), "utf8")).resolves.toBe(expectedEnvFile);
+```
+
+The KEEP test fails when the default changes, when the installer stops writing the file, or when the content drifts, and the assertion owns each failure (a bare `await readFile` would reject upstream of it, which Prove the test below rules out). The DELETE test fails only when someone edits the constant, and they edit the test in the same keystroke.
+
+Specimen: a test audit of an installer removed the `DEFAULT_HOME` pin and replaced it with this read-back.
 
 Specimen: eleven PRs landed in one day on a repository of GitHub Actions workflows, and their builders shipped shape tests that restated the yaml: a census asserting no workflow sets `cancel-in-progress: false`, a pin that a job's `needs` equals the list in the file. Four pressures produced them, each with its answer:
 
