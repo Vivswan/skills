@@ -26,7 +26,20 @@ These rules apply to any session that carries a change from "opened" to "landed"
 - Flip BACK TO DRAFT the moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding), before the fix round starts.
 - Draft state tracks pending commits; CONVERGENCE gates the merge offer. A fresh comment needing only a reply does not bounce a ready PR back to draft (its reply-and-resolve lands the same cycle, no commit), but a PR is offered for merge only while the full converged definition below holds.
 
-**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes.
+**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes. READY also requires that nothing the PR publishes carries PII: the title, body, commit messages, diff, and review or issue comments are free of the author's employer name, real GitHub or `gh` account logins, machine names, home paths under a real user, and emails (the `/pr-and-issue-discipline` skill's redaction rule names the substitutes and the contract exception). The check reads all of it from the PR itself, never from local HEAD, and greps for the author's real identifiers as fixed strings, one `-e` per identifier (the five below are placeholders for the employer, login, username, email, and machine name):
+
+```sh
+n=<pr number>; out="$(mktemp)"
+{ gh pr view "$n" --json title,body,commits -q '.title, .body, (.commits[] | .messageHeadline, .messageBody)' &&
+  gh pr diff "$n" &&
+  gh api --paginate "repos/{owner}/{repo}/pulls/$n/reviews" -q '.[].body' &&
+  gh api --paginate "repos/{owner}/{repo}/pulls/$n/comments" -q '.[].body' &&
+  gh api --paginate "repos/{owner}/{repo}/issues/$n/comments" -q '.[].body'; } > "$out" &&
+  { grep -n -i -F -e 'ExampleCorp' -e 'real-login' -e 'realuser' -e 'real.name@example.net' -e 'MacBook-Pro' "$out"; echo "grep exit $?"; }
+rm -f "$out"
+```
+
+`grep exit 1` is clean. `grep exit 0` lists the hits: a product file name that carries a vendor's word and the repository's own `owner/repo` coordinate in its install command are the permitted matches, and every other hit is a blocking finding. No `grep exit` line means a read failed, and the run says nothing about the PR.
 
 ## Babysit to Comment Convergence
 
