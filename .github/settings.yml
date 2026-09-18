@@ -19,7 +19,7 @@ repository:
   has_issues: true
   has_projects: false
   has_wiki: false
-  homepage: https://vivswan.github.io/
+  homepage: https://vivswan.github.io/skills/
   private: false
   security_and_analysis:
     secret_scanning:
@@ -37,6 +37,9 @@ labels:
     - name: dependencies
       color: 0366d6
       description: Dependency updates
+    - name: docs-link-rot
+      color: D4A72C
+      description: Automated docs-site link-rot report
     - name: enhancement
       color: a2eeef
       description: New feature or request
@@ -52,6 +55,9 @@ labels:
     - name: merge-when-green
       color: 0e8a16
       description: "Owner approved: merge once every gate is green"
+    - name: nightly-failure
+      color: D93F0B
+      description: Automated nightly CI failure
     - name: repo-platform:sync
       color: "5319e7"
       description: Sync this pull request's branch from repo-platform (the workflow
@@ -139,3 +145,5 @@ rulesets:
         - actor_id: 5
           actor_type: RepositoryRole
           bypass_mode: always
+pages:
+  build_type: workflow

@@ -23,9 +23,9 @@ import {
   ROOT,
   runChecks,
   skillDirs,
+  XENO_PLUGIN,
   xenoSkillDirs,
 } from "./lib";
-import { XENO_PLUGIN } from "./validate-skills";
 
 // Mirrors the CLI's kebabToTitle: capitalize the first letter of each segment.
 function kebabToTitle(name: string): string {

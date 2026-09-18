@@ -35,7 +35,7 @@ repository:
   # homepage, topics, and private are declared here even when empty or
   # public: the apply manages only declared keys, so this keeps it healing
   # out-of-band edits (an empty value declares-and-clears).
-  homepage: "https://vivswan.github.io/"
+  homepage: "https://vivswan.github.io/skills/"
   topics: "agent-skills,agents,ai,claude-code,codex,github-copilot,llm,mcp,plugins,skills"
   private: false
 

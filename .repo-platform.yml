@@ -2,7 +2,9 @@
 # reads this file and never rewrites it.
 modules:
   - bun
+  - nightly
   - pr-title
+  - site
 project:
   name: Skills
   slug: skills

@@ -1,30 +1,35 @@
-# Repo-owned: refreshes the vendored copies under xeno/ from their
-# upstreams every Monday and opens (or updates) one pull request when a pin
-# moved. The copies and xeno/sources.yml are written only by
-# scripts/sync-xeno.mts; a hand edit there fails the sync's own --check.
+# Nightly CI starter: written once by Vivswan/repo-platform, never
+# overwritten by a later sync. The report job files one label-deduplicated
+# tracking issue on a red night and closes it on a green one
+# (repo-platform's docs/nightly.md).
+#
+# The one nightly check here is the xeno refresh: it rewrites the vendored
+# copies under xeno/ from their upstreams and opens (or updates) one pull
+# request when a pin moved. The copies and xeno/sources.yml are written only
+# by scripts/sync-xeno.mts; a hand edit there fails the sync's own --check.
 #
 # The push and the PR use GITHUB_TOKEN, and events raised by that token start
 # no workflow runs, so the PR arrives without CI. The gate below runs the
 # repository's full check on the refreshed tree first, and the PR body says
 # so; an empty commit pushed by a human, or a close-and-reopen, gives it a CI
 # run. A PAT in an environment would remove that step.
-
-name: Sync Xeno Skills
+name: Nightly
 
 on:
   schedule:
-    - cron: "23 6 * * 1"
+    # Offset from the fleet's other nightlies (ci.yml 04:03, the starter's
+    # 06:59) so they do not all land at once.
+    - cron: "23 6 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: nightly
 
 permissions:
   contents: read
 
-concurrency:
-  group: sync-xeno-skills
-  cancel-in-progress: false
-
 jobs:
-  sync:
+  sync-xeno:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -94,3 +99,36 @@ jobs:
               --title "chore(xeno): sync vendored skills to their upstream heads" \
               --body-file "$RUNNER_TEMP/body.md"
           fi
+
+  # A CANCELLED sync job counts as red: hitting the timeout cancels
+  # rather than fails, and a hang is exactly what a nightly exists to
+  # catch. Add sibling jobs freely: list each in `needs` and fold its
+  # result into the red/green conditions below.
+  report:
+    needs: [sync-xeno]
+    if: always()
+    runs-on: ubuntu-latest
+    # A hung reporter is the residual silence window; keep this tight.
+    timeout-minutes: 5
+    # issues: write is for the fuzz-issue action; an issue it creates fires no issues:opened event, so it assigns the owner itself.
+    permissions:
+      issues: write
+    steps:
+      - name: File or update the nightly issue
+        if: needs.sync-xeno.result == 'failure' || needs.sync-xeno.result == 'cancelled'
+        uses: Vivswan/repo-platform/actions/fuzz-issue@stable
+        with:
+          mode: report
+          label: "nightly-failure"
+          title: Nightly CI failures
+          label-color: "D93F0B"
+          label-description: "Automated nightly CI failure"
+          stream: generic
+
+      - name: Close the nightly issue on a green night
+        if: needs.sync-xeno.result == 'success'
+        uses: Vivswan/repo-platform/actions/fuzz-issue@stable
+        with:
+          mode: resolve
+          label: "nightly-failure"
+          stream: generic

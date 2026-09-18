@@ -36,7 +36,7 @@ Load only when you invoke them (`/skill-name` in Claude Code, `$skill-name` in C
 
 ### Xeno
 
-Xeno, from the Greek for foreign: skills written in other repositories, vendored here from their upstream at a pinned commit and refreshed weekly ([how](./xeno/README.md)):
+Xeno, from the Greek for foreign: skills written in other repositories, vendored here from their upstream at a pinned commit and refreshed nightly ([how](./xeno/README.md)):
 
 - [/unslop](./xeno/unslop/) - Cut AI tells from any writing (from [cursor/plugins](https://github.com/cursor/plugins))
 - [/frontend-design](./xeno/frontend-design/) - Distinctive visual design for new or reshaped UI, invoked by you in Claude Code (from [anthropics/skills](https://github.com/anthropics/skills))
@@ -160,7 +160,7 @@ Run the repo checks before publishing changes:
 bun run check
 ```
 
-That runs the TypeScript typecheck, the Biome lint, YAML and JSON schema lints, the unit tests, structural validation ([`scripts/validate-skills.ts`](./scripts/validate-skills.ts)), and cross-file consistency checks ([`scripts/smoke-test.ts`](./scripts/smoke-test.ts)). CI runs the same script through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery-test.ts`](./scripts/cli-discovery-test.ts)).
+That runs the TypeScript typecheck, the Biome lint, the JSON schema lint, the unit tests, structural validation ([the validate-skills action](./docs/validate-skills.md)), and cross-file consistency checks ([`scripts/smoke-test.ts`](./scripts/smoke-test.ts)). CI runs the same script through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery-test.ts`](./scripts/cli-discovery-test.ts)).
 
 ## License
 

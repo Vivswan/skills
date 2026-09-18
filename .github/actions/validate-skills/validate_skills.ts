@@ -232,13 +232,23 @@ export function validateSkillDir(skillDir: string, where: string): string[] {
   } else if (description.length > MAX_DESCRIPTION_LENGTH) {
     errors.push(`${at}: description exceeds ${MAX_DESCRIPTION_LENGTH} characters`);
   }
+  // The skills CLI silently drops a skill whose metadata.internal === true from installs and listings (any other
+  // value publishes), so that value on a published skill makes it vanish for consumers while every gate stays green.
+  const metadata = frontmatter.metadata;
+  if (isRecord(metadata) && metadata.internal === true) {
+    errors.push(
+      `${at}: metadata.internal is true on a published skill (the skills CLI silently drops ` +
+        "internal skills at install time)",
+    );
+  }
   const mcpJson = join(skillDir, ".mcp.json");
   const mcpStat = lstatOf(mcpJson);
   if (mcpStat?.isSymbolicLink()) {
     errors.push(
       `${where}/.mcp.json: must be a real file, not a symlink (a link can point outside the checkout)`,
     );
-  } else if (mcpStat?.isFile()) {
+  } else if (mcpStat) {
+    // Anything present must read and parse; a directory fails the read with EISDIR.
     collect(errors, () => void loadJson(mcpJson, `${where}/.mcp.json`));
   }
   return errors;
