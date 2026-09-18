@@ -1,9 +1,20 @@
 #!/usr/bin/env bun
 
 /**
- * Consistency checks for the skills collection. Complements
- * scripts/validate-skills.ts (per-file structure) by catching drift across
- * files that still passes structural validation:
+ * Consistency checks for the skills collection. Complements the
+ * validate-skills action (per-folder structure, the baseline any skills
+ * repository can call; `bun run validate` runs it here) with everything
+ * specific to THIS catalog:
+ *
+ *   - the per-skill files this catalog requires beyond SKILL.md: README.md
+ *     and a codex manifest named for the folder
+ *   - template/: its files, and metadata.internal kept true so the
+ *     placeholder skill never ships
+ *   - xeno/: every vendored copy held to the action's SKILL.md contract
+ *   - marketplace shape: one root plugin publishing "./" under plugin.json's
+ *     name, and the xeno plugin publishing "./xeno"
+ *
+ * and drift across files that still passes structural validation:
  *
  *   - template placeholders left behind in a published skill
  *   - version fields anywhere but marketplace.json metadata.version, the
@@ -37,6 +48,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { validateSkillDir } from "../.github/actions/validate-skills/validate_skills";
 import type { Frontmatter, Marketplace, RootManifest } from "./lib";
 import {
   errorMessage,
@@ -44,6 +56,7 @@ import {
   isRecord,
   isUnknownArray,
   KEBAB_CASE,
+  loadJson,
   loadJsonObject,
   loadMarketplace,
   loadRootManifest,
@@ -57,6 +70,7 @@ import {
   skillDirs,
   walkFiles,
   XENO_DIR,
+  XENO_PLUGIN,
   xenoSkillDirs,
 } from "./lib";
 import {
@@ -69,7 +83,6 @@ import {
   checkReadmeUsageExplicitRoster,
 } from "./smoke-checks";
 import { parseSources } from "./sync-xeno.mts";
-import { XENO_PLUGIN } from "./validate-skills";
 
 // Strings that should only ever appear in template/, never in a published skill.
 const PLACEHOLDER_MARKERS = ["Replace with", "Replace this", "template-skill", "Template Skill"];
@@ -174,6 +187,7 @@ function checkSingleSourceVersion(codex: CodexManifest, skillMd: SkillFrontmatte
 function checkManifestConventions(skillDir: string, codex: CodexManifest): void {
   const { path, plugin } = codex;
   const folder = basename(skillDir);
+  if (plugin.name !== folder) fail(`${rel(path)}: name does not match folder '${folder}'`);
   if (typeof plugin.repository !== "string") fail(`${rel(path)}: missing repository URL`);
   const expectedHomepage = `${plugin.repository}/tree/main/skills/${folder}`;
   if (plugin.homepage !== expectedHomepage) {
@@ -221,7 +235,20 @@ function checkCatalogCoverage(manifest: RootManifest, dirs: readonly string[]): 
 }
 
 function checkMarketplaceAgainstManifest(marketplace: Marketplace, manifest: RootManifest): void {
+  // This repo publishes itself: every entry but the xeno plugin resolves to the repo root, and the root plugin is
+  // what marketplace installs and the CLI grouping key on, so it must be there once, under plugin.json's name.
+  const roots = marketplace.plugins.filter((plugin) => plugin.name !== XENO_PLUGIN);
+  if (roots.length !== 1 || roots[0]?.name !== manifest.name) {
+    fail(
+      `${rel(marketplace.path)}: exactly one plugin must publish the repository root, named` +
+        ` '${manifest.name}' like .claude-plugin/plugin.json`,
+    );
+  }
   for (const plugin of marketplace.plugins) {
+    const source = plugin.name === XENO_PLUGIN ? `./${basename(XENO_DIR)}` : "./";
+    if (plugin.source !== source) {
+      fail(`${rel(marketplace.path)}: plugin '${plugin.name}' source must be "${source}"`);
+    }
     if (plugin.name === XENO_PLUGIN) continue;
     // strict defaults to true (plugin.json is the authority). strict:false
     // alongside a component-declaring plugin.json is a load-time conflict.
@@ -534,6 +561,22 @@ function checkInterfaceIdentity(skillDir: string, codex: CodexManifest): void {
   }
 }
 
+// template/ seeds every new skill, so it carries every file the layout
+// requires, and metadata.internal keeps it out of `npx skills add` listings:
+// if that ever goes missing, the placeholder skill ships to consumers.
+function checkTemplate(skillMd: SkillFrontmatter): void {
+  const templateDir = join(ROOT, "template");
+  requireFile(join(templateDir, "README.md"));
+  requireFile(join(templateDir, ".codex-plugin", "plugin.json"));
+  requireFile(join(templateDir, "agents", "openai.yaml"));
+  requireFile(join(templateDir, ".mcp.json.example"));
+  const metadata = skillMd.frontmatter.metadata;
+  if (!isRecord(metadata) || metadata.internal !== true) {
+    fail(`${rel(skillMd.path)}: metadata.internal must be true`);
+  }
+  loadJson(join(templateDir, ".mcp.json.example"));
+}
+
 // Guard the placeholder-leak detector itself: if template/ stops containing
 // one of the marker strings (or the marker list is emptied), the leak
 // detector for published skills has silently gone stale.
@@ -559,8 +602,10 @@ function checkPlaceholderMarkersStillInTemplate(): void {
 
 /** The `xeno` marketplace plugin exists exactly when vendored copies do, and its roster is exactly their folders. */
 function checkExternalPlugin(marketplace: Marketplace, xenoNames: ReadonlySet<string>): void {
-  const plugin = marketplace.plugins.find((entry) => entry.name === XENO_PLUGIN);
+  const entries = marketplace.plugins.filter((entry) => entry.name === XENO_PLUGIN);
   const where = rel(marketplace.path);
+  if (entries.length > 1) fail(`${where}: plugin '${XENO_PLUGIN}' is listed more than once`);
+  const plugin = entries[0];
   if (xenoNames.size === 0) {
     if (plugin)
       fail(`${where}: plugin '${XENO_PLUGIN}' has no vendored copies to publish -- remove it`);
@@ -585,7 +630,11 @@ function checkExternalPlugin(marketplace: Marketplace, xenoNames: ReadonlySet<st
   }
 }
 
-/** Every folder under xeno/ is a pinned copy (in sources.yml, named for its folder, indexed in the group README). */
+/**
+ * Every folder under xeno/ is a pinned copy: in sources.yml, indexed in the group README, and held to the same
+ * per-folder contract the action applies to skills/ (a vendored copy carries only what its upstream folder carries,
+ * so this catalog's own extras, README.md and the codex manifest, are not required of it).
+ */
 function checkExternalSources(xenoDirs: readonly string[]): void {
   const sourcesPath = join(XENO_DIR, "sources.yml");
   if (xenoDirs.length === 0 && !existsSync(sourcesPath)) return;
@@ -612,12 +661,8 @@ function checkExternalSources(xenoDirs: readonly string[]): void {
         `${rel(dir)}: not in ${rel(sourcesPath)} -- external folders are written only by the sync`,
       );
     }
-    const frontmatter = parseFrontmatter(join(dir, "SKILL.md"));
-    if (frontmatter.name !== name) {
-      fail(
-        `${rel(dir)}/SKILL.md: frontmatter name '${frontmatter.name}' does not match folder '${name}'`,
-      );
-    }
+    const errors = validateSkillDir(dir, rel(dir));
+    if (errors.length > 0) fail(errors.join("\n"));
     if (!indexText.includes(`[\`${name}\`](./${name}/)`)) {
       fail(`${rel(indexPath)}: the table is missing a row for '${name}' linking ./${name}/`);
     }
@@ -873,6 +918,7 @@ function checkReviewerPreamble(): void {
 }
 
 function main(): void {
+  for (const name of ["README.md", "AGENTS.md"]) requireFile(join(ROOT, name));
   const marketplace = loadMarketplace();
   const manifest = loadRootManifest();
   const dirs = skillDirs();
@@ -890,6 +936,7 @@ function main(): void {
   const codexManifests: CodexManifest[] = [];
   const skillFrontmatters: SkillFrontmatter[] = [];
   for (const skillDir of dirs) {
+    requireFile(join(skillDir, "README.md"));
     checkNoPlaceholders(skillDir);
     checkNoInstallDroppedFiles(skillDir);
     const codex = loadCodexManifest(skillDir);
@@ -949,6 +996,7 @@ function main(): void {
   ]);
   checkLicenseIdentity(manifest, codexManifests, skillFrontmatters);
   checkHomepageIdentity(marketplace, manifest, codexManifests);
+  checkTemplate(templateSkillMd);
   checkPlaceholderMarkersStillInTemplate();
   checkReviewCriteriaAutoDiscovery(dirs);
   checkPinnedSnapshotRevision();

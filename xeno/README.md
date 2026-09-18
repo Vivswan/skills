@@ -22,7 +22,7 @@ bun run sync-xeno -- --check   exit 1 when a pin is behind its ref or a copy dif
 - **The frontmatter of a copy's SKILL.md, and the license file it names, belong to `sources.yml`.** Those are the only sanctioned differences from upstream, and an edit typed in either is not preserved.
 - **An override reaches Claude Code only.** Codex reads `agents/openai.yaml`, which a copy carries only when upstream ships one; `disable-model-invocation: true` on a copy therefore binds Claude Code and leaves Codex on the upstream policy.
 - **The copies keep their upstream's conventions,** not this repository's: their prose shape, punctuation, and comments are read as upstream's. `.gitattributes` turns line-ending normalization off under `xeno/`, so a CRLF upstream stays CRLF.
-- **The weekly workflow** (`.github/workflows/sync-xeno-skills.yml`) runs the sync every Monday and opens one pull request when a pin moved, with the before and after commits per skill.
+- **The nightly workflow** (`.github/workflows/nightly.yml`) runs the sync every night and opens one pull request when a pin moved, with the before and after commits per skill. A red sync files a tracking issue; the next green night closes it.
 - **The pin is the review unit.** A bump is read as a diff of the vendored folder, the same way any change to our own skills is read.
 
 ## Adding one

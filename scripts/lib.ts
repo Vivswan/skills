@@ -12,6 +12,8 @@ export const ROOT = resolve(import.meta.dir, "..");
 export const SKILLS_DIR = join(ROOT, "skills");
 /** Vendored copies of other repositories' skills, beside skills/ (ours); scripts/sync-xeno.mts is their only writer. */
 export const XENO_DIR = join(ROOT, "xeno");
+/** The marketplace plugin that groups the vendored copies under their own CLI heading ("Xeno"). */
+export const XENO_PLUGIN = "xeno";
 
 export const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 

@@ -194,7 +194,7 @@ export function renderSources(sources: Sources, header = SOURCES_HEADER): string
 export const SOURCES_HEADER = `# Vendored external skills, one mapping per folder under xeno/.
 #   url          clone URL of the upstream repository
 #   path         the skill folder inside it (copied whole)
-#   ref          branch or tag the weekly sync follows (absent: the upstream's default branch)
+#   ref          branch or tag the nightly sync follows (absent: the upstream's default branch)
 #   commit       the upstream commit the copy was taken from; the sync moves it, nobody edits it
 #   license      SPDX id of the upstream license, or "none published"
 #   license_file repository-relative path of the upstream license text, copied in under its basename when the folder carries none

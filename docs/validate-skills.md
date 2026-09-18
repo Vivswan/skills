@@ -45,6 +45,7 @@ Structure mode, in the order it reports:
 - Every folder under the skills directory, listed or not, has a `SKILL.md` with frontmatter.
 - Its `name` equals the folder and is kebab-case, 64 characters max.
 - Its `description` is nonempty, 1024 characters max.
+- Its frontmatter carries no `metadata.internal` key: the skills CLI silently drops such skills at install time, so the key on a published skill hides it from consumers while every gate stays green.
 - A `.mcp.json` in a skill folder, when present, parses as JSON.
 - `marketplace.json`, when present next to the manifest, has a kebab-case `name` and a non-empty `plugins` list.
 - Each marketplace plugin's `source` stays inside the repository.
@@ -80,8 +81,8 @@ The action sets up its own bun from the `.bun-version` next to `action.yml`, so 
 
 ## How this repository runs it on itself
 
-- CI: the `validate-skills-action` job in `.github/workflows/checks.yml` runs the action on this checkout in `structure` mode, inside the all-green gate.
-- Locally, from the repo root:
+- CI: the `validate-skills-action` job in `.github/workflows/checks.yml` runs the composite action on this checkout in `structure` mode, inside the all-green gate. That job exercises the action as repo-platform consumes it, `action.yml` and its own bun pin included.
+- Locally and in the pre-commit hook, `bun run validate` runs the same script with the defaults (`bun run check` includes it):
 
 ```sh
 SKILLS_DIR=skills PLUGIN_MANIFEST=.claude-plugin/plugin.json MODE=structure bun .github/actions/validate-skills/validate_skills.ts
@@ -90,4 +91,4 @@ SKILLS_DIR=skills PLUGIN_MANIFEST=.claude-plugin/plugin.json MODE=structure bun 
 - Discovery, the same command with `MODE=discovery` (needs network).
 - `bun run test` covers the action's unit tests along with the rest of the suite.
 
-This repository's own richer checks (`bun run validate`, `bun run smoke`) stay in `scripts/`; the action is the baseline any repository hosting skills can call.
+The action is the baseline any repository hosting skills can call. Everything specific to this catalog (per-skill README and codex manifest, `template/`, `xeno/`, the marketplace shape, cross-file drift) is `bun run smoke`, [scripts/smoke-test.ts](../scripts/smoke-test.ts).

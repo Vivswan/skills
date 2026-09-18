@@ -205,6 +205,30 @@ describe("validateSkillDir", () => {
       ["skills/blank-skill/SKILL.md: missing frontmatter description"],
     ],
     [
+      "metadata.internal set true: the marker template skills carry",
+      "hidden-skill",
+      "---\nname: hidden-skill\ndescription: d\nmetadata:\n  internal: true\n---\n",
+      [
+        "skills/hidden-skill/SKILL.md: metadata.internal is not allowed on a published skill" +
+          " (the skills CLI silently drops internal skills at install time)",
+      ],
+    ],
+    [
+      "metadata.internal set false: key presence, not truthiness, is what bans it",
+      "hidden-skill",
+      "---\nname: hidden-skill\ndescription: d\nmetadata:\n  internal: false\n---\n",
+      [
+        "skills/hidden-skill/SKILL.md: metadata.internal is not allowed on a published skill" +
+          " (the skills CLI silently drops internal skills at install time)",
+      ],
+    ],
+    [
+      "control: other metadata keys pass",
+      "authored-skill",
+      "---\nname: authored-skill\ndescription: d\nmetadata:\n  author: Example\n---\n",
+      [],
+    ],
+    [
       "name and description over their length limits",
       LONG_NAME,
       `---\nname: ${LONG_NAME}\ndescription: ${"d".repeat(1025)}\n---\n`,
@@ -234,6 +258,14 @@ describe("validateSkillDir", () => {
     expect(errors[0]).toMatch(/\.mcp\.json: invalid JSON/);
     writeFileSync(join(dir, ".mcp.json"), '{"mcpServers": {}}');
     expect(validateSkillDir(dir, "skills/mcp-skill")).toEqual([]);
+  });
+
+  test("rejects a directory named .mcp.json: present means it must read and parse", () => {
+    const dir = skillFixture("mcp-dir-skill", "---\nname: mcp-dir-skill\ndescription: d\n---\n");
+    mkdirSync(join(dir, ".mcp.json"));
+    const errors = validateSkillDir(dir, "skills/mcp-dir-skill");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/^skills\/mcp-dir-skill\/\.mcp\.json: cannot read file/);
   });
 });
 
