@@ -45,7 +45,7 @@ Structure mode, in the order it reports:
 - Every folder under the skills directory, listed or not, has a `SKILL.md` with frontmatter.
 - Its `name` equals the folder and is kebab-case, 64 characters max.
 - Its `description` is nonempty, 1024 characters max.
-- Its frontmatter carries no `metadata.internal` key: the skills CLI silently drops such skills at install time, so the key on a published skill hides it from consumers while every gate stays green.
+- Its frontmatter does not set `metadata.internal` to `true`: the skills CLI silently drops such a skill at install time, so the value on a published skill hides it from consumers while every gate stays green. Any other value publishes.
 - A `.mcp.json` in a skill folder, when present, parses as JSON.
 - `marketplace.json`, when present next to the manifest, has a kebab-case `name` and a non-empty `plugins` list.
 - Each marketplace plugin's `source` stays inside the repository.

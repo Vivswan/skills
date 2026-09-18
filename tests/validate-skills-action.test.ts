@@ -205,22 +205,19 @@ describe("validateSkillDir", () => {
       ["skills/blank-skill/SKILL.md: missing frontmatter description"],
     ],
     [
-      "metadata.internal set true: the marker template skills carry",
+      "metadata.internal true: the marker template skills carry, which the CLI hides",
       "hidden-skill",
       "---\nname: hidden-skill\ndescription: d\nmetadata:\n  internal: true\n---\n",
       [
-        "skills/hidden-skill/SKILL.md: metadata.internal is not allowed on a published skill" +
+        "skills/hidden-skill/SKILL.md: metadata.internal is true on a published skill" +
           " (the skills CLI silently drops internal skills at install time)",
       ],
     ],
     [
-      "metadata.internal set false: key presence, not truthiness, is what bans it",
-      "hidden-skill",
-      "---\nname: hidden-skill\ndescription: d\nmetadata:\n  internal: false\n---\n",
-      [
-        "skills/hidden-skill/SKILL.md: metadata.internal is not allowed on a published skill" +
-          " (the skills CLI silently drops internal skills at install time)",
-      ],
+      "metadata.internal false: the CLI publishes anything but true (skills@1.5.26 tests === true)",
+      "shown-skill",
+      "---\nname: shown-skill\ndescription: d\nmetadata:\n  internal: false\n---\n",
+      [],
     ],
     [
       "control: other metadata keys pass",
