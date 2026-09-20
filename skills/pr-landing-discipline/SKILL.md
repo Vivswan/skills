@@ -26,20 +26,42 @@ These rules apply to any session that carries a change from "opened" to "landed"
 - Flip BACK TO DRAFT the moment new commit-requiring work appears on a ready PR (a fresh valid review comment, a gate finding), before the fix round starts.
 - Draft state tracks pending commits; CONVERGENCE gates the merge offer. A fresh comment needing only a reply does not bounce a ready PR back to draft (its reply-and-resolve lands the same cycle, no commit), but a PR is offered for merge only while the full converged definition below holds.
 
-**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes. READY also requires that nothing the PR publishes carries PII: the title, body, commit messages, diff, and review or issue comments are free of the author's employer name, real GitHub or `gh` account logins, machine names, home paths under a real user, and emails (the `/pr-and-issue-discipline` skill's redaction rule names the substitutes and the contract exception). The check reads all of it from the PR itself, never from local HEAD, and greps for the author's real identifiers as fixed strings, one `-e` per identifier (the five below are placeholders for the employer, login, username, email, and machine name):
+**Converged** means the review has converged as the `/rubber-duck-review` skill defines it (step 7 owns the single definition), plus the PR-specific bar: CI fully green and every review thread resolved (fixed or answered). Fully green counts EVERY check on the PR, required or not, and on every PR in its dependency chain: a residue red from an un-retargeted base disqualifies ready even when the required gate passes. READY also requires that nothing the PR publishes carries PII: the title, body, commit messages, added lines of the diff, and review, issue, and CI comments tell a reader nothing about who the author is, how they work, or how their machine is set up (the `/pr-and-issue-discipline` skill's redaction rule owns the definition, the substitutes, and the contract exception). The grep below catches identifiers and the figures of a replaced real-data fixture; a quoted real configuration, log, or transcript is the review's read, and a blocking finding. The check reads all of it from the PR itself, never from local HEAD, and greps with a needle file of fixed strings:
+
+- the author's real identifiers, one per line, every spelling the author has published under (the six below are placeholders for the name, employer, login, username, email, and machine name)
+- the provenance phrases a real-data fixture carries (`measured from`, `real logs`)
+- when the PR replaces a fixture that was measured from real data: every full-precision ratio and every integer of 4+ digits in the whole OLD file, read from the repository's API at the PR's merge base (the compare endpoint names it, and the contents endpoint serves the file there, so nothing is fetched locally and a retained figure is a needle too), so the old figures cannot ride into the new fixture, the body, or a comment
 
 ```sh
-n=<pr number>; out="$(mktemp)"
-{ gh pr view "$n" --json title,body,commits -q '.title, .body, (.commits[] | .messageHeadline, .messageBody)' &&
-  gh pr diff "$n" &&
+n=<pr number>; out="$(mktemp)"; diff="$(mktemp)"; shas="$(mktemp)"; old="$(mktemp)"; needles="$(mktemp)"
+fixture='<path/to/replaced-fixture.json>'   # only when a real-data fixture is being replaced; with none, drop this line and every line that uses $fixture, $mb, $old, or $head
+printf '%s\n' 'Real Name' 'ExampleCorp' 'real-login' 'realuser' 'real.name@example.net' 'MacBook-Pro' 'measured from' 'real logs' > "$needles"
+head="$(gh pr view "$n" --json headRefOid -q .headRefOid)" &&
+mb="$(gh api "repos/{owner}/{repo}/compare/$(gh pr view "$n" --json baseRefOid -q .baseRefOid)...$head" -q .merge_base_commit.sha)" &&
+gh api -H 'Accept: application/vnd.github.raw+json' "repos/{owner}/{repo}/contents/$fixture?ref=$mb" > "$old" &&
+{ grep -oE '[0-9]+\.[0-9]{3,}|[0-9]{4,}' "$old" >> "$needles" || test $? -eq 1; } &&   # no distinctive figure in the old file adds no needles and is not a stop; exit 2 (a read error) is
+gh api -H 'Accept: application/vnd.github.raw+json' "repos/{owner}/{repo}/contents/$fixture?ref=$head" > "$out" &&
+gh api --paginate "repos/{owner}/{repo}/pulls/$n/commits" -q '.[].sha' > "$shas" &&
+test "$(wc -l < "$shas")" -eq "$(gh api "repos/{owner}/{repo}/pulls/$n" -q .commits)" &&   # the listing stops at 250 commits; a short list is a stop, not a sample
+xargs -I{} gh api -H 'Accept: application/vnd.github.diff' "repos/{owner}/{repo}/commits/{}" < "$shas" > "$diff" &&
+{ gh pr view "$n" --json title,body -q '.title, .body' &&
+  gh api --paginate "repos/{owner}/{repo}/pulls/$n/commits" -q '.[].commit.message' &&
+  sed -n '/^+/p' "$diff" &&
   gh api --paginate "repos/{owner}/{repo}/pulls/$n/reviews" -q '.[].body' &&
   gh api --paginate "repos/{owner}/{repo}/pulls/$n/comments" -q '.[].body' &&
-  gh api --paginate "repos/{owner}/{repo}/issues/$n/comments" -q '.[].body'; } > "$out" &&
-  { grep -n -i -F -e 'ExampleCorp' -e 'real-login' -e 'realuser' -e 'real.name@example.net' -e 'MacBook-Pro' "$out"; echo "grep exit $?"; }
-rm -f "$out"
+  gh api --paginate "repos/{owner}/{repo}/issues/$n/comments" -q '.[].body' &&
+  xargs -I{} gh api --paginate "repos/{owner}/{repo}/commits/{}/comments" -q '.[].body' < "$shas"; } >> "$out" &&
+  { grep -n -i -F -f "$needles" "$out"; echo "grep exit $?"; }
+rm -f "$out" "$diff" "$shas" "$old" "$needles"
 ```
 
-`grep exit 1` is clean. `grep exit 0` lists the hits: a product file name that carries a vendor's word and the repository's own `owner/repo` coordinate in its install command are the permitted matches, and every other hit is a blocking finding. No `grep exit` line means a read failed, and the run says nothing about the PR.
+`grep exit 1` is clean. `grep exit 0` lists the hits, each read before it is called: a product file name that carries a vendor's word and the repository's own `owner/repo` coordinate in its install command are the permitted matches; a 4+ digit needle that coincides with a year, a sha fragment, or a port in an unrelated line is dismissed with that reading named; every other hit is a blocking finding, and a hit on a provenance phrase is a finding against the fixture it describes, whose fix is a hand-written fixture. No `grep exit` line means a read failed somewhere in the chain (a wrong fixture path is a 404, a cut-off read is a nonzero exit, a commit listing shorter than the PR's commit count fails its `test`, and `xargs` exits nonzero when any commit read fails), and the run says nothing about the PR. An old fixture with no figure the fingerprint pattern matches adds no needles; the replacement is then read by eye against the old file, since the grep has nothing distinctive to look for.
+
+What the block reads, and why:
+
+- **Every commit's own added lines**, never only the net diff: a fixture added in one commit and deleted in the next is still published by the first, and a rebase or merge-commit landing keeps both. Added lines only, because the removed lines of a PR that redacts PII carry the PII by definition.
+- **The whole new fixture at the PR head**, not just its changed lines: an old figure kept unchanged in the replacement is exactly the ride-through the fingerprints exist to catch.
+- **Every comment: review, issue, and commit comments, CI comments included.** A CI comment that carries a figure derived from real data is a finding against the check that posted it, not only against the PR.
 
 ## Babysit to Comment Convergence
 

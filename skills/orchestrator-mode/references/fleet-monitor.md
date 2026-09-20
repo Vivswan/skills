@@ -97,6 +97,53 @@ The judgment that stays with the operator:
 - **Every narrowed variant of a working probe is a NEW probe** and needs its own positive control before its empty is trusted; the rule and its worked example live in `/verify-with-controls`.
 - **Resolve spreads and follow moved definitions by searching, never by pinned path.** A path-pinned check counts 0 and passes silently after the definition moves.
 
+## PII on Every HEAD Move
+
+The lead writes the session's needle file once at session start, outside the repository, and the monitor's brief names its path. One fixed string per line: the owner's real identifiers, the provenance phrases a real-data fixture carries (`measured from`, `real logs`), and, when a track replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file (the `/pr-landing-discipline` skill's READY check shows the extraction). The file never enters a worktree or a commit.
+
+On every sweep where a row's `headSha` differs from the previous sweep's (every commit, amend, and rebase), the monitor greps every commit the track added since its branch point: each commit's message and each commit's own added lines, never the net diff, because a fixture added in one commit and deleted in the next is still published by the first.
+
+```bash
+needles=/tmp/fleet-<sessionId>/pii-needles.txt; wt=<worktree>
+out="$(mktemp)"; patches="$(mktemp)"
+test -s "$needles" &&
+  base="$(git -C "$wt" merge-base <base-remote>/<mainline> HEAD)" &&
+  git -C "$wt" log --format=%B "$base..HEAD" > "$out" &&
+  git -C "$wt" log -p --no-color --diff-merges=first-parent --format= "$base..HEAD" > "$patches" &&
+  sed -n '/^+/p' "$patches" >> "$out" &&
+  { grep -n -i -F -f "$needles" "$out"; echo "grep exit $?"; }
+rm -f "$out" "$patches"
+```
+
+- The base is the track's branch point on the session's mainline (the same base-to-HEAD span the sizing rule below uses), pinned by `merge-base` at read time; the sweep row does not carry it.
+- `--no-color` because the `+` filter reads the first byte of each line: under `color.ui=always` an escape code comes first and the filter selects nothing, a silent empty. `--diff-merges=first-parent` makes a merge commit show what it added against its first parent: `git log -p` shows no patch for a merge by default, so a needle typed in while resolving a conflict would otherwise never be read. Content merged in from the mainline shows up too; a hit there is read like any other and named as already-published mainline content when it is.
+- `grep exit 1` is clean for this HEAD; `grep exit 0` is a flag to the lead carrying the hit lines. No `grep exit` line means the needle file is empty or a git read failed, and the reading says nothing: the `&&` chain stops before the grep, so a broken probe cannot print a clean verdict.
+- Only added lines are read: a track that redacts PII carries the PII in its removed lines by definition.
+- The hit is read before it is flagged, like every other count in this file: a 4+ digit needle coinciding with a year or a sha fragment is named as such, and a hit on a provenance phrase is flagged against the fixture it describes.
+- A commit pushed between two sweeps is caught at the next sweep, not before the push; the check that runs before anything merges is the landing gate's. The PR-side text (title, body, comments) is also the landing gate's read; the monitor covers what leaves a worktree as commits.
+
+The landing gate in direct mode runs the same read over the frozen branch, with two additions the monitor does not need: the whole replacement fixture (a retained old figure sits on an unchanged line, which no patch shows) and, for a patch still uncommitted, the index in place of `base..HEAD`, since HEAD has not moved. Each variant is one `&&` chain into the same `$out`; with no replaced fixture, the `show` line becomes `: > "$out"`.
+
+```bash
+fixture=<path of the replaced real-data fixture>
+# committed on the frozen branch
+test -s "$needles" &&
+  git -C "$wt" show "HEAD:$fixture" > "$out" &&
+  base="$(git -C "$wt" merge-base <base-remote>/<mainline> HEAD)" &&
+  git -C "$wt" log --format=%B "$base..HEAD" >> "$out" &&
+  git -C "$wt" log -p --no-color --diff-merges=first-parent --format= "$base..HEAD" > "$patches" &&
+  sed -n '/^+/p' "$patches" >> "$out" &&
+  { grep -n -i -F -f "$needles" "$out"; echo "grep exit $?"; }
+# staged, not yet committed: the index is the frozen content, and the message is the proposed one
+message=<the proposed commit message>
+test -s "$needles" &&
+  git -C "$wt" show ":$fixture" > "$out" &&
+  printf '%s\n' "$message" >> "$out" &&
+  git -C "$wt" diff --cached --no-color > "$patches" &&
+  sed -n '/^+/p' "$patches" >> "$out" &&
+  { grep -n -i -F -f "$needles" "$out"; echo "grep exit $?"; }
+```
+
 ## Standing States: ledger.mts
 
 Per-worker standing state lives in a ledger file the LEAD creates at session start (so it survives agent context loss and monitor handovers), and the monitor checks every would-be flag against it before reporting:
