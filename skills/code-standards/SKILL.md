@@ -52,12 +52,15 @@ A floor every test clears, not a recipe for which tests to write: fuzzing, prope
 - When hand-written cases differ only along one input axis, replace them with one parametrized case list.
 - Prove each guard test: show it failing on the bug it guards, and for that reason. Reintroducing the bug is the standard form; a pre-fix red run is the same control.
 - Red-then-green is for behavior changes, a fix made by deleting code included. A deletion with no behavior of its own (an unused setting, a dead path) proves itself with a census (grep counts before and after) in the PR body, or in the landing report with no PR, never with a test manufactured so that something goes red.
+- Fixtures are hand-authored, never recorded from real data: a file measured or copied from the author's real environment identifies the author with no name in it. A tool that measures real data requires an explicit output path outside the repository and refuses one inside it.
 
 Specimen: an extractor had fifteen tests each asserting one key of the returned dict. Folded into one parametrized test pinning the whole dict per scenario, the file went from 81 test functions to 44 while every one of the seven bugs the suite existed to catch still failed when reintroduced. A test that ignores a column cannot catch a regression in it.
 
 Specimen: builders on a workflows repository shipped shape tests that restated the yaml they had just read (a census that no workflow sets `cancel-in-progress: false`, a pin that a job's `needs` equals the list in the file), eleven PRs of them in one day. Such a test changes in the same commit as the source, so nothing can drift under it: delete it.
 
 Specimen: a test audit found `expect(DEFAULT_HOME).toBe("~/.local/share/app")`. Deleted; its replacement runs the installer with no home override and reads back the file it wrote under that path, because the path is where the value reaches the user's disk.
+
+Specimen: a statistical profile measured from its author's real sessions sat committed as a test fixture with a comment saying so. Replaced by a hand-written fixture; every figure of the old file was grepped out of the replacing PR, and the history was rewritten to drop the original.
 
 Full detail: `references/tests.md`.
 
@@ -129,7 +132,7 @@ Full detail: `references/artifacts.md`.
 
 ### Commit messages carry content only
 
-Commit and PR messages state what changed and why, following the repo's subject conventions. No AI or tool attribution lines and no hard wrapping of the body at 72 columns (a wrapped body renders as ragged mid-sentence breaks in GitHub's soft-wrapping UI).
+Commit and PR messages state what changed and why, following the repo's subject conventions. No AI or tool attribution lines, no hard wrapping of the body at 72 columns (a wrapped body renders as ragged mid-sentence breaks in GitHub's soft-wrapping UI), and no PII (nothing that tells a reader who the author is, how they work, or how their machine is set up; the `/pr-and-issue-discipline` skill's rule).
 
 Specimen of the one sanctioned attribution, human community credit in repos that take contributions: `fix: ... (#NN, thanks @user)` in the subject, `Co-authored-by:` trailers for humans whose code landed. Credit for people, never for tools.
 
@@ -154,6 +157,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - Tests that assert only a shape, a type, or that something exists; hand-written test functions that differ only along one input axis and should be one parametrized case list; a guard test never seen failing on the bug it guards.
 - A new test that restates the source it reads (a workflow test pinning `needs` to the list in the yaml, a constant pinned to its own literal), or whose name or first line does not say what would drift silently without it.
 - A test manufactured for a deletion with no behavior of its own in place of a census in the PR body or landing report.
+- A fixture recorded from real data, a provenance comment saying so, or a tool that measures real data with a default output path or one inside the repository.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
@@ -169,7 +173,7 @@ Triage findings against the standards above; each criterion maps to one.
 ## References
 
 - `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort
-- `references/tests.md`: the minimum standard for tests, what counts as weak, the drift question every test answers, proving a guard test with a negative control, the census rule for deletions
+- `references/tests.md`: the minimum standard for tests, what counts as weak, the drift question every test answers, proving a guard test with a negative control, the census rule for deletions, hand-authored fixtures and the output-path rule for tools that measure real data
 - `references/comments.md`: what a good comment carries, tell then show, the two-question test, the specimens, the TODO ban, planning references
 - `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging
 - `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions

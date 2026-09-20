@@ -21,7 +21,12 @@ Every brief includes:
 13. **Prompt and scratch files are written with the Write tool, one plain command per step.** In Claude Code, a builder inside an agent worktree has a sandbox that refuses Bash heredocs and compound commands whose text contains the word `git` (even inside a quoted prompt) as too complex to verify they stay inside the worktree; five builders in one wave each rediscovered it. So the brief says: write prompt and scratch files with the Write tool, and restore a mutated source with `cp` from a `/tmp` backup rather than a git command chained into the mutation.
 14. **Every git command in the brief names the worktree: `git -C <absolute worktree path> ...`**, never `cd <worktree> && git ...` (the compound form trips the same sandbox rule as item 13; `git -C` is one command). A shell's cwd is not a fact about the worktree: a teammate's cwd reset to the main checkout between turns, and its `git reset --soft` moved local main for a minute (restored, nothing pushed). And the builder's FIRST command is the preflight `git -C <worktree> rev-parse --show-toplevel`, which must print back the ABSOLUTE worktree path the brief declares (never the main checkout's path, and never a mere "somewhere under the harness's default worktree directory" test: Claude Code's `.claude/worktrees/` is one harness's default, not a fact about the worktree) before any install or edit: a worktree-isolated spawn once did not materialize, and the builder was editing the main checkout.
 15. **The test rule: red-then-green for BEHAVIOR changes only.** A deletion with no behavior of its own (an unused setting, a dead path) is proved by a census, grep counts before and after, in the PR body or in the landing report with no PR, never by a test manufactured so that something goes red; every new test says in its name or first line what would drift silently without it, and one that restates the source it reads is deleted, not committed. Where the `/code-standards` skill is installed, its `references/tests.md` owns the rule; briefs demanding red-then-green for every change produced eleven PRs of yaml-restating workflow tests in one day.
-16. **The PII rule, in every builder brief, and applied by the lead to the brief itself.** Nothing the builder publishes (commits, PR title and body, code, test fixtures, docs, review replies) carries PII: the owner's employer name, real GitHub or `gh` account logins, real usernames, hostnames and machine names, home paths under a real user, emails. One substitute per kind: `octocat`, `work-bot`, or `example-user` for a login or username; `example.com` for an employer name, domain, or hostname; `example-user@example.com` for a whole email; `/home/user` or `~` for a home path; `/repo/...` for the checkout path. The lead redacts owner output before pasting it into a brief, because a builder treats brief text as safe to copy: one builder lifted the owner's `gh auth status` login `<login>_<employer>` from terminal output in its brief into test fixtures and a PR body (replaced with `work-bot`). A product file name that contains a vendor's word and a repository's own `owner/repo` coordinate in its install command are contracts, not PII, and stay. The rule governs what the builder publishes, not the brief's plumbing: item 14's absolute worktree path stays in the brief as is, and the builder keeps it out of commits, PR text, and fixtures.
+16. **The PII rule, in every builder brief, and applied by the lead to the brief itself.** Nothing the builder publishes (commits, PR title and body, code, test fixtures, docs, review replies, CI comments) tells a reader who the owner is, how they work, or how their machine is set up. The `/pr-and-issue-discipline` skill owns the rule and the substitutes; a builder treats brief text as safe to copy, so the lead redacts before pasting.
+    - **Identity:** one substitute per kind, `octocat`, `work-bot`, or `example-user` for a login or username; `example.com` for an employer, domain, or hostname; `example-user@example.com` for a whole email; `/home/user` or `~` for a home path; `/repo/...` for the checkout path. Production: one builder lifted the owner's real account login from terminal output in its brief into test fixtures and a PR body (replaced with `work-bot`).
+    - **Anything measured or copied from the owner's real environment** (figures and profiles computed from real logs, real configuration, transcripts, inventories of what the owner uses) identifies the owner with no name in it. The lead never pastes such a value into a brief: a figure about usage or a worked example the brief needs comes from a synthetic scratch corpus the lead wrote by hand, and the brief says so (the deletion census of item 15 counts occurrences in the repository and stays real).
+    - **Fixtures are hand-authored, never recorded from real data**, and a tool the builder writes that measures real data requires an explicit output path outside the repository and refuses one inside it. Production: a statistical profile measured from the owner's real sessions sat committed as a test fixture until a later sweep found it; replacing it took a hand-written fixture, a fingerprint grep of every old figure over the PR, and a history rewrite.
+    - A product file name that contains a vendor's word and a repository's own `owner/repo` coordinate in its install command are contracts, not PII, and stay. The rule governs what the builder publishes, not the brief's plumbing: item 14's absolute worktree path stays in the brief as is, and the builder keeps it out of commits, PR text, and fixtures.
+17. **The PII step, in every gate brief (the landing-gate review and any reviewer the lead spawns).** The gate greps the frozen content's added lines, the commit messages, the PR title and body, and the review replies with the session's needle file (the owner's real identifiers plus, when the change replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file), per the `/pr-landing-discipline` skill's READY check; the lead writes the needle file once at session start, outside the repository (`/tmp/fleet-<sessionId>/pii-needles.txt`), and the brief names its path. A provenance comment naming real data on a fixture is a finding whose fix is a hand-written fixture. The reviewer prompt in the `/rubber-duck-review` skill's `references/reviewer-prompt.md` carries the reading side of the same rule, which catches what a grep cannot (a quoted real configuration or log).
 
 ## The Stop-and-Wait Ban
 
@@ -90,45 +95,11 @@ Builders may never leave TODO or FIXME markers. The work either happens in the s
 ## Example Brief
 
 ```text
-Task: Add rate limiting to the API gateway (worktree branch: wt/rate-limit,
-  worktree /repo/.claude/worktrees/wt-rate-limit).
+Task: Add rate limiting to the API gateway (worktree branch: wt/rate-limit, worktree /repo/.claude/worktrees/wt-rate-limit).
 Done means: middleware added, unit tests pass, gateway docs section updated.
-Territory: src/gateway/** and tests/gateway/** only. Do NOT touch
-  src/core/** or shared configs; report needed changes there in your
-  signal instead of making them.
-Environment: FIRST run `git -C /repo/.claude/worktrees/wt-rate-limit
-  rev-parse --show-toplevel` and require that exact path back (a spawn's
-  worktree can fail to materialize). Then `bun install --frozen-lockfile
-  --cwd /repo/.claude/worktrees/wt-rate-limit` (a fresh worktree has no
-  node_modules; the pre-commit hook refuses without them). Every git
-  command names the worktree the same way, `git -C <that path> ...`,
-  never `cd && git`.
-Gates: run `bun run check` FOREGROUND until green, then run your own
-  review loop and fix findings before signaling. Red-then-green for
-  behavior changes only; a deletion with no behavior of its own is proved
-  by a census in the PR body (the landing report with no PR), not a test. Every new test names what would drift silently without it;
-  one that restates the source it reads is deleted. In Claude Code spawn
-  reviewers UNNAMED (named spawns detach there); write scratch/prompt
-  files under your own `mktemp -d` in /tmp with your Write tool, never
-  here, never a fixed name like /tmp/commit-msg.txt, and never via a
-  heredoc (the sandbox refuses heredocs and compound commands that
-  mention git).
-Handoff: commit finished work to wt/rate-limit (do not push). Your final
-  act is one SendMessage to the lead (in Claude Code a named agent's final
-  text reaches nobody) with the branch name, commit subjects, any
-  escalations, and one
-  line per lead message you received. Re-read your FULL inbox first: a
-  signal that omits a pending directive is not a final signal.
-Rules: no TODO/FIXME markers; do the work or escalate it. Comments only
-  for what code cannot show. No PII in anything you publish (employer
-  name, real account logins, real usernames, hostnames, home paths,
-  emails): one substitute per kind, `work-bot` or `example-user` for
-  a login or username, `example.com` for an employer or hostname,
-  `example-user@example.com` for a whole email, `/home/user` for a
-  home path, `/repo/...` for the checkout path. Directives and your own steps must be safe
-  to arrive or run twice or late: check current state first, report an
-  already-applied one as a no-op, and report one superseded by a newer
-  directive as stale instead of applying it. Never stop to "wait" for
-  background children: after fanning out, your next action on wake is
-  reading their output. The only permitted stop is your final signal.
+Territory: src/gateway/** and tests/gateway/** only. Do NOT touch src/core/** or shared configs; report needed changes there in your signal instead of making them.
+Environment: FIRST run `git -C /repo/.claude/worktrees/wt-rate-limit rev-parse --show-toplevel` and require that exact path back (a spawn's worktree can fail to materialize). Then `bun install --frozen-lockfile --cwd /repo/.claude/worktrees/wt-rate-limit` (a fresh worktree has no node_modules; the pre-commit hook refuses without them). Every git command names the worktree the same way, `git -C <that path> ...`, never `cd && git`.
+Gates: run `bun run check` FOREGROUND until green, then run your own review loop and fix findings before signaling. Red-then-green for behavior changes only; a deletion with no behavior of its own is proved by a census in the PR body (the landing report with no PR), not a test. Every new test names what would drift silently without it; one that restates the source it reads is deleted. In Claude Code spawn reviewers UNNAMED (named spawns detach there); write scratch/prompt files under your own `mktemp -d` in /tmp with your Write tool, never here, never a fixed name like /tmp/commit-msg.txt, and never via a heredoc (the sandbox refuses heredocs and compound commands that mention git).
+Handoff: commit finished work to wt/rate-limit (do not push). Your final act is one SendMessage to the lead (in Claude Code a named agent's final text reaches nobody) with the branch name, commit subjects, any escalations, and one line per lead message you received. Re-read your FULL inbox first: a signal that omits a pending directive is not a final signal.
+Rules: no TODO/FIXME markers; do the work or escalate it. Comments only for what code cannot show. No PII in anything you publish: nothing that tells a reader who the owner is, how they work, or how their machine is set up. One substitute per kind for identifiers (`work-bot` or `example-user` for a login or username, `example.com` for an employer or hostname, `example-user@example.com` for a whole email, `/home/user` for a home path, `/repo/...` for the checkout path); no value measured or copied from a real environment (every fixture is hand-written, and a tool that measures real data takes an explicit output path outside the repo and refuses one inside it). Directives and your own steps must be safe to arrive or run twice or late: check current state first, report an already-applied one as a no-op, and report one superseded by a newer directive as stale instead of applying it. Never stop to "wait" for background children: after fanning out, your next action on wake is reading their output. The only permitted stop is your final signal.
 ```

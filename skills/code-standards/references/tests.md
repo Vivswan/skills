@@ -83,6 +83,24 @@ Red-then-green is for behavior changes: a fix or a feature has a behavior to see
 
 The before count is the control: a nonzero count at the same path proves the grep reaches the files, so the zero after is evidence and not a mistyped path (the `/verify-with-controls` rule). A test written so the deletion has something to turn red restates the source and is not written. A test deleted under the drift question records "restated the source" as its reason; that satisfies the dropped-coverage rule under Boundaries.
 
+## Fixtures are hand-authored
+
+A fixture is written by hand, never recorded from real data: not from logs, sessions, settings, or accounts. A file measured or copied from the author's real environment identifies the author with no name in it, by showing how they work or how their machine is set up. It is PII under the `/pr-and-issue-discipline` skill's rule, and once committed only a history rewrite removes it.
+
+- **Write the values.** Pick round or obviously invented figures that exercise the code paths, and say in the fixture's name or first line that the data is synthetic.
+- **No provenance comment that names real data.** A comment saying the values were measured from the author's real usage is a finding whose fix is a hand-written fixture, not a deleted comment.
+- **A count about the author's own data comes from a synthetic scratch corpus.** A PR body or brief that needs a figure about usage (how much, how often, what share) generates it from data the author wrote, and says so. The deletion census above is different: it counts occurrences in the repository and stays real.
+- **A tool that measures real data writes outside the repository.** It takes an explicit output path, has no default, and refuses a path inside the repository it runs from:
+
+```ts
+const out = resolve(args.out ?? fail("--out <path outside the repository> is required"));
+const rel = relative(repoRoot, out);
+const outside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);   // a bare startsWith("..") would pass "/repo/..profile.json"
+if (!outside) fail(`refusing to write measured data inside the repository: ${out}`);
+```
+
+Specimen: a statistical profile measured from the author's real sessions was committed as a test fixture and found by a later sweep. The replacement was a hand-written fixture; the landing gate grepped the PR's added lines, body, and comments for every full-precision ratio and 4+ digit integer of the old file; and the repository's history was rewritten to drop the original.
+
 ## Prove the test
 
 This proves a test that exists for a behavior; it does not ask for a test on every change (Deletions, above).
