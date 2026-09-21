@@ -156,7 +156,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - Do not blindly accept every finding. If you disagree, explain why, and watch for fixes that would conflict with the design (e.g. a suggested guard that breaks a legitimate path).
 - An "add a test" finding that names no fact the test would pin beyond what the source says is rejected with that reason, whichever reviewer raised it; a deletion with no behavior of its own is proved by the census in the PR body or landing report, not a test.
 - If a finding conflicts with an explicit user decision, follow the user and record that the issue was intentionally skipped.
-- Re-validate after each batch of fixes before re-reviewing: typecheck plus the tests the change touches, never the full suite the PR's CI runs anyway. A long run carries an explicit timeout, and a process is stopped by the PID you spawned, never by pattern. A personal private repository meters CI minutes, so there the full check runs locally once before the push; not sure which kind it is, ask the user, or the lead when one briefed you.
+- Re-validate after each batch of fixes before re-reviewing: typecheck plus the tests the change and its proof touch, never the full suite CI runs anyway. A long run carries an explicit timeout, and a process is stopped by the PID you spawned, never by pattern. A personal private repository meters CI minutes, so there the full check runs locally once before the push; not sure which kind it is, ask the user, or the lead when one briefed you.
 
 ### 7. Re-review until it converges
 
