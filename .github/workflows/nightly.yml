@@ -5,8 +5,10 @@
 #
 # The one nightly check here is the xeno refresh: it rewrites the vendored
 # copies under xeno/ from their upstreams and opens (or updates) one pull
-# request when a pin moved. The copies and xeno/sources.yml are written only
-# by scripts/sync-xeno.mts; a hand edit there fails the sync's own --check.
+# request when a folder changed at its ref's head; an upstream commit that
+# leaves the folder as it is moves no pin. The copies and xeno/sources.yml
+# are written only by scripts/sync-xeno.mts; a hand edit there fails the
+# sync's own --check.
 #
 # The push and the PR use GITHUB_TOKEN, and events raised by that token start
 # no workflow runs, so the PR arrives without CI. The gate below runs the

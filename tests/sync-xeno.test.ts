@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -95,6 +96,80 @@ describe("update", () => {
     expect(third.reports).toEqual([
       { name: "alpha", status: "current", detail: `at ${head.slice(0, 7)}` },
     ]);
+  });
+
+  test("an upstream commit that leaves the folder byte-identical moves no pin and opens no diff; check agrees", () => {
+    // PR 163 bumped two pins with an empty folder diff: the upstreams had committed elsewhere in their repositories.
+    const up = upstream({
+      "plugins/skills/alpha/SKILL.md": SKILL,
+      "README.md": "one\n",
+    });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const sources = {
+      alpha: source(up.url, "0".repeat(40), { frontmatter: { "disable-model-invocation": null } }),
+    };
+    const synced = update(sources, xeno).sources;
+    // Outside the folder, and inside it on a key the override erases anyway: the copy comes out the same bytes.
+    const elsewhere = commitUpstream(up.dir, { "README.md": "two\n" }, "readme");
+    const erased = commitUpstream(
+      up.dir,
+      { "plugins/skills/alpha/SKILL.md": SKILL.replace("invocation: true", "invocation: false") },
+      "toggle the key the copy drops",
+    );
+    expect(erased).not.toBe(elsewhere);
+    const detail = `at ${up.head.slice(0, 7)}; ${erased.slice(0, 7)} on the default branch leaves the folder as it is`;
+    const still = update(synced, xeno);
+    expect(still).toEqual({
+      sources: synced,
+      reports: [{ name: "alpha", status: "current", detail }],
+    });
+    expect(check(synced, xeno)).toEqual([{ name: "alpha", status: "current", detail }]);
+
+    const body = commitUpstream(
+      up.dir,
+      { "plugins/skills/alpha/SKILL.md": `${SKILL}v2\n` },
+      "body",
+    );
+    expect(check(synced, xeno)[0]?.status).toBe("outdated");
+    const moved = update(synced, xeno);
+    expect(moved.sources.alpha?.commit).toBe(body);
+    expect(moved.reports[0]).toEqual({
+      name: "alpha",
+      status: "updated",
+      detail: `${up.head.slice(0, 7)} -> ${body.slice(0, 7)} on the default branch`,
+    });
+  });
+
+  test("a deleted copy is restored without moving a pin that the ref's head leaves unchanged", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, "README.md": "one\n" });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update({ alpha: source(up.url, "0".repeat(40)) }, xeno).sources;
+    commitUpstream(up.dir, { "README.md": "two\n" }, "readme");
+    rmSync(join(xeno, "alpha"), { recursive: true });
+    const restored = update(synced, xeno);
+    expect(restored).toEqual({
+      sources: synced,
+      reports: [
+        { name: "alpha", status: "updated", detail: `at ${up.head.slice(0, 7)}; copy rewritten` },
+      ],
+    });
+    expect(readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8")).toBe(SKILL);
+    expect(check(synced, xeno)[0]?.status).toBe("current");
+  });
+
+  test("a registry-owned file that differs between pin and head still moves the pin when the copy already matches head", () => {
+    // The pin is judged pin against head, never copy against head: a LICENSE typed into the copy to match
+    // upstream (the hand-edit guard exempts it) would otherwise leave a pin that --check calls modified.
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL, LICENSE: "old\n" });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const sources = { alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) };
+    const synced = update(sources, xeno).sources;
+    const head = commitUpstream(up.dir, { LICENSE: "new\n" }, "license");
+    writeFileSync(join(xeno, "alpha", "LICENSE"), "new\n");
+    const moved = update(synced, xeno);
+    expect(moved.sources.alpha?.commit).toBe(head);
+    expect(moved.reports[0]?.status).toBe("updated");
+    expect(check(moved.sources, xeno)[0]?.status).toBe("current");
   });
 
   test("a frontmatter override removes or sets only the named keys and touches no other file", () => {
@@ -379,6 +454,39 @@ describe("license_file", () => {
     expect(existsSync(join(xeno, "alpha", "LICENSE"))).toBe(true);
   });
 
+  test("a license_file declared after upstream added it in a commit that left the folder alone syncs and moves the pin there", () => {
+    // The held-back pin predates the LICENSE; requiring it at the pin would refuse a registry change the README tells the owner to make.
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update({ alpha: source(up.url, "0".repeat(40)) }, xeno).sources;
+    const licensed = commitUpstream(up.dir, { LICENSE: "MIT License\n" }, "add a license");
+    expect(update(synced, xeno).sources.alpha?.commit).toBe(up.head);
+    const declared = { alpha: { ...(synced.alpha as Source), licenseFile: "LICENSE" } };
+    expect(check(declared, xeno)[0]?.status).toBe("outdated");
+    const result = update(declared, xeno);
+    expect(result.sources.alpha?.commit).toBe(licensed);
+    expect(readFileSync(join(xeno, "alpha", "LICENSE"), "utf8")).toBe("MIT License\n");
+    expect(check(result.sources, xeno)[0]?.status).toBe("current");
+  });
+
+  test("a directory named like the license_file at the pin is not the license; the file upstream later adds is", () => {
+    // Its descendants are neither read as the license nor held to the plain-file rule: a symlink there is upstream's business.
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
+    mkdirSync(join(up.dir, "LICENSE"));
+    symlinkSync("../plugins/skills/alpha/SKILL.md", join(up.dir, "LICENSE", "notice.txt"));
+    git(up.dir, "add", "-A");
+    git(up.dir, "commit", "-q", "-m", "license directory");
+    const xeno = temp.dir("sync-xeno-copy-");
+    const synced = update({ alpha: source(up.url, "0".repeat(40)) }, xeno).sources;
+    git(up.dir, "rm", "-q", "-r", "LICENSE");
+    const asFile = commitUpstream(up.dir, { LICENSE: "MIT\n" }, "license as a file");
+    const declared = { alpha: { ...(synced.alpha as Source), licenseFile: "LICENSE" } };
+    expect(check(declared, xeno)[0]?.status).toBe("outdated");
+    const result = update(declared, xeno);
+    expect(result.sources.alpha?.commit).toBe(asFile);
+    expect(readFileSync(join(xeno, "alpha", "LICENSE"), "utf8")).toBe("MIT\n");
+  });
+
   test("a license basename that matches a directory in the folder is a collision too", () => {
     const up = upstream({
       "plugins/skills/alpha/SKILL.md": SKILL,
@@ -464,5 +572,10 @@ describe("license_file", () => {
     expect(() =>
       update({ alpha: source(up.url, "0".repeat(40), { licenseFile: "LICENSE" }) }, xeno),
     ).toThrow(/already carries LICENSE; drop license_file/);
+    // Declared against a synced copy whose pin is the head: --check hits the same error the sync would, never "current".
+    const synced = update({ alpha: source(up.url, "0".repeat(40)) }, xeno).sources;
+    const declared = { alpha: { ...(synced.alpha as Source), licenseFile: "NOTICE" } };
+    expect(() => check(declared, xeno)).toThrow(/license_file NOTICE does not exist/);
+    expect(() => update(declared, xeno)).toThrow(/license_file NOTICE does not exist/);
   });
 });

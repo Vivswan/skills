@@ -2,8 +2,11 @@
 // Xeno skills are vendored copies: xeno/<name>/ is the whole
 // folder of an upstream repository at the commit xeno/sources.yml
 // pins. This script is the only writer of those folders.
-//   sync-xeno.mts            refresh every copy to its ref's head and move the pins
-//   sync-xeno.mts --check    exit 1 when a pin is behind its ref or a copy differs from its pin
+//   sync-xeno.mts            refresh every copy to its ref's head and move the pins of the folders that changed
+//   sync-xeno.mts --check    exit 1 when the folder at a ref's head differs from its copy, or a copy differs from its pin
+// An upstream commit that leaves the folder byte-identical (a change elsewhere in that repository)
+// moves nothing: the pin moves only when the vendored files differ between it and the ref's head,
+// so a pin move is always an upstream diff to read.
 // A source may declare frontmatter overrides (a key set or removed in the
 // copy's SKILL.md) and a license_file copied in from the upstream root; the
 // copy is then upstream plus exactly those, and the check compares against
@@ -270,10 +273,16 @@ export interface Snapshot {
   readonly files: Files;
 }
 
-/** The upstream folder at one commit, through a throwaway depth-1 fetch of that sha. */
+/**
+ * The upstream folder at one commit, through a throwaway depth-1 fetch of that sha.
+ * A pin may predate its license file (declared later, or added upstream in a commit that left the
+ * folder alone), so the pinned snapshot takes the file "if-present": its absence there is a
+ * difference the head resolves, never an error. The head itself always requires it.
+ */
 export function fetchSnapshot(
   source: Pick<Source, "url" | "path" | "licenseFile">,
   commit: string,
+  license: "required" | "if-present" = "required",
 ): Snapshot {
   const work = mkdtempSync(join(tmpdir(), "sync-xeno-"));
   try {
@@ -291,6 +300,7 @@ export function fetchSnapshot(
     const listing = git(["ls-tree", "-r", "-z", "FETCH_HEAD", "--", ...pathspecs], work);
     const licenseName = source.licenseFile ? basename(source.licenseFile) : undefined;
     if (
+      license === "required" &&
       source.licenseFile &&
       !listing.split("\0").some((row) => row.endsWith(`\t${source.licenseFile}`))
     ) {
@@ -307,6 +317,9 @@ export function fetchSnapshot(
     for (const row of rows) {
       // "<mode> <type> <sha>\t<path>"
       const [meta, path] = row.split("\t", 2) as [string, string];
+      const inFolder = path.startsWith(`${source.path}/`);
+      // The license pathspec also lists the descendants of a directory of that name; only the file itself is the license.
+      if (!inFolder && path !== source.licenseFile) continue;
       const mode = meta.split(" ")[0];
       if (mode !== "100644" && mode !== "100755") {
         throw new Error(
@@ -319,7 +332,6 @@ export function fetchSnapshot(
         maxBuffer: BLOB_LIMIT,
       });
       if (blob.status !== 0) throw new Error(`git show ${path}: ${blob.stderr.toString().trim()}`);
-      const inFolder = path.startsWith(`${source.path}/`);
       const name = inFolder ? relative(source.path, path) : (licenseName as string);
       if (
         !inFolder &&
@@ -490,25 +502,32 @@ export function check(sources: Sources, externalDir = XENO_DIR): Report[] {
   assertPlainFolder(externalDir, "the xeno folder");
   return Object.entries(sources).map(([name, source]) => {
     assertPlainFolder(join(externalDir, name), "the copy root");
-    const pinned = fetchSnapshot(source, source.commit);
-    const drift = differences(
-      localSnapshot(join(externalDir, name)),
-      applyOverrides(pinned.files, source.frontmatter),
+    const head = resolveRef(source.url, source.ref);
+    // A pin that is the head is the head: a license_file missing there is the error the sync would hit.
+    const pinned = applyOverrides(
+      fetchSnapshot(source, source.commit, head === source.commit ? "required" : "if-present")
+        .files,
+      source.frontmatter,
     );
+    const drift = differences(localSnapshot(join(externalDir, name)), pinned);
     if (drift.length > 0)
       return {
         name,
         status: "modified",
         detail: `differs from ${short(source.commit)}: ${drift.join(", ")}`,
       };
-    const head = resolveRef(source.url, source.ref);
-    if (head !== source.commit)
+    if (
+      head !== source.commit &&
+      differences(pinned, applyOverrides(fetchSnapshot(source, head).files, source.frontmatter))
+        .length > 0
+    ) {
       return {
         name,
         status: "outdated",
         detail: `${short(source.commit)} -> ${short(head)} on ${source.ref ?? "the default branch"}`,
       };
-    return { name, status: "current", detail: `at ${short(source.commit)}` };
+    }
+    return { name, status: "current", detail: currentDetail(source, head) };
   });
 }
 
@@ -524,9 +543,17 @@ export function update(
   const staged = Object.entries(sources).map(([name, source]) => {
     const dir = join(externalDir, name);
     assertPlainFolder(dir, "the copy root");
-    if (existsSync(dir) && !PLACEHOLDER.test(source.commit)) {
+    // A new entry (placeholder pin) has no snapshot to hold the copy against; it is taken whole.
+    // The pin is judged against the head whether or not the folder is present, so restoring a
+    // deleted copy moves it only when the folder itself changed.
+    const pinned = PLACEHOLDER.test(source.commit)
+      ? undefined
+      : applyOverrides(
+          fetchSnapshot(source, source.commit, "if-present").files,
+          source.frontmatter,
+        );
+    if (pinned && existsSync(dir)) {
       const local = localSnapshot(dir);
-      const pinned = applyOverrides(fetchSnapshot(source, source.commit).files, source.frontmatter);
       // sources.yml owns SKILL.md's frontmatter, so a changed override is not a hand edit; the body is.
       // sources.yml owns the frontmatter and the license file it names; a difference there is a registry change, not a hand edit.
       // The registry owns exactly the current license_file's copy; a renamed or dropped one leaves
@@ -547,23 +574,26 @@ export function update(
     }
     const head = fetchSnapshot(source, resolveRef(source.url, source.ref));
     const files = applyOverrides(head.files, source.frontmatter);
-    const changed =
-      differences(localSnapshot(dir), files).length > 0 || head.commit !== source.commit;
-    return { name, source, dir, head, files, changed };
+    // The pin follows the folder, judged pin against head the way --check judges it, so the two never
+    // disagree; the copy is rewritten whenever it differs from head, which re-applies a changed
+    // override or license file without a pin move.
+    const pinMoves = pinned === undefined || differences(pinned, files).length > 0;
+    const rewrite = pinMoves || differences(localSnapshot(dir), files).length > 0;
+    return { name, source, dir, head, files, pinMoves, rewrite };
   });
   const next: Record<string, Source> = {};
   const reports: Report[] = [];
-  for (const { name, source, dir, head, files, changed } of staged) {
-    if (changed) replaceFolder(dir, files);
-    next[name] = { ...source, commit: head.commit };
+  for (const { name, source, dir, head, files, pinMoves, rewrite } of staged) {
+    if (rewrite) replaceFolder(dir, files);
+    next[name] = pinMoves ? { ...source, commit: head.commit } : source;
+    const at = short(source.commit);
+    const ref = source.ref ?? "the default branch";
     reports.push(
-      changed
-        ? {
-            name,
-            status: "updated",
-            detail: `${short(source.commit)} -> ${short(head.commit)} on ${source.ref ?? "the default branch"}`,
-          }
-        : { name, status: "current", detail: `at ${short(source.commit)}` },
+      pinMoves
+        ? { name, status: "updated", detail: `${at} -> ${short(head.commit)} on ${ref}` }
+        : rewrite
+          ? { name, status: "updated", detail: `at ${at}; copy rewritten` }
+          : { name, status: "current", detail: currentDetail(source, head.commit) },
     );
   }
   return { sources: next, reports };
@@ -573,10 +603,17 @@ function short(sha: string): string {
   return sha.slice(0, 7);
 }
 
+/** A current copy whose ref has moved on says so, so the PR body and the log show the head that was looked at. */
+function currentDetail(source: Source, head: string): string {
+  return head === source.commit
+    ? `at ${short(source.commit)}`
+    : `at ${short(source.commit)}; ${short(head)} on ${source.ref ?? "the default branch"} leaves the folder as it is`;
+}
+
 const USAGE = [
   "usage: sync-xeno.mts [--check] [--report <file>]",
-  "  (default)  refresh every xeno/<name>/ to its ref's head and move the pin in sources.yml; a copy hand-edited outside its frontmatter and license file stops the run",
-  "  --check    fetch nothing into the tree; exit 1 when a pin is behind its ref or a copy differs from its pin",
+  "  (default)  refresh every xeno/<name>/ whose folder changed at its ref's head and move its pin in sources.yml; a copy hand-edited outside its frontmatter and license file stops the run",
+  "  --check    fetch nothing into the tree; exit 1 when the folder at a ref's head differs from its copy, or a copy differs from its pin",
   "  --report   also write the per-skill lines to <file>, one markdown bullet each",
   "exit 0: every copy current (or refreshed); 1: --check found drift; 2: usage, an unreadable sources.yml, a hand-edited copy, or a failed fetch",
 ].join("\n");
