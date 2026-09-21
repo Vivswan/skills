@@ -315,8 +315,10 @@ export function fetchSnapshot(
         (a, b) => Number(b.includes(`\t${source.path}/`)) - Number(a.includes(`\t${source.path}/`)),
       );
     for (const row of rows) {
-      // "<mode> <type> <sha>\t<path>"
-      const [meta, path] = row.split("\t", 2) as [string, string];
+      // "<mode> <type> <sha>\t<path>"; only the first tab separates, a path keeps any of its own
+      const tab = row.indexOf("\t");
+      const meta = row.slice(0, tab);
+      const path = row.slice(tab + 1);
       const inFolder = path.startsWith(`${source.path}/`);
       // The license pathspec also lists the descendants of a directory of that name; only the file itself is the license.
       if (!inFolder && path !== source.licenseFile) continue;
