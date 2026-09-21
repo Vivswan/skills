@@ -145,5 +145,10 @@ rulesets:
         - actor_id: 5
           actor_type: RepositoryRole
           bypass_mode: always
+environments:
+  - name: github-pages
+    wait_timer: 0
+    prevent_self_review: false
+    reviewers: []
 pages:
   build_type: workflow
