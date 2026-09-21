@@ -50,7 +50,7 @@ A floor every test clears, not a recipe for which tests to write: fuzzing, prope
 - A test of a single constant, or of a variable that is itself the source of its value (a default, a key name, an argv literal, a path), restates the source and grows with it. Pin the value where it leaves the program (the bytes written to a file, the line printed, the request sent), and only when that boundary is an external contract.
 - Delete tests that only assert a shape, a type, or that something exists. If that fact matters, assert it inside a test that also checks the value.
 - When hand-written cases differ only along one input axis, replace them with one parametrized case list.
-- Prove each guard test: show it failing on the bug it guards, and for that reason. Reintroducing the bug is the standard form; a pre-fix red run is the same control.
+- Prove each guard test: show it failing on the bug it guards, and for that reason. Reintroducing the bug is the standard form; a pre-fix red run is the same control. Run that test file alone, not the suite.
 - Red-then-green is for behavior changes, a fix made by deleting code included. A deletion with no behavior of its own (an unused setting, a dead path) proves itself with a census (grep counts before and after) in the PR body, or in the landing report with no PR, never with a test manufactured so that something goes red.
 - Fixtures are hand-authored, never recorded from real data: a file measured or copied from the author's real environment identifies the author with no name in it. A tool that measures real data requires an explicit output path outside the repository and refuses one inside it.
 
