@@ -49,6 +49,7 @@ Use this skill when someone asks for:
   - Demonstrable defects: a correctness finding earns work when it names a concrete input or state and the wrong output, crash, or data loss it produces in the change under review. A maintainability finding earns work when it points at something concrete in this change, per the next bullet.
   - Naming or design choices that are already awkward in this change: a name that misleads about what the code does today, or duplication and structure introduced here
   - Workarounds propped up by long justification comments: if it takes a paragraph-long comment to argue the workaround is OK, the code is wrong. Flag both the comment and the code for fixing.
+  - Hand-rolled code whose whole job a good library already does: a finding that names the library and what it covers (the `/code-standards` skill's rule). A large library or an unclear fit is a question for the user, listed as such, not a finding to build.
   - The standing test question: for each NEW test in the change, the fact it pins that the source does not already say. The reviewer never asks for a test without naming that fact.
     - A test that restates the source it reads is a finding whose fix is deletion: a workflow test asserting `needs` equals the list in the yaml, a constant pinned to its own literal.
     - The template carries the wording; the `/code-standards` skill's `references/tests.md` owns the rule, its three valid answers, and where a constant's value is pinned instead.
