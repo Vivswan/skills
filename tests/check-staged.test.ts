@@ -43,6 +43,11 @@ describe("selectTests", () => {
     ],
     ["a staged test runs itself", ["tests/doc-drift.test.ts"], ["tests/doc-drift.test.ts"]],
     [
+      "a deleted script, absent from the map, still selects the test that names it",
+      ["scripts/gone.mts", "skills/watch-ci-after-push/scripts/watch-ci.sh"],
+      ["tests/watch-ci-script.test.ts"],
+    ],
+    [
       "a SKILL.md selects the doc pin only",
       ["skills/unslop/SKILL.md"],
       ["tests/doc-drift.test.ts"],

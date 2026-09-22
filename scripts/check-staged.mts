@@ -2,7 +2,8 @@
 // The targeted gate the pre-commit hook runs: the fast static checks always, then only the test
 // files a staged file can reach (by import, or by name in the test's text). The full suite is CI's (checks.yml runs `bun run check`
 // on every push and PR), so a commit here stays seconds long.
-//   check-staged.mts               staged paths read from the index
+//   check-staged.mts               staged paths read from the index, deletions included (a deleted
+//                                  script's test still runs, and fails, which is the point)
 //   check-staged.mts <paths...>    the hook passes them, read before it scrubs GIT_INDEX_FILE
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -98,7 +99,7 @@ function readSources(): Map<string, string> {
 
 function stagedFromIndex(): string[] {
   const proc = Bun.spawnSync(
-    ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
+    ["git", "diff", "--cached", "--name-only", "--diff-filter=ACDMR", "-z"],
     { cwd: ROOT, stdout: "pipe", stderr: "inherit" },
   );
   if (proc.exitCode !== 0) {

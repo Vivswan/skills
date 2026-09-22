@@ -42,7 +42,7 @@ if (!entry(join(root, "node_modules"))?.isDirectory()) {
 // The staged list is read BEFORE the scrub below: `git commit <pathspec>` and
 // `git commit -a` stage into a temporary index that only GIT_INDEX_FILE names.
 const staged = Bun.spawnSync(
-  ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
+  ["git", "diff", "--cached", "--name-only", "--diff-filter=ACDMR", "-z"],
   { cwd: root, stdout: "pipe", stderr: "inherit" },
 );
 if (staged.exitCode !== 0) {
