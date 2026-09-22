@@ -49,7 +49,7 @@ Use this skill when someone asks for:
   - Demonstrable defects: a correctness finding earns work when it names a concrete input or state and the wrong output, crash, or data loss it produces in the change under review. A maintainability finding earns work when it points at something concrete in this change, per the next bullet.
   - Naming or design choices that are already awkward in this change: a name that misleads about what the code does today, or duplication and structure introduced here
   - Workarounds propped up by long justification comments: if it takes a paragraph-long comment to argue the workaround is OK, the code is wrong. Flag both the comment and the code for fixing.
-  - Hand-rolled code whose whole job a good library already does: a finding that names the library and what it covers (the `/code-standards` skill's rule). A large library or an unclear fit is a question for the user, listed as such, not a finding to build.
+  - Hand-rolled code whose whole job a good library already does: a finding that names the library and what it covers (the `/code-standards` skill's rule). A large library or an unclear fit is a `non_blocking` entry whose claim begins `Ask the owner:`; the driver puts it to the user and builds nothing until they answer.
   - The standing test question: for each NEW test in the change, the fact it pins that the source does not already say. The reviewer never asks for a test without naming that fact.
     - A test that restates the source it reads is a finding whose fix is deletion: a workflow test asserting `needs` equals the list in the yaml, a constant pinned to its own literal.
     - The template carries the wording; the `/code-standards` skill's `references/tests.md` owns the rule, its three valid answers, and where a constant's value is pinned instead.
@@ -152,6 +152,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - The stop sign is the cascade: when each review round finds one more hypothetical bypass of the last hardening, the target is widening. Keep the first round's minimal form and record the rest under `Recorded, not built`. A demonstrable defect found in a later round is still work under the first bullet.
   - Items under `Recorded, not built` are not work: leave them in the report and open no task or PR for them, unless the user asks. The other exception is a repository with more than 100 GitHub stars: surface those items to the user with the concrete risk, and build only the ones they confirm.
 - Fix valid non-blocking findings as well as the blocking ones, including fixes that improve maintainability (clearer naming, removed duplication, simpler structure).
+  - A `non_blocking` entry whose claim begins `Ask the owner:` is a question, not a finding: put it to the user with the library named, and build nothing on it until they answer.
   - Skip a valid finding only when the fix would conflict with the design, reach outside the change under review, or go against an explicit user decision; record why.
   - A finding you judge incorrect or inapplicable is not skipped but rejected, per the next bullet.
 - Do not blindly accept every finding. If you disagree, explain why, and watch for fixes that would conflict with the design (e.g. a suggested guard that breaks a legitimate path).
