@@ -1,6 +1,6 @@
 # Design Standards: Full Detail
 
-The deep version of three standards: fix the class, general-purpose over special-case, maintainability over effort. They share one root: a design should absorb change instead of being rewritten by it.
+The deep version of four standards: fix the class, general-purpose over special-case, maintainability over effort, prefer a library over hand-rolling. They share one root: a design should absorb change instead of being rewritten by it.
 
 ## Fix the Class, Not the Instance
 
@@ -64,3 +64,22 @@ How to apply:
 - A big refactor is always better than a fix done the wrong way; a wrong-shaped fix compounds into tech debt that a later, larger cleanup must pay for.
 - Use assertions to pin invariants the type system cannot carry: asserting an invariant at the boundary removes the downstream edge-case handling for states that can no longer occur.
 - When an action is hard to undo (deletions, published or external actions, architecture lock-ins), stop and consult the user first, even mid-task.
+
+## Prefer a Library Over Hand-Rolling
+
+Never hand-roll what a good library already does. The owner's words: "do not hand-roll something a good library already does; if the library is large or the fit is unclear, ask; otherwise prefer the library, because the hand-rolled version has to be maintained over the long run."
+
+Specimen: an audit of one repository's CI scripts found five whose whole job existing tooling already did. Each had grown its own parsing, caching, and error handling that someone else maintains for everyone.
+
+- Two fetched API schemas, one kept an events enum, one generated action documentation: a published package covers each.
+- One checked for drift: a build followed by `git diff --exit-code` covers it.
+
+A good library is maintained (a release or a merged fix within the year), licensed for the use, and small enough that its code can be read when it misbehaves.
+
+How to apply:
+
+- Before writing a parser, a fetcher, a schema, a format converter, a retry loop, or a CLI framework, look for the package that does it; the search takes minutes and the maintenance it saves lasts years.
+- A large library, or a fit that is unclear (it does most of the job, or it does the job a different way), is a question to the owner before the work, with the library named.
+- The one exception: a library that needs a runtime or API the repository has dropped is not a fit, however good. Specimen: a dependency graph tool that requires the TypeScript compiler API is not a fit for a repository pinned to a TypeScript that no longer ships one; the hand-rolled parser walk stays, and the reason is recorded where the walk lives.
+- At review, a reviewer treats hand-rolled code whose whole job a good library does as a finding that names the library; a finding that names no library is a style opinion.
+

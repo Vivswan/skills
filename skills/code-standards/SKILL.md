@@ -42,6 +42,14 @@ Specimen: a documented workaround hybrid was reworked outright rather than kept.
 
 Full detail: `references/design.md`.
 
+### Prefer a library over hand-rolling
+
+Never hand-roll what a good library already does: the hand-rolled version is maintained for as long as the code lives, the library by its authors. A large library, or a fit that is unclear, is a question to the owner before the work; otherwise the library wins.
+
+Specimen: an audit of one repository's CI scripts found five whose whole job existing tooling already did. A published package covered four (two schema fetchers, an events enum, generated action docs); a build followed by `git diff --exit-code` covered the drift check.
+
+Full detail, including what makes a library good and the one exception (a library that needs a runtime or API the repository has dropped): `references/design.md`.
+
 ### Minimum standard for tests
 
 A floor every test clears, not a recipe for which tests to write: fuzzing, property-based, integration, and other richer tests are welcome, and each of them still meets this bar. A test asserts a whole outcome, not one field of it. Agents drift toward many small weak tests; the fix is tests that each pin a whole outcome, which leaves fewer of them as a side effect, not a goal.
@@ -160,6 +168,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - A fixture recorded from real data, a provenance comment saying so, or a tool that measures real data with a default output path or one inside the repository.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
+- Hand-rolled code whose whole job a good library already does; the finding names the library and what it covers.
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
 - Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), several ideas in one sentence, prose packed to fit a cap.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
