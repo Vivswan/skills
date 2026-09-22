@@ -39,6 +39,18 @@ if (!entry(join(root, "node_modules"))?.isDirectory()) {
   process.exit(1);
 }
 
+// The staged list is read BEFORE the scrub below: `git commit <pathspec>` and
+// `git commit -a` stage into a temporary index that only GIT_INDEX_FILE names.
+const staged = Bun.spawnSync(
+  ["git", "diff", "--cached", "--name-only", "--diff-filter=ACDMR", "-z"],
+  { cwd: root, stdout: "pipe", stderr: "inherit" },
+);
+if (staged.exitCode !== 0) {
+  console.error("pre-commit: could not read the staged files.");
+  process.exit(1);
+}
+const stagedPaths = staged.stdout.toString().split("\0").filter(Boolean);
+
 // Incident class: leaked git hook environment. git exports GIT_DIR,
 // GIT_INDEX_FILE, and other GIT_* variables to hooks; everything spawned
 // below inherits them, and an inherited GIT_DIR redirects any fixture git
@@ -50,8 +62,8 @@ for (const [key, value] of Object.entries(process.env)) {
   if (value !== undefined && !key.toUpperCase().startsWith("GIT_")) env[key] = value;
 }
 
-// The full gates CI also runs; catch failures before they leave the machine.
-const check = Bun.spawnSync(["bun", "run", "check"], {
+// The targeted gate (scripts/check-staged.mts); the full `bun run check` is CI's.
+const check = Bun.spawnSync(["bun", "run", "check:staged", ...stagedPaths], {
   cwd: root,
   env,
   stdout: "inherit",
