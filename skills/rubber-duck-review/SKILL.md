@@ -36,8 +36,8 @@ Use this skill when someone asks for:
 ### 2. Large change sets: fan out one review per section
 
 - A single broad review of a big diff is shallower than several focused ones. Split the change into logical **sections** (each new command/module, each script, the CI/release config, a parity pair) and run one review per section in parallel, each scoped to its files.
-- **Don't over-parallelize.** Many simultaneous `codex exec` processes can saturate the backend and hang. If reviews stall, run them in smaller batches (2-3 at a time).
-- **Detect & recover from hangs.** With JSON streaming, compare each review's event count over ~30-60s. If one is flat while its siblings climb, it's hung: stop it (the task runner's stop, or `pkill -f "<unique substring of that prompt>"`) and relaunch just that one.
+- **Run at most about three at a time.** Many simultaneous `codex exec` processes can saturate the backend and hang; a stalled batch gets smaller, never larger.
+- **Detect & recover from hangs.** With JSON streaming, compare each review's event count over ~30-60s. If one is flat while its siblings climb, it's hung: stop it (the task runner's stop, or `kill <the pid the launch printed>`; never a kill by pattern) and relaunch just that one.
 
 ### 3. Craft the prompt
 
@@ -156,7 +156,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - Do not blindly accept every finding. If you disagree, explain why, and watch for fixes that would conflict with the design (e.g. a suggested guard that breaks a legitimate path).
 - An "add a test" finding that names no fact the test would pin beyond what the source says is rejected with that reason, whichever reviewer raised it; a deletion with no behavior of its own is proved by the census in the PR body or landing report, not a test.
 - If a finding conflicts with an explicit user decision, follow the user and record that the issue was intentionally skipped.
-- Re-validate after each batch of fixes (typecheck / lint / tests) before re-reviewing.
+- Re-validate after each batch of fixes before re-reviewing: typecheck plus the tests the change and its proof touch, never the full suite CI runs anyway. A long run carries an explicit timeout, and a process is stopped by the PID you spawned, never by pattern. A personal private repository meters CI minutes, so there the full check runs locally once before the push; not sure which kind it is, ask the user, or the lead when one briefed you.
 
 ### 7. Re-review until it converges
 

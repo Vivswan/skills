@@ -106,6 +106,7 @@ Production shape of one round:
 
 - After every push, a background CI watcher; where installed, the `/watch-ci-after-push` skill defines it. A MERGE is watched the same way, on the mainline tip's SHA (fetch the mainline from the remote the PR merged into and watch `FETCH_HEAD`): after `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
 - Before anything lands, an independent review that can block the landing, scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.
+- Local runs before a push are targeted: typecheck plus the tests the change and its proof touch, with an explicit timeout on a long run, and a process stopped by the PID you spawned, never by pattern. The full suite and the lint-plus-build sweep are the CI watcher's to judge, never run locally when CI runs them anyway. A personal private repository meters CI minutes, so there the full check runs locally before the push instead; not sure which kind it is, ask the user, or the lead when one briefed you.
 
 ## Line Accounting Before Landing
 
