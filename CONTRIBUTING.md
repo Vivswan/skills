@@ -6,7 +6,7 @@ Thanks for contributing. Every change lands through a pull request; this page co
 
 - Open a PR as a draft and flip it ready when it converges. PRs are squash-merged, so the PR title becomes the commit subject.
 - PR titles and commit subjects are [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), for example `feat: add X`; the `pr-title` check validates the title.
-- Run `bun run check` before pushing. CI runs the same command and gates on the `all-green` check.
+- The pre-commit hook runs `bun run check:staged`: the fast static checks plus the tests a staged file reaches, by import or by name. CI runs the full `bun run check` and gates on the `all-green` check; do not run it locally.
 - Plain ASCII punctuation only: no curly quotes, em-dashes, or invisible unicode.
 - By opening a pull request, or offering code in an issue or review for inclusion, you agree to the Contributions section of [LICENSE.md](LICENSE.md).
 

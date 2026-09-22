@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 
 // Incident-class tests for the pre-commit hook: git exports GIT_DIR and
-// GIT_INDEX_FILE to hooks, and everything `bun run check` spawns inherits
+// GIT_INDEX_FILE to hooks, and everything `bun run check:staged` spawns inherits
 // them, so an unscrubbed fixture git flow in a test would mutate the real
 // repository (fixture commits landed on real branches; core.bare/identity
 // overwrites corrupted the shared .git/config). The hook must scrub every
@@ -34,7 +34,7 @@ const HOOK = join(ROOT, ".githooks", "pre-commit.mts");
 
 // The fake `bun` handles the two call shapes the hook chain produces: the
 // dispatcher's `bun .githooks/pre-commit.mts` is forwarded to the real bun
-// so the hook logic really runs, and the hook's `bun run check` is
+// so the hook logic really runs, and the hook's `bun run check:staged` is
 // intercepted - it dumps the GIT_* environment and argv it received, then
 // plays a scenario: an unscrubbed fixture git flow (init + commit that would
 // land on the victim if GIT_DIR leaked through), a check failure, or death
@@ -158,8 +158,8 @@ describe("pre-commit dispatcher", () => {
     });
     expect(r.code).toBe(0);
     // The dispatcher reached the checkout's hook logic, and the hook invoked
-    // the real check script.
-    expect(readFileSync(argvDump, "utf-8").trim()).toBe("run check");
+    // the targeted gate; the leaked index is clean, so no staged path rides along.
+    expect(readFileSync(argvDump, "utf-8").trim()).toBe("run check:staged");
     // The scrub is total: the check pipeline saw no GIT_* variable at all.
     expect(readFileSync(envDump, "utf-8")).toBe("");
     // The unscrubbed fixture flow stayed in its fixture...
@@ -202,9 +202,13 @@ describe("pre-commit hook logic", () => {
 
   test("a linked-worktree root (.git is a file) is accepted", () => {
     // In a linked worktree .git is a FILE pointing at the common dir; the
-    // root check must accept it, not demand a directory.
-    const dir = mkdtempSync(join(binDir, "worktree-root-"));
-    writeFileSync(join(dir, ".git"), "gitdir: /somewhere/.git/worktrees/x\n");
+    // root check must accept it, not demand a directory, and the staged
+    // list is read through it.
+    const checkout = makeCheckout();
+    const dir = join(binDir, `worktree-root-${scenario}`);
+    git("-C", checkout, "worktree", "add", "-q", "-b", "wt", dir);
+    mkdirSync(join(dir, ".githooks"));
+    copyFileSync(HOOK, join(dir, ".githooks", "pre-commit.mts"));
     mkdirSync(join(dir, "node_modules"));
     const r = runHook([process.execPath, HOOK], dir, {});
     expect(r.code).toBe(0);

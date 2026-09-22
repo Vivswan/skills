@@ -154,13 +154,15 @@ Compatibility rules for every skill in this repo:
 
 ## Validation
 
-Run the repo checks before publishing changes:
+The pre-commit hook runs the targeted checks on every commit; run them by hand with:
 
 ```bash
-bun run check
+bun run check:staged
 ```
 
-That runs the TypeScript typecheck, the Biome lint, the JSON schema lint, the unit tests, structural validation ([the validate-skills action](./docs/validate-skills.md)), and cross-file consistency checks ([`scripts/smoke-test.ts`](./scripts/smoke-test.ts)). CI runs the same script through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery-test.ts`](./scripts/cli-discovery-test.ts)).
+That runs the TypeScript typecheck, the Biome lint, structural validation ([the validate-skills action](./docs/validate-skills.md)), cross-file consistency checks ([`scripts/smoke-test.ts`](./scripts/smoke-test.ts)), and the unit tests a staged file reaches, by import or by name in the test's text.
+
+CI runs the full `bun run check` (all of that plus the JSON schema lint and the whole test suite) through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery-test.ts`](./scripts/cli-discovery-test.ts)).
 
 ## License
 

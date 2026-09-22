@@ -16,6 +16,7 @@
     "lint:json": "uvx --no-config check-jsonschema --schemafile https://json.schemastore.org/package.json package.json && uvx --no-config check-jsonschema --builtin-schema vendor.github-issue-forms .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml && uvx --no-config check-jsonschema --schemafile https://json.schemastore.org/github-issue-config.json .github/ISSUE_TEMPLATE/config.yml",
     "check:fix": "biome check --write .",
     "check": "bun run typecheck && bun run lint && bun run lint:json && bun run test && bun run validate && bun run smoke",
+    "check:staged": "bun scripts/check-staged.mts",
     "sync-xeno": "bun scripts/sync-xeno.mts"
   },
   "devDependencies": {
