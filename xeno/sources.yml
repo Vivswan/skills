@@ -10,7 +10,7 @@
 unslop:
   url: https://github.com/cursor/plugins.git
   path: pstack/skills/unslop
-  commit: 032be146865d973682535de75f2287da438550bf
+  commit: ecc249f1e306fc64ddf83c7bed16cacf7c2239db
   license: none published
   frontmatter:
     disable-model-invocation: null
