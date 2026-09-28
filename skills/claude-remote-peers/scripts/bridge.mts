@@ -105,6 +105,8 @@ for path in (os.path.join(sessions, n) for n in names):
         with open(path) as f:
             record = json.load(f)
         pid, sock = record["pid"], record["messagingSocketPath"]
+        if not (isinstance(pid, int) and isinstance(sock, str)):
+            raise ValueError("pid or messagingSocketPath has the wrong type")
     except Exception as e:
         print(f"unreadable registry record {path}: {e}", file=sys.stderr)
         continue
