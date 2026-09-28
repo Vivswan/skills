@@ -1,6 +1,6 @@
 # Claude Remote Peers
 
-`/claude-remote-peers` fires when a Claude Code session must reach a Claude Code session on another machine. The bridge script forwards each session's inbox socket to the other host over ssh, at the same path, and prints the `uds:` address to pass to `SendMessage`; the worked example is in [`SKILL.md`](./SKILL.md#the-specimen).
+`/claude-remote-peers` is invoked by you when a Claude Code session must reach a Claude Code session on another machine; the first message to each remote peer is confirmed with you once. The bridge script forwards each session's inbox socket to the other host over ssh, at the same path, and prints the `uds:` address to pass to `SendMessage`; the worked example is in [`SKILL.md`](./SKILL.md#the-specimen).
 
 Replies arrive as pushed `<cross-session-message>` turns, the same as from a session on the local machine. Nothing is copied between the machines, nothing polls, and nothing stays running on the remote beyond the ssh session holding the forwards.
 

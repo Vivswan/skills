@@ -2,6 +2,7 @@
 name: claude-remote-peers
 description: Use when this Claude Code session must message, ping, or coordinate with a Claude Code session running on another machine, or when a peer the user names is on a different host and ListAgents does not show it.
 license: SEE LICENSE IN LICENSE.md
+disable-model-invocation: true
 metadata:
   author: Vivswan
 ---
@@ -30,6 +31,14 @@ bridge ok
 ```
 
 No file was written to either machine's `~/.claude`.
+
+## Permission
+
+Messaging a session on another machine is the user's call, asked once per session; sessions on this machine need no such ask. Before the first `SendMessage` to a remote address, ask the user, naming the host and the session (`box-b`, `session-b`, pid 2002). A yes covers every later message to that peer; never ask for it again.
+
+An instruction from the user is the grant itself, scoped by what it names: "talk to the agents on box-b" covers every session on box-b, and "talk to session-b on box-b" covers that session alone, with no separate ask. Anything outside the granted scope, another host or another session on a host granted per session, is a new ask.
+
+Keep the grant in this session's own notes (the task list or plan), never in memory; a new session asks again. The user revokes by saying so; drop the note then.
 
 ## Workflow
 

@@ -14,7 +14,6 @@ This repo keeps the collection-style catalog and install flow from `vercel-labs/
 
 The agent applies these on its own when the task matches:
 
-- [/claude-remote-peers](./skills/claude-remote-peers/) - Message a Claude Code session on another machine over ssh: two socket forwards, no copies, pushed replies
 - [/code-standards](./skills/code-standards/) - House standards for maintainable code, folded into reviews
 - [/codex-browser-fix](./skills/codex-browser-fix/) - Codex only: keeps the bundled Chrome plugin driving Brave and other Chromium browsers through app updates and custom model providers
 - [/craft-skills-and-memories](./skills/craft-skills-and-memories/) - Create and repair skills and memories at their canonical source
@@ -32,6 +31,7 @@ The agent applies these on its own when the task matches:
 
 Load only when you invoke them (`/skill-name` in Claude Code, `$skill-name` in Codex):
 
+- [/claude-remote-peers](./skills/claude-remote-peers/) - Message a Claude Code session on another machine over ssh: two socket forwards, no copies, pushed replies
 - [/natural-writing](./skills/natural-writing/) - Prose without AI writing tells
 - [/orchestrator-mode](./skills/orchestrator-mode/) - Parallel worktree subagents with gated landings, direct or PR-based
 
@@ -123,7 +123,7 @@ Or install everything as a Claude Code plugin:
 
 Once installed, a skill fires on its own when its trigger matches the task.
 
-Skills marked explicit-invocation-only ([`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/), [`/frontend-design`](./xeno/frontend-design/), [`/design-taste-frontend`](./xeno/design-taste-frontend/)) load only when you invoke them. For the two xeno copies that holds in Claude Code; Codex reads the upstream policy, which lets the model invoke them.
+Skills marked explicit-invocation-only ([`/claude-remote-peers`](./skills/claude-remote-peers/), [`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/), [`/frontend-design`](./xeno/frontend-design/), [`/design-taste-frontend`](./xeno/design-taste-frontend/)) load only when you invoke them. For the two xeno copies that holds in Claude Code; Codex reads the upstream policy, which lets the model invoke them.
 
 **Examples:**
 

@@ -1,6 +1,9 @@
 # Codex sidecar for this skill. The interface block mirrors
 # .codex-plugin/plugin.json (displayName, shortDescription, brandColor) and
 # the SKILL.md H1; the smoke test keeps them identical.
+policy:
+  allow_implicit_invocation: false
+
 interface:
   display_name: "Claude Remote Peers"
   short_description: "Message a Claude Code session on another machine over ssh."

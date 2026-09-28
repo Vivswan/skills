@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Claude Remote Peers",
     "shortDescription": "Message a Claude Code session on another machine over ssh.",
-    "longDescription": "Fires when a Claude Code session must reach a Claude Code session on another host. The bridge script forwards each session's inbox socket to the other machine at the same path over ssh, prints the uds: address to pass to SendMessage, and stays up until stopped. Replies arrive as pushed cross-session messages, the same as from a session on the local machine. Nothing is copied between the machines and nothing polls.",
+    "longDescription": "Invoked by the user when a Claude Code session must reach a Claude Code session on another host; the first message to each remote peer is confirmed with the user once. The bridge script forwards each session's inbox socket to the other machine at the same path over ssh and prints the uds: address for SendMessage. Replies arrive as pushed cross-session messages; nothing is copied and nothing polls.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
     "capabilities": ["Read", "Execute"],
