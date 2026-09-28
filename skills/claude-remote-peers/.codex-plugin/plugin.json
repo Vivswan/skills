@@ -1,0 +1,36 @@
+{
+  "name": "claude-remote-peers",
+  "description": "Message a Claude Code session on another machine with the same push delivery two sessions get on one machine: two ssh socket forwards, no files copied, no polling.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/claude-remote-peers",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "claude-code",
+    "cross-session",
+    "ssh",
+    "multi-machine",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Claude Remote Peers",
+    "shortDescription": "Message a Claude Code session on another machine over ssh.",
+    "longDescription": "Fires when a Claude Code session must reach a Claude Code session on another host. The bridge script forwards each session's inbox socket to the other machine at the same path over ssh, prints the uds: address to pass to SendMessage, and stays up until stopped. Replies arrive as pushed cross-session messages, the same as from a session on the local machine. Nothing is copied between the machines and nothing polls.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/claude-remote-peers",
+    "defaultPrompt": [
+      "Message the Claude Code session running on my other dev box.",
+      "Bridge this session to the Claude on host box-b so they can ping each other.",
+      "ListAgents does not show the session on the other machine; connect them."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

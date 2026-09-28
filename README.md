@@ -14,6 +14,7 @@ This repo keeps the collection-style catalog and install flow from `vercel-labs/
 
 The agent applies these on its own when the task matches:
 
+- [/claude-remote-peers](./skills/claude-remote-peers/) - Message a Claude Code session on another machine over ssh: two socket forwards, no copies, pushed replies
 - [/code-standards](./skills/code-standards/) - House standards for maintainable code, folded into reviews
 - [/codex-browser-fix](./skills/codex-browser-fix/) - Codex only: keeps the bundled Chrome plugin driving Brave and other Chromium browsers through app updates and custom model providers
 - [/craft-skills-and-memories](./skills/craft-skills-and-memories/) - Create and repair skills and memories at their canonical source
@@ -47,6 +48,7 @@ How the skills reference each other (an arrow means "mentions and hands off to, 
 ```mermaid
 graph LR
   cbf["/codex-browser-fix"]
+  crp["/claude-remote-peers"]
   dd["/docs-discipline"] --> rdr
   dd --> pid
   dd --> cs
