@@ -31,6 +31,7 @@ The agent applies these on its own when the task matches:
 
 Load only when you invoke them (`/skill-name` in Claude Code, `$skill-name` in Codex):
 
+- [/claude-remote-peers](./skills/claude-remote-peers/) - Message a Claude Code session on another machine over ssh: two socket forwards, no copies, pushed replies
 - [/natural-writing](./skills/natural-writing/) - Prose without AI writing tells
 - [/orchestrator-mode](./skills/orchestrator-mode/) - Parallel worktree subagents with gated landings, direct or PR-based
 
@@ -47,6 +48,7 @@ How the skills reference each other (an arrow means "mentions and hands off to, 
 ```mermaid
 graph LR
   cbf["/codex-browser-fix"]
+  crp["/claude-remote-peers"]
   dd["/docs-discipline"] --> rdr
   dd --> pid
   dd --> cs
@@ -121,7 +123,7 @@ Or install everything as a Claude Code plugin:
 
 Once installed, a skill fires on its own when its trigger matches the task.
 
-Skills marked explicit-invocation-only ([`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/), [`/frontend-design`](./xeno/frontend-design/), [`/design-taste-frontend`](./xeno/design-taste-frontend/)) load only when you invoke them. For the two xeno copies that holds in Claude Code; Codex reads the upstream policy, which lets the model invoke them.
+Skills marked explicit-invocation-only ([`/claude-remote-peers`](./skills/claude-remote-peers/), [`/natural-writing`](./skills/natural-writing/), [`/orchestrator-mode`](./skills/orchestrator-mode/), [`/frontend-design`](./xeno/frontend-design/), [`/design-taste-frontend`](./xeno/design-taste-frontend/)) load only when you invoke them. For the two xeno copies that holds in Claude Code; Codex reads the upstream policy, which lets the model invoke them.
 
 **Examples:**
 
