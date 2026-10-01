@@ -1,6 +1,8 @@
 # Python Strategies
 
-Python applies the same architecture, with a caveat: its static guarantees are only as strong as the type checker the project runs. Check `pyproject.toml` or CI for mypy or pyright before leaning on type-level enforcement. Without a checker, prefer runtime-enforced constructions (frozen dataclasses, validating factories) that fail fast.
+Python applies the same architecture, with a caveat. Its static guarantees are only as strong as the type checker the project runs.
+
+Check `pyproject.toml` or CI for mypy or pyright before leaning on type-level enforcement. Without a checker, prefer runtime-enforced constructions (frozen dataclasses, validating factories) that fail fast.
 
 Prefer:
 
@@ -73,7 +75,7 @@ def parse_user_id(value: str) -> UserId:
     return UserId(value)
 ```
 
-Internal functions accept `UserId`; only the parser accepts `str`. The checker then flags any code path that tries to pass an unvalidated string inward.
+Internal functions accept `UserId`. Only the parser accepts `str`. The checker then flags any code path that tries to pass an unvalidated string inward.
 
 ## Exhaustive state handling
 
@@ -95,6 +97,6 @@ Adding a new state class now produces a type error at every match that does not 
 
 ## What to avoid
 
-- Do not imitate Rust typestate mechanically when ordinary classes or unions are clearer. Python has no move semantics, so a "consumed" old state object still exists and a determined caller can reuse it.
-- Frozen dataclasses, factories, and checker-enforced signatures are the idiomatic strength here.
-- Avoid `# type: ignore` and `cast()` as pressure valves. Each one reopens the hole the refactor was meant to close.
+- **Do not imitate Rust typestate mechanically** when ordinary classes or unions are clearer. Python has no move semantics, so a "consumed" old state object still exists and a determined caller can reuse it.
+- **Frozen dataclasses, factories, and checker-enforced signatures** are the idiomatic strength here.
+- **Avoid `# type: ignore` and `cast()`** as pressure valves. Each one reopens the hole the refactor was meant to close.

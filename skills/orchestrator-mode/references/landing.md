@@ -7,28 +7,36 @@ A landing is two independent choices:
 
 The two sections below are the gate's two values. The base choice exists in direct mode too: dependent tracks still build branch-on-branch, they just land serially instead of via stacked PRs.
 
-Who merges, the standing merge exceptions, draft discipline, line accounting, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-landing-discipline` skill; show-the-change PR bodies in the `/pr-and-issue-discipline` skill. Review-before-landing and the CI watcher after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode; their definitions and defaults live there, not here.
+Who merges, the standing merge exceptions, draft discipline, line accounting, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-landing-discipline` skill. Show-the-change PR bodies are the `/pr-and-issue-discipline` skill's.
+
+Review-before-landing and the CI watcher after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode. Their definitions and defaults live there, not here.
 
 ## Direct Commits to the Mainline
 
-1. One pending change on the mainline at a time, in plan order. Wait for the previous landing's CI verdict before pushing the next: when the mainline's runs share a concurrency group key, GitHub keeps at most one running plus one pending run per key, so a third push cancels the pending run and that SHA never gets a verdict (two landings in one production session needed reruns for exactly this), and the one-watcher rule in orchestrator-mode's Land section (6) keeps the API budget intact.
-2. Take the builder's branch (named in its completion signal) and prepare it per the repo's conventions: rebase onto the mainline, cherry-pick its commits, or export and apply its diff as a patch.
-   - A DEPENDENT track (based on a sibling's branch) needs one extra recorded fact, MAINTAINED rather than set-once: the dependency's tip sha. Pin it when the upper track branches, and re-record it after every restack of the upper branch. The boundary tracks the branch's ACTUAL current base, so it updates at exactly the moments the base changes; a stale recording replays later or rewritten dependency commits.
+1. **One pending change on the mainline at a time, in plan order.** Wait for the previous landing's CI verdict before pushing the next. When the mainline's runs share a concurrency group key, GitHub keeps at most one running plus one pending run per key, so a third push cancels the pending run and that SHA never gets a verdict (two landings in one production session needed reruns for exactly this).
+
+   The one-watcher rule in orchestrator-mode's Land section (6) keeps the API budget intact.
+2. **Take the builder's branch** (named in its completion signal) and prepare it per the repo's conventions: rebase onto the mainline, cherry-pick its commits, or export and apply its diff as a patch.
+   - A DEPENDENT track (based on a sibling's branch) needs one extra recorded fact, MAINTAINED rather than set-once: the dependency's tip sha. Pin it when the upper track branches, and re-record it after every restack of the upper branch. The boundary tracks the branch's ACTUAL current base, so it updates at exactly the moments the base changes, and a stale recording replays later or rewritten dependency commits.
    - At landing, transplant only the track-specific delta: `git rebase --onto <mainline> <recorded-dep-tip> <upper-branch>`. A dependency landed via squash or cherry-pick leaves its original commits outside the mainline's ancestry, so a whole-branch rebase would replay the dependency's changes.
    - The boundary must be RECORDED, not inferred: squash rewrites history (the same lesson as the PR gate's restack-before-retarget rule below).
-3. Re-run the gates on the result and run the review pass. Then land per the prep mode: a rebase or cherry-pick already leaves committed work, so fast-forward the mainline onto it and push; an applied patch is uncommitted, so commit it first, then push. Either way, what gets pushed is the MAINLINE, never the builder's branch.
-4. Keep the mainline tree frozen while a review round is in flight, and serialize resource-exclusive validation (fixed ports, shared stacks).
-5. Reverting a red landing is itself a landing, subject to the repo's commit-subject convention: `git revert` keeps the default subject `Revert "<subject>"`, which fails a Conventional Commits check, so revert with `git revert --no-edit <sha>` and then `git commit --amend -m "revert: <original subject>" -m "This reverts commit <sha>."` before pushing (`git revert -m` is the merge-parent selector, not a message flag). Production: the revert of a red landing on main failed CI's commit-subject validator on the very next run and needed a lease-pinned amend of the mainline tip to repair.
+3. **Re-run the gates on the result and run the review pass.** Then land per the prep mode: a rebase or cherry-pick already leaves committed work, so fast-forward the mainline onto it and push. An applied patch is uncommitted, so commit it first, then push. Either way, what gets pushed is the MAINLINE, never the builder's branch.
+4. **Keep the mainline tree frozen while a review round is in flight**, and serialize resource-exclusive validation (fixed ports, shared stacks).
+5. **Reverting a red landing is itself a landing**, subject to the repo's commit-subject convention. `git revert` keeps the default subject `Revert "<subject>"`, which fails a Conventional Commits check. So revert with `git revert --no-edit <sha>` and then `git commit --amend -m "revert: <original subject>" -m "This reverts commit <sha>."` before pushing (`git revert -m` is the merge-parent selector, not a message flag).
+
+   Production: the revert of a red landing on main failed CI's commit-subject validator on the very next run and needed a lease-pinned amend of the mainline tip to repair.
 
 ## PRs
 
 The shared mechanics, for every PR in the session regardless of its base:
 
-1. Each track's branch becomes its own PR, opened as a DRAFT (title and description per the repo's conventions); it stays draft through its babysit loop, with the flip rules in both directions per `/pr-landing-discipline`. The spawn brief says who does what: either the builder pushes its branch and opens the draft PR, reporting the URL in its signal, or the builder stays no-push and the lead pushes from the worktree and opens it. Creating and iterating many PRs in parallel is fine: the file whitelists that keep worktrees disjoint keep the PRs disjoint too.
-2. What stays serial is merging into the shared base: merge one at a time in plan order (or hand the ordering to the repo's merge queue), and rebase or update each successor PR after the previous merge. The lead prepares each PR (gates green, landing-gate review converged, CI watched) and reports "ready to merge"; the merge itself is executed by the hand the setup interview named.
-3. The landing-gate review runs on each PR's final state before merge; re-run it after any rebase or restack that changes content.
+1. **Each track's branch becomes its own PR, opened as a DRAFT** (title and description per the repo's conventions). It stays draft through its babysit loop, with the flip rules in both directions per `/pr-landing-discipline`.
 
-The PR's BASE is a per-track choice inside this one mode, set by the dependency graph; any combination coexists in one session.
+   The spawn brief says who does what: either the builder pushes its branch and opens the draft PR, reporting the URL in its signal, or the builder stays no-push and the lead pushes from the worktree and opens it. Creating and iterating many PRs in parallel is fine. The file whitelists that keep worktrees disjoint keep the PRs disjoint too.
+2. **What stays serial is merging into the shared base.** Merge one at a time in plan order (or hand the ordering to the repo's merge queue), and rebase or update each successor PR after the previous merge. The lead prepares each PR (gates green, landing-gate review converged, CI watched) and reports "ready to merge". The merge itself is executed by the hand the setup interview named.
+3. **The landing-gate review runs on each PR's final state before merge.** Re-run it after any rebase or restack that changes content.
+
+The PR's BASE is a per-track choice inside this one mode, set by the dependency graph. Any combination coexists in one session.
 
 - An independent track bases its PR on the mainline.
 - A track that depends on a sibling's UNLANDED content bases its PR on that sibling's branch (a stacked PR).
@@ -37,12 +45,14 @@ The PR's BASE is a per-track choice inside this one mode, set by the dependency 
 
 ### Dependency-Based (Stacked) Tracks
 
-Everything above still applies; this subsection only adds what is stack-specific.
+Everything above still applies. This subsection only adds what is stack-specific.
 
-1. Tracks whose bases chain onto each other form a stack: each branch bases on its predecessor, so reviewers see only that track's delta. The chain is git branch-on-branch plus one PR per link, each PR's base set to its predecessor's branch (an independent track's PR bases on the mainline). A PR's base branch must exist in the BASE repository, so a stacked chain requires push access there: every layer branch is pushed to a writable remote of the base repository. When only a fork is writable, dependent tracks land serially instead (branch-on-branch builds, one PR at a time against the mainline, the next opened after its dependency merges).
-2. The lead owns the stack: builders develop in their own worktrees against the agreed base branch and never restack. The lead integrates each converged branch into the chain, restacks successors, and pushes; the shared re-gate rule (item 3 above) applies to every link whose content a restack changed.
-3. For a chain, the shared serial-merge rule takes its order from the chain: bottom-up, one link at a time; the whole chain never merges in one shot.
-4. Parallel building is still fine: builders on later links start from the current state of the link below (or from the mainline plus an interface stub the brief names) and accept that their diff gets rebased when earlier links land. The shared-file content check from `references/fleet-monitor.md` applies to every restack.
+1. **Tracks whose bases chain onto each other form a stack.** Each branch bases on its predecessor, so reviewers see only that track's delta. The chain is git branch-on-branch plus one PR per link, each PR's base set to its predecessor's branch (an independent track's PR bases on the mainline).
+
+   A PR's base branch must exist in the BASE repository, so a stacked chain requires push access there: every layer branch is pushed to a writable remote of the base repository. When only a fork is writable, dependent tracks land serially instead (branch-on-branch builds, one PR at a time against the mainline, the next opened after its dependency merges).
+2. **The lead owns the stack.** Builders develop in their own worktrees against the agreed base branch and never restack. The lead integrates each converged branch into the chain, restacks successors, and pushes. The shared re-gate rule (item 3 above) applies to every link whose content a restack changed.
+3. **For a chain, the shared serial-merge rule takes its order from the chain**: bottom-up, one link at a time. The whole chain never merges in one shot.
+4. **Parallel building is still fine.** Builders on later links start from the current state of the link below (or from the mainline plus an interface stub the brief names) and accept that their diff gets rebased when earlier links land. The shared-file content check from `references/fleet-monitor.md` applies to every restack.
 
 The lead's loop, top to bottom. Nothing in the block may prompt: no interactive rebase, and any command that could open a prompt gets stdin closed (`< /dev/null`).
 
@@ -203,13 +213,19 @@ git merge --ff-only FETCH_HEAD       # ...and fast-forward it: the fetch above w
 #                                      that just landed
 ```
 
-A failed step in this loop is loud on its own: a rebase stops on a conflict with a nonzero exit, and `--force-with-lease` refuses to push over a branch that moved under you. The block's `set -e` turns that loudness into a full stop, so no later step (a boundary re-record, a push, a retarget) builds on a failure. What still needs explicit verification is the POSTCONDITION each step exists to produce, per site: before publishing, each successor's base contains the dependency's current tip; after a merge, the next layer's merge-base contains the merged mainline commit (both `merge-base --is-ancestor` checks in the block). Logs approximate; the postcondition is the truth (`/verify-with-controls` rule 4).
+A failed step in this loop is loud on its own: a rebase stops on a conflict with a nonzero exit, and `--force-with-lease` refuses to push over a branch that moved under you. The block's `set -e` turns that loudness into a full stop, so no later step (a boundary re-record, a push, a retarget) builds on a failure.
+
+What still needs explicit verification is the POSTCONDITION each step exists to produce, per site. Before publishing, each successor's base contains the dependency's current tip. After a merge, the next layer's merge-base contains the merged mainline commit (both `merge-base --is-ancestor` checks in the block).
+
+Logs approximate. The postcondition is the truth (`/verify-with-controls` rule 4).
 
 Worktree interplay: git refuses to check out a branch already checked out in a worktree (the `/worktree-hygiene` skill's one-branch-one-worktree rule), and builders hold their layer branches in theirs.
 
 - After the chain setup creates the layer branches, the lead switches the main checkout back to the mainline BEFORE spawning builders, leaving every layer branch free for its builder's worktree.
 - The lead runs restacks and merges from the main checkout only AFTER collecting (or removing) the owning builder's worktree, never while it is live.
 - Removal itself is destructive: run the removal checks in the `/worktree-hygiene` skill (fresh status codes, no live processes with cwd inside the tree) before deleting anything.
-- Collection is a HANDOFF: stopping a builder and removing its worktree transfers ownership of that layer branch to the lead's stack operations only. Review fixes on a collected layer ALWAYS go to a FRESH builder in a NEW worktree, with no collection exception to the skill's findings-go-to-a-builder rule, and never by resurrecting the removed builder (a message to a stopped agent resumes it, into a directory that no longer exists; see the `/worktree-hygiene` skill on handovers).
-- For a layer the main checkout itself holds (a rebase in the block above ends with that layer's branch checked out), release the branch first with `git checkout <mainline>` before creating the fix worktree, then recollect before the next restack touches that layer: the same one-branch-one-worktree rule this section opens with.
-- Until collection, layer commits happen only on that layer's branch in its builder's worktree; the lead's restacks are the only cross-layer writes.
+- **Collection is a HANDOFF:** stopping a builder and removing its worktree transfers ownership of that layer branch to the lead's stack operations only. Review fixes on a collected layer ALWAYS go to a FRESH builder in a NEW worktree, with no collection exception to the skill's findings-go-to-a-builder rule.
+
+  Never resurrect the removed builder: a message to a stopped agent resumes it, into a directory that no longer exists (see the `/worktree-hygiene` skill on handovers).
+- For a layer the main checkout itself holds (a rebase in the block above ends with that layer's branch checked out), release the branch first with `git checkout <mainline>` before creating the fix worktree. Then recollect before the next restack touches that layer: the same one-branch-one-worktree rule this section opens with.
+- Until collection, layer commits happen only on that layer's branch in its builder's worktree. The lead's restacks are the only cross-layer writes.

@@ -40,6 +40,6 @@ Read the change before you answer: a report with no reads behind it is not a rev
 
 - `scripts/run-review.mts` hands `scripts/verdict-schema.json` to codex (`--output-schema`) and claude (`--json-schema`), so their final message cannot be anything but that object. The block above still tells the model what each field means.
 - copilot has no schema flag, so for copilot the block above is the only thing asking for the object. The script parses the plain-text answer as JSON (a ```json fence is fine) and fails the review when it is not the object.
-- The script also refuses a verdict with no tool call before it in the same turn. codex fills its narration into the schema too, so "I will review now" comes back as an empty, valid verdict; the missing reads are what give it away.
+- The script also refuses a verdict with no tool call before it in the same turn. codex fills its narration into the schema too, so "I will review now" comes back as an empty, valid verdict. The missing reads are what give it away.
 
 Skills that declare a `## Review Criteria` section contribute extra bullets when installed: expand each one's section into the review list above. In this collection, `/no-invalid-states`, `/code-standards`, `/never-twice`, and `/verify-with-controls` declare it. On someone else's PR, expand only the sections the user chose under the `/reply-and-review-discipline` skill.

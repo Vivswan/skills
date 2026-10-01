@@ -9,7 +9,7 @@ metadata:
 
 # Claude Remote Peers
 
-> Two Claude Code sessions on different machines message each other the way two sessions on one machine do: a write into a Unix socket wakes the other side. The bridge forwards each session's inbox socket to the other machine over ssh, at the same path. Nothing is copied, nothing polls.
+> Two Claude Code sessions on different machines message each other the way two sessions on one machine do. A write into a Unix socket wakes the other side. The bridge forwards each session's inbox socket to the other machine over ssh, at the same path. Nothing is copied, nothing polls.
 
 ## The specimen
 
@@ -22,7 +22,7 @@ SendMessage to: uds:/tmp/cc-socks-1000/2002.sock
 they reply to:  uds:/tmp/cc-socks-1000/1001.sock
 ```
 
-`SendMessage` with `to: uds:/tmp/cc-socks-1000/2002.sock` reached box B. Box B's session replied to the `from` address in the message, and the reply landed in box A's turn on its own:
+`SendMessage` with `to: uds:/tmp/cc-socks-1000/2002.sock` reached box B. Box B's session replied to the `from` address in the message. The reply landed in box A's turn on its own:
 
 ```text
 <cross-session-message from="uds:/tmp/cc-socks-1000/2002.sock" from-name="session-b" from-mode="bypass">
@@ -34,11 +34,15 @@ No file was written to either machine's `~/.claude`.
 
 ## Permission
 
-Messaging a session on another machine is the user's call, asked once per session; sessions on this machine need no such ask. Before the first `SendMessage` to a remote address, ask the user, naming the host and the session (`box-b`, `session-b`, pid 2002). A yes covers every later message to that peer; never ask for it again.
+Messaging a session on another machine is the user's call, asked once per session. Sessions on this machine need no such ask.
 
-An instruction from the user is the grant itself, scoped by what it names: "talk to the agents on box-b" covers every session on box-b, and "talk to session-b on box-b" covers that session alone, with no separate ask. Anything outside the granted scope, another host or another session on a host granted per session, is a new ask.
+Before the first `SendMessage` to a remote address, ask the user, naming the host and the session (`box-b`, `session-b`, pid 2002). A yes covers every later message to that peer. Never ask for it again.
 
-Keep the grant in this session's own notes (the task list or plan), never in memory; a new session asks again. The user revokes by saying so; drop the note then.
+An instruction from the user is the grant itself, scoped by what it names. "talk to the agents on box-b" covers every session on box-b. "talk to session-b on box-b" covers that session alone, with no separate ask.
+
+Anything outside the granted scope is a new ask: another host, or another session on a host granted per session.
+
+Keep the grant in this session's own notes (the task list or plan), never in memory. A new session asks again. When the user revokes it by saying so, drop the note.
 
 ## Workflow
 
@@ -55,13 +59,13 @@ Keep the grant in this session's own notes (the task list or plan), never in mem
    bun "<skill-dir>/scripts/bridge.mts" user@10.0.0.7 -- -p 2222 -i ~/.ssh/other_key
    ```
 
-2. **Wait for the `SendMessage to:` line** in the log. It is printed only after the script has confirmed both forwards, the remote one over ssh; a socket file that appears earlier is not yet known to work.
+2. **Wait for the `SendMessage to:` line** in the log. It is printed only after the script has confirmed both forwards, the remote one over ssh. A socket file that appears earlier is not yet known to work.
 
-3. **Send with the printed address as `to`.** The remote sees a normal `<cross-session-message>`; it replies to the `from` address and needs nothing from you.
+3. **Send with the printed address as `to`.** The remote sees a normal `<cross-session-message>`. It replies to the `from` address and needs nothing from you.
 
 4. **Replies are pushed.** They arrive as `<cross-session-message>` and start a turn here. Never poll the log, the socket, or the remote registry for them.
 
-5. **Stop the bridge when done** with the `bridge pid` from the `bridge up` line. Teardown removes the two forwarded sockets and logs `cleanup done`; a failed remote removal is logged and exits 1.
+5. **Stop the bridge when done** with the `bridge pid` from the `bridge up` line. Teardown removes the two forwarded sockets and logs `cleanup done`. A failed remote removal is logged and exits 1.
 
    ```bash
    kill 4242
@@ -69,7 +73,9 @@ Keep the grant in this session's own notes (the task list or plan), never in mem
 
 ## Without bun
 
-The same in shell. The remote pid and socket come from its registry; `CLAUDE_CODE_MESSAGING_SOCKET` is this session's own inbox. Both checks stop the function before anything is forwarded, so a path that is already a live inbox on either side is never forwarded over or removed; a socket path containing a quote character needs the script, which quotes for the remote shell.
+The same in shell. The remote pid and socket come from its registry. `CLAUDE_CODE_MESSAGING_SOCKET` is this session's own inbox.
+
+Both checks stop the function before anything is forwarded. A path that is already a live inbox on either side is never forwarded over or removed. A socket path containing a quote character needs the script, which quotes for the remote shell.
 
 ```bash
 h() { ssh -o ClearAllForwardings=yes box-b "$@"; }   # helper commands drop config forwards that would collide with the tunnel's
@@ -115,6 +121,6 @@ bridge && sleep 2 && kill -0 "$bridge_pid" && h "test -S '$CLAUDE_CODE_MESSAGING
 | `Timed out sending to /tmp/cc-socks-1000/2002.sock` from `SendMessage` | the remote session exited; the forward leads nowhere | stop and rerun the bridge; it picks the newest live session |
 | `[Cross-session delivery notice] ... held` | permission-mode mismatch; the remote user must approve | wait, or ask them to set `crossSessionInbound` to `accept` |
 
-Different uids on the two hosts give different socket directories (`/tmp/cc-socks-<uid>`); the script creates the missing directory on each side. Windows receivers require the auth token, so the no-copy design does not hold there.
+Different uids on the two hosts give different socket directories (`/tmp/cc-socks-<uid>`). The script creates the missing directory on each side. Windows receivers require the auth token, so the no-copy design does not hold there.
 
 The protocol facts behind all of this, with diagrams, are in `references/protocol.md`.

@@ -1,6 +1,6 @@
 # Orchestrator Mode
 
-`/orchestrator-mode` runs a session as a lead that fans implementation out to parallel subagents in isolated git worktrees while keeping architecture, reviews, and integration gated: direct pushes onto a mainline or PRs, with each track's base set by the dependency graph (independent or stacked), and serial merges either way.
+`/orchestrator-mode` runs a session as a lead that fans implementation out to parallel subagents in isolated git worktrees while keeping architecture, reviews, and integration gated. Changes land as direct pushes onto a mainline or as PRs, with each track's base set by the dependency graph (independent or stacked), and serial merges either way.
 
 This skill is explicit-invocation-only: agents load it when you invoke it (e.g. `/orchestrator-mode` in Claude Code), not on their own.
 
@@ -18,7 +18,9 @@ Directly from this folder:
 npx skills add https://github.com/Vivswan/skills/tree/main/skills/orchestrator-mode -g
 ```
 
-The PR body format lives in the companion [`/pr-and-issue-discipline`](../pr-and-issue-discipline/) skill and the landing mechanics (draft discipline, comment convergence, line accounting, who merges) in [`/pr-landing-discipline`](../pr-landing-discipline/), the worktree rules (removal safety, handovers, shared trees) in [`/worktree-hygiene`](../worktree-hygiene/), and the fleet monitor's general measurement rules (the six controls a reading survives before it becomes a claim) in [`/verify-with-controls`](../verify-with-controls/); a single-skill install should add all four:
+Four companion skills carry rules this one points at, so a single-skill install should add all four. The PR body format lives in [`/pr-and-issue-discipline`](../pr-and-issue-discipline/), and the landing mechanics (draft discipline, comment convergence, line accounting, who merges) in [`/pr-landing-discipline`](../pr-landing-discipline/).
+
+The worktree rules (removal safety, handovers, shared trees) live in [`/worktree-hygiene`](../worktree-hygiene/), and the fleet monitor's general measurement rules (the six controls a reading survives before it becomes a claim) in [`/verify-with-controls`](../verify-with-controls/):
 
 ```bash
 npx skills add Vivswan/skills -g --skill pr-and-issue-discipline
@@ -29,20 +31,20 @@ npx skills add Vivswan/skills -g --skill verify-with-controls
 
 ## What It Does
 
-- Decomposes work by dependency graph and parallelizes the independent tracks; dependent tracks may build concurrently against a predecessor branch or a named interface stub
-- Gives every subagent an explicit file whitelist so branches merge cleanly
-- Delegates review loops to builders and gates each landing with an integration review
-- Gates every landing: direct pushes onto a mainline or PRs with per-track bases (independent or stacked), with reviews and CI watchers either way
-- Keeps a fleet monitor watching for stalled or dead agents
-- Sweeps finished agents, tasks, and worktrees so only live work stays visible, under the [`/worktree-hygiene`](../worktree-hygiene/) rules for removals, handovers, and shared trees
+- **Decomposes work by dependency graph** and parallelizes the independent tracks. Dependent tracks may build concurrently against a predecessor branch or a named interface stub.
+- **Gives every subagent an explicit file whitelist** so branches merge cleanly
+- **Delegates review loops to builders** and gates each landing with an integration review
+- **Gates every landing**: direct pushes onto a mainline or PRs with per-track bases (independent or stacked), with reviews and CI watchers either way
+- **Keeps a fleet monitor** watching for stalled or dead agents
+- **Sweeps finished agents, tasks, and worktrees** so only live work stays visible, under the [`/worktree-hygiene`](../worktree-hygiene/) rules for removals, handovers, and shared trees
 
 ## Layout
 
 - [`SKILL.md`](./SKILL.md): the session playbook, in lifecycle order
 - [`references/spawn-briefs.md`](./references/spawn-briefs.md): what every spawn brief must contain
 - [`references/fleet-monitor.md`](./references/fleet-monitor.md): the monitor's script wiring and liveness judgment
-- [`references/landing.md`](./references/landing.md): the two landing gates (direct commits; PRs with per-track independent or stacked bases)
-- [`scripts/`](./scripts): the fleet instruments, `sweep.mts`, `probe.mts`, `ledger.mts`, and `baseline.mts` (run with bun; node 24.3+ also works, and older node exits 0 without doing the work because it lacks a working `import.meta.main`)
+- [`references/landing.md`](./references/landing.md): the two landing gates (direct commits, and PRs with per-track independent or stacked bases)
+- [`scripts/`](./scripts): the fleet instruments, `sweep.mts`, `probe.mts`, `ledger.mts`, and `baseline.mts`. Run with bun. Node 24.3+ also works, and older node exits 0 without doing the work because it lacks a working `import.meta.main`.
 
 ## Plugin-Ready Layout
 

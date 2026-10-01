@@ -11,7 +11,14 @@
 | 5 | Two observations to look, re-measure to send | a report racing the state it describes |
 | 6 | Negative control for checkers | a gate that cannot go red |
 
-Each rule is distilled from a false conclusion nearly shipped in production: a pathspec typo that a diff accepted silently, a checker aimed at the wrong repository, a column parse split by check names, a tool that printed "Push failed" and exited 0, a flag withheld because a re-measure 37 seconds later found the state changed, and a landing checker whose green meant nothing until it was first seen failing against a ref without the files.
+Each rule is distilled from a false conclusion nearly shipped in production:
+
+1. a pathspec typo that a diff accepted silently
+2. a checker aimed at the wrong repository
+3. a column parse split by check names
+4. a tool that printed "Push failed" and exited 0
+5. a flag withheld because a re-measure 37 seconds later found the state changed
+6. a landing checker whose green meant nothing until it was first seen failing against a ref without the files
 
 ## Install
 
@@ -29,7 +36,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/verify-with-co
 
 ## What It Does
 
-- Rejects any probe whose zero means both "absent" and "I failed to look"; a sound reading carries its matched lines or errors
+- Rejects any probe whose zero means both "absent" and "I failed to look". A sound reading carries its matched lines or errors
 - Requires a positive control (one reading that must be non-zero, same instrument) before any zero is trusted
 - Re-derives alarming readings a second way before they reach a report
 - Treats exit codes and output verdicts as approximations and checks the postcondition itself

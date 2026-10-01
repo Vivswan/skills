@@ -10,11 +10,13 @@ Term lists from [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wi
 
 additionally (sentence-initial), align with, boasts, bolstered, causal (Grok), correlate (Grok), crucial, deep dive, delve, emphasizing, empirical (Grok), enduring, enhance, fostering, garner, highlight (verb), highlighting, interplay, intricate, intricacies, key (adjective), landscape (abstract noun), meticulous, meticulously, pivotal, robust, showcase, showcasing, tapestry (abstract noun), testament, underscore (verb), underscores, valuable, vibrant
 
-Era notes: 2023 to mid-2024 output leans on delve, tapestry, testament, intricate, bolstered, garner; mid-2024 to mid-2025 on align with, fostering, showcasing, enduring, vibrant; mid-2025 onward on emphasizing, enhance, highlighting, showcasing.
+Era notes: 2023 to mid-2024 output leans on delve, tapestry, testament, intricate, bolstered, garner. Mid-2024 to mid-2025 output leans on align with, fostering, showcasing, enduring, vibrant. Mid-2025 onward leans on emphasizing, enhance, highlighting, showcasing.
 
 ## Inflated significance and legacy
 
-stands as, serves as, is a testament, is a reminder, vital role, significant role, crucial role, pivotal role, pivotal moment, key moment, underscores its importance, highlights its significance, reflects broader, symbolizing its ongoing, enduring legacy, lasting legacy, contributing to the, setting the stage for, marking the, shaping the, represents a shift, marks a shift, key turning point, evolving landscape, focal point, indelible mark, deeply rooted, generated debate, prompted broader reflection, shaped emerging discussions, raising philosophical questions
+stands as, serves as, is a testament, is a reminder, vital role, significant role, crucial role, pivotal role, pivotal moment, key moment, underscores its importance, highlights its significance, reflects broader, symbolizing its ongoing, enduring legacy, lasting legacy
+
+contributing to the, setting the stage for, marking the, shaping the, represents a shift, marks a shift, key turning point, evolving landscape, focal point, indelible mark, deeply rooted, generated debate, prompted broader reflection, shaped emerging discussions, raising philosophical questions
 
 ## Promotional language
 
@@ -50,7 +52,9 @@ not just, not only ... but also, isn't just, doesn't just, it's not ... it's, is
 
 ## Chat and disclaimer artifacts
 
-I hope this helps, of course!, certainly!, you're absolutely right, would you like, is there anything else, let me know, here is a, here's a, detailed breakdown, as of my last knowledge update, up to my last training update, while specific details are limited, not widely documented, not publicly available, in the provided search results, based on available information, maintains a low profile, keeps personal details private, as an AI language model, I'm sorry, I cannot
+I hope this helps, of course!, certainly!, you're absolutely right, would you like, is there anything else, let me know, here is a, here's a, detailed breakdown
+
+as of my last knowledge update, up to my last training update, while specific details are limited, not widely documented, not publicly available, in the provided search results, based on available information, maintains a low profile, keeps personal details private, as an AI language model, I'm sorry, I cannot
 
 ## Placeholders
 
@@ -67,8 +71,8 @@ turn0, oaicite, oai_citation, contentReference, attributableIndex, attached_file
 ## Punctuation and formatting (house rules)
 
 - Em dash (—): never. En dash (–) or spaced hyphen ( - ) used as the same connector: never. Rewrite the sentence.
-- Curly quotes and apostrophes (“ ” ‘ ’): only where house style requires; never in code, wikis, or plain text; never mixed with straight quotes.
+- Curly quotes and apostrophes (“ ” ‘ ’): only where house style requires. Never in code, wikis, or plain text, and never mixed with straight quotes.
 - Emoji in headings or lists: no.
 - Bold-label bullets (**Term**: text): no.
-- Title Case Headings: no; use sentence case.
+- Title Case Headings: no. Use sentence case.
 - Horizontal rules before headings: no.

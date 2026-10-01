@@ -36,20 +36,22 @@ bun "<skill-dir>/scripts/browser-plugin-preflight.mts"          # sync + verify
 bun "<skill-dir>/scripts/browser-plugin-preflight.mts" --check  # read-only verify, exit 1 on drift
 ```
 
-It prints the app bundle version, the plugin path to import `browser-client.mjs` from, and which caches were synchronized. Re-run it after every desktop app update or restart. A failure names the missing file or stale setting and exits 1; a missing `config.toml`, bundle, or executable is an error, never a pass.
+It prints the app bundle version, the plugin path to import `browser-client.mjs` from, and which caches were synchronized. Re-run it after every desktop app update or restart.
 
-The codex home is `$CODEX_HOME` or `~/.codex`. A non-standard install passes `--plugin-dir <dir>` with the bundled Chrome plugin directory. `--check` on a missing `config.toml` exits 1; a missing `--plugin-dir` value exits 2.
+A failure names the missing file or stale setting and exits 1. A missing `config.toml`, bundle, or executable is an error, never a pass.
+
+The codex home is `$CODEX_HOME` or `~/.codex`. A non-standard install passes `--plugin-dir <dir>` with the bundled Chrome plugin directory. `--check` on a missing `config.toml` exits 1, and a missing `--plugin-dir` value exits 2.
 
 What it changes, and nothing else (`<home>` is the codex home):
 
 - `<home>/plugins/cache/openai-bundled/chrome`: every existing pinned version entry, the current version's entry, and the `latest` link follow the installed app bundle. `<home>/plugins/cache/openai-bundled/browser`: the current version's companion copy and its `latest` link only. Replaced stale copies move to `<home>/plugin-rollbacks/`.
-- `<home>/config.toml`, under `[mcp_servers.node_repl.env]`: `CODEX_CLI_PATH`, the app version, and the trusted code paths. Under `[shell_environment_policy.set]`: the `browser-client.mjs` hash. Each value must already be assigned there; the edit is parse-verified to change nothing else.
-- `<home>/scripts/browser-codex`: a generated launcher. Only its `app-server` subcommand gets `-c 'model_provider="openai"'`; every other subcommand passes through unchanged. The main provider, `CODEX_HOME`, and credentials are untouched.
+- `<home>/config.toml`, under `[mcp_servers.node_repl.env]`: `CODEX_CLI_PATH`, the app version, and the trusted code paths. Under `[shell_environment_policy.set]`: the `browser-client.mjs` hash. Each value must already be assigned there. The edit is parse-verified to change nothing else.
+- `<home>/scripts/browser-codex`: a generated launcher. Only its `app-server` subcommand gets `-c 'model_provider="openai"'`. Every other subcommand passes through unchanged. The main provider, `CODEX_HOME`, and credentials are untouched.
 - Each `<home>/hosts/<host>/`: its own `plugins/cache/openai-bundled/browser` companion cache, and, where it has a `config.toml`, the same config edits plus its own `scripts/browser-codex`. The Chrome cache is global only.
 
 ### 2. Bootstrap the vendor way
 
-Follow the installed `control-chrome` skill through its `node_repl` JavaScript tool: import `browser-client.mjs` from the path the preflight printed, call `setupBrowserRuntime()` once, and reuse the `agent` and browser bindings across turns. Never reset a working session to repeat setup.
+Follow the installed `control-chrome` skill through its `node_repl` JavaScript tool. Import `browser-client.mjs` from the path the preflight printed, call `setupBrowserRuntime()` once, and reuse the `agent` and browser bindings across turns. Never reset a working session to repeat setup.
 
 ### 3. Select the browser family
 
@@ -84,9 +86,9 @@ nodeRepl.write(await browser.documentation());
 
 ### 4. Work and hand off
 
-- Inspect the page before acting; re-check state after each meaningful action. A completed click or upload is not a saved result: verify the fields, media, and saved state on the page before reporting success.
+- Inspect the page before acting. Re-check state after each meaningful action. A completed click or upload is not a saved result: verify the fields, media, and saved state on the page before reporting success.
 - Read the vendor upload instructions before photo or document uploads.
-- Preserve tabs per the vendor's handoff rules. Never clear browser storage; it holds local drafts and signed-in state.
+- Preserve tabs per the vendor's handoff rules. Never clear browser storage, since it holds local drafts and signed-in state.
 - Connection setup authorizes nothing else. Applications, messages, purchases, and publications still follow the current request and project approval rules.
 
 ## Recovery
@@ -94,13 +96,15 @@ nodeRepl.write(await browser.documentation());
 - `Codex auth token is unavailable`, empty discovery, cache or trust failures: run the preflight, then read [recovery](references/recovery.md).
 - Discovery or selection fails after a good bootstrap: `await agent.documentation.get("bootstrap-troubleshooting")`.
 - Extension install or communication fails: `await agent.documentation.get("chrome-troubleshooting")`.
-- A running browser helper keeps the environment it started with. A new launcher setting takes effect when that helper next starts; do not kill a working connection to apply it.
+- A running browser helper keeps the environment it started with. A new launcher setting takes effect when that helper next starts. Do not kill a working connection to apply it.
 
 Never: switch the main `model_provider` off and back on, copy tokens, patch app binaries, or reinstall components speculatively. Report a real sign-in requirement as the user's action.
 
 ## Fallback Without the Desktop Plugin
 
-The preflight `--check` runs from any terminal with Bun, independent of an MCP host, and reports which bundle, cache, or setting is missing. Prepare task material locally where useful. Live browser work resumes only in a desktop Codex session with the Chrome plugin and the requested browser connection; never substitute another browser or automation transport.
+The preflight `--check` runs from any terminal with Bun, independent of an MCP host, and reports which bundle, cache, or setting is missing. Prepare task material locally where useful.
+
+Live browser work resumes only in a desktop Codex session with the Chrome plugin and the requested browser connection. Never substitute another browser or automation transport.
 
 ## References
 

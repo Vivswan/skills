@@ -8,7 +8,7 @@ metadata:
 
 # Verify With Controls
 
-> A reading is not a finding. Before "no matches" (a zero), "half the checks vanished" (an alarm), "the work landed" (a success claim), or "nothing is running" (stillness) becomes a claim, the reading must survive its controls: evidence attached, a positive control behind every zero, the instrument suspected, the postcondition checked, a re-measure at the moment of sending, and a checker that has been seen failing.
+> A reading is not a finding. Before "no matches" (a zero), "half the checks vanished" (an alarm), "the work landed" (a success claim), or "nothing is running" (stillness) becomes a claim, the reading must survive its controls. Those are evidence attached, a positive control behind every zero, the instrument suspected, the postcondition checked, a re-measure at the moment of sending, and a checker that has been seen failing.
 
 Six rules, each distilled from a false conclusion nearly shipped in production:
 
@@ -23,16 +23,20 @@ Six rules, each distilled from a false conclusion nearly shipped in production:
 
 ## 1. Evidence or error, never a bare zero
 
-A probe that can return 0 both for "absent" and for "I failed to look" is broken by construction. No amount of care in reading its output fixes it; the two meanings arrive as the same byte.
+A probe that can return 0 both for "absent" and for "I failed to look" is broken by construction. No amount of care in reading its output fixes it. The two meanings arrive as the same byte.
 
 ```bash
 $ git diff --numstat origin/main...HEAD -- src/fetaure/
 $        # empty, exit 0: reads as "this branch touched nothing there"
 ```
 
-One transposed letter, and the pathspec matches nothing that ever existed. "No changes under the path" and "I probed the wrong place" arrive as the same empty, successful reading; a run of zeros with this shape nearly reported real, landed work as missing.
+One transposed letter, and the pathspec matches nothing that ever existed. "No changes under the path" and "I probed the wrong place" arrive as the same empty, successful reading. A run of zeros with this shape nearly reported real, landed work as missing.
 
-A sound probe proves the question was answerable before trusting the zero, and errors on a reading it could not take. Validate the pathspec against the same endpoints the measurement reads. Three traps hide in that sentence: a three-dot diff compares the MERGE BASE with HEAD, not the two named tips; a failed validation exiting 0 is just another bare zero; and a pipe returns only its last command's status, so `pipefail` keeps a failed `ls-tree` from hiding behind the other endpoint's match:
+A sound probe proves the question was answerable before trusting the zero, and errors on a reading it could not take. Validate the pathspec against the same endpoints the measurement reads. Three traps hide in that sentence:
+
+- a three-dot diff compares the MERGE BASE with HEAD, not the two named tips
+- a failed validation exiting 0 is just another bare zero
+- a pipe returns only its last command's status, so `pipefail` keeps a failed `ls-tree` from hiding behind the other endpoint's match
 
 ```bash
 $ set -o pipefail
@@ -54,11 +58,13 @@ $ echo "${files:-nothing under docs/}"
 nothing under docs/
 ```
 
-The stash DID hold work under `docs/`. `git stash show` takes no pathspec, so the narrowed command measures nothing; its complaint went to the discarded stderr, and the captured stdout was empty either way. The control that exposes it: run the narrowed form on a path the stash MUST contain, and watch it read empty there too, before its empty means anything.
+The stash DID hold work under `docs/`. `git stash show` takes no pathspec, so the narrowed command measures nothing. Its complaint went to the discarded stderr, and the captured stdout was empty either way.
+
+The control that exposes it: run the narrowed form on a path the stash MUST contain, and watch it read empty there too, before its empty means anything.
 
 ## 2. Positive control: one reading that must be non-zero
 
-Before trusting any zero or absent reading, take one reading that MUST be non-zero through the same instrument. An empty world and a blind instrument produce the same zero; only the control separates them.
+Before trusting any zero or absent reading, take one reading that MUST be non-zero through the same instrument. An empty world and a blind instrument produce the same zero. Only the control separates them.
 
 A landing checker with the wrong repository root hardcoded reported two landed files as DROPPED. Every reading it took was internally consistent, a truthful answer to the wrong question: the tree it probed could never contain the files.
 
@@ -90,7 +96,9 @@ When two derivations disagree, suspect the instruments before the world, and kee
 
 ## 4. Logs approximate; the postcondition is the truth
 
-Exit codes catch hard failures. Output verdicts catch soft aborts, where a tool prints its own failure and exits 0. Neither substitutes for verifying the state you needed. Two production shapes:
+Exit codes catch hard failures. Output verdicts catch soft aborts, where a tool prints its own failure and exits 0. Neither substitutes for verifying the state you needed.
+
+Two production shapes:
 
 ```text
 $ sync-tool push
@@ -111,7 +119,13 @@ Both messages are honest about the wrong thing. The claim you need is about the 
 $ git fetch origin main && git merge-base --is-ancestor "$sha" FETCH_HEAD && echo landed
 ```
 
-Is the ref actually where it must be? That is the postcondition. The log only ever approximates it. (Test `FETCH_HEAD`, the ref the fetch just wrote: whether `origin/main` itself updates depends on the remote's configured fetch mapping, and a stale remote-tracking ref approximates the same way a log does.) Ancestry is conclusive only when the landing preserves commit ids: squash, rebase, and cherry-pick landings all rewrite `$sha`, so there a failed ancestry check proves nothing by itself. For those, the postcondition is the content itself at `FETCH_HEAD` (the changed files' exact content present at the fetched tip), with a subject match used at most to locate the landing, never as the check (a squash can rewrite the subject too).
+Is the ref actually where it must be? That is the postcondition. The log only ever approximates it.
+
+Test `FETCH_HEAD`, the ref the fetch just wrote. Whether `origin/main` itself updates depends on the remote's configured fetch mapping, and a stale remote-tracking ref approximates the same way a log does.
+
+Ancestry is conclusive only when the landing preserves commit ids. Squash, rebase, and cherry-pick landings all rewrite `$sha`, so there a failed ancestry check proves nothing by itself.
+
+For those, the postcondition is the content itself at `FETCH_HEAD`: the changed files' exact content present at the fetched tip. A subject match is used at most to locate the landing, never as the check, since a squash can rewrite the subject too.
 
 ## 5. Two observations before a flag, re-measure before sending
 
@@ -126,11 +140,13 @@ reading 2                  still no change -> the flag is earned on this evidenc
 re-measure before sending  changed 37 seconds ago -> withhold; the claim went stale
 ```
 
-A flag that met the bar on genuine evidence can still be wrong by the time it sends. A conclusion is bound to the moment it was measured, and sending it asserts it NOW, so measure it now. The same applies to retracting one: a retraction is a claim about current state too.
+A flag that met the bar on genuine evidence can still be wrong by the time it sends. A conclusion is bound to the moment it was measured, and sending it asserts it NOW, so measure it now.
+
+The same applies to retracting one: a retraction is a claim about current state too.
 
 ## 6. Negative control: prove the checker can fail
 
-A gate that cannot go red verifies nothing, and a checker that has never been seen failing proves nothing when it passes. Feed it a sentinel that MUST fail, through the same assertion path the real checks use; a separate test-the-test path controls the wrong instrument.
+A gate that cannot go red verifies nothing, and a checker that has never been seen failing proves nothing when it passes. Feed it a sentinel that MUST fail, through the same assertion path the real checks use. A separate test-the-test path controls the wrong instrument.
 
 ```ts
 // The real checks and the control share assertContains, so the control
