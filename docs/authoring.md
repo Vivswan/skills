@@ -48,7 +48,9 @@ A skill written elsewhere ships from this catalog as a vendored copy under `xeno
 
 ## Contributing Criteria to Reviews
 
-A skill contributes to `/rubber-duck-review` second-opinion passes by declaring a `## Review Criteria` section in its `SKILL.md`. That alone joins it to every review; there is no registry to update. Keep the section short: a few bullets the reviewer can act on, plus a pointer to the skill's own workflow for triaging findings. The smoke test rejects a section without list items.
+A skill contributes to `/rubber-duck-review` second-opinion passes by declaring a `## Review Criteria` section in its `SKILL.md`. That alone joins it to every review of the user's own change; there is no registry to update. On someone else's PR, the `/reply-and-review-discipline` skill's lens choice selects which sections are expanded.
+
+Keep the section short: a few bullets the reviewer can act on, plus a pointer to the skill's own workflow for triaging findings. The smoke test rejects a section without list items.
 
 Criteria that only apply in a specific context use a differently named heading (e.g. `## Orchestration Review Criteria`) and are folded into reviews by the skill that owns that context instead of being auto-discovered.
 

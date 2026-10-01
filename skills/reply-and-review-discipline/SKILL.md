@@ -42,7 +42,7 @@ Full specimens of both shapes, and the two-language layout: `references/issue-re
 - **Part one is plain language, and never says so** (the Readability rules own the heading rule).
   - Say what the reader did and what they see: "the server you removed" rather than "the tombstoned server entry". When a mechanism has no plain name, show its effect instead of naming it.
   - Quote the reader's own log line with an arrow note rather than paraphrasing it.
-- **Part two is the technical reading, collapsed, and only when it adds something.** The same collapsible as a PR body's part two in the `/pr-and-issue-discipline` skill, with the same `Technical details` summary line.
+- **Part two is the technical reading, collapsed, and only when it adds something.** The same collapsible as a PR body's part two in the `/pr-and-issue-discipline` skill, its summary line in the half's language (`Technical details`, `Détails techniques`).
   - Inside a `<details>` block: the mechanism names, the log lines mapped to code paths, docs links, and what a future maintainer would want when re-reading the thread. Nothing in part one depends on it.
   - A reply that says everything in plain words has no part two. The visible-cause specimen has none; the mid-request one's exists because the buffer size and timeout explain why the log stops where it does.
 - **A guess goes last in part one and is labeled a guess.** It saves a round trip without steering the reader before they answer.
