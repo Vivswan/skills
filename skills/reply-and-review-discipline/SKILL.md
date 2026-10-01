@@ -96,11 +96,12 @@ sed -i.bak "s/\"commit_id\": \"HEAD_SHA\"/\"commit_id\": \"$head_sha\"/" "$revie
 gh api -X POST repos/<owner>/<repo>/pulls/<n>/reviews --input "$review_dir/review.json" --jq .id   # no "event": stays pending
 ```
 
-**Revise:** GitHub keeps one pending review per author per PR, so a second POST fails. Delete the pending one, confirm none remains, recreate the full set, and tell the user the id changed:
+**Revise:** GitHub keeps one pending review per author per PR, so a second POST fails. Read the pending review's comments as they are now, since the user may have edited them in the web UI, and rebuild the full set from that text. Then delete it, confirm none remains, recreate, and tell the user the id changed:
 
 ```bash
 # --paginate: a PR with many reviews spreads them over pages, and the pending one is the newest
 gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.state == "PENDING") | .id'   # the id to delete
+gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews/<id>/comments --jq '.[] | {path, position, body}'   # the current text, web edits included; rebuild from this (this endpoint anchors by position, which the POST accepts too)
 gh api -X DELETE repos/<owner>/<repo>/pulls/<n>/reviews/<id>
 gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.state == "PENDING") | .id' | wc -l   # must print 0 before the new POST
 ```
