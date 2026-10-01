@@ -151,9 +151,9 @@ export function checkReadmeSkillList(
           ` skills/${name}/ folder -- remove the stale entry or restore the folder`,
       );
     }
-    const folder = xeno ? `./xeno/${name}/` : `./skills/${name}/`;
-    if (target !== folder && target !== folder.slice(0, -1)) {
-      fail(`README.md: the '[${name}]' entry must link to ${folder}`);
+    const page = `./${xeno ? "xeno" : "skills"}/${name}/SKILL.md`;
+    if (target !== page) {
+      fail(`README.md: the '[${name}]' entry must link to ${page}`);
     }
     if (xeno !== underExternal) {
       fail(
@@ -172,17 +172,18 @@ export function checkReadmeSkillList(
 // The README's mermaid skill-reference graph is stripped out of the list
 // checks above (fenced block), so nothing else keeps it honest: a retired
 // skill's node, a dangling edge, or a new skill missing from the graph would
-// all render fine and drift silently. Bijection plus referential integrity:
-// every node label resolves to a published skill, one node per skill, every
-// published skill has a node, and every edge endpoint names a defined node.
-export function checkReadmeMermaidGraph(readmeText: string, skillNames: ReadonlySet<string>): void {
+// render fine and drift silently. This check reads node definitions, edge
+// endpoints, and click targets and holds them to the catalog; whether the
+// block renders is the renderer's verdict, not parsed here.
+export function checkReadmeMermaidGraph(
+  readmeText: string,
+  skillNames: ReadonlySet<string>,
+  xenoNames: ReadonlySet<string> = new Set(),
+): void {
   const fence = /```mermaid\n([\s\S]*?)```/.exec(readmeText);
   if (fence === null) fail("README.md: missing the mermaid skill-reference graph");
   const body = fence[1] ?? "";
 
-  // Node definitions may appear standalone or inline inside an edge; collect
-  // them all first so a bare alias used before its labeled definition still
-  // resolves (mermaid allows that order).
   const aliases = new Map<string, string>();
   for (const def of body.matchAll(/([A-Za-z0-9_]+)\["\/([^"\]]*)"\]/g)) {
     const alias = def[1] ?? "";
@@ -206,9 +207,6 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
     aliases.set(alias, name);
   }
 
-  // Bijection, both directions: every label resolves to a published skill,
-  // one node per skill (a second alias for the same skill is drift from a
-  // rename or a stale duplicate), and every published skill has a node.
   const aliasBySkill = new Map<string, string>();
   for (const [alias, name] of aliases) {
     if (!skillNames.has(name)) {
@@ -232,49 +230,40 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
     }
   }
 
-  // Every line must be something this checker understands. The FIRST
-  // non-empty line must be exactly one valid flowchart header (mermaid
-  // cannot render the block without one, and `graph XX` is not a
-  // direction); every later line is an edge or a standalone
-  // '/skill'-labeled node. Anything else (a second header, a bare alias, a
-  // node whose label lacks the leading slash, syntax this parser does not
-  // know) fails loudly instead of slipping past the guarantees above
-  // unparsed. Edges are matched first so a malformed line starting with
-  // `graph` cannot ride the header rule past endpoint validation.
-  const lines = body
-    .split("\n")
-    .map((rawLine) => rawLine.trim())
-    .filter((line) => line !== "");
-  const header = lines[0] ?? "";
-  if (!/^graph (LR|RL|TB|TD|BT)$/.test(header)) {
-    fail(
-      "README.md: the mermaid skill-reference graph must open with a" +
-        ` 'graph <LR|RL|TB|TD|BT>' header, found '${header}'`,
-    );
-  }
-  for (const line of lines.slice(1)) {
-    if (line.includes("-->")) {
-      for (const rawEndpoint of line.split("-->")) {
-        const endpoint = rawEndpoint.trim();
-        const parsed = /^([A-Za-z0-9_]+)(\["\/[^"\]]*"\])?$/.exec(endpoint);
-        if (parsed === null) {
-          fail(`README.md: cannot parse mermaid edge endpoint '${endpoint}' in '${line}'`);
-        }
-        const alias = parsed[1] ?? "";
-        if (!aliases.has(alias)) {
-          fail(
-            `README.md: mermaid edge '${line}' references '${alias}', which no node` +
-              " definition labels -- a dangling endpoint",
-          );
-        }
+  const clicked = new Set<string>();
+  for (const rawLine of body.split("\n")) {
+    const line = rawLine.trim();
+    const click = /^click ([A-Za-z0-9_]+) "([^"]*)"$/.exec(line);
+    if (click !== null) {
+      const alias = click[1] ?? "";
+      const name = aliases.get(alias);
+      if (name === undefined) {
+        fail(`README.md: mermaid click '${line}' references '${alias}', which no node labels`);
       }
+      const page = `./${xenoNames.has(name) ? "xeno" : "skills"}/${name}/SKILL.md`;
+      if (click[2] !== page) {
+        fail(`README.md: mermaid click for '${alias}' must link to ${page}, found '${click[2]}'`);
+      }
+      if (clicked.has(alias)) fail(`README.md: mermaid node '${alias}' has two click lines`);
+      clicked.add(alias);
       continue;
     }
-    if (!/^[A-Za-z0-9_]+\["\/[^"\]]*"\]$/.test(line)) {
-      fail(
-        `README.md: cannot parse mermaid graph line '${line}' -- expected an edge` +
-          " or a node labeled '/skill-name' (the header belongs on the first line only)",
-      );
+    if (!line.includes("-->")) continue;
+    // `a <--> b` is the two-way arrow; its endpoints are the same as `a --> b`'s.
+    for (const rawEndpoint of line.replaceAll("<-->", "-->").split("-->")) {
+      // The endpoint is an alias, with or without its inline label; nothing else.
+      const alias = rawEndpoint.trim().replace(/\["\/[^"\]]*"\]$/, "");
+      if (!aliases.has(alias)) {
+        fail(
+          `README.md: mermaid edge '${line}' references '${alias}', which no node` +
+            " definition labels -- a dangling endpoint",
+        );
+      }
+    }
+  }
+  for (const alias of aliases.keys()) {
+    if (!clicked.has(alias)) {
+      fail(`README.md: mermaid node '${alias}' has no click line to its SKILL.md`);
     }
   }
 }
@@ -334,11 +323,11 @@ export function checkReadmeUsageExplicitRoster(
   }
   const named = new Set<string>();
   for (const entry of (sentence[1] ?? "").split(", ")) {
-    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/(?:skills|(xeno))\/\1\/\)$/.exec(entry);
+    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/(?:skills|(xeno))\/\1\/SKILL\.md\)$/.exec(entry);
     if (link === null) {
       fail(
         `README.md: cannot parse Usage explicit-invocation-only roster entry '${entry}'` +
-          " -- expected '[`/skill-name`](./skills/skill-name/)' entries separated by ', '",
+          " -- expected '[`/skill-name`](./skills/skill-name/SKILL.md)' entries separated by ', '",
       );
     }
     const name = link[1] ?? "";
@@ -350,7 +339,7 @@ export function checkReadmeUsageExplicitRoster(
     if (xeno !== (link[2] !== undefined)) {
       fail(
         `README.md: the Usage roster entry for '${name}' must link to` +
-          ` ./${xeno ? "xeno" : "skills"}/${name}/`,
+          ` ./${xeno ? "xeno" : "skills"}/${name}/SKILL.md`,
       );
     }
   }

@@ -35,7 +35,7 @@ This keeps the repo compatible with:
 4. Fill in `SKILL.md` with activation criteria, workflow steps, and fallback behavior. Keep the frontmatter `description` a short trigger ("Use when ..."), and lead with worked examples, scenarios, or concrete commands rather than abstract prose.
 5. Create `agents/openai.yaml` with an `interface` block mirroring the codex manifest (required; add `policy.allow_implicit_invocation: false` for explicit-invocation-only skills).
 6. Add a human-facing `README.md`.
-7. Update the root [`README.md`](../README.md) catalog: the Available Skills entry under the matching invocation heading, and a node in the mermaid skill-reference graph with edges only for hand-offs the skill's text actually makes.
+7. Update the root [`README.md`](../README.md) catalog: the Available Skills entry under the matching invocation heading, linking to the skill's `SKILL.md`, and a node in the mermaid skill-reference graph with a `click` line to that page and edges only for hand-offs the skill's text actually makes.
 8. List the new skill in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json).
 9. Add the skill to the `skill` dropdown in [`.github/ISSUE_TEMPLATE/bug_report.yml`](../.github/ISSUE_TEMPLATE/bug_report.yml).
 10. Ship a byte-identical copy of the root `LICENSE.md` in the skill folder, set frontmatter `metadata.author` to the plugin author's first name, and never set `metadata.internal` or add a `metadata.json` (the install CLI drops both silently).
@@ -48,7 +48,9 @@ A skill written elsewhere ships from this catalog as a vendored copy under `xeno
 
 ## Contributing Criteria to Reviews
 
-A skill contributes to `/rubber-duck-review` second-opinion passes by declaring a `## Review Criteria` section in its `SKILL.md`. That alone joins it to every review; there is no registry to update. Keep the section short: a few bullets the reviewer can act on, plus a pointer to the skill's own workflow for triaging findings. The smoke test rejects a section without list items.
+A skill contributes to `/rubber-duck-review` second-opinion passes by declaring a `## Review Criteria` section in its `SKILL.md`. That alone joins it to every review of the user's own change; there is no registry to update. On someone else's PR, the `/reply-and-review-discipline` skill's lens choice selects which sections are expanded.
+
+Keep the section short: a few bullets the reviewer can act on, plus a pointer to the skill's own workflow for triaging findings. The smoke test rejects a section without list items.
 
 Criteria that only apply in a specific context use a differently named heading (e.g. `## Orchestration Review Criteria`) and are folded into reviews by the skill that owns that context instead of being auto-discovered.
 

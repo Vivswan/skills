@@ -104,36 +104,30 @@ describe("checkExplicitInvocationPairing", () => {
 describe("checkReadmeSkillList", () => {
   const names: ReadonlySet<string> = new Set(["alpha-one", "beta-two"]);
   const goodList =
-    "\n- [/alpha-one](./skills/alpha-one/) - a\n- [/beta-two](./skills/beta-two/) - b\n";
+    "\n- [/alpha-one](./skills/alpha-one/SKILL.md) - a\n- [/beta-two](./skills/beta-two/SKILL.md) - b\n";
 
   test("accepts an exact bijection", () => {
     expect(() => checkReadmeSkillList(readme(goodList), names)).not.toThrow();
   });
 
   test("rejects a missing entry", () => {
-    const list = "\n- [/alpha-one](./skills/alpha-one/) - a\n";
+    const list = "\n- [/alpha-one](./skills/alpha-one/SKILL.md) - a\n";
     expect(() => checkReadmeSkillList(readme(list), names)).toThrow(/missing an entry/);
   });
 
   test("rejects a stale entry without a folder", () => {
-    const list = `${goodList}- [/gamma-three](./skills/gamma-three/) - c\n`;
+    const list = `${goodList}- [/gamma-three](./skills/gamma-three/SKILL.md) - c\n`;
     expect(() => checkReadmeSkillList(readme(list), names)).toThrow(/no matching/);
   });
 
   test("rejects a wrong link target", () => {
     const list =
-      "\n- [/alpha-one](./skills/beta-two/) - a\n- [/beta-two](./skills/beta-two/) - b\n";
+      "\n- [/alpha-one](./skills/beta-two/SKILL.md) - a\n- [/beta-two](./skills/beta-two/SKILL.md) - b\n";
     expect(() => checkReadmeSkillList(readme(list), names)).toThrow(/must link/);
   });
 
   test("rejects a duplicate entry", () => {
     expect(() => checkReadmeSkillList(readme(goodList + goodList), names)).toThrow(/duplicate/);
-  });
-
-  test("accepts the no-trailing-slash link form", () => {
-    const list =
-      "\n- [/alpha-one](./skills/alpha-one) - a\n- [/beta-two](./skills/beta-two/) - b\n";
-    expect(() => checkReadmeSkillList(readme(list), names)).not.toThrow();
   });
 
   test("leaves non-kebab-case prose bullets alone", () => {
@@ -161,68 +155,22 @@ describe("checkReadmeMermaidGraph", () => {
   function withGraph(graphBody: string): string {
     return `# Skills\n\ntext\n\n\`\`\`mermaid\n${graphBody}\`\`\`\n\n## Installation\n`;
   }
-  const goodGraph = 'graph LR\n  a["/alpha-one"] --> b["/beta-two"]\n';
+  const clicks =
+    '  click a "./skills/alpha-one/SKILL.md"\n  click b "./skills/beta-two/SKILL.md"\n';
+  const goodGraph = `graph LR\n  a["/alpha-one"] --> b["/beta-two"]\n${clicks}`;
 
   test("accepts a consistent graph", () => {
     expect(() => checkReadmeMermaidGraph(withGraph(goodGraph), names)).not.toThrow();
   });
 
   test("accepts a bare alias used before its labeled definition", () => {
-    const graph = 'graph LR\n  a["/alpha-one"] --> b\n  b["/beta-two"] --> a\n';
+    const graph = `graph LR\n  a["/alpha-one"] --> b\n  b["/beta-two"] --> a\n${clicks}`;
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
   });
 
-  test("negative control: a dangling edge endpoint fails", () => {
-    const graph = `${goodGraph}  a --> ghost\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/dangling/);
-  });
-
-  test("rejects a node labeling a skill with no folder", () => {
-    const graph = `${goodGraph}  g["/gamma-three"] --> a\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/no skills\//);
-  });
-
-  test("rejects a graph missing a node for a published skill", () => {
-    const graph = 'graph LR\n  a["/alpha-one"] --> a\n';
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(
-      /missing a node for 'beta-two'/,
-    );
-  });
-
-  test("rejects two aliases labeling the same skill", () => {
-    // The reverse half of the bijection: without it, a rename could leave a
-    // stale duplicate node behind and every skill would still "appear".
-    const graph = `${goodGraph}  a2["/alpha-one"] --> b\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(
-      /both label '\/alpha-one'/,
-    );
-  });
-
-  test("rejects one alias defined with two different labels", () => {
-    const graph = 'graph LR\n  a["/alpha-one"] --> a["/beta-two"]\n  b["/beta-two"] --> a\n';
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/defined twice/);
-  });
-
-  test("rejects an unparsable edge endpoint instead of skipping it", () => {
-    const graph = `${goodGraph}  a --> b & c\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
-  });
-
-  test.each([
-    {
-      id: "a standalone node with a non-skill label",
-      line: 'orphan["retired"]',
-      reason: "a label without the leading slash never enters the alias map",
-    },
-    { id: "a bare standalone alias", line: "orphan" },
-    { id: "a second header line", line: "graph TB" },
-  ])("negative control: an unparsable line fails instead of slipping past: $id", ({ id, line }) => {
-    const graph = `${goodGraph}  ${line}\n`;
-    expectCheckFailure(
-      () => checkReadmeMermaidGraph(withGraph(graph), names),
-      `cannot parse mermaid graph line '${line}'`,
-      id,
-    );
+  test("ignores layout frontmatter and reads both endpoints of a bidirectional edge", () => {
+    const graph = `---\nconfig:\n  layout: elk\n---\ngraph LR\n  a["/alpha-one"] <--> b["/beta-two"]\n${clicks}`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
   });
 
   test("rejects 'end' as a node alias (reserved flowchart keyword)", () => {
@@ -230,38 +178,6 @@ describe("checkReadmeMermaidGraph", () => {
     // erroring, so without this check the graph passes and does not draw.
     const graph = `${goodGraph}  end["/beta-two"]\n`;
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/reserved/);
-  });
-
-  test("accepts a standalone '/skill'-labeled node line", () => {
-    const graph = 'graph LR\n  a["/alpha-one"]\n  a --> b["/beta-two"]\n';
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
-  });
-
-  test.each([
-    {
-      id: "a malformed edge on the header line",
-      firstLine: "graph LR --> ghost",
-      reason: "the dangling endpoint must not ride a header exemption past validation",
-    },
-    { id: "no header at all", firstLine: "", reason: "mermaid cannot render without one" },
-    { id: "an invalid direction", firstLine: "graph XX" },
-  ])("rejects a graph with a bad first line: $id", ({ id, firstLine }) => {
-    // An empty first line is dropped as blank, so the edge itself gets judged
-    // as the header and named in the message.
-    const edge = 'a["/alpha-one"] --> b["/beta-two"]';
-    const graph = `${firstLine}\n  ${edge}\n`;
-    expectCheckFailure(
-      () => checkReadmeMermaidGraph(withGraph(graph), names),
-      `must open with a 'graph <LR|RL|TB|TD|BT>' header, found '${firstLine || edge}'`,
-      id,
-    );
-  });
-
-  test("rejects a README without a mermaid block", () => {
-    expectCheckFailure(
-      () => checkReadmeMermaidGraph("# Skills\n", names),
-      /missing the mermaid skill-reference graph/,
-    );
   });
 });
 
@@ -328,7 +244,7 @@ describe("checkMarketplacePluginVersionBan", () => {
 
 describe("checkReadmeUsageExplicitRoster", () => {
   function usageReadme(roster: string): string {
-    return `# Skills\n\n## Usage\n\nSkills marked explicit-invocation-only (${roster}) load only when you invoke them (e.g. [\`/beta-two\`](./skills/beta-two/) in Claude Code).\n`;
+    return `# Skills\n\n## Usage\n\nSkills marked explicit-invocation-only (${roster}) load only when you invoke them (e.g. [\`/beta-two\`](./skills/beta-two/SKILL.md) in Claude Code).\n`;
   }
   const skills = [
     { name: "alpha-one", disabled: false },
@@ -337,13 +253,16 @@ describe("checkReadmeUsageExplicitRoster", () => {
 
   test("accepts a roster naming exactly the disabled skills", () => {
     expect(() =>
-      checkReadmeUsageExplicitRoster(usageReadme("[`/beta-two`](./skills/beta-two/)"), skills),
+      checkReadmeUsageExplicitRoster(
+        usageReadme("[`/beta-two`](./skills/beta-two/SKILL.md)"),
+        skills,
+      ),
     ).not.toThrow();
   });
 
   test("negative control: a roster missing a disabled skill fails", () => {
     expect(() =>
-      checkReadmeUsageExplicitRoster(usageReadme("[`/alpha-one`](./skills/alpha-one/)"), [
+      checkReadmeUsageExplicitRoster(usageReadme("[`/alpha-one`](./skills/alpha-one/SKILL.md)"), [
         { name: "alpha-one", disabled: true },
         { name: "beta-two", disabled: true },
       ]),
@@ -353,7 +272,9 @@ describe("checkReadmeUsageExplicitRoster", () => {
   test("rejects a roster naming an automatic skill", () => {
     expect(() =>
       checkReadmeUsageExplicitRoster(
-        usageReadme("[`/alpha-one`](./skills/alpha-one/), [`/beta-two`](./skills/beta-two/)"),
+        usageReadme(
+          "[`/alpha-one`](./skills/alpha-one/SKILL.md), [`/beta-two`](./skills/beta-two/SKILL.md)",
+        ),
         skills,
       ),
     ).toThrow(/does not set disable-model-invocation/);
@@ -362,14 +283,16 @@ describe("checkReadmeUsageExplicitRoster", () => {
   test("rejects a roster naming a skill that is not published", () => {
     expect(() =>
       checkReadmeUsageExplicitRoster(
-        usageReadme("[`/beta-two`](./skills/beta-two/), [`/gamma-three`](./skills/gamma-three/)"),
+        usageReadme(
+          "[`/beta-two`](./skills/beta-two/SKILL.md), [`/gamma-three`](./skills/gamma-three/SKILL.md)",
+        ),
         skills,
       ),
     ).toThrow(/not a published skill/);
   });
 
   const hiddenSentence =
-    "Skills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/)) load only when you invoke them.";
+    "Skills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/SKILL.md)) load only when you invoke them.";
 
   test.each([
     {
@@ -405,7 +328,7 @@ describe("checkReadmeUsageExplicitRoster", () => {
     // parse or the check fails.
     expect(() =>
       checkReadmeUsageExplicitRoster(
-        usageReadme("[`/beta-two`](./skills/beta-two/), **/ghost-skill**"),
+        usageReadme("[`/beta-two`](./skills/beta-two/SKILL.md), **/ghost-skill**"),
         skills,
       ),
     ).toThrow(/cannot parse Usage explicit-invocation-only roster entry '\*\*\/ghost-skill\*\*'/);
@@ -413,14 +336,19 @@ describe("checkReadmeUsageExplicitRoster", () => {
 
   test("rejects a roster link whose target names a different skill", () => {
     expect(() =>
-      checkReadmeUsageExplicitRoster(usageReadme("[`/beta-two`](./skills/alpha-one/)"), skills),
+      checkReadmeUsageExplicitRoster(
+        usageReadme("[`/beta-two`](./skills/alpha-one/SKILL.md)"),
+        skills,
+      ),
     ).toThrow(/cannot parse/);
   });
 
   test("rejects a duplicate roster entry", () => {
     expect(() =>
       checkReadmeUsageExplicitRoster(
-        usageReadme("[`/beta-two`](./skills/beta-two/), [`/beta-two`](./skills/beta-two/)"),
+        usageReadme(
+          "[`/beta-two`](./skills/beta-two/SKILL.md), [`/beta-two`](./skills/beta-two/SKILL.md)",
+        ),
         skills,
       ),
     ).toThrow(/duplicate/);

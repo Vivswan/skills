@@ -1,0 +1,28 @@
+{
+  "name": "reply-and-review-discipline",
+  "description": "Replies to issue reporters and reviews of someone else's PR: plain words first, the reporter's own log lines, questions only when the report does not answer them, and one pending review the user publishes.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/reply-and-review-discipline",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": ["agent-skills", "issues", "code-review", "pull-requests", "plugin-ready"],
+  "skills": "./",
+  "interface": {
+    "displayName": "Reply and Review Discipline",
+    "shortDescription": "Plain-first issue replies and pending reviews on others' PRs.",
+    "longDescription": "Fires when an agent replies to an issue reporter or outside contributor, or reviews someone else's pull request under the user's account. A reply leads with the diagnosis when the reporter's log shows the cause (their own log lines with arrow notes, then a numbered what-to-do list) and asks questions only when the diagnosis depends on the answers; the technical reading is collapsed and present only when it adds something; a reporter who writes in another language gets the full reply in that language first, then in English. A review of someone else's PR is staged as one pending review, verdict included as an inline summary comment, in a plain human voice, symptom then a one-line ask, only on what changes behavior, reliability, or the truth of a stated fact; publishing is the user's act.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/reply-and-review-discipline",
+    "defaultPrompt": [
+      "Reply to this issue reporter in plain language first.",
+      "Stage a pending review of this PR under my account."
+    ],
+    "brandColor": "#0E7490"
+  }
+}

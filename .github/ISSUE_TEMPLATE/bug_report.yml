@@ -19,6 +19,7 @@ body:
         - never-twice
         - pr-and-issue-discipline
         - pr-landing-discipline
+        - reply-and-review-discipline
         - rubber-duck-review
         - verify-with-controls
         - watch-ci-after-push

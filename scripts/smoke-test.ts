@@ -970,7 +970,7 @@ function main(): void {
   checkManifestEntriesHaveFolders(manifest, skillNames);
   const readmeText = readTextFile(join(ROOT, "README.md"));
   checkReadmeSkillList(readmeText, skillNames, xenoNames);
-  checkReadmeMermaidGraph(readmeText, allNames);
+  checkReadmeMermaidGraph(readmeText, allNames, xenoNames);
   const groupingEntries = [
     ...skillFrontmatters.map(({ path, frontmatter }) => ({
       name: basename(dirname(path)),
