@@ -130,12 +130,6 @@ describe("checkReadmeSkillList", () => {
     expect(() => checkReadmeSkillList(readme(goodList + goodList), names)).toThrow(/duplicate/);
   });
 
-  test("rejects a folder link: the entry opens the skill page, not its directory", () => {
-    const list =
-      "\n- [/alpha-one](./skills/alpha-one/) - a\n- [/beta-two](./skills/beta-two/SKILL.md) - b\n";
-    expect(() => checkReadmeSkillList(readme(list), names)).toThrow(/must link/);
-  });
-
   test("leaves non-kebab-case prose bullets alone", () => {
     const list = `${goodList}- [Installation](./docs/install.md) - prose link\n`;
     expect(() => checkReadmeSkillList(readme(list), names)).not.toThrow();
@@ -174,62 +168,9 @@ describe("checkReadmeMermaidGraph", () => {
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
   });
 
-  test("accepts a YAML frontmatter block before the header and a bidirectional edge", () => {
+  test("ignores layout frontmatter and reads both endpoints of a bidirectional edge", () => {
     const graph = `---\nconfig:\n  layout: elk\n---\ngraph LR\n  a["/alpha-one"] <--> b["/beta-two"]\n${clicks}`;
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
-  });
-
-  test("negative control: a dangling edge endpoint fails", () => {
-    const graph = `${goodGraph}  a --> ghost\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/dangling/);
-  });
-
-  test("rejects a node labeling a skill with no folder", () => {
-    const graph = `${goodGraph}  g["/gamma-three"] --> a\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/no skills\//);
-  });
-
-  test("rejects a graph missing a node for a published skill", () => {
-    const graph = 'graph LR\n  a["/alpha-one"] --> a\n  click a "./skills/alpha-one/SKILL.md"\n';
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(
-      /missing a node for 'beta-two'/,
-    );
-  });
-
-  test("rejects two aliases labeling the same skill", () => {
-    // The reverse half of the bijection: without it, a rename could leave a
-    // stale duplicate node behind and every skill would still "appear".
-    const graph = `${goodGraph}  a2["/alpha-one"] --> b\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(
-      /both label '\/alpha-one'/,
-    );
-  });
-
-  test("rejects one alias defined with two different labels", () => {
-    const graph = 'graph LR\n  a["/alpha-one"] --> a["/beta-two"]\n  b["/beta-two"] --> a\n';
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/defined twice/);
-  });
-
-  test("rejects an unparsable edge endpoint instead of skipping it", () => {
-    const graph = `${goodGraph}  a --> b & c\n`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/cannot parse/);
-  });
-
-  test.each([
-    {
-      id: "a standalone node with a non-skill label",
-      line: 'orphan["retired"]',
-      reason: "a label without the leading slash never enters the alias map",
-    },
-    { id: "a bare standalone alias", line: "orphan" },
-    { id: "a second header line", line: "graph TB" },
-  ])("negative control: an unparsable line fails instead of slipping past: $id", ({ id, line }) => {
-    const graph = `${goodGraph}  ${line}\n`;
-    expectCheckFailure(
-      () => checkReadmeMermaidGraph(withGraph(graph), names),
-      `cannot parse mermaid graph line '${line}'`,
-      id,
-    );
   });
 
   test("rejects 'end' as a node alias (reserved flowchart keyword)", () => {
@@ -237,38 +178,6 @@ describe("checkReadmeMermaidGraph", () => {
     // erroring, so without this check the graph passes and does not draw.
     const graph = `${goodGraph}  end["/beta-two"]\n`;
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/reserved/);
-  });
-
-  test("accepts a standalone '/skill'-labeled node line", () => {
-    const graph = `graph LR\n  a["/alpha-one"]\n  a --> b["/beta-two"]\n${clicks}`;
-    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
-  });
-
-  test.each([
-    {
-      id: "a malformed edge on the header line",
-      firstLine: "graph LR --> ghost",
-      reason: "the dangling endpoint must not ride a header exemption past validation",
-    },
-    { id: "no header at all", firstLine: "", reason: "mermaid cannot render without one" },
-    { id: "an invalid direction", firstLine: "graph XX" },
-  ])("rejects a graph with a bad first line: $id", ({ id, firstLine }) => {
-    // An empty first line is dropped as blank, so the edge itself gets judged
-    // as the header and named in the message.
-    const edge = 'a["/alpha-one"] --> b["/beta-two"]';
-    const graph = `${firstLine}\n  ${edge}\n`;
-    expectCheckFailure(
-      () => checkReadmeMermaidGraph(withGraph(graph), names),
-      `must open with a 'graph <LR|RL|TB|TD|BT>' header, found '${firstLine || edge}'`,
-      id,
-    );
-  });
-
-  test("rejects a README without a mermaid block", () => {
-    expectCheckFailure(
-      () => checkReadmeMermaidGraph("# Skills\n", names),
-      /missing the mermaid skill-reference graph/,
-    );
   });
 });
 

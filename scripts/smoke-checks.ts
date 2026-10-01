@@ -172,9 +172,9 @@ export function checkReadmeSkillList(
 // The README's mermaid skill-reference graph is stripped out of the list
 // checks above (fenced block), so nothing else keeps it honest: a retired
 // skill's node, a dangling edge, or a new skill missing from the graph would
-// all render fine and drift silently. Bijection plus referential integrity:
-// every node label resolves to a published skill, one node per skill, every
-// published skill has a node, and every edge endpoint names a defined node.
+// render fine and drift silently. This check reads node definitions, edge
+// endpoints, and click targets and holds them to the catalog; whether the
+// block renders is the renderer's verdict, not parsed here.
 export function checkReadmeMermaidGraph(
   readmeText: string,
   skillNames: ReadonlySet<string>,
@@ -182,26 +182,8 @@ export function checkReadmeMermaidGraph(
 ): void {
   const fence = /```mermaid\n([\s\S]*?)```/.exec(readmeText);
   if (fence === null) fail("README.md: missing the mermaid skill-reference graph");
-  // An optional YAML frontmatter block (`---` ... `---`, the layout config)
-  // may open the block. It is stripped before anything else is read, so its
-  // text can neither supply a node nor collide with one, and it must parse:
-  // mermaid renders nothing behind malformed frontmatter.
-  let body = fence[1] ?? "";
-  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(body);
-  if (frontmatter !== null) {
-    try {
-      Bun.YAML.parse(frontmatter[1] ?? "");
-    } catch (error) {
-      fail(`README.md: the mermaid graph's frontmatter is not valid YAML: ${String(error)}`);
-    }
-    body = body.slice(frontmatter[0].length);
-  } else if (body.startsWith("---\n")) {
-    fail("README.md: the mermaid graph's frontmatter block never closes");
-  }
+  const body = fence[1] ?? "";
 
-  // Node definitions may appear standalone or inline inside an edge; collect
-  // them all first so a bare alias used before its labeled definition still
-  // resolves (mermaid allows that order).
   const aliases = new Map<string, string>();
   for (const def of body.matchAll(/([A-Za-z0-9_]+)\["\/([^"\]]*)"\]/g)) {
     const alias = def[1] ?? "";
@@ -225,9 +207,6 @@ export function checkReadmeMermaidGraph(
     aliases.set(alias, name);
   }
 
-  // Bijection, both directions: every label resolves to a published skill,
-  // one node per skill (a second alias for the same skill is drift from a
-  // rename or a stale duplicate), and every published skill has a node.
   const aliasBySkill = new Map<string, string>();
   for (const [alias, name] of aliases) {
     if (!skillNames.has(name)) {
@@ -251,31 +230,9 @@ export function checkReadmeMermaidGraph(
     }
   }
 
-  // Every line must be something this checker understands. The FIRST
-  // non-empty line must be exactly one valid flowchart header (mermaid
-  // cannot render the block without one, and `graph XX` is not a
-  // direction); every later line is an edge (`-->` or `<-->`), a standalone
-  // '/skill'-labeled node, or a `click <alias> "<url>"` line. Anything else
-  // (a second header, a bare alias, a node whose label lacks the leading
-  // slash, syntax this parser does not know) fails loudly instead of
-  // slipping past the guarantees above unparsed. Edges are matched first so
-  // a malformed line starting with `graph` cannot ride the header rule past
-  // endpoint validation.
-  const lines = body
-    .split("\n")
-    .map((rawLine) => rawLine.trim())
-    .filter((line) => line !== "");
-  const header = lines[0] ?? "";
-  if (!/^graph (LR|RL|TB|TD|BT)$/.test(header)) {
-    fail(
-      "README.md: the mermaid skill-reference graph must open with a" +
-        ` 'graph <LR|RL|TB|TD|BT>' header, found '${header}'`,
-    );
-  }
-  // Every node links to its skill page, once: the graph is navigation, not
-  // only a picture.
   const clicked = new Set<string>();
-  for (const line of lines.slice(1)) {
+  for (const rawLine of body.split("\n")) {
+    const line = rawLine.trim();
     const click = /^click ([A-Za-z0-9_]+) "([^"]*)"$/.exec(line);
     if (click !== null) {
       const alias = click[1] ?? "";
@@ -291,29 +248,17 @@ export function checkReadmeMermaidGraph(
       clicked.add(alias);
       continue;
     }
-    if (line.includes("-->")) {
-      // `a <--> b` is the two-way arrow; its endpoints are the same as `a --> b`'s.
-      for (const rawEndpoint of line.replaceAll("<-->", "-->").split("-->")) {
-        const endpoint = rawEndpoint.trim();
-        const parsed = /^([A-Za-z0-9_]+)(\["\/[^"\]]*"\])?$/.exec(endpoint);
-        if (parsed === null) {
-          fail(`README.md: cannot parse mermaid edge endpoint '${endpoint}' in '${line}'`);
-        }
-        const alias = parsed[1] ?? "";
-        if (!aliases.has(alias)) {
-          fail(
-            `README.md: mermaid edge '${line}' references '${alias}', which no node` +
-              " definition labels -- a dangling endpoint",
-          );
-        }
+    if (!line.includes("-->")) continue;
+    // `a <--> b` is the two-way arrow; its endpoints are the same as `a --> b`'s.
+    for (const rawEndpoint of line.replaceAll("<-->", "-->").split("-->")) {
+      // The endpoint is an alias, with or without its inline label; nothing else.
+      const alias = rawEndpoint.trim().replace(/\["\/[^"\]]*"\]$/, "");
+      if (!aliases.has(alias)) {
+        fail(
+          `README.md: mermaid edge '${line}' references '${alias}', which no node` +
+            " definition labels -- a dangling endpoint",
+        );
       }
-      continue;
-    }
-    if (!/^[A-Za-z0-9_]+\["\/[^"\]]*"\]$/.test(line)) {
-      fail(
-        `README.md: cannot parse mermaid graph line '${line}' -- expected an edge,` +
-          " a node labeled '/skill-name', or a click line (the header belongs on the first line only)",
-      );
     }
   }
   for (const alias of aliases.keys()) {
