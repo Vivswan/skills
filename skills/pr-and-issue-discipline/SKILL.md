@@ -8,7 +8,7 @@ metadata:
 
 # PR and Issue Discipline
 
-> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, in the shape that fits the change; anything written for a tool or another agent sits in one collapsed section at the bottom.
+> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, under a hard size budget, in the shape that fits the change; anything written for a tool or another agent sits in one collapsed section at the bottom.
 
 These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, alone or in a multi-agent session. What happens after the PR exists (draft flips, review rounds, the merge) is the `/pr-landing-discipline` skill's moment; someone else's thread (an issue reply, a review of their PR) is the `/reply-and-review-discipline` skill's.
 
@@ -35,17 +35,32 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 </details>
 ```
 
-- **Into part two:** reviewer guidance for bot reviewers such as Copilot, mechanism detail beyond `## How`, the recorded-not-built and accepted-deviation lists, gate and codex round counts, file-by-file notes, line counts that fit the stated purpose.
-- **The test is the reader, not the item type.** Part one holds whatever the human needs to know or decide about this change; part two holds everything else. The list above is the default sorting, decided case by case: the codex round count is part two, but a finding from that round that changed what the change does, or left something undone, is part one.
+- **Into part two:** reviewer guidance for bot reviewers such as Copilot, mechanism detail beyond `## How`, the recorded-not-built and accepted-deviation lists, gate detail beyond the `## Proof` totals, file-by-file notes, line counts that fit the stated purpose.
+- **The test is the reader, not the item type.** Part one holds whatever the human needs to know or decide about this change; part two holds everything else. The list above is the default sorting, decided case by case. A review finding that changed what the change does, or left something undone, is part one even though it came from a round.
 - **Nothing in part one depends on part two.** A PR whose detail fits in part one has no part two.
 - **The summary line is a heading.** The Readability rules below govern it: "Technical details" names content.
 
-**Readability rules**, for PR bodies and for the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
+**Size budget.** Part one has a hard cap, counted before publishing. The bullet counts are defaults: a change whose mechanism needs eight bullets gets eight. Part two has no length cap, only the format rules below. An agent that believes this change cannot fit the cap asks the user before publishing over it, with the count and the lines it would keep. The user decides, never the agent alone.
 
-- **No blob of text.** No paragraph over three sentences.
-- **Short bullets with bold lead-ins.** Tables and fenced blocks carry structure.
+| Region | Budget |
+| --- | --- |
+| Part one prose (words outside fenced blocks) | 150 words, hard cap |
+| `## How` | 3 to 6 bullets by default, one sentence each, about 15 words. Or one small diagram or table |
+| `## Proof` | 2 to 4 bullets by default, latest totals only |
+| `Technical details` | No length cap. One fact per line, one sentence each |
+
+**Readability is an accessibility requirement.** Readers include people with dyslexia, and a wall of prose costs them the PR. The standard is the one the `/docs-discipline` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
+
+These rules bind PR bodies and the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
+
+- **Pick the device from the content.** Paragraphs, bullets, tables, and fenced blocks mix. Each appears because it shows this content faster, never because the last section had one.
+- **A bullet is for a list.** Parallel items, steps, options, findings. A line of reasoning stays prose. Turning every sentence into a bullet hides which ones are the same kind of thing.
+- **Short paragraphs are fine.** One idea per paragraph, one to three sentences, under 70 words. Short sentences, about 20 words, one idea each.
+- **No semicolon chains.** A semicolon joining clauses means two sentences were forced into one. Split them.
+- **Bold lead-ins on bullets.** The bold words name the point so a skim reads the lead-ins alone.
+- **No nesting past one level.** A list inside a list is content asking for a table or a subsection.
 - **Headings name the content** ("What changed", "What the report shows"), never the reader's level: "In plain words", "Simple version", and "Non-technical summary" read as talking down.
-- **As short as the change allows.** The blocks carry the change, the words only what no block can.
+- **The blocks carry the change, the words only what no block can.** The defaults above are what most changes need. Go past them when this change needs it, never because a round added something.
 - **`/unslop` runs last**, where installed, over the prose that remains: the AI tells go before the body is offered.
 
 **Template check, once per session, at plan time.** Before the first PR or issue of the session, while still planning, resolve the choice once and reuse it for every PR and issue in that session:
@@ -72,11 +87,14 @@ changed: api -> dependency closure {base, api} -> shards: [base, base+api]
 
 ## How
 
-The resolver validates the manifest against the checkout, closes changed contexts over their dependencies, and emits the GitHub Actions matrix.
+- **Validates the manifest** against the checkout before anything else runs.
+- **Closes each changed context** over its declared dependencies.
+- **Emits the GitHub Actions matrix** from the closure, one shard per entry.
 
 ## Proof
 
-- **Tests and gate:** manifest validation and shard-resolution cases pass (2 new), `bun run check` green.
+- **Tests:** manifest validation and shard-resolution cases pass (2 new).
+- **Gate:** `bun run check` green.
 ````
 
 ### Existing behavior change or bug fix
@@ -107,12 +125,14 @@ after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live ver
 
 ## Proof
 
-- **Tests and gate:** 34 green (2 new), `bun run check` green.
+- **Tests:** 34 green (2 new).
+- **Gate:** `bun run check` green.
 
 <details>
 <summary>Technical details</summary>
 
-- **Reviewer note (Copilot):** the 300s ceiling is a constant in `scripts/sweep.mts`, not a flag; a flag was recorded, not built, since no second caller exists.
+- **Reviewer note (Copilot):** the 300s ceiling is a constant in `scripts/sweep.mts`, not a flag.
+- **Refused: `--probe-ceiling`.** No second caller exists.
 - **Proof detail:** one new test pins the extension while the lock is held, the other the plain 120s verdict without it.
 - **Files:** `scripts/sweep.mts` (the probe), `tests/sweep-script.test.ts` (the two cases).
 
@@ -147,17 +167,19 @@ interface.brand_color       == interface.brandColor
 
 ## How
 
-The smoke test reads the three files per skill and fails the build on any drift.
+- **The smoke test reads the three files** per skill on every build.
+- **Any drift between the mirrored fields** fails the build with the field named.
+- **The invocation pair is checked together,** so one flag without the other fails.
 
 ## Proof
 
 - **Smoke test:** the mirrored-block and invocation-pairing cases pass.
+- **Gate:** `bun run check` green.
 
 <details>
 <summary>Technical details</summary>
 
-- **Accepted deviation:** `longDescription` is not mirrored; the codex manifest carries the long form alone.
-- **Gates:** `bun run check` green; codex review converged in one round.
+- **Accepted deviation:** `longDescription` is not mirrored, since the codex manifest carries the long form alone.
 
 </details>
 ````
@@ -165,9 +187,20 @@ The smoke test reads the three files per skill and fails the build on any drift.
 For every form:
 
 - Blocks show, prose tells. Where behavior is observable, the opening block is an actual command and its actual output, complete enough to stand alone; never manufacture output or add it only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
-- `## How` has no mandated carrier. Use terse bullets, a small diagram, a table, or two short paragraphs, whichever explains the mechanism fastest. One carrier per point: a diagram followed by a paragraph re-explaining it means the diagram failed.
-- `## Proof` names focused behavioral tests or stable checks, with numbers where they exist (tests, gates). Do not turn it into transient CI, approval, or review status.
-- Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above. The diff carries the detail; part one never narrates the implementation process, reduction history, transient status, future work, or the entire diff, and carries line counts only when they contradict the stated purpose (the `/pr-landing-discipline` skill's line accounting says when, and the reason comes with them). Reviewer guidance and gate or review round counts go in part two or nowhere; a scope caveat follows the reader test, part one when the reader must act on it or would be misled without it, part two otherwise.
+- `## How` is 3 to 6 bullets by default, more when the mechanism has more moving parts. One small diagram or table may replace them where it explains the mechanism faster. Each bullet is one sentence of about 15 words with a bold lead-in.
+- One carrier per point: a diagram followed by a bullet re-explaining it means the diagram failed. Never a `## How` paragraph per review round.
+- `## Proof` is 2 to 4 bullets by default, naming focused behavioral tests or stable checks, with the latest totals where numbers exist. Never one line per review round ("round 3: 20 passed", "round 4: 83 passed"): a new run overwrites the old number. Do not turn it into transient CI, approval, or review status.
+- Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above.
+- The diff carries the detail. Part one never narrates the implementation process, reduction history, transient status, future work, or the entire diff. It carries line counts only when they contradict the stated purpose, and then the `/pr-landing-discipline` skill's line accounting says when and the reason comes with them.
+- Reviewer guidance goes in part two or nowhere. Review round counts go nowhere. A scope caveat follows the reader test: part one when the reader must act on it or would be misled without it, part two otherwise.
+
+**Technical details is a fact list with no length cap.** Written for a bot reviewer or the next agent, read by a human who opened it on purpose. As long as the facts require, and shaped so every line can be skipped on its own:
+
+- **One fact per line, one sentence per line.** A line that needs a second sentence is two facts.
+- **Guard and refusal lists use one pattern:** `**Refused: \`--flag\`.** one-clause reason`.
+- **Files take one line,** grouped with braces: `scripts/{sweep.mts,probe.mts}`, `tests/sweep-script.test.ts`.
+- **No round numbers, no process narrative.** "Copilot round four" and "codex round two" name the session, not the change. The fact stays; the round it came from goes.
+- **Nothing part one already says.** A details section that restates `## How` doubled the body for no reader.
 
 **Redact captured output before publishing, and publish no PII anywhere**: strip secrets, tokens, and credentials. Redaction is not paraphrase: the command and the output structure stay verbatim. This is the single definition; the skills that gate on it point here.
 
@@ -205,14 +238,44 @@ gh pr create --draft --title "<type(scope): subject>" --body-file "$body_dir/bod
 
 ## Re-read Before the Human Reads
 
-The body is written when the PR opens and read when the PR is offered; the diff moves in between. Before the offer (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session. How hard to look depends on how far the PR moved: a one-commit PR gets a glance at the Proof numbers, a PR that went through eight review rounds gets every claim re-checked. What usually drifts:
+The body is written when the PR opens and read when the PR is offered; the diff moves in between. Two gates keep it readable: one after every review round, one before the offer.
+
+**After every review round: edit in place, never append.** The specimen was a body that grew to 1,800 words because each of twelve rounds added its own `## How` paragraph and its own `## Proof` line. The rule:
+
+1. A fix to something the body already states edits that `## How` or `## Proof` bullet in place. It does not add a second bullet about the same thing.
+2. A fact new to the change (a mechanism or proof the body never stated) gets one new line, in the region the reader test sends it to.
+3. A count (tests, gates, lines) is overwritten with the latest total. The old number goes.
+4. Nothing in the body says which round produced it.
+5. Run the size check below before updating the PR body. Over the cap, re-cut first.
+
+**Before the offer** (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session. How hard to look depends on how far the PR moved: a one-commit PR gets a glance at the Proof numbers, a PR that went through eight review rounds gets every claim re-checked. Run the size check first, then the drift list:
+
+```bash
+# Part-one prose: words outside fenced blocks and above the <details> tag. Cap: 150.
+# Pipe the CANDIDATE body in through a quoted heredoc: the text about to be published, every round and before the first publish.
+# `gh pr view "$n" --json body -q .body |` replaces the heredoc only for the final pre-offer read of what is already published.
+# Never point awk at a file name, and keep pipefail on: a missing file or a failed gh read must stop the gate, not count as 0.
+set -o pipefail
+awk '
+  /^(```|~~~)/ { match($0, /^(`+|~+)/); d = substr($0, 1, 1)
+                 if (!f)                                       { f = 1; c = d; n = RLENGTH; next }   # opening fence: remember its character and length
+                 if (d == c && RLENGTH >= n && /^(`+|~+) *$/) { f = 0 }                              # closing fence: same character, at least as long, nothing else
+                 next }
+  !f && /^<details>/ { exit }                                                                        # part two starts at a real tag, never one inside a fence
+  !f' <<'EOF' | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /[[:alnum:]]/) n++ } END { print n + 0; exit (n > 150) }'   # counts tokens with a letter or digit, so `##`, `-`, and `|` are not words; exits 1 over the cap
+<the candidate body>
+EOF
+```
+
+Over the cap means cut, not justify. Move detail down into part two, which has room for it, or drop what the diff already says. If the cut would lose something the reader must know, stop and ask the user with the count and the candidate lines. Publishing over the cap is the user's call. What usually drifts:
 
 - **Every claim still true.** The opening block is still accurate (its After side, or its only side, is what the code does now), the Proof numbers are the final run's, and every file named as current still exists under that name.
 - **Scope drift.** Work the review rounds added or removed is in the body, or its absence is deliberate.
 - **Sorting.** Part one holds what the reader needs about the change as it is now. Anything that became detail moved down; anything that became important (a review finding that changed the change, a line count that contradicts the purpose) moved up.
 - **Title.** Type and subject name what landed, not the opening plan.
+- **Size.** Part one is under 150 words, and no semicolon joins two clauses. `## How` and `## Proof` sit at their defaults unless this change needs more.
 
-A body that no longer matches is edited before the flip, never after the reader finds it.
+A body that no longer matches, or no longer fits, is edited before the flip, never after the reader finds it.
 
 ## Issues: Same Principle
 
