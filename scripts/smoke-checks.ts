@@ -292,7 +292,8 @@ export function checkReadmeMermaidGraph(
       continue;
     }
     if (line.includes("-->")) {
-      for (const rawEndpoint of line.split(/<?-->/)) {
+      // `a <--> b` is the two-way arrow; its endpoints are the same as `a --> b`'s.
+      for (const rawEndpoint of line.replaceAll("<-->", "-->").split("-->")) {
         const endpoint = rawEndpoint.trim();
         const parsed = /^([A-Za-z0-9_]+)(\["\/[^"\]]*"\])?$/.exec(endpoint);
         if (parsed === null) {
