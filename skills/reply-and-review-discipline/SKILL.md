@@ -12,6 +12,8 @@ metadata:
 
 These rules apply to any session writing on a thread it does not own: an issue reply, or a review of someone else's PR. The user's own PR or issue is the `/pr-and-issue-discipline` skill's moment. Its Readability rules and its redaction rule apply here unchanged; they are stated there, once.
 
+`/unslop`, where installed, runs last over every reply and staged comment: it publishes under the user's name, so no AI tells.
+
 ## When to Apply
 
 - Replying to an issue reporter or outside contributor

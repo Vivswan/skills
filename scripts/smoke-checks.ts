@@ -151,9 +151,9 @@ export function checkReadmeSkillList(
           ` skills/${name}/ folder -- remove the stale entry or restore the folder`,
       );
     }
-    const folder = xeno ? `./xeno/${name}/` : `./skills/${name}/`;
-    if (target !== folder && target !== folder.slice(0, -1)) {
-      fail(`README.md: the '[${name}]' entry must link to ${folder}`);
+    const page = `./${xeno ? "xeno" : "skills"}/${name}/SKILL.md`;
+    if (target !== page) {
+      fail(`README.md: the '[${name}]' entry must link to ${page}`);
     }
     if (xeno !== underExternal) {
       fail(
@@ -175,10 +175,29 @@ export function checkReadmeSkillList(
 // all render fine and drift silently. Bijection plus referential integrity:
 // every node label resolves to a published skill, one node per skill, every
 // published skill has a node, and every edge endpoint names a defined node.
-export function checkReadmeMermaidGraph(readmeText: string, skillNames: ReadonlySet<string>): void {
+export function checkReadmeMermaidGraph(
+  readmeText: string,
+  skillNames: ReadonlySet<string>,
+  xenoNames: ReadonlySet<string> = new Set(),
+): void {
   const fence = /```mermaid\n([\s\S]*?)```/.exec(readmeText);
   if (fence === null) fail("README.md: missing the mermaid skill-reference graph");
-  const body = fence[1] ?? "";
+  // An optional YAML frontmatter block (`---` ... `---`, the layout config)
+  // may open the block. It is stripped before anything else is read, so its
+  // text can neither supply a node nor collide with one, and it must parse:
+  // mermaid renders nothing behind malformed frontmatter.
+  let body = fence[1] ?? "";
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(body);
+  if (frontmatter !== null) {
+    try {
+      Bun.YAML.parse(frontmatter[1] ?? "");
+    } catch (error) {
+      fail(`README.md: the mermaid graph's frontmatter is not valid YAML: ${String(error)}`);
+    }
+    body = body.slice(frontmatter[0].length);
+  } else if (body.startsWith("---\n")) {
+    fail("README.md: the mermaid graph's frontmatter block never closes");
+  }
 
   // Node definitions may appear standalone or inline inside an edge; collect
   // them all first so a bare alias used before its labeled definition still
@@ -235,12 +254,13 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
   // Every line must be something this checker understands. The FIRST
   // non-empty line must be exactly one valid flowchart header (mermaid
   // cannot render the block without one, and `graph XX` is not a
-  // direction); every later line is an edge or a standalone
-  // '/skill'-labeled node. Anything else (a second header, a bare alias, a
-  // node whose label lacks the leading slash, syntax this parser does not
-  // know) fails loudly instead of slipping past the guarantees above
-  // unparsed. Edges are matched first so a malformed line starting with
-  // `graph` cannot ride the header rule past endpoint validation.
+  // direction); every later line is an edge (`-->` or `<-->`), a standalone
+  // '/skill'-labeled node, or a `click <alias> "<url>"` line. Anything else
+  // (a second header, a bare alias, a node whose label lacks the leading
+  // slash, syntax this parser does not know) fails loudly instead of
+  // slipping past the guarantees above unparsed. Edges are matched first so
+  // a malformed line starting with `graph` cannot ride the header rule past
+  // endpoint validation.
   const lines = body
     .split("\n")
     .map((rawLine) => rawLine.trim())
@@ -252,9 +272,27 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
         ` 'graph <LR|RL|TB|TD|BT>' header, found '${header}'`,
     );
   }
+  // Every node links to its skill page, once: the graph is navigation, not
+  // only a picture.
+  const clicked = new Set<string>();
   for (const line of lines.slice(1)) {
+    const click = /^click ([A-Za-z0-9_]+) "([^"]*)"$/.exec(line);
+    if (click !== null) {
+      const alias = click[1] ?? "";
+      const name = aliases.get(alias);
+      if (name === undefined) {
+        fail(`README.md: mermaid click '${line}' references '${alias}', which no node labels`);
+      }
+      const page = `./${xenoNames.has(name) ? "xeno" : "skills"}/${name}/SKILL.md`;
+      if (click[2] !== page) {
+        fail(`README.md: mermaid click for '${alias}' must link to ${page}, found '${click[2]}'`);
+      }
+      if (clicked.has(alias)) fail(`README.md: mermaid node '${alias}' has two click lines`);
+      clicked.add(alias);
+      continue;
+    }
     if (line.includes("-->")) {
-      for (const rawEndpoint of line.split("-->")) {
+      for (const rawEndpoint of line.split(/<?-->/)) {
         const endpoint = rawEndpoint.trim();
         const parsed = /^([A-Za-z0-9_]+)(\["\/[^"\]]*"\])?$/.exec(endpoint);
         if (parsed === null) {
@@ -272,9 +310,14 @@ export function checkReadmeMermaidGraph(readmeText: string, skillNames: Readonly
     }
     if (!/^[A-Za-z0-9_]+\["\/[^"\]]*"\]$/.test(line)) {
       fail(
-        `README.md: cannot parse mermaid graph line '${line}' -- expected an edge` +
-          " or a node labeled '/skill-name' (the header belongs on the first line only)",
+        `README.md: cannot parse mermaid graph line '${line}' -- expected an edge,` +
+          " a node labeled '/skill-name', or a click line (the header belongs on the first line only)",
       );
+    }
+  }
+  for (const alias of aliases.keys()) {
+    if (!clicked.has(alias)) {
+      fail(`README.md: mermaid node '${alias}' has no click line to its SKILL.md`);
     }
   }
 }
@@ -334,11 +377,11 @@ export function checkReadmeUsageExplicitRoster(
   }
   const named = new Set<string>();
   for (const entry of (sentence[1] ?? "").split(", ")) {
-    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/(?:skills|(xeno))\/\1\/\)$/.exec(entry);
+    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/(?:skills|(xeno))\/\1\/SKILL\.md\)$/.exec(entry);
     if (link === null) {
       fail(
         `README.md: cannot parse Usage explicit-invocation-only roster entry '${entry}'` +
-          " -- expected '[`/skill-name`](./skills/skill-name/)' entries separated by ', '",
+          " -- expected '[`/skill-name`](./skills/skill-name/SKILL.md)' entries separated by ', '",
       );
     }
     const name = link[1] ?? "";
@@ -350,7 +393,7 @@ export function checkReadmeUsageExplicitRoster(
     if (xeno !== (link[2] !== undefined)) {
       fail(
         `README.md: the Usage roster entry for '${name}' must link to` +
-          ` ./${xeno ? "xeno" : "skills"}/${name}/`,
+          ` ./${xeno ? "xeno" : "skills"}/${name}/SKILL.md`,
       );
     }
   }

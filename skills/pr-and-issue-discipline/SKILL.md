@@ -46,6 +46,7 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 - **Short bullets with bold lead-ins.** Tables and fenced blocks carry structure.
 - **Headings name the content** ("What changed", "What the report shows"), never the reader's level: "In plain words", "Simple version", and "Non-technical summary" read as talking down.
 - **As short as the change allows.** The blocks carry the change, the words only what no block can.
+- **`/unslop` runs last**, where installed, over the prose that remains: the AI tells go before the body is offered.
 
 **Template check, once per session, at plan time.** Before the first PR or issue of the session, while still planning, resolve the choice once and reuse it for every PR and issue in that session:
 
