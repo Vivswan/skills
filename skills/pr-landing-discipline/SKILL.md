@@ -71,7 +71,8 @@ An open PR is live work until it merges: bot reviewers (e.g. Copilot code review
 2. When a review lands, triage EVERY comment the same cycle it appears, never batched:
    - A valid finding is fixed in that same round.
    - An invalid or not-valid-here comment gets a reply stating why, and its thread resolved. A comment with nothing to answer (praise, a restated diff) is resolved without one.
-3. A fix push restarts the loop: new CI watch, re-gate on the changed content, and the bot may re-review.
+3. Before the fix push, the body gets the per-round edit the `/pr-and-issue-discipline` skill defines: edit in place, overwrite counts, re-run the size check.
+4. A fix push restarts the loop: new CI watch, re-gate on the changed content, and the bot may re-review.
 
 **Bot comments are advisory.** A non-human reviewer (Copilot code review, any review bot) follows a repository's review instructions inconsistently, and many repositories have none, so the author runs each bot comment through the filter those instructions would have applied: comment only on a defect you can demonstrate.
 
