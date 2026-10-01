@@ -1,6 +1,6 @@
 ---
 name: pr-and-issue-discipline
-description: Use when opening a pull request, writing or changing its body or title, writing an issue, or replying to an issue reporter or outside contributor.
+description: Use when opening a pull request, writing or changing its body or title, or writing an issue.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -10,13 +10,12 @@ metadata:
 
 > Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change; the fewest words after, in the shape that fits the change; anything written for a tool or another agent sits in one collapsed section at the bottom.
 
-These rules apply to any session that opens or updates a PR, writes an issue, or replies to an issue reporter or outside contributor. "The author" below is whoever prepared the change, human or agent, working alone or in a multi-agent session. What happens after the PR exists (draft flips, review rounds, who merges, the gates before landing) is the `/pr-landing-discipline` skill's moment.
+These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, alone or in a multi-agent session. What happens after the PR exists (draft flips, review rounds, the merge) is the `/pr-landing-discipline` skill's moment; someone else's thread (an issue reply, a review of their PR) is the `/reply-and-review-discipline` skill's.
 
 ## When to Apply
 
 - Opening a pull request, or writing or changing its body or title
 - Writing a bug report or issue
-- Replying to an issue reporter or outside contributor
 - Re-reading the body before the PR is offered to its reader
 
 Open every PR as a DRAFT; from there the `/pr-landing-discipline` skill owns it: the draft flips, the babysit loop, who merges, and the gates before landing.
@@ -41,7 +40,7 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 - **Nothing in part one depends on part two.** A PR whose detail fits in part one has no part two.
 - **The summary line is a heading.** The Readability rules below govern it: "Technical details" names content.
 
-**Readability rules**, for PR bodies and issue replies alike (the Replies section below points here rather than restating them):
+**Readability rules**, for PR bodies and for the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
 
 - **No blob of text.** No paragraph over three sentences.
 - **Short bullets with bold lead-ins.** Tables and fenced blocks carry structure.
@@ -169,35 +168,18 @@ For every form:
 - `## Proof` names focused behavioral tests or stable checks, with numbers where they exist (tests, gates). Do not turn it into transient CI, approval, or review status.
 - Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above. The diff carries the detail; part one never narrates the implementation process, reduction history, transient status, future work, or the entire diff, and carries line counts only when they contradict the stated purpose (the `/pr-landing-discipline` skill's line accounting says when, and the reason comes with them). Reviewer guidance and gate or review round counts go in part two or nowhere; a scope caveat follows the reader test, part one when the reader must act on it or would be misled without it, part two otherwise.
 
-**Redact captured output before publishing, and publish no PII anywhere.** Strip secrets, tokens, and credentials. PII is anything that tells a reader who the author is, how they work, or how their machine is set up. The rule covers everything a PR or issue publishes: titles, bodies, commit messages, code, test fixtures, docs, captured Before/After blocks, review replies, CI comments, and issue replies. Redaction is not paraphrase: the command and the output structure stay verbatim. This paragraph is the single definition; the skills that gate on it point here.
+**Redact captured output before publishing, and publish no PII anywhere**: strip secrets, tokens, and credentials. Redaction is not paraphrase: the command and the output structure stay verbatim. This is the single definition; the skills that gate on it point here.
 
-- **Identity.** Names, employers, real account logins and usernames, hostnames and machine names, home paths under a real user, emails. One substitute per kind: `octocat`, `work-bot`, or `example-user` for a login or username; `example.com` for an employer, a domain, or a hostname; `example-user@example.com` for a whole email, never just its host; `/home/user` or `~` for a home path; `/repo/...` for the checkout path (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example).
-- **Anything measured or copied from the author's real environment.** Figures, statistics, and profiles computed from real logs or sessions; real settings, configuration, transcripts, and logs; inventories of what the author has installed or uses. All of it identifies the author with no name in it. Substitute: hand-written example values that show only what the text discusses, and the text says they are examples.
+- **PII is anything that tells a reader who the author is, how they work, or how their machine is set up.** Two kinds: identity (a name, an employer, a real login, a hostname, a home path, an email), and anything measured or copied from the author's real environment (figures from real logs, real settings or transcripts, an inventory of installed tools), which identifies the author with no name in it.
+- **One substitute per kind:** `octocat`, `work-bot`, or `example-user` for a login; `example.com` for an employer, a domain, or a hostname; `example-user@example.com` for a whole email; `/home/user` or `~` for a home path; `/repo/...` for the checkout path; hand-written example values, said to be examples, for anything measured.
+- **What follows from the rule, the specimens, and what stays** (fixtures are hand-authored, a CI check posts no real figure; a product file name and the repository's own coordinate and gates are not PII): `references/redaction.md`.
 
-What follows from the second kind:
+**Release-please reads the body.** In a repository released by release-please, Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) travel in the PR body as a commit-override block, the last element inside the Technical details section. Release-please parses that block in place of the squash message.
 
-- **Fixtures are hand-authored, never derived from real data.** A fixture recorded from real data is PII the moment it is committed, and only a history rewrite removes it. The `/code-standards` skill's `references/tests.md` owns the fixture rule and the output-path rule for tools that measure real data.
-- **A CI check posts no figure derived from real data.** It reports pass or fail and points at the artifact.
-
-Specimens: a real account login copied from pasted terminal output into a test fixture and a PR body, shipped as `work-bot`; a statistical profile measured from the author's real sessions and committed as a test fixture, replaced by a hand-written one, every figure of the old file grepped out of the replacing PR, and the history rewritten to drop the original.
-
-A product file name that happens to contain a vendor's word (a PowerShell profile filename, a devcontainer base image), a repository's own `owner/repo` coordinate in its install command, and the repository's own tooling and gates (the review tool a body's Gates line names, a check's run count) are facts about the repository, not the author, and stay.
-
-**Release-please reads the body.** In a repository released by release-please, footers travel in the PR body as a commit-override block, whatever the squash setting put in the commit message. Release-please reads the merged PR's body at run time and, when it holds the block, parses that block in place of the commit message; a commit whose message it cannot parse is dropped from the changelog.
-
-- **The marker words appear nowhere else in the body.** Release-please splits the body at the first occurrence of the opening marker, so a prose mention before the block ("the block below", spelled with the marker) becomes the message, fails to parse, and drops the commit from the release. Call it the commit-override block in prose; spell the markers only as the block itself.
-- **One `BREAKING CHANGE` note per commit** (the last footer wins): several breaks go into one footer whose value spans several lines, one break per line, or into one `BEGIN_NESTED_COMMIT` / `END_NESTED_COMMIT` block per break.
-- **A bad block is repaired after the merge** by editing the merged PR's body; release-please re-reads it on its next run, and the dropped commit returns to the release.
-
-The override changes release-please's parsed message, not the git commit: a repository whose release tool reads the squash commit itself keeps its footers in that commit message, under its own rules. The block is written for a tool, so it is the last element inside the Technical details section; release-please matches the markers inside a `<details>` element. In a release-please repository, a PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) closes its details section with:
-
-```text
-BEGIN_COMMIT_OVERRIDE
-<conventional subject line>
-
-<footer>: <value, one line per break>
-END_COMMIT_OVERRIDE
-```
+- **The marker words appear nowhere else in the body.**
+- **One `BREAKING CHANGE` note per commit:** several breaks share one multi-line footer, one per line, or take one nested-commit block each.
+- **A bad block is repaired by editing the merged body.**
+- The block's shape, why each rule exists, and the repair: `references/release-please.md`.
 
 **Hand the body to `gh` on stdin, never through a guessable file.** A body drafted at `/tmp/<repo>-pr-body.md` was the specimen: two sessions on one machine picked the same name, and the second overwrote the first's. `gh pr create` and `gh pr edit` take `-` as the body file and read stdin, so a quoted heredoc carries the body with nothing to race over or clean up:
 
@@ -257,54 +239,3 @@ installed: SKILL.md, README.md          (metadata.json silently missing)
 ````
 
 Include environment only when it matters: a version-specific parser bug names the version; a pure logic bug does not. When an issue includes captured output, the redaction rule above applies unchanged.
-
-## Replies to Issue Reporters and Outside Contributors: Plain First
-
-An issue reply or a review comment to an outside contributor is read by someone skimming a thread who does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
-
-Specimen: a diagnostics-only bug report whose log ended mid-request. The first reply opened with three paragraphs on hidden provider groups, tombstones, and silent refreshes. The rewrite:
-
-`````markdown
-## Questions
-
-1. **What went wrong?** One or two sentences, or a screenshot.
-2. **Is `https://<host>/@<user>` a LiteLLM proxy?** If yes, does it need an API key?
-3. **Can you paste the log lines after the last request?** In VS Code: `View > Output`, pick `LiteLLM`, copy everything after the line starting with `Fetching from::`.
-
-Number 3 would help the most. The rest of this comment explains why, if you are curious.
-
-## What the report shows
-
-**The report was sent before anything failed.** The last log line is the extension asking your server for its model list. No answer had arrived yet:
-
-```
-Fetching from:: "https://<host>/@<user>/v1/model/info"    <- last line, still waiting
-```
-
-- **The server you removed** pointed at `https://<host>/`. The extension remembers that and keeps its models out of the picker. That is expected, not an error.
-- **The server you added** is at `https://<host>/@<user>` with no API key.
-
-**A guess, to save a round trip:** a URL with `/@username` in it and no API key usually is not a LiteLLM proxy.
-
-<details>
-<summary>Technical details</summary>
-
-- **Hidden provider group:** `Provider group is hidden by an explicit user removal` means the `servers` entry was removed. VS Code cannot delete a provider group, so the extension tombstones it and answers with an empty model list. Docs: [Lifecycle: renames, removals, hidden groups](...).
-- **Where the log stops:** `Fetching from:: .../v1/model/info` is the first discovery request. The log buffer holds 50 lines and no error was recorded, so the report was built inside this request's 30 second timeout.
-
-</details>
-`````
-
-The rules the specimen follows:
-
-- **Questions first, under a `## Questions` heading.** They are questions, so ask them as questions: a numbered list, three at most, and say which one would help most.
-  - Give the exact click path or command when one exists.
-  - "What would help" rather than "what we need": the reporter is doing you a favor. The reader may stop after the list.
-- **Part one is plain language, and never says so** (the Readability rules above own the heading rule).
-  - Say what the reader did and what they see: "the server you removed" rather than "the tombstoned provider group". When a mechanism has no plain name, show its effect instead of naming it.
-  - Quote the reader's own log line with an arrow note rather than paraphrasing it.
-- **Part two is the technical reading, collapsed, and only when it adds something.** The same collapsible as a PR body's part two, with the same summary line.
-  - Inside a `<details>` block: the mechanism names, the log lines mapped to code paths, docs links, and what a future maintainer would want when re-reading the thread. Nothing in part one depends on it.
-  - A reply that says everything in plain words has no part two. An "expected behavior, here is the setting" answer needs no details block; the specimen's does, because the buffer size and timeout explain why the log stops where it does.
-- **A guess goes last in part one and is labeled a guess.** It saves a round trip without steering the reader before they answer.
-- The Readability rules and the redaction rule above apply unchanged.

@@ -22,6 +22,7 @@ The agent applies these on its own when the task matches:
 - [/no-invalid-states](./skills/no-invalid-states/) - Invariants in the type system instead of runtime checks
 - [/pr-and-issue-discipline](./skills/pr-and-issue-discipline/) - PRs and issues that show the change instead of describing it
 - [/pr-landing-discipline](./skills/pr-landing-discipline/) - Draft flips, review rounds to convergence, line accounting, and a human-gated merge
+- [/reply-and-review-discipline](./skills/reply-and-review-discipline/) - Plain-first replies to issue reporters and one pending review on someone else's PR
 - [/rubber-duck-review](./skills/rubber-duck-review/) - Cross-model, read-only second-opinion code review
 - [/verify-with-controls](./skills/verify-with-controls/) - Controls and evidence before a zero, alarm, success claim, or stillness becomes a conclusion
 - [/watch-ci-after-push](./skills/watch-ci-after-push/) - Background CI watcher after every push or merge
@@ -59,6 +60,15 @@ graph LR
   om --> pld["/pr-landing-discipline"]
   om --> wh["/worktree-hygiene"]
   pid --> pld
+  pid --> rrd["/reply-and-review-discipline"]
+  rrd --> pid
+  rrd --> rdr
+  rrd --> cs
+  rrd --> dd
+  rrd --> nt
+  rrd --> nis
+  rrd --> vwc
+  rdr --> rrd
   pld --> pid
   pld --> wca
   pld --> rdr

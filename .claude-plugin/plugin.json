@@ -21,6 +21,7 @@
     "./skills/never-twice",
     "./skills/pr-and-issue-discipline",
     "./skills/pr-landing-discipline",
+    "./skills/reply-and-review-discipline",
     "./skills/rubber-duck-review",
     "./skills/verify-with-controls",
     "./skills/watch-ci-after-push",
