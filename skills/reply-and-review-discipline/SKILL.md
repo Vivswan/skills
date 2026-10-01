@@ -78,20 +78,21 @@ The agent reviews under the user's account, so publishing is the user's act: the
 
 4. **Carry the answer for the PR**, through every revision of the pending review. A `/rubber-duck-review` pass on this PR expands only the `## Review Criteria` sections the user chose here, not every installed one: that skill's every-section rule is for the user's own change, and this choice scopes it. Then read the PR's linked document and the code, and only then write.
 
-**Stage:** one JSON body, the head commit inside it, no `event` field. With `--input`, a `-f` field goes to the URL query string, not the body, so `commit_id` belongs in the file. The file lives in a `mktemp` directory and is removed in the same shell call, as the `/pr-and-issue-discipline` skill's PR-body fallback does.
+**Stage:** one JSON body, the head commit inside it, no `event` field. `commit_id` belongs in the file: with `--input`, a `-f` field goes to the URL query string. The heredoc is quoted, since comment bodies carry backticks an unquoted one would run as commands, so the SHA goes in afterwards. The file lives in a `mktemp` directory, removed in the same shell call like the `/pr-and-issue-discipline` skill's PR-body fallback.
 
 ```bash
 review_dir=$(mktemp -d "${TMPDIR:-/tmp}/pr-review-XXXXXX"); trap 'rm -rf "$review_dir"' EXIT
-head_sha=$(gh pr view <n> --repo <owner>/<repo> --json headRefOid -q .headRefOid)
-cat > "$review_dir/review.json" <<EOF
+cat > "$review_dir/review.json" <<'EOF'
 {
-  "commit_id": "$head_sha",
+  "commit_id": "HEAD_SHA",
   "comments": [
     {"path": "src/metrics.ts", "line": 42, "side": "RIGHT", "body": "Review summary (copy into the summary box)\n\n**Works:** ...\n**Blocks:** ...\n**Can wait:** ..."},
     {"path": "src/metrics.ts", "line": 88, "side": "RIGHT", "body": "When the model's answer can't be parsed, one metric counts it as a failure and the other skips it, so the two headline numbers disagree. Pick one rule and apply it to both."}
   ]
 }
 EOF
+head_sha=$(gh pr view <n> --repo <owner>/<repo> --json headRefOid -q .headRefOid)
+sed -i.bak "s/\"commit_id\": \"HEAD_SHA\"/\"commit_id\": \"$head_sha\"/" "$review_dir/review.json"   # the whole property, so a body saying HEAD_SHA is untouched
 gh api -X POST repos/<owner>/<repo>/pulls/<n>/reviews --input "$review_dir/review.json" --jq .id   # no "event": stays pending
 ```
 

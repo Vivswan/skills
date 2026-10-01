@@ -65,11 +65,7 @@ graph LR
   pid --> rrd["/reply-and-review-discipline"]
   rrd --> pid
   rrd --> rdr
-  rrd --> cs
   rrd --> dd
-  rrd --> nt
-  rrd --> nis
-  rrd --> vwc
   rdr --> rrd
   pld --> pid
   pld --> wca
