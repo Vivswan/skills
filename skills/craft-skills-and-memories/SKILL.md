@@ -22,7 +22,7 @@ Scope:
 Creating:
 
 - "Save this as a memory" / "make this a skill" / "remember this"
-- The decision is made to encode a lesson or workflow for future sessions (deciding the response to a correction is `/never-twice`'s job; its rung 3 hands off here)
+- The decision is made to encode a lesson or workflow for future sessions (deciding the response to a correction is `/never-twice`'s job, and its rung 3 hands off here)
 
 Fixing:
 
@@ -41,24 +41,24 @@ Fixing:
 - **Descriptions are triggers**: short, "Use when ...", stating the one moment the thing should fire, never summarizing contents. A summary-shaped description is an activation bug.
 - **Skills** carry runnable copy-paste blocks and worked examples a cold agent can follow.
 - **A skill roster stays lean and disjoint.** The design conditions for creating, combining, and splitting skills:
-  - Every firing moment has exactly one home: a skill states its specific moments, and triggers across the roster are pairwise disjoint. An overlap is a defect, resolved by combining or sharpening, never tolerated (this skill's create-and-fix lifecycle is such a combination: its moments share one home, one reader).
+  - Every firing moment has exactly one home: a skill states its specific moments, and triggers across the roster are pairwise disjoint. An overlap is a defect, resolved by combining or sharpening, never tolerated. This skill's create-and-fix lifecycle is such a combination: its moments share one home, one reader.
   - Fewer skills beats more: combine two skills that serve the same reader at the same moment.
-  - No skill becomes extremely complex or big: split by firing moment when one grows. A complex skill never absorbs a sibling even when triggers overlap; sharpen the descriptions instead.
-  - Skimmable throughout: short front-loaded paragraphs, no text blobs (the example-led rule above governs content order); readability for the reader outranks style rules, and accuracy rules always bind.
-  - Form follows the change in any section: no mandated format beyond this bar, never a visual plus prose re-explaining it, programmer register (the `/natural-writing` bullet below states when that skill applies to prose).
+  - No skill becomes extremely complex or big: split by firing moment when one grows. A complex skill never absorbs a sibling even when triggers overlap. Sharpen the descriptions instead.
+  - Skimmable throughout: short front-loaded paragraphs, no text blobs (the example-led rule above governs content order). Readability for the reader outranks style rules, and accuracy rules always bind.
+  - Form follows the change in any section: no mandated format beyond this bar, never a visual plus prose re-explaining it, programmer register. The `/natural-writing` bullet below states when that skill applies to prose.
   - No backwards compatibility, folders included: splits, merges, and retirements are normal changes, with every deletion audited per the `/never-twice` skill (Deleting a Guard). A compatibility contract the hosting repo declares (such as published install paths) still binds folder moves there.
 - **Memories** hold one fact per file, record the why, convert relative dates to absolute, and link related memories. A wrong memory gets deleted, not patched around.
 - When rewriting prose, apply the `/natural-writing` skill if it is present and invocable. If your harness lets only the user invoke it, suggest they run `/natural-writing` rather than silently skipping the step.
 
 ## Creating
 
-1. **Check for an existing home first.** A skill or memory that already covers the topic gets updated; duplicates drift apart.
+1. **Check for an existing home first.** A skill or memory that already covers the topic gets updated. Duplicates drift apart.
 2. **Pick skill vs memory.**
    - General-purpose behavior any user could install: skill.
    - Personal or project fact, policy, or preference: memory, at the right scope.
-   - A skill that encodes a personal workflow rather than an auto-detectable task should be explicit-invocation-only: `disable-model-invocation: true` in the frontmatter, and `policy.allow_implicit_invocation: false` in `agents/openai.yaml` for Codex.
+   - A skill that encodes a personal workflow rather than an auto-detectable task should be explicit-invocation-only. That means `disable-model-invocation: true` in the frontmatter, and `policy.allow_implicit_invocation: false` in `agents/openai.yaml` for Codex.
 3. **Write it to the quality bar above**, with the triggering incident as the specimen.
-4. **Wire it in**: a skill follows its repository's authoring checklist (manifests, catalog, checks); a memory gets its index line.
+4. **Wire it in**: a skill follows its repository's authoring checklist (manifests, catalog, checks). A memory gets its index line.
 5. **Run the gates** where they exist (repo checks, review). For a memory, re-read it asking "will a cold session act correctly from this?"
 
 ## Fixing
@@ -74,13 +74,15 @@ Work around the broken step to complete what the user actually asked for. The fi
 ### 3. Fix it at its canonical source
 
 - Skill in its authoring repository: edit the affected sources directly (`SKILL.md`, `references/`, `scripts/`).
-- Installed or vendored skill copy you are authorized to edit (e.g. a personal skills directory): edit that copy, and tell the user the upstream source still carries the defect if one exists.
+- Installed or vendored skill copy you are authorized to edit (e.g. a personal skills directory): edit that copy. Tell the user the upstream source still carries the defect if one exists.
 - Memory: edit the memory file where it lives and keep its index line in sync. A memory that is wrong, as opposed to merely stale, gets deleted, not patched around.
 - Not authorized to write: report the defect and your proposed fix to the user instead.
 
 ### 4. Fold the fix in, don't append a note
 
-Rewrite the affected step so it is correct as written and meets the quality bar. Keep copy-paste blocks runnable. A one-off warning bolted to the end leaves the broken instructions in place. A rewrite that deletes rules follows the deletion audit in the `/never-twice` skill (Deleting a Guard).
+Rewrite the affected step so it is correct as written and meets the quality bar. Keep copy-paste blocks runnable.
+
+A one-off warning bolted to the end leaves the broken instructions in place. A rewrite that deletes rules follows the deletion audit in the `/never-twice` skill (Deleting a Guard).
 
 **Code first for mechanical failures.** Where each kind of fix lands:
 
@@ -110,7 +112,7 @@ A skill or memory edit is a change like any other: run whatever checks and revie
 1. Transient? No: it reproduces every run, and `claude --help` shows `--output-format stream-json` requires `--verbose`. The root cause is the skill's documented command.
 2. Finish the review by re-running with `--verbose` added.
 3. The skill's canonical source is a local checkout of its authoring repo: edit the copy-paste block in its `SKILL.md` to include `--verbose`.
-4. The fix goes into the block itself, so it stays runnable as written; no footnote saying "note: also pass --verbose".
+4. The fix goes into the block itself, so it stays runnable as written. No footnote saying "note: also pass --verbose".
 5. Run that repo's checks and include the edit in the same change set for review.
 
 **A stale memory.** A recalled project memory says deploys go through `make release`, but the Makefile renamed the target to `make publish` months ago.
@@ -119,7 +121,7 @@ A skill or memory edit is a change like any other: run whatever checks and revie
 2. Finish the deploy with the real target.
 3. Update the memory file in that project's store (and its index line) to name `make publish`, keeping the rename as the concrete example.
 
-**Not a defect.** The same command fails once with a backend overload error and succeeds on retry. That is transient; finish the task and leave the skill alone.
+**Not a defect.** The same command fails once with a backend overload error and succeeds on retry. That is transient. Finish the task and leave the skill alone.
 
 ## Using Skills
 
@@ -127,7 +129,7 @@ Fit is judged per invocation. When an invoked skill's guidance does not fit the 
 
 - Never follow a skill mechanically against the task's needs.
 - Never ignore one silently.
-- Standing rules the user has set (e.g. a commit gate) still hold; this covers guidance that genuinely conflicts with the work.
+- Standing rules the user has set (e.g. a commit gate) still hold. This covers guidance that genuinely conflicts with the work.
 
 ## Reporting
 

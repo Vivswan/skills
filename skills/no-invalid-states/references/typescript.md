@@ -1,6 +1,6 @@
 # TypeScript Strategies
 
-TypeScript's structural type system models domain states precisely as long as you keep the compiler honest: no `any`, no `as` escape hatches, no `!` assertions over your own invariants.
+TypeScript's structural type system models domain states precisely, as long as you keep the compiler honest. That means no `any`, no `as` escape hatches, and no `!` assertions over your own invariants.
 
 Prefer:
 

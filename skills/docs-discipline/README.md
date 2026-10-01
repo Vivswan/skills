@@ -10,7 +10,7 @@
 | a break between versions | old form, new form, and what the old form does now |
 | plain facts | bullets with bold lead-ins, paragraphs under 70 words |
 
-`scripts/docs-probe.mts` measures the cap and checks that named paths exist; `references/architecture-page.md` and its three scripts keep an architecture page's diagrams naming real code.
+`scripts/docs-probe.mts` measures the cap and checks that named paths exist. `references/architecture-page.md` and its three scripts keep an architecture page's diagrams naming real code.
 
 ## Install
 
@@ -28,22 +28,22 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/docs-disciplin
 
 ## What It Does
 
-- Picks the device from the content, with a worked before/after on a real paragraph and the rule to break a convention when the content reads better without it
-- Probes a page: paragraphs and list items over 70 words, and backticked paths or relative links that do not exist, each with its line
-- Restructures an existing page without losing or inventing a fact: headings and anchors censused before and after, a review that lists every fact absent or new
-- For an architecture page: declares the import layering once in `architecture.yml`, lints the tree against it both ways, renders the module map into a generated region, and checks that every diagram box names a file that exists and a symbol it exports
-- Contributes its `## Review Criteria` to every [`/rubber-duck-review`](../rubber-duck-review/) pass
+- Picks the device from the content, with a worked before/after on a real paragraph. Includes the rule to break a convention when the content reads better without it.
+- Probes a page: paragraphs and list items over 70 words, and backticked paths or relative links that do not exist, each with its line.
+- Restructures an existing page without losing or inventing a fact: headings and anchors censused before and after, a review that lists every fact absent or new.
+- For an architecture page: declares the import layering once in `architecture.yml` and lints the tree against it both ways. Renders the module map into a generated region, and checks that every diagram box names a file that exists and a symbol it exports.
+- Contributes its `## Review Criteria` to every [`/rubber-duck-review`](../rubber-duck-review/) pass.
 
 ## Layout
 
 - [`SKILL.md`](./SKILL.md): the specimen, the shape rules, the probe, restructuring, page kinds, the review criteria
 - [`references/architecture-page.md`](./references/architecture-page.md): the architecture page recipe
-- [`scripts/docs-probe.mts`](./scripts/docs-probe.mts): the paragraph cap and the path check; `--shape-only` skips paths, `--max-words` moves the cap
-- [`scripts/arch-lint.mts`](./scripts/arch-lint.mts): the layering lint (`--mermaid` prints the map); exports `readArchitecture`, `lintArchitecture`, `renderArchitectureMermaid`, `importSpecifiers`
-- [`scripts/render-architecture-map.mts`](./scripts/render-architecture-map.mts): writes the map into the page's generated region; `--check` exits 1 on drift
-- [`scripts/check-architecture-page.mts`](./scripts/check-architecture-page.mts): the page test; `--expect-diagrams <n>` pins the count, `--repo-url` resolves absolute links
+- [`scripts/docs-probe.mts`](./scripts/docs-probe.mts): the paragraph cap and the path check. `--shape-only` skips paths, `--max-words` moves the cap
+- [`scripts/arch-lint.mts`](./scripts/arch-lint.mts): the layering lint (`--mermaid` prints the map). Exports `readArchitecture`, `lintArchitecture`, `renderArchitectureMermaid`, `importSpecifiers`
+- [`scripts/render-architecture-map.mts`](./scripts/render-architecture-map.mts): writes the map into the page's generated region. `--check` exits 1 on drift
+- [`scripts/check-architecture-page.mts`](./scripts/check-architecture-page.mts): the page test. `--expect-diagrams <n>` pins the count, `--repo-url` resolves absolute links
 
-The probe runs with bun alone. The three architecture scripts also need `oxc-parser` (`bun add -d oxc-parser`); copy them into the repository so its check command runs without the skill installed.
+The probe runs with bun alone. The three architecture scripts also need `oxc-parser` (`bun add -d oxc-parser`). Copy them into the repository so its check command runs without the skill installed.
 
 ## Exit Codes
 

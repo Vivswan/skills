@@ -1,6 +1,6 @@
 # How Claude Code peer messaging works, and how the bridge rides it
 
-This page owns the protocol facts; `../SKILL.md` owns the workflow.
+This page owns the protocol facts. `../SKILL.md` owns the workflow.
 
 ## Picture
 
@@ -65,19 +65,21 @@ Wire format, one connection per message:
 
 **The path must be the same on both sides.** The message's `from` is an absolute path on the sender's machine, and the reply lands only if that path is a socket on the receiver's machine too. So each socket is forwarded to the exact path it has at home.
 
-**OpenSSH forwards Unix sockets.** `-L a:b` creates socket `a` locally and carries each connection to socket `b` on the remote; `-R` is the mirror image. Supported since OpenSSH 6.7 on both ends.
+**OpenSSH forwards Unix sockets.** `-L a:b` creates socket `a` locally and carries each connection to socket `b` on the remote, and `-R` is the mirror image. Supported since OpenSSH 6.7 on both ends.
 
 ## Why the bridge copies nothing
 
-Copying B's registry record into A's `~/.claude/sessions/` makes `ListAgents` list B by name, because a record whose `pidDomain` (pid namespace id) is foreign skips the pid check. That rule exists for containers sharing a home folder.
+Copying B's registry record into A's `~/.claude/sessions/` makes `ListAgents` list B by name. A record whose `pidDomain` (pid namespace id) is foreign skips the pid check. That rule exists for containers sharing a home folder.
 
 But the copy is a snapshot. `status` and `name` go stale, the entry outlives B, and Claude Code never sweeps a foreign-domain record. Addressing by path avoids all of that, so the bridge does not copy.
 
 ## The one-time lookup
 
-The bridge needs B's socket path once. `scripts/bridge.mts` runs a short python program on B over ssh that reads every `~/.claude/sessions/*.json` and prints the records that are live: a record alone does not mean a live session, so one counts only when its pid answers a signal 0 and its inbox path is a socket. The newest live one wins unless a pid is given.
+The bridge needs B's socket path once. `scripts/bridge.mts` runs a short python program on B over ssh that reads every `~/.claude/sessions/*.json` and prints the records that are live.
 
-The lookup is python fed on ssh's stdin rather than a shell loop, so B's login shell plays no part: zsh does not word-split unquoted variables, which broke the shell version.
+A record alone does not mean a live session. One counts only when its pid answers a signal 0 and its inbox path is a socket. The newest live one wins unless a pid is given.
+
+The lookup is python fed on ssh's stdin rather than a shell loop, so B's login shell plays no part. zsh does not word-split unquoted variables, which broke the shell version.
 
 ## Security
 

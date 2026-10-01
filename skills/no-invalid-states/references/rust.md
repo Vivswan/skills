@@ -1,6 +1,6 @@
 # Rust Strategies
 
-Rust has the strongest toolkit for this skill: ownership, move semantics, and zero-cost type-level state make many invariants free to enforce.
+Rust has the strongest toolkit for this skill. Ownership, move semantics, and zero-cost type-level state make many invariants free to enforce.
 
 Prefer, roughly in order of reach:
 
@@ -70,7 +70,7 @@ fn initialize(&mut self) {
 }
 ```
 
-Consuming `self` makes reuse of the stale state impossible: the old value is moved away, so the borrow checker rejects any later use of it.
+Consuming `self` makes reuse of the stale state impossible. The old value is moved away, so the borrow checker rejects any later use of it.
 
 ## Newtypes at the boundary
 
@@ -106,5 +106,5 @@ instead of a struct with `card_number: Option<_>`, `expiry: Option<_>`, and `po_
 
 ## What to avoid
 
-- Do not reach for `Rc<RefCell<_>>`, `Arc<Mutex<_>>`, cloning, heap allocation, or `unsafe` merely to dodge designing ownership correctly.
-- If a typestate refactor forces one of these in, the refactor is wrong-shaped for this code. Fall back to an enum or separate types.
+- **Do not reach for** `Rc<RefCell<_>>`, `Arc<Mutex<_>>`, cloning, heap allocation, or `unsafe` merely to dodge designing ownership correctly.
+- **If a typestate refactor forces one of these in**, the refactor is wrong-shaped for this code. Fall back to an enum or separate types.

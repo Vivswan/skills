@@ -8,7 +8,7 @@ metadata:
 
 # Never Twice
 
-> Categorically eliminate the problem (through better architecture or a better choice of data structures) so the failure class cannot recur, instead of fixing its instances one at a time.
+> Categorically eliminate the problem so the failure class cannot recur, through better architecture or a better choice of data structures. That beats fixing its instances one at a time.
 
 Every correction and every repeated failure gets the most durable response reachable:
 
@@ -19,9 +19,9 @@ Every correction and every repeated failure gets the most durable response reach
 | 3 | a skill or written rule | recurs, but the next agent knows | fallback |
 | 4 | human vigilance | anything | avoid |
 
-The ladder is not a menu. Preference decays exponentially down it: rung 1 is the goal, rung 2 a clearly weaker but acceptable gate, rungs 3 and 4 each another large step down, taken only when every higher rung is genuinely unreachable.
+The ladder is not a menu, and preference decays exponentially down it. Rung 1 is the goal, and rung 2 a clearly weaker but acceptable gate. Rungs 3 and 4 are each another large step down, taken only when every higher rung is genuinely unreachable.
 
-And a rung-3 or rung-4 landing is a **debt**, not a resolution: when a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
+A rung-3 or rung-4 landing is a **debt**, not a resolution. When a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
 
 ## Workflow
 
@@ -99,16 +99,18 @@ $ tail -1 AGENTS.md
 Log timestamps are ISO 8601 (2026-08-26T14:03:00Z), never epoch.
 ```
 
-How to write the rule (where it lives, its trigger, its quality bar) is the `/craft-skills-and-memories` skill's job: this rung decides THAT a loaded rule is the response, then hands off there.
+How to write the rule (where it lives, its trigger, its quality bar) is the `/craft-skills-and-memories` skill's job. This rung decides THAT a loaded rule is the response, then hands off there.
 
 ## Deleting a Guard (Chesterton's Fence)
 
-The ladder erects guards; this rule governs removing them. Never remove a rule, guard, or check without being able to state why it was erected. Every such deletion in a change maps to one of two outcomes, or nothing lands:
+The ladder erects guards, and this rule governs removing them. Never remove a rule, guard, or check without being able to state why it was erected. Every such deletion in a change maps to one of two outcomes, or nothing lands:
 
 - a successor that covers its class: a script that embodies it, a stronger rung, a rewording that keeps the rule
 - a named deliberate cut, with the reason recorded in the change
 
-Worked example: a doc rewrite deleted 90 long-standing rule lines. Auditing each line into successor / rewording / named cut found exactly one unmapped real loss, restored before landing. The audit is the mechanism; this rule makes it the default for every deletion, not a salvage step after someone notices.
+Worked example: a doc rewrite deleted 90 long-standing rule lines. Auditing each line into successor / rewording / named cut found exactly one unmapped real loss, restored before landing.
+
+The audit is the mechanism. This rule makes it the default for every deletion, not a salvage step after someone notices.
 
 The pairing is the point: aggressive rewrites stay allowed BECAUSE deletions are audited. The audit is what makes bold deletion safe, not a brake on it.
 
@@ -116,7 +118,7 @@ The pairing is the point: aggressive rewrites stay allowed BECAUSE deletions are
 
 Skills that run code reviews (such as `/rubber-duck-review`) expand this section into their reviewer prompt when this skill is installed. Ask the reviewer to flag:
 
-- fixes that repeat an earlier fix of the same failure class; cite the evidence (the prior commit, doc line, or correction), not a hunch
+- fixes that repeat an earlier fix of the same failure class. Cite the evidence (the prior commit, doc line, or correction), not a hunch
 - for each, name the rung the fix sits on, propose a concrete more durable rung, and say why it is reachable within this change's scope (or why it is not)
 - apply the test to whatever ships: if a new member of the class appears tomorrow, is it impossible to build, stopped in CI, caught by a loaded rule, or silent?
 - deletions of rules, guards, or checks that map to neither a successor covering their class nor a deliberate cut with its reason recorded in the change (Deleting a Guard, above)

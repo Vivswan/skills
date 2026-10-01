@@ -8,7 +8,7 @@ metadata:
 
 # No Invalid States
 
-Review and refactor a codebase so that correctness constraints are carried by the strongest mechanism the language provides, not by scattered defensive checks.
+Review and refactor a codebase so that correctness constraints are carried by the strongest mechanism the language provides. Scattered defensive checks are not that mechanism.
 
 The core principle:
 
@@ -38,7 +38,7 @@ Do not use this skill to add abstraction to code that is already simple, or in p
 
 ## Guiding Principle
 
-Before adding another defensive check, ask: can this invalid state be removed from the program's representation instead? Use the strongest idiomatic mechanism the language offers, and keep the design simpler, not more complicated, than the problem itself.
+Before adding another defensive check, ask: can this invalid state be removed from the program's representation instead? Use the strongest idiomatic mechanism the language offers. Keep the design simpler, not more complicated, than the problem itself.
 
 ## Workflow
 
@@ -62,7 +62,7 @@ Also inspect:
 
 For each candidate, write the invariant as one sentence. For example: "a connection may only send data after it has successfully connected."
 
-If you cannot state the invariant, you cannot encode it; skip it.
+If you cannot state the invariant, you cannot encode it. Skip it.
 
 ### 2. Classify each invariant: static or dynamic
 
@@ -86,14 +86,14 @@ The telltale: N call sites carrying the same guard, or a flag that every consume
 
 Worked example: a stored credential goes stale when its associated endpoint URL changes.
 
-- Consumer-side design: all six request paths check a `staleCredential` flag before using it. Six guards, six error surfaces, and every future request path must remember the check.
-- Owner-side design: every URL change (settings UI save, config file edit, import) goes through one owning transition that resolves the question at that moment ("keep this credential for the new endpoint?").
-- Afterwards: no request path needs a staleness guard. Runtime authentication failures stay handled, as the dynamic condition they are.
+- **Consumer-side design:** all six request paths check a `staleCredential` flag before using it. Six guards, six error surfaces, and every future request path must remember the check.
+- **Owner-side design:** every URL change (settings UI save, config file edit, import) goes through one owning transition. It resolves the question at that moment ("keep this credential for the new endpoint?").
+- **Afterwards:** no request path needs a staleness guard. Runtime authentication failures stay handled, as the dynamic condition they are.
 
 Two rules make the owner-side fix sound:
 
-- Enumerate **all** mutation points before claiming completeness. A consumer-side check accidentally covers write paths you forgot; an owner-side fix must route each one through the owning transition explicitly. A GUI and the settings file it edits are two paths, not one.
-- The resolution at the mutation point need not be a type. A validating transition, a normalization, or a question put to the user at the moment the intent is expressed all work. The next step covers the cases where a stronger representation is the right mechanism.
+- **Enumerate all mutation points** before claiming completeness. A consumer-side check accidentally covers write paths you forgot, but an owner-side fix must route each one through the owning transition explicitly. A GUI and the settings file it edits are two paths, not one.
+- **The resolution at the mutation point need not be a type.** A validating transition, a normalization, or a question put to the user at the moment the intent is expressed all work. The next step covers the cases where a stronger representation is the right mechanism.
 
 ### 4. Choose the strongest idiomatic representation
 
@@ -115,7 +115,7 @@ Detailed, idiomatic guidance with code examples lives in the per-language refere
 - [references/python.md](references/python.md): state-specific frozen dataclasses, `Literal` unions, `NewType`, `assert_never`, strict typing
 - [references/other-languages.md](references/other-languages.md): Go, Java, Kotlin, C#, Swift, functional languages, dynamic languages, and databases
 
-If the language at hand is not covered, map the situation table onto whatever the language offers: sealed hierarchies, smart constructors, immutability, and module privacy exist almost everywhere in some form.
+If the language at hand is not covered, map the situation table onto whatever the language offers. Sealed hierarchies, smart constructors, immutability, and module privacy exist almost everywhere in some form.
 
 ### 5. Refactor
 
@@ -130,13 +130,13 @@ For each accepted candidate, work through this checklist:
 
 Rules while refactoring:
 
-- Make illegal construction hard: private fields, validating constructors, factory functions, state-transition functions, frozen or readonly data.
-- Validate once. `validate -> use, validate -> use` becomes `parse once -> use, use, use`.
-- Never silence the type checker with broad casts, `any`, non-null assertions, or ignore comments to force a refactor through.
-- Preserve existing behavior unless you have confirmed a bug. If you find one, report it separately rather than fixing it silently.
-- Respect public API compatibility where practical: strengthen internals first, then widen outward.
-- Make the **smallest** architectural change that removes the invalid state. Do not convert every boolean into a state machine.
-- A refactor is worthwhile only when it eliminates repeated checks, prevents wrong ordering, removes impossible field combinations, or clarifies the API contract. Readability beats type-system cleverness.
+- **Make illegal construction hard:** private fields, validating constructors, factory functions, state-transition functions, frozen or readonly data.
+- **Validate once.** `validate -> use, validate -> use` becomes `parse once -> use, use, use`.
+- **Never silence the type checker** with broad casts, `any`, non-null assertions, or ignore comments to force a refactor through.
+- **Preserve existing behavior** unless you have confirmed a bug. If you find one, report it separately rather than fixing it silently.
+- **Respect public API compatibility** where practical: strengthen internals first, then widen outward.
+- **Make the smallest architectural change** that removes the invalid state. Do not convert every boolean into a state machine.
+- **A refactor is worthwhile only when** it eliminates repeated checks, prevents wrong ordering, removes impossible field combinations, or clarifies the API contract. Readability beats type-system cleverness.
 
 ### 6. Test and verify
 
@@ -162,12 +162,12 @@ Do not introduce a new type checker or dependency just for this skill unless tha
 
 When asked to modify code, implement the changes rather than describing them. At completion, report:
 
-- Invariants improved: what was previously enforced by convention or runtime checks
-- Invalid states removed: what contradictory data or wrong ordering was previously possible
-- New representation: which mechanism now carries each invariant (for example: Rust typestate, TypeScript discriminated union, Python NewType)
-- Runtime validation retained: which checks stay because they depend on external or dynamic information
-- Files changed and why
-- Verification: the exact formatter, type-checker, lint, build, and test commands run, and whether they passed
+- **Invariants improved:** what was previously enforced by convention or runtime checks
+- **Invalid states removed:** what contradictory data or wrong ordering was previously possible
+- **New representation:** which mechanism now carries each invariant (for example: Rust typestate, TypeScript discriminated union, Python NewType)
+- **Runtime validation retained:** which checks stay because they depend on external or dynamic information
+- **Files changed** and why
+- **Verification:** the exact formatter, type-checker, lint, build, and test commands run, and whether they passed
 
 ## Review Criteria
 
@@ -179,7 +179,7 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
   - "must call X before Y" ordering enforced at runtime
   - repeated validation of already-validated values
   - field combinations that should be impossible to represent
-- consumer-side guards that an owner-side resolution would remove: the same check repeated at N call sites, or a flag every consumer must remember to honor, when the state has enumerable mutation points where the question could be resolved once
+- consumer-side guards that an owner-side resolution would remove: the same check repeated at N call sites, or a flag every consumer must remember to honor. This applies when the state has enumerable mutation points where the question could be resolved once
 - for each finding, the stronger representation (sum type, newtype, typestate, validating constructor) or owner-side resolution that would remove the invalid state
 
 Triage the resulting findings with the workflow above.

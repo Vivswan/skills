@@ -1,40 +1,76 @@
 # Spawn Briefs
 
-Every subagent spawn brief is self-contained: the agent may lack the task board, the plan, and the session history, so the brief carries everything.
+Every subagent spawn brief is self-contained. The agent may lack the task board, the plan, and the session history, so the brief carries everything.
 
 ## Checklist
 
 Every brief includes:
 
-1. **The full task contract inline.** Goal, acceptance criteria, and the definition of done. Never say "see task #N"; subagents may lack the board tools.
+1. **The full task contract inline.** Goal, acceptance criteria, and the definition of done. Never say "see task #N", because subagents may lack the board tools.
 2. **An explicit file whitelist and do-not-touch boundary.** The territory the agent owns, plus any shared files with region-level grants (e.g. one CSS file's disjoint regions). This is what lets sibling branches merge without conflicts.
 3. **The gates to run, targeted,** and the instruction to run its own review loop before signaling done.
-    - Typecheck, then only the tests the change and its proof touch: the changed files' tests, the named census or proof target, one e2e slice when a scenario is the target. Never the full suite, `bun run check`, or a lint-plus-build sweep; CI runs those on the push or the PR. A wider local run states its reason (the target is unknown) and happens at most once per PR.
+    - Typecheck, then only the tests the change and its proof touch: the changed files' tests, the named census or proof target, one e2e slice when a scenario is the target. Never the full suite, `bun run check`, or a lint-plus-build sweep, since CI runs those on the push or the PR. A wider local run states its reason (the target is unknown) and happens at most once per PR.
     - The brief says whether the repository is public or a personal private one. Such a repository meters CI minutes, so there the full check runs locally before the push instead. A brief that does not say is a question back to the lead, and a lead who is not sure asks the user.
     - About three gates run at once, every long run carries an explicit timeout, and a process is killed by the PID the agent spawned, never by pattern.
-    - The install comes first: a fresh worktree has no installed dependencies (`node_modules`, a venv), the pre-commit hook refuses to run without them, and a runner like `bun run` can silently resolve the parent checkout's binaries and pass anyway, so the brief's first command after item 14's worktree preflight is the repo's install (`bun install --frozen-lockfile` or its equivalent). After a lead directive, the builder's re-review prompt states what changed since the last round, and when the directive changed the diff's shape the builder rewrites the amended commit's body to match (the directive can say so explicitly): `--amend --no-edit` left stale bodies twice in one wave.
-4. **How to signal completion** (e.g. message the lead) and the handoff contract: commit finished work to the worktree's branch (never push unless the brief says so) and include the branch name, commit subjects, and any escalations in the signal. In PR-per-track mode the brief NAMES THE ACTOR explicitly, preserving both options. Either the builder pushes its branch, opens the PR, reports the URL in its signal, and spawns (or requests) the CI watcher for its own pushes; or the builder stays no-push and the lead pushes from the worktree, opens the PR, and starts the watcher. The final signal is the only permitted stop.
-5. **For a teammate-style (named) agent whose REPORT matters, the delivery mechanism itself:** the brief REQUIRES an explicit SendMessage to the lead carrying the report, as the agent's final act, and says why. In Claude Code the harness delivers nothing else for a named (teammate) spawn: unlike an unnamed one-shot spawn, whose output comes back to the spawner automatically, a named agent's final text reaches nobody, so a teammate that ends its turn with the report as prose has reported to no one (five silent strandings in one production session, and it bit again in a later one whose briefs only said "report to the lead"). Codex hands a named agent's final output to the spawner on its own; the explicit message costs nothing there and keeps one brief shape across harnesses.
+    - The install comes first. A fresh worktree has no installed dependencies (`node_modules`, a venv), the pre-commit hook refuses to run without them, and a runner like `bun run` can silently resolve the parent checkout's binaries and pass anyway. So the brief's first command after item 14's worktree preflight is the repo's install (`bun install --frozen-lockfile` or its equivalent).
+
+      After a lead directive, the builder's re-review prompt states what changed since the last round. When the directive changed the diff's shape, the builder rewrites the amended commit's body to match (the directive can say so explicitly): `--amend --no-edit` left stale bodies twice in one wave.
+4. **How to signal completion** (e.g. message the lead) and the handoff contract: commit finished work to the worktree's branch (never push unless the brief says so) and include the branch name, commit subjects, and any escalations in the signal. The final signal is the only permitted stop.
+
+    In PR-per-track mode the brief NAMES THE ACTOR explicitly, preserving both options. Either the builder pushes its branch, opens the PR, reports the URL in its signal, and spawns (or requests) the CI watcher for its own pushes. Or the builder stays no-push and the lead pushes from the worktree, opens the PR, and starts the watcher.
+5. **For a teammate-style (named) agent whose REPORT matters, the delivery mechanism itself:** the brief REQUIRES an explicit SendMessage to the lead carrying the report, as the agent's final act, and says why.
+
+    In Claude Code the harness delivers nothing else for a named (teammate) spawn. An unnamed one-shot spawn's output comes back to the spawner automatically, but a named agent's final text reaches nobody. A teammate that ends its turn with the report as prose has reported to no one.
+
+    Five silent strandings in one production session, and it bit again in a later one whose briefs only said "report to the lead".
+
+    Codex hands a named agent's final output to the spawner on its own. The explicit message costs nothing there and keeps one brief shape across harnesses.
 6. **The stop-and-wait ban** (below).
-7. **The comment rules and the TODO ban** (below). Comments only for what code cannot show; where the `/code-standards` skill is installed, the brief points builders at it for the full house standards.
+7. **The comment rules and the TODO ban** (below). Comments only for what code cannot show. Where the `/code-standards` skill is installed, the brief points builders at it for the full house standards.
 8. **The out-of-territory rule:** anything broken or wrong found outside the agent's file whitelist is reported in the completion signal, never fixed silently. A silent out-of-territory edit collides with another agent's territory, and a silently dropped finding is lost.
 9. **The inbox-reconciliation rule** (below): the final signal enumerates every lead message received, with one line of evidence per directive.
-10. **The idempotency rule** (below): every directive and every briefed step is safe to arrive twice, late, or after the fact; a late arrival is also checked for supersession before acting, and genuinely non-idempotent operations are named in the brief.
+10. **The idempotency rule** (below): every directive and every briefed step is safe to arrive twice, late, or after the fact. A late arrival is also checked for supersession before acting, and genuinely non-idempotent operations are named in the brief.
 11. **For long-running service agents (the fleet monitor, long-horizon watchers): the standing-state channel.** The brief names the session ledger as where standing state arrives (re-read it every sweep) and requires every lead directive received as a message to be acknowledged in the agent's NEXT report. The delivery rule and its lead side live in `references/fleet-monitor.md`, Reporting Discipline.
-12. **Scratch files go to /tmp, never the worktree, at a unique per-agent path.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit. And the /tmp path is a `mktemp -d` taken once or an agent-named directory, never a fixed name like `/tmp/commit-msg.txt`: three builders in one session wrote their commit messages to that same path, and one track's commit carried another track's message (content unaffected).
-13. **Prompt and scratch files are written with the Write tool, one plain command per step.** In Claude Code, a builder inside an agent worktree has a sandbox that refuses Bash heredocs and compound commands whose text contains the word `git` (even inside a quoted prompt) as too complex to verify they stay inside the worktree; five builders in one wave each rediscovered it. So the brief says: write prompt and scratch files with the Write tool, and restore a mutated source with `cp` from a `/tmp` backup rather than a git command chained into the mutation.
-14. **Every git command in the brief names the worktree: `git -C <absolute worktree path> ...`**, never `cd <worktree> && git ...` (the compound form trips the same sandbox rule as item 13; `git -C` is one command). A shell's cwd is not a fact about the worktree: a teammate's cwd reset to the main checkout between turns, and its `git reset --soft` moved local main for a minute (restored, nothing pushed). And the builder's FIRST command is the preflight `git -C <worktree> rev-parse --show-toplevel`, which must print back the ABSOLUTE worktree path the brief declares (never the main checkout's path, and never a mere "somewhere under the harness's default worktree directory" test: Claude Code's `.claude/worktrees/` is one harness's default, not a fact about the worktree) before any install or edit: a worktree-isolated spawn once did not materialize, and the builder was editing the main checkout.
-15. **The test rule: red-then-green for BEHAVIOR changes only.** A deletion with no behavior of its own (an unused setting, a dead path) is proved by a census, grep counts before and after, in the PR body or in the landing report with no PR, never by a test manufactured so that something goes red; every new test says in its name or first line what would drift silently without it, and one that restates the source it reads is deleted, not committed. Where the `/code-standards` skill is installed, its `references/tests.md` owns the rule; briefs demanding red-then-green for every change produced eleven PRs of yaml-restating workflow tests in one day.
-16. **The PII rule, in every builder brief, and applied by the lead to the brief itself.** Nothing the builder publishes (commits, PR title and body, code, test fixtures, docs, review replies, CI comments) tells a reader who the owner is, how they work, or how their machine is set up. The `/pr-and-issue-discipline` skill owns the rule and the substitutes; a builder treats brief text as safe to copy, so the lead redacts before pasting.
-    - **Identity:** one substitute per kind, `octocat`, `work-bot`, or `example-user` for a login or username; `example.com` for an employer, domain, or hostname; `example-user@example.com` for a whole email; `/home/user` or `~` for a home path; `/repo/...` for the checkout path. Production: one builder lifted the owner's real account login from terminal output in its brief into test fixtures and a PR body (replaced with `work-bot`).
-    - **Anything measured or copied from the owner's real environment** (figures and profiles computed from real logs, real configuration, transcripts, inventories of what the owner uses) identifies the owner with no name in it. The lead never pastes such a value into a brief: a figure about usage or a worked example the brief needs comes from a synthetic scratch corpus the lead wrote by hand, and the brief says so (the deletion census of item 15 counts occurrences in the repository and stays real).
-    - **Fixtures are hand-authored, never recorded from real data**, and a tool the builder writes that measures real data requires an explicit output path outside the repository and refuses one inside it. Production: a statistical profile measured from the owner's real sessions sat committed as a test fixture until a later sweep found it; replacing it took a hand-written fixture, a fingerprint grep of every old figure over the PR, and a history rewrite.
+12. **Scratch files go to /tmp, never the worktree, at a unique per-agent path.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
+
+    The /tmp path is a `mktemp -d` taken once or an agent-named directory, never a fixed name like `/tmp/commit-msg.txt`. Three builders in one session wrote their commit messages to that same path, and one track's commit carried another track's message (content unaffected).
+13. **Prompt and scratch files are written with the Write tool, one plain command per step.** In Claude Code, a builder inside an agent worktree has a sandbox that refuses Bash heredocs and compound commands whose text contains the word `git` (even inside a quoted prompt) as too complex to verify they stay inside the worktree. Five builders in one wave each rediscovered it.
+
+    So the brief says: write prompt and scratch files with the Write tool, and restore a mutated source with `cp` from a `/tmp` backup rather than a git command chained into the mutation.
+14. **Every git command in the brief names the worktree: `git -C <absolute worktree path> ...`**, never `cd <worktree> && git ...`. The compound form trips the same sandbox rule as item 13, and `git -C` is one command. A shell's cwd is not a fact about the worktree: a teammate's cwd reset to the main checkout between turns, and its `git reset --soft` moved local main for a minute (restored, nothing pushed).
+
+    The builder's FIRST command is the preflight `git -C <worktree> rev-parse --show-toplevel`, before any install or edit. It must print back the ABSOLUTE worktree path the brief declares: never the main checkout's path, and never a mere "somewhere under the harness's default worktree directory" test (Claude Code's `.claude/worktrees/` is one harness's default, not a fact about the worktree).
+
+    A worktree-isolated spawn once did not materialize, and the builder was editing the main checkout.
+15. **The test rule: red-then-green for BEHAVIOR changes only.** A deletion with no behavior of its own (an unused setting, a dead path) is proved by a census, grep counts before and after, in the PR body or in the landing report with no PR. Never by a test manufactured so that something goes red.
+
+    Every new test says in its name or first line what would drift silently without it, and one that restates the source it reads is deleted, not committed. Where the `/code-standards` skill is installed, its `references/tests.md` owns the rule. Briefs demanding red-then-green for every change produced eleven PRs of yaml-restating workflow tests in one day.
+16. **The PII rule, in every builder brief, and applied by the lead to the brief itself.** Nothing the builder publishes (commits, PR title and body, code, test fixtures, docs, review replies, CI comments) tells a reader who the owner is, how they work, or how their machine is set up.
+
+    The `/pr-and-issue-discipline` skill owns the rule and the substitutes. A builder treats brief text as safe to copy, so the lead redacts before pasting.
+    - **Identity:** one substitute per kind. `octocat`, `work-bot`, or `example-user` stands in for a login or username, and `example.com` for an employer, domain, or hostname. `example-user@example.com` replaces a whole email, `/home/user` or `~` a home path, and `/repo/...` the checkout path.
+
+      Production: one builder lifted the owner's real account login from terminal output in its brief into test fixtures and a PR body (replaced with `work-bot`).
+    - **Anything measured or copied from the owner's real environment** (figures and profiles computed from real logs, real configuration, transcripts, inventories of what the owner uses) identifies the owner with no name in it. The lead never pastes such a value into a brief.
+
+      A figure about usage or a worked example the brief needs comes from a synthetic scratch corpus the lead wrote by hand, and the brief says so. The deletion census of item 15 counts occurrences in the repository and stays real.
+    - **Fixtures are hand-authored, never recorded from real data**, and a tool the builder writes that measures real data requires an explicit output path outside the repository and refuses one inside it.
+
+      Production: a statistical profile measured from the owner's real sessions sat committed as a test fixture until a later sweep found it. Replacing it took a hand-written fixture, a fingerprint grep of every old figure over the PR, and a history rewrite.
     - A product file name that contains a vendor's word and a repository's own `owner/repo` coordinate in its install command are contracts, not PII, and stay. The rule governs what the builder publishes, not the brief's plumbing: item 14's absolute worktree path stays in the brief as is, and the builder keeps it out of commits, PR text, and fixtures.
-17. **The PII step, in every gate brief (the landing-gate review and any reviewer the lead spawns).** The gate greps the frozen content's added lines, the commit messages, the PR title and body, and the review replies with the session's needle file (the owner's real identifiers plus, when the change replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file), per the `/pr-landing-discipline` skill's READY check; the lead writes the needle file once at session start, outside the repository (`/tmp/fleet-<sessionId>/pii-needles.txt`), and the brief names its path. A provenance comment naming real data on a fixture is a finding whose fix is a hand-written fixture. The reviewer prompt in the `/rubber-duck-review` skill's `references/reviewer-prompt.md` carries the reading side of the same rule, which catches what a grep cannot (a quoted real configuration or log).
+17. **The PII step, in every gate brief (the landing-gate review and any reviewer the lead spawns).** The gate greps the frozen content's added lines, the commit messages, the PR title and body, and the review replies with the session's needle file, per the `/pr-landing-discipline` skill's READY check.
+
+    The needle file holds the owner's real identifiers plus, when the change replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file.
+
+    The lead writes the needle file once at session start, outside the repository (`/tmp/fleet-<sessionId>/pii-needles.txt`), and the brief names its path. A provenance comment naming real data on a fixture is a finding whose fix is a hand-written fixture.
+
+    The reviewer prompt in the `/rubber-duck-review` skill's `references/reviewer-prompt.md` carries the reading side of the same rule, which catches what a grep cannot (a quoted real configuration or log).
 
 ## The Stop-and-Wait Ban
 
-In harnesses like Claude Code, a subagent's idle notification fires only when it has zero live children, so "I'll be woken when they complete" is always said to an already-complete state. Builders that stop to "wait for my background children" strand until someone nudges them. If your harness has different notification semantics, verify them before relying on this; the ban on stopping to wait stands either way.
+In harnesses like Claude Code, a subagent's idle notification fires only when it has zero live children, so "I'll be woken when they complete" is always said to an already-complete state. Builders that stop to "wait for my background children" strand until someone nudges them.
+
+If your harness has different notification semantics, verify them before relying on this. The ban on stopping to wait stands either way.
 
 Every brief therefore states:
 
@@ -46,24 +82,32 @@ When a stranded agent must be nudged anyway, the nudge states the mechanism ("th
 
 One nuance from production: a notification can occasionally fire while an untracked grandchild (e.g. a git hook's process tree) is still alive. An agent acting on a "finished" child should verify the outcome it reads is settled, not trust the notification alone.
 
-**The named-spawn trap (Claude Code):** an Agent-tool spawn WITH a `name` detaches and runs in the background even when the brief said `run_in_background: false`; only unnamed spawns honor the synchronous flag. This single fact produced five strands across three builders in one production session; each builder believed its reviewer was synchronous. Briefs that tell a builder to run reviews synchronously must therefore say: spawn the reviewer UNNAMED, or use a foreground CLI invocation (`codex exec` in a foreground Bash call) that cannot detach.
+**The named-spawn trap (Claude Code):** an Agent-tool spawn WITH a `name` detaches and runs in the background even when the brief said `run_in_background: false`. Only unnamed spawns honor the synchronous flag. This single fact produced five strands across three builders in one production session, and each builder believed its reviewer was synchronous.
+
+Briefs that tell a builder to run reviews synchronously must therefore say: spawn the reviewer UNNAMED, or use a foreground CLI invocation (`codex exec` in a foreground Bash call) that cannot detach.
 
 ## Report-First for Watchers and Reviewers
 
 A watcher or reviewer's entire value is its report. The single most common failure is a silent idle stop at the report seam, observed repeatedly even in agents whose brief ended with a report instruction.
 
-- State the deliverable FIRST, not last: "your ENTIRE value is one SendMessage to the lead; a stop without it is total failure".
-- Require that message in EVERY branch: success, failure, empty output, tooling error ("report tooling trouble as tooling trouble, never as a red pipeline").
-- Briefs shaped this way reported unprompted; briefs with the instruction buried needed a nudge per run.
+- **State the deliverable FIRST, not last:** "your ENTIRE value is one SendMessage to the lead; a stop without it is total failure".
+- **Require that message in EVERY branch:** success, failure, empty output, tooling error ("report tooling trouble as tooling trouble, never as a red pipeline").
+- **Briefs shaped this way reported unprompted.** Briefs with the instruction buried needed a nudge per run.
 
-Better still, remove the seam: spawn one-shot watchers and gate reviewers UNNAMED where the harness delivers a completed agent's output to the spawner automatically (Claude Code does). A named watcher must remember to SendMessage at exactly the seam where agents strand; two report-seam strands in one production session were both named spawns whose harness would have delivered the same output for free. Reserve names for agents the lead must address mid-run.
+Better still, remove the seam: spawn one-shot watchers and gate reviewers UNNAMED where the harness delivers a completed agent's output to the spawner automatically (Claude Code does). A named watcher must remember to SendMessage at exactly the seam where agents strand.
+
+Two report-seam strands in one production session were both named spawns whose harness would have delivered the same output for free. Reserve names for agents the lead must address mid-run.
 
 ## Test Fixtures That Touch Git
 
-Two incident classes from one production session, each observed twice; every brief for a track whose tests create or run git repositories carries both rules:
+Two incident classes from one production session, each observed twice. Every brief for a track whose tests create or run git repositories carries both rules:
 
 - **Fixture repos live in `mkdtemp` under `os.tmpdir()`, never inside the worktree, and fixture commits never land on the track's branch.** A test that runs `git init`/`git commit` in (or resolves paths into) the working tree wrote fixture commits onto the real branch and wiped the worktree twice when the fixture's cleanup ran against the enclosing repo.
-- **Hermetic git env is owner-side: the repo's test launcher (`bun run test` -> `scripts/run-tests.ts`) builds it BEFORE the test process starts (GIT_* scrubbed, `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null`, `GIT_CEILING_DIRECTORIES` over the repo root and tmpdir, deterministic `fixture` identity, cwd outside the repo), and the preload refuses runs launched any other way.** The pre-commit hook exports `GIT_DIR` and `GIT_INDEX_FILE` into `bun test`, silently redirecting every fixture's git calls at the REAL repository; two corruption incidents, plus one canary escape that proved per-suite scrubbing cannot cover children spawned with a default env (they inherit the environ from process birth, which no preload or in-process mutation reaches). Suites that build child envs by hand keep the same hygiene as belt-and-suspenders (scrub GIT_*, pin the /dev/null configs, set identity AFTER the scrub: `GIT_AUTHOR_NAME=fixture`, `GIT_AUTHOR_EMAIL=fixture@example.com`, `GIT_COMMITTER_NAME=fixture`, `GIT_COMMITTER_EMAIL=fixture@example.com`), but the launcher, not suite discipline, is what contains a leaky test.
+- **Hermetic git env is owner-side:** the repo's test launcher (`bun run test` -> `scripts/run-tests.ts`) builds it BEFORE the test process starts, and the preload refuses runs launched any other way. The launcher's env: GIT_* scrubbed, `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null`, `GIT_CEILING_DIRECTORIES` over the repo root and tmpdir, deterministic `fixture` identity, cwd outside the repo.
+
+  The pre-commit hook exports `GIT_DIR` and `GIT_INDEX_FILE` into `bun test`, silently redirecting every fixture's git calls at the REAL repository: two corruption incidents. Plus one canary escape that proved per-suite scrubbing cannot cover children spawned with a default env, since they inherit the environ from process birth, which no preload or in-process mutation reaches.
+
+  Suites that build child envs by hand keep the same hygiene as belt-and-suspenders: scrub GIT_*, pin the /dev/null configs, set identity AFTER the scrub (`GIT_AUTHOR_NAME=fixture`, `GIT_AUTHOR_EMAIL=fixture@example.com`, `GIT_COMMITTER_NAME=fixture`, `GIT_COMMITTER_EMAIL=fixture@example.com`). But the launcher, not suite discipline, is what contains a leaky test.
 
 ## Territory Binds Children
 
@@ -78,19 +122,25 @@ Two rules follow:
 
 ## Final Signals Reconcile the Full Inbox
 
-A directive sent to a worker mid-turn queues invisibly and delivers only at its next tool round; the worker cannot see it while its long turn runs. The dominant coordination failure this produces: the worker finishes its planned round, signals "done", and the queued directive silently drops. In one production session this cost a full extra round on four different builders, each of which sincerely reported completion while a lead message sat unread in its inbox.
+A directive sent to a worker mid-turn queues invisibly and delivers only at its next tool round. The worker cannot see it while its long turn runs.
 
-The rule every brief carries: a FINAL SIGNAL must re-read the full inbox first and enumerate every lead message received since the last signal, with one line of evidence per directive ("fixed at file:line", "declined because X", "already done, see Y"). A signal that omits a pending directive is not a final signal: the lead bounces it, and the bounce costs more than the enumeration ever does.
+The dominant coordination failure this produces: the worker finishes its planned round, signals "done", and the queued directive silently drops. In one production session this cost a full extra round on four different builders, each of which sincerely reported completion while a lead message sat unread in its inbox.
+
+The rule every brief carries: a FINAL SIGNAL must re-read the full inbox first and enumerate every lead message received since the last signal, with one line of evidence per directive ("fixed at file:line", "declined because X", "already done, see Y").
+
+A signal that omits a pending directive is not a final signal. The lead bounces it, and the bounce costs more than the enumeration ever does.
 
 The lead's side of the same rule: verify a signal against the directives actually sent, by probe, not by trusting the enumeration.
 
 ## Directives and Steps Are Idempotent
 
-Messages cross constantly in a fleet: a directive can arrive twice, arrive late, or arrive after the worker already did the thing. Every directive and every briefed step is therefore written to be safe on re-arrival: the worker checks current state before acting, and an already-applied directive is a no-op to report ("already done, see Y"), never an error and never a redo.
+Messages cross constantly in a fleet: a directive can arrive twice, arrive late, or arrive after the worker already did the thing. Every directive and every briefed step is therefore written to be safe on re-arrival. The worker checks current state before acting, and an already-applied directive is a no-op to report ("already done, see Y"), never an error and never a redo.
 
 Idempotency covers repeats, not ordering. A stale directive applied once can still overwrite newer intent (a late "add X" undoes a newer "remove X" even though both are individually idempotent). So a late arrival is also checked against the newest directive on the same subject: when a newer one supersedes it, the worker reports it as superseded and does not apply it.
 
-The exception class is named, never assumed: genuinely non-idempotent operations (version bumps, counters, anything append-only) are called out in the brief and coordinated through the lead. Their directives state the target postcondition (bump to 1.7.0, never bump by one), so a repeat or late arrival verifies the postcondition and no-ops instead of redoing. Production shape: two stacked builders each bumped the same manifest version by one; the double bump was absorbed only because a later rebase happened to collapse the two edits. The brief clause makes that coordination explicit instead of lucky.
+The exception class is named, never assumed: genuinely non-idempotent operations (version bumps, counters, anything append-only) are called out in the brief and coordinated through the lead. Their directives state the target postcondition (bump to 1.7.0, never bump by one), so a repeat or late arrival verifies the postcondition and no-ops instead of redoing.
+
+Production shape: two stacked builders each bumped the same manifest version by one. The double bump was absorbed only because a later rebase happened to collapse the two edits. The brief clause makes that coordination explicit instead of lucky.
 
 ## The TODO Ban
 

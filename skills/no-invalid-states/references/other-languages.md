@@ -6,10 +6,10 @@ The situation table in SKILL.md maps onto most languages. This file collects the
 
 Go has no sum types, so lean on package boundaries and construction:
 
-- unexported struct fields with a validating `NewX(...) (X, error)` constructor; outside the package, the constructor is the only way in
-- separate types per state (`PendingOrder`, `ShippedOrder`) with transition functions between them
-- a closed interface (an unexported method only in-package types can implement) to approximate a sealed set of variants
-- defined types (`type UserID string`) plus a parse function; conversions are explicit, so `UserID(raw)` outside the parser is greppable in review
+- **Unexported struct fields** with a validating `NewX(...) (X, error)` constructor. Outside the package, the constructor is the only way in
+- **Separate types per state** (`PendingOrder`, `ShippedOrder`) with transition functions between them
+- **A closed interface** (an unexported method only in-package types can implement) to approximate a sealed set of variants
+- **Defined types** (`type UserID string`) plus a parse function. Conversions are explicit, so `UserID(raw)` outside the parser is greppable in review
 
 ```go
 type UserID string
@@ -24,11 +24,11 @@ func ParseUserID(raw string) (UserID, error) {
 
 ## Java and Kotlin
 
-- sealed interfaces or sealed classes for mutually exclusive states, with exhaustive `switch` / `when` over them
-- records (Java) and data classes (Kotlin) with validation in the compact constructor or `init` block, so an instance existing implies validity
-- Kotlin value classes (`@JvmInline value class UserId(val raw: String)`) with a `companion object` factory as the smart constructor
-- private constructors plus static factories where a hierarchy is overkill
-- non-null types (Kotlin) or `Optional` at boundaries only, never as fields that encode which state the object is in
+- **Sealed interfaces or sealed classes** for mutually exclusive states, with exhaustive `switch` / `when` over them
+- **Records (Java) and data classes (Kotlin)** with validation in the compact constructor or `init` block, so an instance existing implies validity
+- **Kotlin value classes** (`@JvmInline value class UserId(val raw: String)`) with a `companion object` factory as the smart constructor
+- **Private constructors plus static factories** where a hierarchy is overkill
+- **Non-null types (Kotlin) or `Optional`** at boundaries only, never as fields that encode which state the object is in
 
 ```kotlin
 sealed interface Connection
@@ -41,14 +41,14 @@ fun send(connection: Connected, message: String) =
 
 ## C#
 
-- abstract base class with a fixed set of sealed nested subclasses (or the OneOf library if the project already uses it) as a discriminated union
-- records with validation in the constructor; `init`-only and `required` properties to force complete construction
-- exhaustive `switch` expressions with no discard arm over your own state hierarchies
-- readonly structs wrapping a validated primitive as the newtype
+- **Abstract base class** with a fixed set of sealed nested subclasses (or the OneOf library if the project already uses it) as a discriminated union
+- **Records** with validation in the constructor. `init`-only and `required` properties force complete construction
+- **Exhaustive `switch` expressions** with no discard arm over your own state hierarchies
+- **Readonly structs** wrapping a validated primitive as the newtype
 
 ## Swift
 
-Swift enums with associated values are a first-class sum type; use them directly:
+Swift enums with associated values are a first-class sum type. Use them directly:
 
 ```swift
 enum Connection {
@@ -77,11 +77,11 @@ Phantom type parameters give typestate where lifecycles matter. In Scala, use `s
 
 Without a checker, encode invariants in construction rather than types:
 
-- immutable value objects whose constructor validates and raises
-- factory methods as the single entry point; make `new` private (Ruby)
-- distinct classes per state so wrong-state calls fail immediately with NoMethodError instead of misbehaving later
-- pattern matching over tagged tuples or structs (Elixir) with no catch-all clause
-- gradual typing (Sorbet, TypeScript migration, typespecs plus dialyzer) when the project already has it; do not introduce one just for this skill
+- **Immutable value objects** whose constructor validates and raises
+- **Factory methods** as the single entry point. Make `new` private (Ruby)
+- **Distinct classes per state** so wrong-state calls fail immediately with NoMethodError instead of misbehaving later
+- **Pattern matching** over tagged tuples or structs (Elixir) with no catch-all clause
+- **Gradual typing** (Sorbet, TypeScript migration, typespecs plus dialyzer) when the project already has it. Do not introduce one just for this skill
 
 ## Databases and schemas
 

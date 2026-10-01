@@ -7,7 +7,7 @@ A comment is written for humans and agents, and a human reads it first. It carri
 Only what the code cannot show. The kinds:
 
 - The reason a choice was made when the obvious choice was rejected.
-- An invariant another file relies on; name that file.
+- An invariant another file relies on, naming that file.
 - An external system's quirk, with what breaks without the workaround.
 - A consequence of changing the line that is not visible here.
 - The one input that motivated a guard.
@@ -16,12 +16,13 @@ Never a comment: what the code does, its types, its control flow, its history, t
 
 ## Tell first, then show
 
-- One or two sentences say what the code cannot show. That is the whole comment when nothing more is needed.
-- A block follows only when it shows the fact faster: an arrow flow for a sequence (`re-derive -> read credentials -> re-derive again -> must match`), aligned rows for facts that share a shape (`input  -> outcome`). Nothing else is mandated.
-- Combine as the spot needs; a blank comment line separates groups when there are more than a tell and its block. One carrier per point: rows followed by prose re-explaining them mean the rows failed.
-- Uniform shape is the wall. A paragraph fails; so does every fact as its own line with nothing shown, however true each line is. The tell is one or two sentences; past that, a fact is shown or cut.
-- A paragraph that has grown holds narration (delete it) or a workaround defense (fix the code, not the comment).
-- No limits here: length and width caps are the fleet's file-size check. Never pack prose to fit a cap; a wall under the cap is worse than the original, and a marker on a packed block is the worst of both. Cut honestly; a block still over the cap after that is reported to the lead.
+- **The tell.** One or two sentences say what the code cannot show. That is the whole comment when nothing more is needed.
+- **The show.** A block follows only when it shows the fact faster: an arrow flow for a sequence (`re-derive -> read credentials -> re-derive again -> must match`), aligned rows for facts that share a shape (`input  -> outcome`). Nothing else is mandated.
+- **Combine as the spot needs.** A blank comment line separates groups when there are more than a tell and its block. One carrier per point: rows followed by prose re-explaining them mean the rows failed.
+- **Uniform shape is the wall.** A paragraph fails, and so does every fact as its own line with nothing shown, however true each line is. The tell is one or two sentences, and past that a fact is shown or cut.
+- **A paragraph that has grown** holds narration (delete it) or a workaround defense (fix the code, not the comment).
+- **No limits here:** length and width caps are the fleet's file-size check.
+- **Never pack prose to fit a cap.** A wall under the cap is worse than the original, and a marker on a packed block is the worst of both. Cut honestly, and a block still over the cap after that is reported to the lead.
 
 ## Combinations
 
@@ -61,7 +62,7 @@ The carrier follows the fact at that spot. Real-shaped examples, tell first in e
 
 - A quoted literal with an arrow note, when the comment explains a log line or wire format the code matches.
 - A value example, for a transformation or a threshold change.
-- A pointer, for a cross-file invariant; the other file holds the detail, so nothing is restated.
+- A pointer, for a cross-file invariant. The other file holds the detail, so nothing is restated.
 - Inputs with outcomes, for a guard with several motivating inputs.
 - The tell alone, when one sentence is the whole comment.
 - A flow with a closing sentence, when a guarantee holds after the sequence.
@@ -73,7 +74,9 @@ Before writing or keeping a comment, ask two questions:
 1. What does this say that the code does not?
 2. Could a tired human read it in one pass?
 
-Fail either: rewrite or delete. A wholly redundant comment is deleted, not compressed. A comment that buries one real constraint in narration keeps only the constraint. After compressing, check each remaining fact against the code; shorter is never allowed to be less true (one rewrite turned "can overstate" into "overstates").
+Fail either: rewrite or delete. A wholly redundant comment is deleted, not compressed. A comment that buries one real constraint in narration keeps only the constraint.
+
+After compressing, check each remaining fact against the code. Shorter is never allowed to be less true (one rewrite turned "can overstate" into "overstates").
 
 ## Specimens
 
@@ -105,9 +108,9 @@ Real blocks, before and after.
  */
 ```
 
-Two lines described what other functions do; their own comments carry that. Three facts shared a shape (a resolved header, its effect) and became rows.
+Two lines described what other functions do. Their own comments carry that. Three facts shared a shape (a resolved header, its effect) and became rows.
 
-**Narrated control flow, deleted.** Every sentence described a branch the function body shows; nothing here was a reason, an invariant, or a quirk.
+**Narrated control flow, deleted.** Every sentence described a branch the function body shows. Nothing here was a reason, an invariant, or a quirk.
 
 ```ts
 /**
@@ -154,27 +157,29 @@ Two lines described what other functions do; their own comments carry that. Thre
 // no summary on exit 0                               -> fails, so a bun wording change breaks loudly
 ```
 
-The two sentences carry why the guard exists and why the match is anchored; the three rows pair each hazard with its handling.
+The two sentences carry why the guard exists and why the match is anchored. The three rows pair each hazard with its handling.
 
 ## No comment-justified workarounds
 
-If it takes a paragraph-long comment to justify why a workaround is OK, the code is wrong: fix the code, even when that takes a bigger refactor (see `references/design.md`, Maintainability Over Effort).
+If it takes a paragraph-long comment to justify why a workaround is OK, the code is wrong. Fix the code, even when that takes a bigger refactor (see `references/design.md`, Maintainability Over Effort).
 
-A long rationalizing comment is the smell that a cleaner design exists; adopt it outright and delete the old path rather than shimming around it. A comment documenting a genuinely external, unavoidable constraint is fine, in the shape above.
+A long rationalizing comment is the smell that a cleaner design exists. Adopt it outright and delete the old path rather than shimming around it. A comment documenting a genuinely external, unavoidable constraint is fine, in the shape above.
 
 ## No TODO comments, ever
 
-A TODO/FIXME/XXX/HACK marker is deferred work hiding in the code: either DO the work in the same change, or SURFACE it to the user (a task, an escalation in the completion signal); never park it in a comment. Sweeps treat existing TODO markers as work items to resolve or surface, not text to compress.
+A TODO/FIXME/XXX/HACK marker is deferred work hiding in the code: either DO the work in the same change, or SURFACE it to the user (a task, an escalation in the completion signal). Never park it in a comment. Sweeps treat existing TODO markers as work items to resolve or surface, not text to compress.
 
 ## No planning references in code
 
-Code and comments never reference planning artifacts: work-package names, spike part numbers, plan codenames, audit finding numbers, or "temporary per plan" markers. Plan-internal labels are meaningless to future readers; comments describe purpose and constraints, not where the code came from. Commit messages may reference the change itself but not internal plan codenames.
+Code and comments never reference planning artifacts: work-package names, spike part numbers, plan codenames, audit finding numbers, or "temporary per plan" markers. Plan-internal labels are meaningless to future readers.
+
+Comments describe purpose and constraints, not where the code came from. Commit messages may reference the change itself but not internal plan codenames.
 
 ## How to apply
 
-- Run the two-question test before writing a comment and before keeping one you meet.
-- Shape every comment you keep: tell, then show only when a block is faster.
-- Treat any multi-line comment defending a hack, special case, or fragile assumption as a signal to redesign that code until the comment becomes unnecessary.
-- Run these checks explicitly in every pre-commit review pass (see the `/rubber-duck-review` skill).
-- Hand a subagent that writes or sweeps comments this file and the SKILL.md section by path, and tell it to read both first. Never a paraphrase: a lead's paraphrase is where the rule inverts. One lead's version read "prefer one dense paragraph over bullets", and six agents produced packed walls of text with markers on top.
-- When sweeping a whole repo, skip generated files and symlinked files.
+- **Run the two-question test** before writing a comment and before keeping one you meet.
+- **Shape every comment you keep:** tell, then show only when a block is faster.
+- **Redesign around a defended hack.** Treat any multi-line comment defending a hack, special case, or fragile assumption as a signal to redesign that code until the comment becomes unnecessary.
+- **Run these checks explicitly** in every pre-commit review pass (see the `/rubber-duck-review` skill).
+- **Hand a subagent that writes or sweeps comments this file** and the SKILL.md section by path, and tell it to read both first. Never a paraphrase: a lead's paraphrase is where the rule inverts. One lead's version read "prefer one dense paragraph over bullets", and six agents produced packed walls of text with markers on top.
+- **When sweeping a whole repo,** skip generated files and symlinked files.
