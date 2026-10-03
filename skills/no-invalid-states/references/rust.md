@@ -126,7 +126,7 @@ pub fn push(&mut self, value: T) {
 - **The comment names the invariant and what established it.** Its shape is the `/code-standards` skill's comment standard; the lint only demands that it exists.
 - **An `unsafe fn` is the exception, not the default.** Use it only when the caller is the one who can uphold the invariant, and state the obligation in a `/// # Safety` section. If the module could check it itself, make the function safe and check there.
 
-At crate scale, the owner is a quarantine: deny `unsafe` for the workspace and re-allow it per audited module, each allow carrying its justification.
+At crate scale, the owner is a quarantine: deny `unsafe` for the workspace and re-admit it per audited module with an `expect` that carries the reason. If a module stops using `unsafe`, its `expect` triggers `unfulfilled_lint_expectations`, a warning by default that CI with warnings denied turns into a failed build. A stale re-admission cannot linger.
 
 ```toml
 # Cargo.toml at the workspace root
@@ -139,8 +139,8 @@ workspace = true
 ```
 
 ```rust
-//! ipc/peercred.rs: the one FFI call that reads the peer's credentials off the socket.
-#![allow(unsafe_code)]
+//! ipc/peercred.rs
+#![expect(unsafe_code, reason = "the one FFI call that reads the peer's credentials off the socket")]
 ```
 
 Everything outside those modules is then safe Rust by construction, and a new `unsafe` block anywhere else fails the build until it is moved behind an owner.
