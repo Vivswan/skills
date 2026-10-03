@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import { tempDirs } from "./helpers/temp-dirs";
 
@@ -63,6 +63,29 @@ describe("the docs-probe action", () => {
   test("two spellings of one page count once", () => {
     const root = repo(files);
     const result = runAction(root, { PAGES: "README.md ./README.md" });
+    expect([result.status, result.stdout, result.stderr]).toEqual([
+      0,
+      "docs-probe: 1 page(s) clean (cap 70 words)\n",
+      "",
+    ]);
+  });
+
+  test("a page whose name starts with a dash is a file, not a probe option", () => {
+    const root = repo({ "-guide.md": "# Guide\n\nShort.\n" });
+    const result = runAction(root, { PAGES: "./-guide.md" });
+    expect([result.status, result.stdout, result.stderr]).toEqual([
+      0,
+      "docs-probe: 1 page(s) clean (cap 70 words)\n",
+      "",
+    ]);
+  });
+
+  test("a root given as a symlink, with a pattern that climbs out and back, still probes the matched file", () => {
+    const root = repo({ "README.md": "# R\n\nShort.\n" });
+    const outer = repo({});
+    const link = join(outer, "link");
+    symlinkSync(root, link);
+    const result = runAction(link, { ROOT: link, PAGES: `../${basename(root)}/README.md` }, outer);
     expect([result.status, result.stdout, result.stderr]).toEqual([
       0,
       "docs-probe: 1 page(s) clean (cap 70 words)\n",

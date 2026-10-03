@@ -4,7 +4,7 @@
 
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
-import { dirname, normalize, resolve } from "node:path";
+import { dirname, isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PROBE = resolve(
@@ -44,7 +44,10 @@ function main(): number {
   if (process.env.MAX_WORDS) args.push("--max-words", process.env.MAX_WORDS);
   if (process.env.SHAPE_ONLY === "true") args.push("--shape-only");
 
-  const run = spawnSync(process.execPath, [PROBE, ...args, ...pages], {
+  // Relative with a `./` prefix: a page named `-guide.md` is then a file to the probe, not an option,
+  // and a pattern that climbs out of a symlinked root and back still names what the scan matched.
+  const files = [...pages].map((page) => (isAbsolute(page) ? page : `./${page}`));
+  const run = spawnSync(process.execPath, [PROBE, ...args, ...files], {
     cwd: root,
     stdio: "inherit",
   });
