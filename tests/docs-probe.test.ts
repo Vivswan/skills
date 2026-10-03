@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import {
@@ -309,6 +309,42 @@ describe("the CLI", () => {
       "  docs/g.md:3: paragraph of 71 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps",
       "  docs/g.md:5: `docs/gone.md` does not exist",
       "",
+    ]);
+  });
+
+  test("the usage line names the probe's own file: a vendored copy prints its name, an importer does not print its own", () => {
+    // A platform repository vendored the script as docs_probe.ts and its usage line still said docs-probe.mts.
+    const usage = (name: string) =>
+      [
+        `usage: ${name} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
+        "  --root        the repository root paths resolve against (default: cwd)",
+        "  --base        a directory under the root that paths also resolve against (repeatable)",
+        "  --max-words   the cap on a paragraph or list item (default: 70)",
+        "  --shape-only  word counts only; skip the check that named paths exist",
+        "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
+      ].join("\n");
+    const root = repo({ "a.md": "" });
+    const copy = join(root, "docs_probe.ts");
+    copyFileSync(PROBE, copy);
+    const renamed = spawnSync("bun", [copy], { cwd: root, encoding: "utf8" });
+    expect([renamed.status, renamed.stdout, renamed.stderr]).toEqual([
+      2,
+      "",
+      `docs-probe: ${usage("docs_probe.ts")}\n`,
+    ]);
+    const importer = spawnSync(
+      "bun",
+      ["-e", `import { parseArgs } from ${JSON.stringify(PROBE)}; parseArgs([]);`],
+      { cwd: root, encoding: "utf8" },
+    );
+    // Bun prints its own stack frames around the thrown message; the usage block between them is the contract.
+    const lines = importer.stderr.split("\n");
+    const from = lines.findIndex((l) => l.startsWith("error: usage:"));
+    const block = lines.slice(from, from + 6).join("\n");
+    expect([importer.status, importer.stdout, block]).toEqual([
+      1,
+      "",
+      `error: ${usage("docs-probe.mts")}`,
     ]);
   });
 
