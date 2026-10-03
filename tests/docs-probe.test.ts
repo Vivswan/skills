@@ -202,6 +202,33 @@ describe("the path check", () => {
     ).toEqual(["`scripts/gone.mts` does not exist"]);
   });
 
+  test("--base adds a tree a page's paths also resolve against; a path missing there is still a finding", () => {
+    // A platform repository ships `.github/workflows/checks.yml` under files/base/ for OTHER
+    // repositories, while its own `.github/` exists too, so the foreign-layout exemption cannot fire.
+    const root = repo({
+      "docs/page.md": "",
+      ".github/workflows/ci.yml": "",
+      "files/base/.github/workflows/checks.yml": "",
+    });
+    const page =
+      "The sync writes `.github/workflows/checks.yml` and `.github/workflows/gone.yml`.\n";
+    expect(probePage(page, "docs/page.md", options(root)).map((f) => f.message)).toEqual([
+      "`.github/workflows/checks.yml` does not exist",
+      "`.github/workflows/gone.yml` does not exist",
+    ]);
+    const base = join(root, "files", "base");
+    expect(
+      probePage(page, "docs/page.md", { ...options(root), bases: [base] }).map((f) => f.message),
+    ).toEqual(["`.github/workflows/gone.yml` does not exist"]);
+    writeFileSync(join(root, "docs", "page.md"), page);
+    const cli = runProbe(root, "--base", "files/base", "docs/page.md");
+    expect([cli.status, cli.stdout, cli.stderr]).toEqual([
+      1,
+      "",
+      "docs-probe: 1 finding(s)\n  docs/page.md:1: `.github/workflows/gone.yml` does not exist\n",
+    ]);
+  });
+
   test("link destinations in every Markdown form are checked from the page; a link quoted in a code span is not", () => {
     const root = repo({ "docs/a.md": "", "docs/b.md": "" });
     const page = [
@@ -235,6 +262,13 @@ describe("repository containment", () => {
       "`../../../../../../../../etc/passwd` escapes the repository",
       "link target ../../../../../../../../etc/passwd escapes the repository",
     ]);
+  });
+
+  test("a directory whose name starts with two dots is inside the repository, not a parent escape", () => {
+    const root = repo({ "docs/a.md": "", "..vendor/a.ts": "" });
+    expect(
+      probePage("See `..vendor/a.ts`.\n", "docs/a.md", { root, maxWords: 70, paths: true }),
+    ).toEqual([]);
   });
 
   test("a link to the repository root itself is inside the repository", () => {
@@ -280,6 +314,8 @@ describe("the CLI", () => {
 
   test.each([
     ["a --root that is not a directory", ["--root", "package.json", "a.md"], /is not a directory/],
+    ["a --base that is not a directory", ["--base", "package.json", "a.md"], /is not a directory/],
+    ["a --base outside the root", ["--base", "..", "a.md"], /is outside the root/],
     ["a page that is a directory", ["docs"], /is not a readable file/],
     ["no pages", [], /usage: docs-probe\.mts/],
   ])("%s exits 2 and says why", (_name, args, message) => {
