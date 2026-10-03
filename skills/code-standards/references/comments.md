@@ -61,9 +61,10 @@ The carrier follows the fact at that spot. Real-shaped examples, tell first in e
 ```
 
 ```rust
-// SAFETY: the grow above leaves len < cap, so ptr + len is a slot this struct
-// owns and no value is stored there yet.
-unsafe { self.ptr.add(self.len).write(value) };
+let slot = self.ptr.wrapping_add(self.len);
+// SAFETY: the grow above leaves len < cap, so slot is inside the buffer this
+// struct owns and no value is stored there yet.
+unsafe { slot.write(value) };
 ```
 
 - A quoted literal with an arrow note, when the comment explains a log line or wire format the code matches.

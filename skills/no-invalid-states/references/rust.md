@@ -113,15 +113,16 @@ pub fn push(&mut self, value: T) {
     if self.len == self.cap {
         self.grow();
     }
-    // SAFETY: the grow above leaves len < cap, so ptr + len is a slot this struct
-    // owns and no value is stored there yet.
-    unsafe { self.ptr.add(self.len).write(value) };
+    let slot = self.ptr.wrapping_add(self.len);
+    // SAFETY: the grow above leaves len < cap, so slot is inside the buffer this
+    // struct owns and no value is stored there yet.
+    unsafe { slot.write(value) };
     self.len += 1;
 }
 ```
 
 - **The signature is safe.** `push` carries no `unsafe`, so a caller cannot be handed an obligation it has no way to meet.
-- **The block holds one operation.** The grow check and the length update stay in safe code, so the `SAFETY:` comment has exactly one claim to make and a reviewer one line to audit.
+- **The block holds one operation.** The grow check, the pointer arithmetic (`wrapping_add` is safe), and the length update stay in safe code, so the `SAFETY:` comment has exactly one claim to make and a reviewer one line to audit.
 - **The comment names the invariant and what established it.** Its shape is the `/code-standards` skill's comment standard; the lint only demands that it exists.
 - **An `unsafe fn` is the exception, not the default.** Use it only when the caller is the one who can uphold the invariant, and state the obligation in a `/// # Safety` section. If the module could check it itself, make the function safe and check there.
 
