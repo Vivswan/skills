@@ -60,12 +60,20 @@ The carrier follows the fact at that spot. Real-shaped examples, tell first in e
 // Guaranteed after that: same label, same endpoint, same origin.
 ```
 
+```rust
+let slot = self.ptr.wrapping_add(self.len);
+// SAFETY: the grow above leaves len < cap, so slot is inside the buffer this
+// struct owns and no value is stored there yet.
+unsafe { slot.write(value) };
+```
+
 - A quoted literal with an arrow note, when the comment explains a log line or wire format the code matches.
 - A value example, for a transformation or a threshold change.
 - A pointer, for a cross-file invariant. The other file holds the detail, so nothing is restated.
 - Inputs with outcomes, for a guard with several motivating inputs.
 - The tell alone, when one sentence is the whole comment.
 - A flow with a closing sentence, when a guarantee holds after the sequence.
+- A `SAFETY:` tell on an unsafe block: the invariant the operation depends on and the line that established it. The safe-API rule for the block itself is the `/no-invalid-states` skill's Rust reference.
 
 ## The test
 

@@ -110,7 +110,7 @@ Pick by situation, not by favorite mechanism:
 
 Detailed, idiomatic guidance with code examples lives in the per-language references:
 
-- [references/rust.md](references/rust.md): enums, newtypes, typestate with `PhantomData`, consuming `self`, `TryFrom` boundaries
+- [references/rust.md](references/rust.md): enums, newtypes, typestate with `PhantomData`, consuming `self`, `TryFrom` boundaries, unsafe behind a safe API
 - [references/typescript.md](references/typescript.md): discriminated unions, branded types, exhaustive `never` checks, boundary schemas
 - [references/python.md](references/python.md): state-specific frozen dataclasses, `Literal` unions, `NewType`, `assert_never`, strict typing
 - [references/other-languages.md](references/other-languages.md): Go, Java, Kotlin, C#, Swift, functional languages, dynamic languages, and databases
