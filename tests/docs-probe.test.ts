@@ -202,7 +202,7 @@ describe("the path check", () => {
     ).toEqual(["`scripts/gone.mts` does not exist"]);
   });
 
-  test("--base adds a tree a page's paths also resolve against; a path missing there is still a finding", () => {
+  test("--base adds the one tree a page's paths also resolve against; a path missing there is still a finding", () => {
     // A platform repository ships `.github/workflows/checks.yml` under files/base/ for OTHER
     // repositories, while its own `.github/` exists too, so the foreign-layout exemption cannot fire.
     const root = repo({
@@ -218,7 +218,7 @@ describe("the path check", () => {
     ]);
     const base = join(root, "files", "base");
     expect(
-      probePage(page, "docs/page.md", { ...options(root), bases: [base] }).map((f) => f.message),
+      probePage(page, "docs/page.md", { ...options(root), base }).map((f) => f.message),
     ).toEqual(["`.github/workflows/gone.yml` does not exist"]);
     writeFileSync(join(root, "docs", "page.md"), page);
     const cli = runProbe(root, "--base", "files/base", "docs/page.md");
@@ -316,9 +316,9 @@ describe("the CLI", () => {
     // A platform repository vendored the script as docs_probe.ts and its usage line still said docs-probe.mts.
     const usage = (name: string) =>
       [
-        `usage: ${name} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
+        `usage: ${name} [--root <dir>] [--base <dir>] [--max-words <n>] [--shape-only] <page.md>...`,
         "  --root        the repository root paths resolve against (default: cwd)",
-        "  --base        a directory under the root that paths also resolve against (repeatable)",
+        "  --base        one directory under the root that paths also resolve against",
         "  --max-words   the cap on a paragraph or list item (default: 70)",
         "  --shape-only  word counts only; skip the check that named paths exist",
         "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
@@ -352,6 +352,7 @@ describe("the CLI", () => {
     ["a --root that is not a directory", ["--root", "package.json", "a.md"], /is not a directory/],
     ["a --base that is not a directory", ["--base", "package.json", "a.md"], /is not a directory/],
     ["a --base outside the root", ["--base", "..", "a.md"], /is outside the root/],
+    ["a second --base", ["--base", "docs", "--base", "docs", "a.md"], /--base may be given once/],
     ["a page that is a directory", ["docs"], /is not a readable file/],
     ["no pages", [], /usage: docs-probe\.mts/],
   ])("%s exits 2 and says why", (_name, args, message) => {

@@ -120,9 +120,11 @@ bun "<skill-dir>/scripts/docs-probe.mts" --base files/base docs/*.md         # p
 | 1 | findings, one per line: `page:line: message` |
 | 2 | usage, or a page that does not exist |
 
-The path check leaves alone, on purpose: placeholders (`<skill-dir>/x`), globs, `owner/repo` slugs, absolute paths, and bare file names (`package.json`). It also leaves alone a path whose first segment exists nowhere between the page and the root, nor under a `--base` (a page describing another layout).
+The path check leaves alone, on purpose: placeholders (`<skill-dir>/x`), globs, `owner/repo` slugs, absolute paths, and bare file names (`package.json`). It also leaves alone a path whose first segment exists nowhere between the page and the root, nor under the `--base` (a page describing another layout).
 
-A path resolves against the root, the page's directory, every directory between, and each `--base`. So a skill's reference page may name a script under its own `scripts/` folder, and a platform page may name a file by the path it will have in the repositories it is written into.
+A path resolves against the root, the page's directory, every directory between, and the one `--base` when given. So a skill's reference page may name a script under its own `scripts/` folder.
+
+The base is a system, not a list: the root by default, or the one shipped tree whose files the pages describe by their destination path. A platform page may then name a file by the path it will have in the repositories it is written into.
 
 Copy the script into the repository's scripts directory and run it in the check command. The cap is then a gate, not a taste.
 
