@@ -23,6 +23,7 @@ Delete or fold these:
 | five tests differing only in an input value | one parametrized case list |
 | `expect(job.needs).toEqual(["lint", "test"])` after reading the workflow that says so | restates the source; it changes in the same commit, so nothing drifts under it |
 | `expect(DEFAULT_HOME).toBe("~/.local/share/app")` | the constant is the source of the value; the test restates it and grows with every new constant |
+| `expect(parseToml(shippedCargoToml).lints.clippy).toEqual({ ... })` | the shipped file is the source; a data file is not external because it is not code |
 
 A shape or dtype claim is not forbidden. It is forbidden *as the whole test*. Move it into the correctness test that also compares values.
 
@@ -66,6 +67,30 @@ await expect(readFile(join(home, ".local/share/app/env.sh"), "utf8")).resolves.t
 The KEEP test fails when the default changes, when the installer stops writing the file, or when the content drifts. The assertion owns each failure (a bare `await readFile` would reject upstream of it, which Prove the test below rules out). The DELETE test fails only when someone edits the constant, and they edit the test in the same keystroke.
 
 Specimen: a test audit of an installer removed the `DEFAULT_HOME` pin and replaced it with this read-back.
+
+### A shipped file is the source
+
+A repository that ships a config file (a lint table, a workflow fragment, a settings layer, a dotfile) is the source of that file.
+
+Agents read "source" as code and treat a data file as an external fact worth pinning. It is not: it changes in the same commit as the test.
+
+```ts
+// DELETE: the starter is the source; this object is a second copy of it
+expect(parseToml(read("files/rust/Cargo.toml")).workspace.lints.clippy).toEqual({
+  undocumented_unsafe_blocks: "deny",
+  multiple_unsafe_ops_per_block: "deny",
+});
+
+// KEEP: an external fact the file cannot express; a renamed lint fails here, not in every consumer's CI
+const known = new Set(clippyLintNames(pinnedClippyVersion));
+for (const lint of Object.keys(parseToml(read("files/rust/Cargo.toml")).workspace.lints.clippy)) {
+  expect(known, `${lint} is not a clippy lint in ${pinnedClippyVersion}`).toContain(lint);
+}
+```
+
+The KEEP test answers the drift question with an external fact: clippy renames and retires lints, and nothing in the repository enforces that the table names real ones. The DELETE test answers "the file says so".
+
+Specimen: a toolchain repository's Rust lint floor shipped with a test that parsed the starter `Cargo.toml` and asserted its lint list, then parsed the three shipped workflow blocks and asserted their cargo commands. The owner's words on deleting it: "if something is already the source of truth, we do not need to check that thing."
 
 Specimen: eleven PRs landed in one day on a repository of GitHub Actions workflows, and their builders shipped shape tests that restated the yaml. Two examples: a census asserting no workflow sets `cancel-in-progress: false`, and a pin that a job's `needs` equals the list in the file. Four pressures produced them, each with its answer:
 
