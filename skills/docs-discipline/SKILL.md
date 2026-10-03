@@ -124,7 +124,14 @@ The path check leaves alone, on purpose: placeholders (`<skill-dir>/x`), globs, 
 
 A path resolves against the root, the page's directory, every directory between, and each `--base`. So a skill's reference page may name a script under its own `scripts/` folder, and a platform page may name a file by the path it will have in the repositories it is written into.
 
-Copy the script into the repository's scripts directory and run it in the check command. The cap is then a gate, not a taste.
+Make the cap a gate, not a taste: run the probe in CI at a pinned sha through the `docs-probe` composite action of the skill's home repository. Where no CI exists, copy the script into the repository's scripts directory and run it in the check command.
+
+```yaml
+- uses: Vivswan/skills/.github/actions/docs-probe@<sha> # main, <date>
+  with:
+    pages: README.md docs/*.md
+    bases: files/base        # only when pages name files a shipped tree writes elsewhere
+```
 
 ## Restructuring an existing page
 
