@@ -58,6 +58,7 @@ Agents drift toward many small weak tests. The fix is tests that each pin a whol
 
 - **The drift question.** Every test answers "what would drift silently without this?" in its name or first line. Three answers count: an external fact the platform does not enforce for us, a cross-file consistency the source cannot express, or a regression with a named incident. "The source says so" means no test.
 - **A constant is the source.** A test of a single constant restates the source and grows with it. So does a test of a variable that is itself the source of its value (a default, a key name, an argv literal, a path).
+- **A shipped file is the source.** A test that parses a file the repository ships (a lint table, a workflow fragment, a settings layer) and asserts its contents back is the same restatement. A data file is not external because it is not code.
 - **Pin the value where it leaves the program** (the bytes written to a file, the line printed, the request sent), and only when that boundary is an external contract.
 - **Shape-only tests go.** Delete tests that only assert a shape, a type, or that something exists. If that fact matters, assert it inside a test that also checks the value.
 - **Parametrize one axis.** When hand-written cases differ only along one input axis, replace them with one parametrized case list.
@@ -72,6 +73,8 @@ Every one of the seven bugs the suite existed to catch still failed when reintro
 Specimen: builders on a workflows repository shipped eleven PRs in one day of shape tests that restated the yaml they had just read. Two examples: a census that no workflow sets `cancel-in-progress: false`, and a pin that a job's `needs` equals the list in the file. Such a test changes in the same commit as the source, so nothing can drift under it: delete it.
 
 Specimen: a test audit found `expect(DEFAULT_HOME).toBe("~/.local/share/app")`. Deleted. Its replacement runs the installer with no home override and reads back the file it wrote under that path, because the path is where the value reaches the user's disk.
+
+Specimen: a toolchain repository's Rust lint floor shipped with a test that parsed the shipped `Cargo.toml` starter and asserted its lint list, then parsed the three shipped workflow blocks and asserted their cargo commands. Deleted: the shipped file is the source of truth, and a test listing its contents back is a second copy that changes in the same commit.
 
 Specimen: a statistical profile measured from its author's real sessions sat committed as a test fixture with a comment saying so. Replaced by a hand-written fixture. Every figure of the old file was grepped out of the replacing PR, and the history was rewritten to drop the original.
 
@@ -160,10 +163,11 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 ## Workflow
 
 1. **Writing code:** apply the standards as you go. They are cheaper at write time than at review time.
-2. **Reviewing:** check the Review Criteria, cite the specific standard in each finding, and prefer suggesting the class fix over the instance patch.
-3. **Boundaries:** when a standard needs its boundaries (what counts, what is exempt, how far to take it), load the matching `references/` file before acting on it.
-4. **Type-level fixes:** when a finding calls for enforcing invariants in the type system (lifecycle flags, must-call-X-before-Y ordering, fields that must appear together), apply the `/no-invalid-states` skill for the refactor itself.
-5. **Conflicts:** when a standard conflicts with an explicit user or project decision, follow the decision and record which standard was consciously set aside.
+2. **Writing a test:** before creating a test file or adding a case, write its drift answer (an external fact, a cross-file consistency, a named incident) as the name or first line. No answer, no test: a constant or a shipped file is the source, and the source is never pinned to itself.
+3. **Reviewing:** check the Review Criteria, cite the specific standard in each finding, and prefer suggesting the class fix over the instance patch.
+4. **Boundaries:** when a standard needs its boundaries (what counts, what is exempt, how far to take it), load the matching `references/` file before acting on it.
+5. **Type-level fixes:** when a finding calls for enforcing invariants in the type system (lifecycle flags, must-call-X-before-Y ordering, fields that must appear together), apply the `/no-invalid-states` skill for the refactor itself.
+6. **Conflicts:** when a standard conflicts with an explicit user or project decision, follow the decision and record which standard was consciously set aside.
 
 ## Review Criteria
 
@@ -172,7 +176,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - Tests that assert only a shape, a type, or that something exists.
 - Hand-written test functions that differ only along one input axis and should be one parametrized case list.
 - A guard test never seen failing on the bug it guards.
-- A new test that restates the source it reads (a workflow test pinning `needs` to the list in the yaml, a constant pinned to its own literal), or whose name or first line does not say what would drift silently without it.
+- A new test that restates the source it reads (a workflow test pinning `needs` to the list in the yaml, a constant pinned to its own literal, a shipped config file parsed and asserted back), or whose name or first line does not say what would drift silently without it.
 - A test manufactured for a deletion with no behavior of its own in place of a census in the PR body or landing report.
 - A fixture recorded from real data, a provenance comment saying so, or a tool that measures real data with a default output path or one inside the repository.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.

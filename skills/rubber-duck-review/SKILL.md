@@ -55,7 +55,7 @@ Use this skill when someone asks for:
 
     A large library or an unclear fit is a `non_blocking` entry whose claim begins `Ask the owner:`. The driver puts it to the user and builds nothing until they answer. A library that needs a runtime or API the repository has dropped is not a fit, and not a finding.
   - The standing test question: for each NEW test in the change, the fact it pins that the source does not already say. The reviewer never asks for a test without naming that fact.
-    - A test that restates the source it reads is a finding whose fix is deletion: a workflow test asserting `needs` equals the list in the yaml, a constant pinned to its own literal.
+    - A test that restates the source it reads is a finding whose fix is deletion: a workflow test asserting `needs` equals the list in the yaml, a constant pinned to its own literal, a config file the repository ships parsed and asserted back.
     - The template carries the wording. The `/code-standards` skill's `references/tests.md` owns the rule, its three valid answers, and where a constant's value is pinned instead.
   - PII in anything the change publishes: anything that tells a reader who the author is, how they work, or how their machine is set up, including values measured or copied from the author's real environment. Every fixture is hand-authored. A provenance comment naming real data is a finding.
 
