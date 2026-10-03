@@ -10,7 +10,7 @@
 | a break between versions | old form, new form, and what the old form does now |
 | plain facts | bullets with bold lead-ins, paragraphs under 70 words |
 
-`scripts/docs-probe.mts` measures the cap and checks that named paths exist. `references/architecture-page.md` and its three scripts keep an architecture page's diagrams naming real code.
+`scripts/docs-probe.mts` measures the cap and checks that named paths exist; the `docs-probe` composite action in this skill's home repository runs it in CI at a pinned sha. `references/architecture-page.md` and its three scripts keep an architecture page's diagrams naming real code.
 
 ## Install
 

@@ -8,3 +8,4 @@ These pages are for people changing the repository:
 |---|---|
 | [Authoring Guide](authoring.md) | adding or changing a skill: the folder layout, the checklist, the checks that enforce it |
 | [The validate-skills action](validate-skills.md) | the composite action any repository hosting skills can call, and how this one runs it on itself |
+| [The docs-probe action](docs-probe.md) | the docs-discipline probe as a composite action any repository can pin, and how this one runs it on itself |

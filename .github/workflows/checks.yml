@@ -52,3 +52,14 @@ jobs:
       - uses: ./.github/actions/validate-skills
         with:
           mode: structure
+
+  # The docs-probe composite action lives here and repo-platform's ci.yml calls
+  # it on its pages, so it also runs on this checkout's pages: a regression in
+  # the action fails this repository first.
+  docs-probe-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/docs-probe
+        with:
+          pages: README.md docs/*.md
