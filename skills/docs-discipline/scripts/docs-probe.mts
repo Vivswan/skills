@@ -15,7 +15,7 @@
 // may name files the reader will create.
 
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export const DEFAULT_MAX_WORDS = 70;
 
@@ -32,6 +32,8 @@ export interface ProbeOptions {
   readonly maxWords: number;
   /** false: word counts only, for pages that describe another repository's files. */
   readonly paths: boolean;
+  /** Extra directories a slash path also resolves against: a shipped tree that mirrors the layout the page describes. */
+  readonly bases?: readonly string[];
 }
 
 export interface Unit {
@@ -239,15 +241,16 @@ export function pathCandidate(token: string): string | null {
 /** True when `file` is `root` or sits under it, judged by the relative path so the host's separator does not matter. */
 function withinRoot(root: string, file: string): boolean {
   const rel = relative(resolve(root), file);
-  return !rel.startsWith("..") && !isAbsolute(rel);
+  // A bare startsWith("..") would also reject a directory named `..vendor`.
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-/** The root, the page's directory, and every directory between: a skill's reference page names `scripts/x.mts` from the skill folder. */
-function bases(root: string, pageDir: string): string[] {
+/** The page's directory, every directory up to the root, then the extra bases: a skill's reference page names `scripts/x.mts` from the skill folder. */
+function bases(root: string, pageDir: string, extra: readonly string[]): string[] {
   const out = [pageDir];
   for (let dir = pageDir; dir !== root && dir.startsWith(root); dir = dirname(dir))
     out.push(dirname(dir));
-  return out;
+  return [...out, ...extra];
 }
 
 /**
@@ -258,9 +261,11 @@ function bases(root: string, pageDir: string): string[] {
 function verdict(
   root: string,
   pageDir: string,
+  extra: readonly string[],
   path: string,
 ): "ok" | "missing" | "foreign" | "outside" {
-  const dirs = path.startsWith("./") || path.startsWith("../") ? [pageDir] : bases(root, pageDir);
+  const dirs =
+    path.startsWith("./") || path.startsWith("../") ? [pageDir] : bases(root, pageDir, extra);
   const hits = dirs.map((base) => resolve(base, path)).filter((file) => existsSync(file));
   if (hits.some((file) => withinRoot(root, file))) return "ok";
   if (hits.length > 0) return "outside";
@@ -298,7 +303,7 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
   if (!options.paths) return findings;
   for (const { text: code, line } of scan.codespans) {
     const path = pathCandidate(code);
-    const state = path ? verdict(options.root, pageDir, path) : "foreign";
+    const state = path ? verdict(options.root, pageDir, options.bases ?? [], path) : "foreign";
     if (state === "missing") findings.push({ file, line, message: `\`${path}\` does not exist` });
     if (state === "outside")
       findings.push({ file, line, message: `\`${path}\` escapes the repository` });
@@ -317,8 +322,9 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
 }
 
 const USAGE = [
-  "usage: docs-probe.mts [--root <dir>] [--max-words <n>] [--shape-only] <page.md>...",
+  "usage: docs-probe.mts [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...",
   "  --root        the repository root paths resolve against (default: cwd)",
+  "  --base        a directory under the root that paths also resolve against (repeatable)",
   "  --max-words   the cap on a paragraph or list item (default: 70)",
   "  --shape-only  word counts only; skip the check that named paths exist",
   "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
@@ -326,6 +332,7 @@ const USAGE = [
 
 interface CliOptions {
   readonly root: string;
+  readonly bases: readonly string[];
   readonly maxWords: number;
   readonly paths: boolean;
   readonly pages: readonly string[];
@@ -341,6 +348,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   let root = realpath(process.cwd());
   let maxWords = DEFAULT_MAX_WORDS;
   let paths = true;
+  const baseArgs: string[] = [];
   const pages: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index] ?? "";
@@ -353,6 +361,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       root = realpath(value());
       if (!statSync(root, { throwIfNoEntry: false })?.isDirectory())
         throw new Error(`--root ${root} is not a directory`);
+    } else if (arg === "--base") {
+      baseArgs.push(value());
     } else if (arg === "--max-words") {
       maxWords = Number(value());
       if (!Number.isInteger(maxWords) || maxWords < 1)
@@ -362,7 +372,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     else pages.push(arg);
   }
   if (pages.length === 0) throw new Error(USAGE);
-  return { root, maxWords, paths, pages };
+  // Resolved after the loop so a --root given later still governs every --base.
+  const bases = baseArgs.map((arg) => {
+    const base = realpath(resolve(root, arg));
+    if (!statSync(base, { throwIfNoEntry: false })?.isDirectory())
+      throw new Error(`--base ${base} is not a directory`);
+    if (!withinRoot(root, base)) throw new Error(`--base ${base} is outside the root ${root}`);
+    return base;
+  });
+  return { root, bases, maxWords, paths, pages };
 }
 
 if (import.meta.main) {

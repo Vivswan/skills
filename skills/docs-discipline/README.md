@@ -38,7 +38,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/docs-disciplin
 
 - [`SKILL.md`](./SKILL.md): the specimen, the shape rules, the probe, restructuring, page kinds, the review criteria
 - [`references/architecture-page.md`](./references/architecture-page.md): the architecture page recipe
-- [`scripts/docs-probe.mts`](./scripts/docs-probe.mts): the paragraph cap and the path check. `--shape-only` skips paths, `--max-words` moves the cap
+- [`scripts/docs-probe.mts`](./scripts/docs-probe.mts): the paragraph cap and the path check. `--shape-only` skips paths, `--max-words` moves the cap, `--base <dir>` adds a tree paths also resolve against
 - [`scripts/arch-lint.mts`](./scripts/arch-lint.mts): the layering lint (`--mermaid` prints the map). Exports `readArchitecture`, `lintArchitecture`, `renderArchitectureMermaid`, `importSpecifiers`
 - [`scripts/render-architecture-map.mts`](./scripts/render-architecture-map.mts): writes the map into the page's generated region. `--check` exits 1 on drift
 - [`scripts/check-architecture-page.mts`](./scripts/check-architecture-page.mts): the page test. `--expect-diagrams <n>` pins the count, `--repo-url` resolves absolute links
