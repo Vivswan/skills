@@ -104,6 +104,46 @@ enum Payment {
 
 instead of a struct with `card_number: Option<_>`, `expiry: Option<_>`, and `po_number: Option<_>` plus a comment about which combinations are legal.
 
+## Unsafe behind a safe API
+
+An `unsafe` block is an invariant the compiler cannot check. The same rule applies: one owner upholds it, callers never re-check. The owner is the module that holds the private fields.
+
+```rust
+pub fn push(&mut self, value: T) {
+    if self.len == self.cap {
+        self.grow();
+    }
+    // SAFETY: the grow above leaves len < cap, so ptr + len is a slot this struct
+    // owns and no value is stored there yet.
+    unsafe { self.ptr.add(self.len).write(value) };
+    self.len += 1;
+}
+```
+
+- **The signature is safe.** `push` carries no `unsafe`, so a caller cannot be handed an obligation it has no way to meet.
+- **The block holds one operation.** The grow check and the length update stay in safe code, so the `SAFETY:` comment has exactly one claim to make and a reviewer one line to audit.
+- **The comment names the invariant and what established it.** Its shape is the `/code-standards` skill's comment standard; the lint only demands that it exists.
+- **An `unsafe fn` is the exception, not the default.** Use it only when the caller is the one who can uphold the invariant, and state the obligation in a `/// # Safety` section. If the module could check it itself, make the function safe and check there.
+
+At crate scale, the owner is a quarantine: deny `unsafe` for the workspace and re-allow it per audited module, each allow carrying its justification.
+
+```toml
+# Cargo.toml at the workspace root
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+# Cargo.toml of EVERY member crate: a member without this line inherits nothing
+[lints]
+workspace = true
+```
+
+```rust
+//! ipc/peercred.rs: the one FFI call that reads the peer's credentials off the socket.
+#![allow(unsafe_code)]
+```
+
+Everything outside those modules is then safe Rust by construction, and a new `unsafe` block anywhere else fails the build until it is moved behind an owner.
+
 ## What to avoid
 
 - **Do not reach for** `Rc<RefCell<_>>`, `Arc<Mutex<_>>`, cloning, heap allocation, or `unsafe` merely to dodge designing ownership correctly.
