@@ -10,7 +10,7 @@ metadata:
 
 > Categorically eliminate the problem so the failure class cannot recur, through better architecture or a better choice of data structures. That beats fixing its instances one at a time.
 
-Every correction and every repeated failure gets the most durable response reachable:
+Every failure that passes the floor below, most corrections of an agent among them, gets the most durable response reachable:
 
 | Rung | Response | What the class can still do | Preference |
 | --- | --- | --- | --- |
@@ -23,11 +23,23 @@ The ladder is not a menu, and preference decays exponentially down it. Rung 1 is
 
 A rung-3 or rung-4 landing is a **debt**, not a resolution. When a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
 
-**The floor the ladder stands on:** the ladder starts when the failure has recurred or can be reproduced on demand. Reproducible on demand means a standing cause you can trigger: a manual step someone will forget, two artifacts synced by convention. An agent's default behaviour counts, since the next prompt triggers it again, so a single correction of an agent passes the floor.
+**The floor the ladder stands on:** whether a failure earns a guard is a judgment weighed scenario by scenario, never a count and never a lookup. Four questions carry it: can the failure be reproduced, is the cause understood concretely, how often will normal operation produce the trigger, and what would the guard cost and where would it live?
 
-A single occurrence that cannot be reproduced is repaired and recorded (where it was seen, what was observed), never guarded against. The record goes in the PR body, report, or issue that holds the incident, never in a rule.
+A correction of an agent answers those questions by itself: the default behaviour is the concrete cause, and every prompt produces the trigger, so a single correction usually passes the floor. Likely means normal operation produces the trigger often. An outage (the forge down, a dependency's service down) is the canonical unlikely trigger.
 
-Specimen: a review launcher's scratch directory vanished once mid-run. No reproduction, so the run was relaunched and the event recorded, and no guard was built.
+Reproducible on demand is not reproducible at the desk. A condition whose cause is understood concretely, that arises only in CI or needs something that cannot be staged locally, and that keeps happening in real runs, answers the questions the same way: known cause, likely trigger.
+
+Two constraints hold in every scenario. A fixture reproduces the failure as observed, so none is ever built without a reproduction, and no local fixture is fabricated to stand in for a condition that lives elsewhere; the guard lives where the condition lives. An unreproduced incident whose cause is unknown is recorded, never guarded.
+
+The record (where it was seen, what was observed) goes in the PR body, report, or issue that holds the incident, never in a rule. "It happened twice" is evidence for the judgment, not a trigger on its own. When the judgment is unclear, ask the user; never build quietly, and never drop it silently.
+
+Worked examples of the judgment, not an exhaustive list:
+
+- A release step depends on someone editing a version file by hand first. Skipping the edit reproduces the failure, every release runs the step, and deriving the version costs one line, so the step derives it.
+- A merge race is understood from the code, and its window opens whenever two pushes land within a minute. Nothing reproduces it at the desk, but normal operation opens that window often, so a lock of a few lines in the merge step, where the race lives, serializes them, with no fabricated fixture.
+- A check fails only on the CI runner's image after its nightly rebuild, never locally. The cause is concrete, the rebuild is nightly, and a one-step probe of the image in the pipeline is cheap, so the guard lives where the condition does: a CI-side tripwire.
+- The forge was down for ten minutes and a push failed. Normal operation rarely produces an outage, so the push is retried and the event recorded, and the user is asked if a fix still seems right.
+- A review launcher's scratch directory vanished once mid-run. No reproduction and no cause, so the run was relaunched and the event recorded, and no guard was built.
 
 ## Workflow
 
@@ -128,6 +140,7 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
 - for each, name the rung the fix sits on, propose a concrete more durable rung, and say why it is reachable within this change's scope (or why it is not)
 - apply the test to whatever ships: if a new member of the class appears tomorrow, is it impossible to build, stopped in CI, caught by a loaded rule, or silent?
 - deletions of rules, guards, or checks that map to neither a successor covering their class nor a deliberate cut with its reason recorded in the change (Deleting a Guard, above)
-- a guard built against a failure that has neither recurred nor can be reproduced on demand (the floor, above): the response is to repair and record it, not to guard against it
+- a guard the floor's judgment does not support (the floor, above): an unreproduced incident with unknown cause, guarded at all; an unreproduced rare trigger, or an unclear call, guarded without the user's confirmation; a fixture that does not reproduce an observed failure
+- an instance repair with no guard where the floor's judgment supports one (a concrete cause, a trigger normal operation produces often, a guard worth its cost): the fix climbs the ladder
 
 Triage the resulting findings with the workflow above.

@@ -18,11 +18,11 @@ Where a standard has a canonical case (the specimen that set the rule), it is st
 
 A systemic problem gets a root fix that makes recurrence impossible, never only a fix of the case at hand. The `/never-twice` skill owns this rule and its response ladder. Specimen and full detail in `references/design.md`.
 
-### Guard recurring problems with tests
+### Guard what passes the floor
 
-A problem that has recurred, or that can be reproduced on demand, ships with the highest reachable rung of the `/never-twice` ladder: a type or structure that makes the state impossible, else a test, tripwire, or pipeline fix (or a proposal to the user when the pipeline is out of reach), else a written rule recorded as debt.
+A problem that passes the `/never-twice` floor's judgment ships with the highest reachable rung of that ladder: a type or structure that makes the state impossible, else a test, tripwire, or pipeline fix (or a proposal to the user when the pipeline is out of reach), else a written rule recorded as debt.
 
-That ladder's floor defines reproduced on demand. Full detail, including the guard-outside-your-reach case, in `references/design.md`.
+That floor owns the judgment and its worked examples. Full detail, including the guard-outside-your-reach case, in `references/design.md`.
 
 ### General-purpose over special-case
 
@@ -173,8 +173,8 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 
 ## Review Criteria
 
-- Instance-only fixes, once the problem has recurred or reproduces on demand: does the change prevent recurrence (test, type, tooling), or just patch the case at hand?
-- A problem that has recurred, or reproduces on demand, fixed again without the highest reachable rung: a type or structure that makes the state impossible, a test, tripwire, or pipeline fix, a proposal to the user when the pipeline is out of reach, or, when none is possible, a written rule recorded as debt.
+- Instance-only fixes, once the problem passes the `/never-twice` floor's judgment: does the change prevent recurrence (test, type, tooling), or just patch the case at hand?
+- A problem past the `/never-twice` floor's judgment fixed again without the highest reachable rung: a type or structure that makes the state impossible, a test, tripwire, or pipeline fix, a proposal to the user when the pipeline is out of reach, or, when none is possible, a written rule recorded as debt.
 - Tests that assert only a shape, a type, or that something exists.
 - Hand-written test functions that differ only along one input axis and should be one parametrized case list.
 - A guard test never seen failing on the bug it guards.
