@@ -327,7 +327,7 @@ const SURFACES: Record<string, Surface> = {
     scriptPath: join(WATCH_CI, "scripts", "watch-ci.sh"),
     tokens: [
       {
-        doc: '"<skill-dir>/scripts/watch-ci.sh <full-sha>"',
+        doc: '"<skill-dir>/scripts/watch-ci.sh" <full-sha>',
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the parameter-expansion source fragment
         script: 'sha="${1:-$(git rev-parse HEAD)}"',
       },
