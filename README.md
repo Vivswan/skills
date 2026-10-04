@@ -6,7 +6,9 @@ A collection of skills for AI coding agents. Skills are packaged instructions an
 
 ## About This Repository
 
-This repo keeps the collection-style catalog and install flow from `vercel-labs/agent-skills`, while also keeping each skill folder plugin-ready so MCP servers, hooks, or app integrations can be added later without changing the layout. The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes the catalog as the `vivswan-skills` plugin for Claude Code marketplace installs, with [`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) as the plugin manifest, plus a `xeno` plugin that groups the skills vendored from other repositories under their own heading, but the main experience stays centered on `npx skills add ...`.
+This repo keeps the collection-style catalog and install flow from `vercel-labs/agent-skills`, while also keeping each skill folder plugin-ready so MCP servers, hooks, or app integrations can be added later without changing the layout.
+
+The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes the catalog as the `vivswan-skills` plugin for Claude Code marketplace installs, with [`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) as the plugin manifest, plus a `xeno` plugin that groups the skills vendored from other repositories under their own heading, but the main experience stays centered on `npx skills add ...`.
 
 ## Available Skills
 
@@ -203,9 +205,9 @@ The pre-commit hook runs the targeted checks on every commit; run them by hand w
 bun run check:staged
 ```
 
-That runs the TypeScript typecheck, the Biome lint, structural validation ([the validate-skills action](./docs/validate-skills.md)), cross-file consistency checks ([`scripts/smoke-test.ts`](./scripts/smoke-test.ts)), and the unit tests a staged file reaches, by import or by name in the test's text.
+That runs the static checks listed in [`scripts/check-staged.mts`](./scripts/check-staged.mts), then only the tests a staged file reaches, by import or by name in the test's text.
 
-CI runs the full `bun run check` (all of that plus the JSON schema lint and the whole test suite) through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery-test.ts`](./scripts/cli-discovery-test.ts)).
+CI runs the full `bun run check` (its steps are the `check` script in [`package.json`](./package.json)) through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery-test.ts`](./scripts/cli-discovery-test.ts)).
 
 ## License
 

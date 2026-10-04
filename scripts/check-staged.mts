@@ -11,7 +11,7 @@ import { constants } from "node:os";
 import { basename, dirname, extname, join, normalize, relative } from "node:path";
 import { ROOT } from "./lib";
 
-export const STATIC_CHECKS = ["typecheck", "lint", "validate", "smoke"] as const;
+export const STATIC_CHECKS = ["typecheck", "lint", "check:docs", "validate", "smoke"] as const;
 
 /** A path's file name without its last extension: scripts/sync-xeno.mts -> sync-xeno, SKILL.md -> SKILL. */
 export function stem(path: string): string {
