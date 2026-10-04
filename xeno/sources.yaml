@@ -16,7 +16,8 @@ unslop:
   license: none published
   frontmatter:
     disable-model-invocation: null
-  own: [vale/]
+  own:
+    - vale/
 frontend-design:
   url: https://github.com/anthropics/skills.git
   path: skills/frontend-design
