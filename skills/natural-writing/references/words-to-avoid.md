@@ -24,7 +24,7 @@ boasts a, vibrant, rich, profound, enhancing, showcasing, exemplifies, commitmen
 
 ## Coverage and notability boilerplate
 
-independent coverage, media outlets, trade publications, profiled in, featured in, written by a leading expert, active social media presence, strong digital presence, significant coverage, widely-read outlets, Awards and recognition (section heading), Recognition (section heading)
+independent coverage, media outlets, trade publications, cited in, profiled in, featured in, was identified by, written by a leading expert, active social media presence, strong digital presence, significant coverage, widely-read outlets, Awards and recognition (section heading), Recognition (section heading)
 
 ## Superficial trailing analysis (sentence-final participles)
 
@@ -54,7 +54,7 @@ not just, not only ... but also, isn't just, doesn't just, it's not ... it's, is
 
 I hope this helps, of course!, certainly!, you're absolutely right, would you like, is there anything else, let me know, here is a, here's a, detailed breakdown
 
-as of my last knowledge update, up to my last training update, while specific details are limited, not widely documented, not publicly available, in the provided search results, based on available information, maintains a low profile, keeps personal details private, as an AI language model, I'm sorry, I cannot
+as of my last knowledge update, up to my last training update, while specific details are limited, not widely documented, not publicly available, in the provided search results, based on available information, should be treated as ... rather than, maintains a low profile, keeps personal details private, as an AI language model, I'm sorry, I cannot
 
 ## Placeholders
 
@@ -62,7 +62,7 @@ as of my last knowledge update, up to my last training update, while specific de
 
 ## Process writing (summaries and self-reports)
 
-ensured that ... adheres to, refined, enhanced, enriched, streamlined, in compliance with, complies with, neutrality, neutral tone, encyclopedic tone, clarity, flow, preserved, preserving, retained, retaining, avoided, avoiding, ensuring, aiming to, added sourced, added verified, improved attribution, with independent sources, per reviewer feedback, addressed reviewer feedback
+ensured that ... adheres to, refined, enhanced, enriched, streamlined, in compliance with, complies with, neutrality, neutral tone, encyclopedic tone, clarity, flow, preserved, preserving, retained, retaining, avoided, avoiding, ensuring, aiming to, added sourced, added verified, improved attribution, with independent sources, per reviewer feedback, addressed reviewer feedback, I understand your concern about AI-generated, I understand the concerns regarding AI-generated
 
 ## Tool residue (grep patterns)
 
