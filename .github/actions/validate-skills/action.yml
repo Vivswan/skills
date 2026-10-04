@@ -30,12 +30,13 @@ inputs:
 runs:
   using: composite
   steps:
-    # The action pins its own bun: the caller's checkout may carry any
-    # .bun-version or none at all.
-    - name: Set up the action's bun
+    # github.action_path is this action's folder inside a checkout of this repository.
+    # Three levels up is that checkout's root. Its .bun-version is the pin the fleet
+    # sync keeps current.
+    - name: Set up bun from this repository's pin
       uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
-        bun-version-file: ${{ github.action_path }}/.bun-version
+        bun-version-file: ${{ github.action_path }}/../../../.bun-version
 
     - name: Validate skills
       shell: bash
