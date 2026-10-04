@@ -12,7 +12,7 @@ Why: an instance fix leaves the failure class alive, so the same toil returns on
 
 How to apply:
 
-- When a failure has recurred, or has a standing cause you can trigger (same cause, different day/PR/file), pause the point fix and ask what mechanism would make the whole class impossible or self-healing. Candidates: a workflow that repairs it automatically, a test or tripwire that fails at the source, a type that forbids the state, a generator that derives the repeated artifact.
+- When a failure has recurred, or has a standing cause you can trigger (the `/never-twice` skill's floor), pause the point fix and ask what mechanism would make the whole class impossible or self-healing. Candidates: a workflow that repairs it automatically, a test or tripwire that fails at the source, a type that forbids the state, a generator that derives the repeated artifact.
 - Prefer the mechanism even when it costs more than the point fix.
 - Still apply the point fix when something is bleeding, but do not stop there.
 

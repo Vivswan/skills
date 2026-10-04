@@ -1,8 +1,8 @@
 # Watch CI After Push
 
-`/watch-ci-after-push` makes every push and every PR merge end with a **background CI watcher** that reports pass/fail with failing-job logs. Never fire-and-forget a push. Never watch CI inline.
+`/watch-ci-after-push` fires on a push to a remote with CI, and on the question whether a pipeline passed. Every push ends with a **background CI watcher** that reports pass/fail with failing-job logs. Never fire-and-forget a push, and never watch CI inline.
 
-After a merge, the watched SHA is the mainline tip, not the topic branch's HEAD.
+A PR merge reaches this skill through the `/pr-landing-discipline` skill, which owns the merge moment. After a merge, the watched SHA is the mainline tip, not the topic branch's HEAD.
 
 ## Install
 
