@@ -139,7 +139,9 @@ This proves a test that exists for a behavior. It does not ask for a test on eve
 
 A guard test that has never failed is not yet evidence. This is the `/verify-with-controls` rule (*a checker that has never been seen failing proves nothing when it passes*) applied to a test suite.
 
-Before claiming a test covers a bug, show it failing on that bug through the same assertion path its green run takes. Reintroducing the bug is the standard form:
+Before claiming a test covers a bug, show it failing on that bug through the same assertion path its green run takes. Reintroducing the bug is the standard form, in the steps below.
+
+The fixture is the reproduction of the observed failure: the same input shape and the same wrong output. It is hand-written but shaped like the incident, never an approximation that fails for a different reason. A failure with no reproduction gets no fixture, and whether it earns any guard is the `/never-twice` skill's floor.
 
 1. Reintroduce the bug in the source (or make the equivalent one-line change).
 2. Run the test and confirm it fails.

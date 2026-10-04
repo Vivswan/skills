@@ -23,9 +23,11 @@ The ladder is not a menu, and preference decays exponentially down it. Rung 1 is
 
 A rung-3 or rung-4 landing is a **debt**, not a resolution. When a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
 
-**The floor the ladder stands on:** a single occurrence with no known mechanism is repaired and recorded (where it was seen, what was observed), never guarded against. The ladder starts at the second occurrence, or at the first with a standing cause you can name.
+**The floor the ladder stands on:** the ladder starts when the failure has recurred or can be reproduced on demand. Reproducible on demand means a standing cause you can trigger: a manual step someone will forget, two artifacts synced by convention. An agent's default behaviour counts, since the next prompt triggers it again, so a single correction of an agent passes the floor.
 
-Specimen: a review launcher's scratch directory vanished once mid-run with no known cause. The run was relaunched and the event recorded, no guard built.
+A single occurrence that cannot be reproduced is repaired and recorded (where it was seen, what was observed), never guarded against. The record goes in the PR body, report, or issue that holds the incident, never in a rule.
+
+Specimen: a review launcher's scratch directory vanished once mid-run. No reproduction, so the run was relaunched and the event recorded, and no guard was built.
 
 ## Workflow
 
@@ -126,6 +128,6 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
 - for each, name the rung the fix sits on, propose a concrete more durable rung, and say why it is reachable within this change's scope (or why it is not)
 - apply the test to whatever ships: if a new member of the class appears tomorrow, is it impossible to build, stopped in CI, caught by a loaded rule, or silent?
 - deletions of rules, guards, or checks that map to neither a successor covering their class nor a deliberate cut with its reason recorded in the change (Deleting a Guard, above)
-- a guard built against a single occurrence with no named mechanism (the floor, above): the response is to repair and record it, not to guard against it
+- a guard built against a failure that has neither recurred nor can be reproduced on demand (the floor, above): the response is to repair and record it, not to guard against it
 
 Triage the resulting findings with the workflow above.
