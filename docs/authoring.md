@@ -28,7 +28,7 @@ This keeps the repo compatible with:
 - Codex through `npx skills add ...` and optional `.codex-plugin/plugin.json`
 - GitHub Copilot through the installed skill content itself
 
-## Adding a New Skill
+## I want to add a skill
 
 1. Copy the starter files from [`template/`](../template).
 2. Create `skills/<skill-name>/`.
@@ -43,11 +43,11 @@ This keeps the repo compatible with:
 11. Explicit-invocation-only skills set `disable-model-invocation: true` in the frontmatter AND `policy.allow_implicit_invocation: false` in `agents/openai.yaml`; the README entry then goes under "Invoked by you", otherwise under "Automatic".
 12. Commit; the pre-commit hook's `bun run check:staged` runs the validator and smoke test, which enforce every item above plus frontmatter limits (`name` <= 64 characters, `description` <= 1024), the codex manifest's `homepage` and `keywords`, and `interface.short_description` at 25 to 64 characters. It also runs the docs probe: paragraphs and list items in first-party `SKILL.md` and `references/*.md` files and the template are capped at 70 words.
 
-## Xeno Skills
+## I want to add a skill written elsewhere
 
 A skill written elsewhere ships from this catalog as a vendored copy under `xeno/<name>/`, pinned to an upstream commit in `xeno/sources.yaml` and rewritten only by `bun run sync-xeno`. The layout above does not apply to a copy; [`xeno/README.md`](../xeno/README.md) has the steps to add one and the nightly refresh.
 
-## Contributing Criteria to Reviews
+## I want my skill to contribute criteria to reviews
 
 A skill contributes to `/rubber-duck-review` second-opinion passes by declaring a `## Review Criteria` section in its `SKILL.md`. That alone joins it to every review of the user's own change; there is no registry to update. On someone else's PR, the `/reply-and-review-discipline` skill's lens choice selects which sections are expanded.
 

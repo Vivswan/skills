@@ -66,7 +66,7 @@ Exit codes:
 
 The full rule set is the source, [validate_skills.ts](../.github/actions/validate-skills/validate_skills.ts). Its tests are [tests/validate-skills-action.test.ts](../tests/validate-skills-action.test.ts).
 
-## How repo-platform calls it
+## I want to call the action from another repository
 
 repo-platform's `ci.yml` pins the action to a commit on `main` (the comment records which main it took) and passes its skills directory:
 

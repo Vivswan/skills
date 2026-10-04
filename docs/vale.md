@@ -12,7 +12,7 @@ One owner per token: no word or phrase is listed by two rules, so a word-level h
 
 `tests/vale-styles.test.ts` pins three things: the exact-token ownership, every token's presence in the skill text it comes from, and that no other `.yml` sits under `skills/` or `xeno/`, since Vale would read it as a rule.
 
-## Wiring a consumer
+## I want to wire a consumer
 
 Check this repository out at a pinned sha, then in `.vale.ini`:
 
@@ -26,7 +26,7 @@ BasedOnStyles = skills, xeno
 
 Vale reads the `*.yml` files under the two named folders and ignores everything else there. A page that quotes the tells as examples (a style guide, this repository's own skill pages) is not a page to lint with them.
 
-## Verifying a change
+## I want to verify a change
 
 ```sh
 { printf 'A robust plan is the focal point, ensuring we delve into it. In order to ship, not just this one.\n\n'; printf 'w%s ' $(seq 71); echo; } > control.md
