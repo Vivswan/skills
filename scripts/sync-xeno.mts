@@ -1,18 +1,22 @@
 #!/usr/bin/env bun
 // Xeno skills are vendored copies: xeno/<name>/ is the whole
-// folder of an upstream repository at the commit xeno/sources.yml
-// pins. This script is the only writer of those folders.
+// folder of an upstream repository at the commit xeno/sources.yaml
+// pins. This script is the only writer of those folders outside the own paths a source declares.
 //   sync-xeno.mts            refresh every copy to its ref's head and move the pins of the folders that changed
 //   sync-xeno.mts --check    exit 1 when the folder at a ref's head differs from its copy, or a copy differs from its pin
 // An upstream commit that leaves the folder byte-identical (a change elsewhere in that repository)
 // moves nothing: the pin moves only when the vendored files differ between it and the ref's head,
 // so a pin move is always an upstream diff to read.
+//
 // A source may declare frontmatter overrides (a key set or removed in the
-// copy's SKILL.md) and a license_file copied in from the upstream root; the
-// copy is then upstream plus exactly those, and the check compares against
-// that. A copy whose body or other files differ from its pin is a hand edit,
-// and the sync refuses to overwrite it; the frontmatter and the license file
-// are sources.yml's. Fetches go through git (a depth-1 fetch of one commit),
+// copy's SKILL.md), a license_file copied in from the upstream root, and own
+// paths (files of this repository that live inside the copy, such as a Vale
+// style). The copy is then upstream plus exactly those, and the check compares
+// against that.
+//
+// A copy whose body or other files differ from its pin is a hand edit, and the
+// sync refuses to overwrite it. The frontmatter, the license file, and the own
+// paths are sources.yaml's. Fetches go through git (a depth-1 fetch of one commit),
 // so a local file:// repository works as an upstream in tests.
 
 import { spawnSync } from "node:child_process";
@@ -32,7 +36,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { Document, isMap, parse, parseDocument } from "yaml";
 import { ROOT, XENO_DIR } from "./lib";
 
-export const SOURCES_FILE = join(XENO_DIR, "sources.yml");
+export const SOURCES_FILE = join(XENO_DIR, "sources.yaml");
 const SHA = /^[0-9a-f]{40}$/;
 /** spawnSync stops reading at 1 MiB by default; an upstream asset (a font index, a bundled script) is routinely larger. */
 const BLOB_LIMIT = 256 * 1024 * 1024;
@@ -55,6 +59,8 @@ export interface Source {
   readonly licenseFile?: string;
   /** SKILL.md frontmatter keys to set (a string, number, or boolean) or remove (null) in the copy. */
   readonly frontmatter?: Readonly<Record<string, string | number | boolean | null>>;
+  /** Folder-relative paths this repository owns inside the copy (a trailing slash names a directory): the sync keeps them, the check ignores them. */
+  readonly own?: readonly string[];
 }
 
 export type Sources = Record<string, Source>;
@@ -68,9 +74,10 @@ const KNOWN_KEYS = new Set([
   "license",
   "license_file",
   "frontmatter",
+  "own",
 ]);
 
-export function parseSources(text: string, where = "sources.yml"): Sources {
+export function parseSources(text: string, where = "sources.yaml"): Sources {
   const raw: unknown = parse(text);
   if (raw === null || raw === undefined) return {};
   if (typeof raw !== "object" || Array.isArray(raw)) {
@@ -123,6 +130,52 @@ export function parseSources(text: string, where = "sources.yml"): Sources {
         );
       }
     }
+    let own: string[] | undefined;
+    if (entry.own !== undefined) {
+      if (!Array.isArray(entry.own) || entry.own.length === 0)
+        throw new Error(`${where}: ${name}.own must be a non-empty list of folder-relative paths`);
+      own = entry.own.map((item) => {
+        const bad =
+          typeof item !== "string" ||
+          item === "" ||
+          item.startsWith("/") ||
+          /[*?[\]\\]/.test(item) ||
+          item
+            .replace(/\/$/, "")
+            .split("/")
+            .some((segment) => segment === "" || segment === "." || segment === "..");
+        if (bad)
+          throw new Error(
+            `${where}: ${name}.own entries are folder-relative paths, a directory with a trailing slash`,
+          );
+        if (item === "SKILL.md")
+          throw new Error(
+            `${where}: ${name}.own cannot claim SKILL.md; its frontmatter is the registry's and its body upstream's`,
+          );
+        return item as string;
+      });
+      // Ownership is judged by name, slash or not: "vale" and "vale/" cannot both hold, and nothing sits under a file.
+      const names = own.map((item) => item.replace(/\/$/, ""));
+      for (const [index, own_] of own.entries()) {
+        const mine = names[index] as string;
+        const clash = names.some(
+          (other, at) => at !== index && (other === mine || other.startsWith(`${mine}/`)),
+        );
+        if (clash)
+          throw new Error(
+            `${where}: ${name}.own lists ${own_} more than once, or together with a path under it`,
+          );
+      }
+      const licenseName =
+        typeof entry.license_file === "string" ? basename(entry.license_file) : undefined;
+      if (
+        licenseName &&
+        own.some(
+          (item) => item === licenseName || (item.endsWith("/") && licenseName.startsWith(item)),
+        )
+      )
+        throw new Error(`${where}: ${name}.own cannot claim the license file ${licenseName}`);
+    }
     const source: Source = {
       url: entry.url as string,
       path,
@@ -130,6 +183,7 @@ export function parseSources(text: string, where = "sources.yml"): Sources {
       commit: entry.commit as string,
       license: entry.license as string,
       ...(typeof entry.license_file === "string" ? { licenseFile: entry.license_file } : {}),
+      ...(own ? { own } : {}),
     };
     if (entry.frontmatter !== undefined) {
       if (
@@ -201,7 +255,9 @@ export const SOURCES_HEADER = `# Vendored external skills, one mapping per folde
 #   commit       the upstream commit the copy was taken from; the sync moves it, nobody edits it
 #   license      SPDX id of the upstream license, or "none published"
 #   license_file repository-relative path of the upstream license text, copied in under its basename when the folder carries none
-#   frontmatter  SKILL.md keys set (scalar) or removed (null) in the copy; with license_file, the only allowed differences from upstream
+#   frontmatter  SKILL.md keys set (scalar) or removed (null) in the copy
+#   own          folder-relative paths this repository keeps inside the copy (a trailing slash names a directory), such as a Vale style
+#                frontmatter, license_file, and own are the only allowed differences from upstream
 `;
 
 /** Updates the existing document in place, so its comments and scalar styles survive a pin move; a missing file is rendered fresh. */
@@ -422,7 +478,7 @@ function splitFrontmatter(bytes: Buffer): { block: string; rest: Buffer } | null
 }
 
 /**
- * A vendored SKILL.md's frontmatter belongs to sources.yml (its overrides are the only sanctioned
+ * A vendored SKILL.md's frontmatter belongs to sources.yaml (its overrides are the only sanctioned
  * difference from upstream), so only the body and the executable bit can carry a hand edit.
  */
 function sameOutsideFrontmatter(ours: Entry | undefined, theirs: Entry | undefined): boolean {
@@ -471,13 +527,61 @@ export function differences(local: Files, upstream: Files): string[] {
     .sort();
 }
 
-export function replaceFolder(dir: string, files: Files): void {
+/** True when `path` is one this repository owns inside the copy, by name or under a declared directory. */
+export function isOwn(source: Pick<Source, "own">, path: string): boolean {
+  return (source.own ?? []).some(
+    (item) => item === path || (item.endsWith("/") && path.startsWith(item)),
+  );
+}
+
+/**
+ * True when an upstream file at `path` cannot coexist with an own entry: the same path, a path under
+ * an own directory, a file where the own directory or one of its ancestors stands, or a directory
+ * where the own file stands.
+ */
+export function collidesWithOwn(source: Pick<Source, "own">, path: string): boolean {
+  return (source.own ?? []).some((item) => {
+    const name = item.replace(/\/$/, "");
+    return path === name || path.startsWith(`${name}/`) || name.startsWith(`${path}/`);
+  });
+}
+
+/** The copy as upstream sees it: this repository's own files set aside, so they are neither drift nor a hand edit. */
+export function withoutOwn(files: Files, source: Pick<Source, "own">): Files {
+  return new Map([...files].filter(([path]) => !isOwn(source, path)));
+}
+
+/**
+ * An upstream file at a path the registry claims as ours would be hidden by the own file: neither
+ * the copy nor the check would ever see it. That is a registry change to make, never a silent shadow.
+ */
+function assertNoShadow(
+  name: string,
+  source: Pick<Source, "own">,
+  upstream: Files,
+  at: string,
+): void {
+  const shadowed = [...upstream.keys()].filter((path) => collidesWithOwn(source, path)).sort();
+  if (shadowed.length > 0) {
+    throw new Error(
+      `${name}: upstream at ${at} carries ${shadowed.join(", ")}, which collides with a path own claims; move the own files or drop the claim`,
+    );
+  }
+}
+
+/** Rewrites the copy to `files`, keeping this repository's own files exactly as they are, own directories included. */
+export function replaceFolder(dir: string, files: Files, source: Pick<Source, "own"> = {}): void {
+  const kept = [...localSnapshot(dir)].filter(([path]) => isOwn(source, path));
   rmSync(dir, { recursive: true, force: true });
-  for (const [path, entry] of files) {
+  for (const [path, entry] of [...files, ...kept]) {
     const target = join(dir, path);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, entry.bytes);
     if (entry.executable) chmodSync(target, 0o755);
+  }
+  // An own directory is kept even when empty: the smoke test requires every declared path to exist.
+  for (const item of source.own ?? []) {
+    if (item.endsWith("/")) mkdirSync(join(dir, item), { recursive: true });
   }
 }
 
@@ -511,23 +615,23 @@ export function check(sources: Sources, externalDir = XENO_DIR): Report[] {
         .files,
       source.frontmatter,
     );
-    const drift = differences(localSnapshot(join(externalDir, name)), pinned);
+    assertNoShadow(name, source, pinned, short(source.commit));
+    const drift = differences(withoutOwn(localSnapshot(join(externalDir, name)), source), pinned);
     if (drift.length > 0)
       return {
         name,
         status: "modified",
         detail: `differs from ${short(source.commit)}: ${drift.join(", ")}`,
       };
-    if (
-      head !== source.commit &&
-      differences(pinned, applyOverrides(fetchSnapshot(source, head).files, source.frontmatter))
-        .length > 0
-    ) {
-      return {
-        name,
-        status: "outdated",
-        detail: `${short(source.commit)} -> ${short(head)} on ${source.ref ?? "the default branch"}`,
-      };
+    if (head !== source.commit) {
+      const atHead = applyOverrides(fetchSnapshot(source, head).files, source.frontmatter);
+      assertNoShadow(name, source, atHead, short(head));
+      if (differences(pinned, atHead).length > 0)
+        return {
+          name,
+          status: "outdated",
+          detail: `${short(source.commit)} -> ${short(head)} on ${source.ref ?? "the default branch"}`,
+        };
     }
     return { name, status: "current", detail: currentDetail(source, head) };
   });
@@ -554,10 +658,11 @@ export function update(
           fetchSnapshot(source, source.commit, "if-present").files,
           source.frontmatter,
         );
+    if (pinned) assertNoShadow(name, source, pinned, short(source.commit));
     if (pinned && existsSync(dir)) {
-      const local = localSnapshot(dir);
-      // sources.yml owns SKILL.md's frontmatter, so a changed override is not a hand edit; the body is.
-      // sources.yml owns the frontmatter and the license file it names; a difference there is a registry change, not a hand edit.
+      const local = withoutOwn(localSnapshot(dir), source);
+      // sources.yaml owns SKILL.md's frontmatter, the license file it names, and the own paths (set aside above);
+      // a difference there is a registry change, not a hand edit.
       // The registry owns exactly the current license_file's copy; a renamed or dropped one leaves
       // its old copy behind as a difference, and the message below says what to do with it.
       const registryOwned = source.licenseFile ? basename(source.licenseFile) : undefined;
@@ -576,17 +681,19 @@ export function update(
     }
     const head = fetchSnapshot(source, resolveRef(source.url, source.ref));
     const files = applyOverrides(head.files, source.frontmatter);
+    assertNoShadow(name, source, files, short(head.commit));
     // The pin follows the folder, judged pin against head the way --check judges it, so the two never
     // disagree; the copy is rewritten whenever it differs from head, which re-applies a changed
     // override or license file without a pin move.
     const pinMoves = pinned === undefined || differences(pinned, files).length > 0;
-    const rewrite = pinMoves || differences(localSnapshot(dir), files).length > 0;
+    const rewrite =
+      pinMoves || differences(withoutOwn(localSnapshot(dir), source), files).length > 0;
     return { name, source, dir, head, files, pinMoves, rewrite };
   });
   const next: Record<string, Source> = {};
   const reports: Report[] = [];
   for (const { name, source, dir, head, files, pinMoves, rewrite } of staged) {
-    if (rewrite) replaceFolder(dir, files);
+    if (rewrite) replaceFolder(dir, files, source);
     next[name] = pinMoves ? { ...source, commit: head.commit } : source;
     const at = short(source.commit);
     const ref = source.ref ?? "the default branch";
@@ -614,10 +721,10 @@ function currentDetail(source: Source, head: string): string {
 
 const USAGE = [
   "usage: sync-xeno.mts [--check] [--report <file>]",
-  "  (default)  refresh every xeno/<name>/ whose folder changed at its ref's head and move its pin in sources.yml; a copy hand-edited outside its frontmatter and license file stops the run",
+  "  (default)  refresh every xeno/<name>/ whose folder changed at its ref's head and move its pin in sources.yaml; a copy hand-edited outside its frontmatter, license file, and own paths stops the run",
   "  --check    fetch nothing into the tree; exit 1 when the folder at a ref's head differs from its copy, or a copy differs from its pin",
   "  --report   also write the per-skill lines to <file>, one markdown bullet each",
-  "exit 0: every copy current (or refreshed); 1: --check found drift; 2: usage, an unreadable sources.yml, a hand-edited copy, or a failed fetch",
+  "exit 0: every copy current (or refreshed); 1: --check found drift; 2: usage, an unreadable sources.yaml, a hand-edited copy, or a failed fetch",
 ].join("\n");
 
 if (import.meta.main) {

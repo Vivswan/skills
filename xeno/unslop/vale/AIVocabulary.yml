@@ -1,0 +1,25 @@
+# The /unslop skill's word-level tells, rules 7 (AI vocabulary) and 8 (fancy ways to say "is"), as that skill lists them.
+# Three of its words are left out: "underscore" (the character) and "features" (a product's) have literal meanings in a code repository, and
+# "landscape" is a tell only in its abstract sense, which a flat word match cannot tell from a page orientation.
+extends: existence
+message: "'%s' is an AI tell (unslop rules 7 and 8). Replace it with the plain word"
+level: error
+ignorecase: true
+tokens:
+  - additionally
+  - crucial
+  - delve
+  - enduring
+  - enhance
+  - fostering
+  - garner
+  - interplay
+  - intricate
+  - pivotal
+  - showcase
+  - tapestry
+  - testament
+  - vibrant
+  - serves as
+  - stands as
+  - boasts

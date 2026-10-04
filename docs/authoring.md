@@ -19,6 +19,7 @@ skills/<skill-name>/
   .mcp.json              # optional
   references/            # optional
   scripts/               # optional
+  vale/                  # optional: Vale rules the skill ships (docs/vale.md)
 ```
 
 This keeps the repo compatible with:
@@ -44,7 +45,7 @@ This keeps the repo compatible with:
 
 ## Xeno Skills
 
-A skill written elsewhere ships from this catalog as a vendored copy under `xeno/<name>/`, pinned to an upstream commit in `xeno/sources.yml` and rewritten only by `bun run sync-xeno`. The layout above does not apply to a copy; [`xeno/README.md`](../xeno/README.md) has the three steps to add one and the nightly refresh.
+A skill written elsewhere ships from this catalog as a vendored copy under `xeno/<name>/`, pinned to an upstream commit in `xeno/sources.yaml` and rewritten only by `bun run sync-xeno`. The layout above does not apply to a copy; [`xeno/README.md`](../xeno/README.md) has the steps to add one and the nightly refresh.
 
 ## Contributing Criteria to Reviews
 

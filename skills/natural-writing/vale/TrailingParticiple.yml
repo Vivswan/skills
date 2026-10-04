@@ -1,0 +1,9 @@
+# A clause-final participle that editorializes (", highlighting the importance of"), the /natural-writing skill's
+# "superficial trailing analysis" list. The token keeps its leading comma, so a participle opening a sentence is not matched.
+extends: existence
+message: "'%s' is trailing analysis. End the sentence at the fact, or make the claim its own sentence"
+level: error
+ignorecase: true
+nonword: true
+tokens:
+  - ', (highlighting|underscoring|emphasizing|ensuring|reflecting|symbolizing|contributing to|cultivating|fostering|encompassing|enhancing|demonstrating|confirming|illustrating|facilitating)\b'

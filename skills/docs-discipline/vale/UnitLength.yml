@@ -1,0 +1,13 @@
+# A paragraph or list item over 70 words: the /docs-discipline shape rule.
+# Vale's `paragraph` excludes list items and quoted prose, so those scopes sit beside it. Inside a blockquote Vale
+# scopes every block as the quote, so a quoted heading is judged like a quoted paragraph; the gate keeps that loud
+# false positive over a silent pass for quoted prose. A word is a whitespace-delimited run, the probe's count.
+extends: occurrence
+message: "%d words in one paragraph or list item; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps"
+level: error
+scope:
+  - paragraph
+  - list
+  - blockquote
+max: 70
+token: '\S+'

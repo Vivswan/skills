@@ -36,6 +36,8 @@ Snapshot last synced: 2026-10-03, from page revision 1378298730 (2026-10-03T21:4
 
 [references/words-to-avoid.md](references/words-to-avoid.md) lists the words and phrases the page flags, organized for scanning, plus ready-made grep commands for the mechanical checks.
 
+The lists also ship as Vale rules in this skill's `vale/` folder (vocabulary, significance, formula phrases, trailing participles); `docs/vale.md` of the skill's home repository shows the wiring.
+
 ## Workflow
 
 ### 1. Load the rules

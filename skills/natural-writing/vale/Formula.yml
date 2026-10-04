@@ -1,0 +1,42 @@
+# Formula phrases, the /natural-writing skill's lists: formula endings and framings, weasel attributions, negative parallelisms,
+# and promotional words. "rich" and "featuring" are left out for their literal uses.
+extends: existence
+message: "'%s' is a formula. Say the thing, or name the source"
+level: error
+ignorecase: true
+tokens:
+  - despite these challenges
+  - faces several challenges
+  - future outlook
+  - future prospects
+  - continues to thrive
+  - in summary
+  - in conclusion
+  - it's important to note
+  - it is important to note
+  - it's crucial to note
+  - worth noting
+  - industry reports
+  - observers have cited
+  - observers have noted
+  - experts argue
+  - some critics argue
+  - several sources
+  - several publications
+  - widely regarded
+  - widely interpreted
+  - not just
+  - not only
+  - isn't just
+  - doesn't just
+  - seamlessly
+  - groundbreaking
+  - renowned
+  - state-of-the-art
+  - diverse array
+  - stunning
+  - breathtaking
+  - nestled
+  - in the heart of
+  - rich cultural heritage
+  - gateway to
