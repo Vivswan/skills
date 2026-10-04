@@ -1,4 +1,4 @@
-# A paragraph or list item over 70 words: the /docs-discipline shape rule.
+# A paragraph or list item over 70 words: the /working-text shape rule.
 # Vale's `paragraph` excludes list items and quoted prose, so those scopes sit beside it. Inside a blockquote Vale
 # scopes every block as the quote, so a quoted heading is judged like a quoted paragraph; the gate keeps that loud
 # false positive over a silent pass for quoted prose. A word is a whitespace-delimited run, the probe's count.

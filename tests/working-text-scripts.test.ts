@@ -6,15 +6,15 @@ import { ROOT } from "../scripts/lib";
 import {
   importSpecifiers,
   renderArchitectureMermaid,
-} from "../skills/docs-discipline/scripts/arch-lint.mts";
+} from "../skills/working-text/scripts/arch-lint.mts";
 
-// Contract tests for the architecture-page scripts of /docs-discipline against a small fixture
+// Contract tests for the architecture-page scripts of /working-text against a small fixture
 // tree. Every CLI case asserts the whole outcome (exit code, full stdout, full
 // stderr), so a message the SKILL.md quotes cannot drift unseen; each way the
 // declaration or the page can be wrong is seen failing, and the matching tree
 // and page are seen passing.
 
-const SCRIPTS = join(ROOT, "skills", "docs-discipline", "scripts");
+const SCRIPTS = join(ROOT, "skills", "working-text", "scripts");
 const ARCH_LINT = join(SCRIPTS, "arch-lint.mts");
 const RENDER = join(SCRIPTS, "render-architecture-map.mts");
 const CHECK_PAGE = join(SCRIPTS, "check-architecture-page.mts");
@@ -133,7 +133,7 @@ const USAGE = {
 };
 
 beforeAll(() => {
-  scratch = mkdtempSync(join(tmpdir(), "docs-discipline-"));
+  scratch = mkdtempSync(join(tmpdir(), "working-text-"));
   fixture = join(scratch, "fixture");
   mkdirSync(fixture);
   writeTree(fixture, FILES);
@@ -356,7 +356,7 @@ describe("without oxc-parser", () => {
     ]) {
       cpSync(join(SCRIPTS, script), join(root, "scripts", script));
     }
-    const hint = "docs-discipline scripts need oxc-parser: bun add -d oxc-parser\n";
+    const hint = "working-text scripts need oxc-parser: bun add -d oxc-parser\n";
     expect(run(join(root, "scripts", "arch-lint.mts"), [], root)).toEqual({
       status: 2,
       stdout: "",

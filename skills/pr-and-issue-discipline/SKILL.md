@@ -49,12 +49,12 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 | `## Proof` | 2 to 4 bullets by default, latest totals only |
 | `Technical details` | No length cap. One fact per line, one sentence each |
 
-**Readability is an accessibility requirement.** Readers include people with dyslexia, and a wall of prose costs them the PR. The standard is the one the `/docs-discipline` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
+**Readability is an accessibility requirement.** Readers include people with dyslexia, and a wall of prose costs them the PR. The standard is the one the `/working-text` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
 
 These rules bind PR bodies and the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
 
-- **Paragraphs, bullets, tables, and fenced blocks mix.** Which device carries which content is the `/docs-discipline` skill's rule set (pick the device from the content, a bullet is for a list, no gainless change, monotony as a signal to regroup, one carrier per point), applied to the PR body unchanged.
-- **The page shape is that skill's too.** Paragraph and sentence length, a bold lead-in opening each bullet, no nesting past one level, and headings that name the content rather than the reader's level ("In plain words" and "Non-technical summary" talk down) are the `/docs-discipline` skill's shape rules, applied to the PR body unchanged. How many headings a body carries is this skill's, fixed by the shapes below.
+- **Paragraphs, bullets, tables, and fenced blocks mix.** Which device carries which content is the `/working-text` skill's rule set (pick the device from the content, a bullet is for a list, no gainless change, monotony as a signal to regroup, one carrier per point), applied to the PR body unchanged.
+- **The page shape is that skill's too.** Paragraph and sentence length, a bold lead-in opening each bullet, no nesting past one level, and headings that name the content rather than the reader's level ("In plain words" and "Non-technical summary" talk down) are the `/working-text` skill's shape rules, applied to the PR body unchanged. How many headings a body carries is this skill's, fixed by the shapes below.
 - **No semicolon chains.** A semicolon joining clauses means two sentences were forced into one. Split them.
 - **The blocks carry the change, the words only what no block can.** The defaults above are what most changes need. Go past them when this change needs it, never because a round added something.
 - **`/unslop` runs last**, where installed, over the prose that remains: the AI tells go before the body is offered.

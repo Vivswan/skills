@@ -8,10 +8,10 @@ import {
   probePage,
   scanPage,
   wordCount,
-} from "../skills/docs-discipline/scripts/docs-probe.mts";
+} from "../skills/working-text/scripts/docs-probe.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
-const PROBE = join(ROOT, "skills", "docs-discipline", "scripts", "docs-probe.mts");
+const PROBE = join(ROOT, "skills", "working-text", "scripts", "docs-probe.mts");
 const temp = tempDirs();
 
 const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");

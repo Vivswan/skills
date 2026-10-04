@@ -22,7 +22,7 @@ Under that house standard, bold-label bullets and sparing keyword bolds are sanc
 - "humanize this text" / "make this sound less like AI" / "remove the AI tells"
 - "does this read as AI-generated?"
 - Drafting or rewriting prose for readers outside the repository: articles, blog posts, reports, emails, announcements, PR descriptions
-- Not repository documentation (READMEs, guides, reference pages): those are programmer-register pages of the `/docs-discipline` skill
+- Not repository documentation (READMEs, guides, reference pages): those are programmer-register pages of the `/working-text` skill
 - Any writing task where the user cares about tone, voice, or naturalness
 
 ## Source of truth

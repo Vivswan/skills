@@ -2,6 +2,8 @@
 
 A comment is written for humans and agents, and a human reads it first. It carries only what the code cannot show, in a shape a reader takes in one pass. The code is the single source of truth.
 
+The shape of a comment's sentences and paragraphs follows the `/working-text` skill; its order (tell, then show) and what it may contain stay this file's rule.
+
 ## What a good comment carries
 
 Only what the code cannot show. The kinds:

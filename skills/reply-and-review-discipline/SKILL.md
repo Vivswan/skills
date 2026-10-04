@@ -62,7 +62,7 @@ The agent reviews under the user's account, so publishing is the user's act: the
 - **The user's repository, or one in an organization they own:** the full house standards, as on their own PR, where the `/rubber-duck-review` skill folds every installed `## Review Criteria` section in without asking. Recommend the whole set.
 - **A repository they do not own:** that repository's conventions come first, and which house standards a colleague's PR is held to is the user's call. Recommend the correctness lenses and offer the rest.
 
-1. **Collect the candidates:** every installed skill declaring a `## Review Criteria` section, found the way the `/rubber-duck-review` skill's companion-skills step finds them; that skill itself, for a read-only cross-model pass over the PR's diff; and `/docs-discipline` when the PR touches a documentation page.
+1. **Collect the candidates:** every installed skill declaring a `## Review Criteria` section, found the way the `/rubber-duck-review` skill's companion-skills step finds them; that skill itself, for a read-only cross-model pass over the PR's diff; and `/working-text` when the PR touches working text (a page, a comment, a description).
 2. **Read the memories first:** the memory index and this project's memories. A standing correction about this repository, a rule the user gave the last time a PR like this was reviewed, a library the user prefers over hand-rolling: each one adds a lens, drops one, or sharpens the recommendation.
 3. **Ask once, the recommendation first**, with the reason for each lens inside the dialog itself, since text outside a dialog is lost:
 
@@ -73,7 +73,7 @@ The agent reviews under the user's account, so publishing is the user's act: the
    [x] /never-twice criteria (Recommended)                the retry loop repeats a fix from PR #98
    [ ] /code-standards criteria                           their repository, their standards; memory: prefer a library
                                                           over hand-rolling, if you hold this PR to it
-   [ ] /docs-discipline                                   docs/retries.md is a new page
+   [ ] /working-text                                      docs/retries.md is a new page
    [ ] /no-invalid-states                                 no lifecycle flags or repeated guards in the diff
    [ ] /verify-with-controls                              the body claims no zero, alarm, or success reading
    ```

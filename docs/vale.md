@@ -4,7 +4,7 @@ Three skills ship their rules as [Vale](https://vale.sh) styles, each inside its
 
 | Rule | Skill | What it reports |
 |---|---|---|
-| `skills.docs-discipline.vale.UnitLength` | `/docs-discipline` | a paragraph or list item over 70 words |
+| `skills.working-text.vale.UnitLength` | `/working-text` | a paragraph or list item over 70 words |
 | `xeno.unslop.vale.AIVocabulary`, `xeno.unslop.vale.PlainWords` | `/unslop` (vendored; the folder is declared `own` in `xeno/sources.yaml`) | rules 7 and 8 (AI vocabulary, fancy ways to say "is"); rules 23 and 31 (filler phrases, plain words) |
 | `skills.natural-writing.vale.Vocabulary`, `Significance`, `Formula`, `TrailingParticiple` | `/natural-writing` | the lists of `references/words-to-avoid.md`: vocabulary and copula avoidance, inflated significance, formula endings with weasel attributions and promotional words, sentence-final participles |
 
@@ -42,5 +42,5 @@ control.md:1:33:skills.natural-writing.vale.TrailingParticiple:', ensuring' is t
 control.md:1:47:xeno.unslop.vale.AIVocabulary:'delve' is an AI tell (unslop rules 7 and 8)
 control.md:1:62:xeno.unslop.vale.PlainWords:Write 'to' for 'In order to' (unslop rules 23 and 31)
 control.md:1:80:skills.natural-writing.vale.Formula:'not just' is a formula
-control.md:3:1:skills.docs-discipline.vale.UnitLength:71 words in one paragraph or list item; the cap is 70
+control.md:3:1:skills.working-text.vale.UnitLength:71 words in one paragraph or list item; the cap is 70
 ```

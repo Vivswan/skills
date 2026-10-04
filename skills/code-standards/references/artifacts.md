@@ -16,7 +16,7 @@ How to apply:
 - **Delete any test that pins AGENTS.md text.** Guidance is not a fixture. A test that checks paths a doc names still exist is a stale-pointer guard and stays.
 - **A change touching only AGENTS.md or CLAUDE.md skips the review loop:** no codex or Copilot round, `git commit --no-verify`, PR opened ready, CI the only gate, the owner merges.
 - **When a file already meets this,** leave it and say so.
-- **README, CONTRIBUTING, and the rest of the repository's documentation** are pages of the `/docs-discipline` skill, not this rule's.
+- **README, CONTRIBUTING, and the rest of the repository's documentation** are pages of the `/working-text` skill, not this rule's.
 
 Specimen: one repository's tail carried a directory tree, a 17-item authoring checklist the smoke test already enforced, and release notes, 66 lines. It became one line on what the repository is, five principles, and two working rules. The checklist facts that lived only there moved to the authoring doc, and the smoke-test assertion on the file's text was deleted.
 

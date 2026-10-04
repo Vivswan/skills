@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// The page probe of /docs-discipline: the two readings a reviewer otherwise
+// The page probe of /working-text: the two readings a reviewer otherwise
 // takes by eye, made exact.
 //   a paragraph or list item over the word cap (default 70)  -> finding, exit 1
 //   a repository path the prose names that does not exist    -> finding, exit 1
