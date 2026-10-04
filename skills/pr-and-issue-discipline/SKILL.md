@@ -54,11 +54,8 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 These rules bind PR bodies and the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
 
 - **Paragraphs, bullets, tables, and fenced blocks mix.** Which device carries which content is the `/docs-discipline` skill's rule set (pick the device from the content, a bullet is for a list, no gainless change, monotony as a signal to regroup, one carrier per point), applied to the PR body unchanged.
-- **Short paragraphs are fine.** One idea per paragraph, one to three sentences, under 70 words. Short sentences, about 20 words, one idea each.
+- **The page shape is that skill's too.** Paragraph and sentence length, a bold lead-in opening each bullet, no nesting past one level, and headings that name the content rather than the reader's level ("In plain words" and "Non-technical summary" talk down) are the `/docs-discipline` skill's shape rules, applied to the PR body unchanged. How many headings a body carries is this skill's, fixed by the shapes below.
 - **No semicolon chains.** A semicolon joining clauses means two sentences were forced into one. Split them.
-- **Bold lead-ins on bullets.** The bold words name the point so a skim reads the lead-ins alone.
-- **No nesting past one level.** A list inside a list is content asking for a table or a subsection.
-- **Headings name the content** ("What changed", "What the report shows"), never the reader's level: "In plain words", "Simple version", and "Non-technical summary" read as talking down.
 - **The blocks carry the change, the words only what no block can.** The defaults above are what most changes need. Go past them when this change needs it, never because a round added something.
 - **`/unslop` runs last**, where installed, over the prose that remains: the AI tells go before the body is offered.
 

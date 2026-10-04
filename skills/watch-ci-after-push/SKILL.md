@@ -1,6 +1,6 @@
 ---
 name: watch-ci-after-push
-description: Use when pushing commits to a remote with CI, merging a PR, or when asked whether a pipeline passed, so every push and merge gets a background watcher.
+description: Use when pushing commits to a remote with CI, or when asked whether a pipeline passed, so every push gets a background watcher.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -8,13 +8,13 @@ metadata:
 
 # Watch CI After Push
 
-Every push gets a **background watcher** that reports pass/fail with failing-job logs. Never fire-and-forget a push. Never watch CI inline: an inline watch blocks the session for minutes while a background watcher costs nothing.
+Every push gets a **background watcher** that reports pass/fail with failing-job logs, and so does every merge, which is a push to the mainline by other hands. Never fire-and-forget a push. Never watch CI inline: an inline watch blocks the session for minutes while a background watcher costs nothing.
 
 ## When to Apply
 
 - A `git push` just ran (any branch with CI)
-- A PR just merged: watch the mainline tip, not the topic HEAD (recipe below)
 - "did CI pass?" / "watch the pipeline" / "check the build"
+- A PR just merged, sent here by the `/pr-landing-discipline` skill, which owns the merge moment: watch the mainline tip, not the topic HEAD (recipe below)
 
 ## Workflow
 
