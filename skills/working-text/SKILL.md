@@ -1,16 +1,18 @@
 ---
-name: docs-discipline
-description: Use when writing or reviewing a page of a repository's documentation (a README, a guide, a reference or architecture page, a docs site), or when a change moves code across the layers an architecture page declares.
+name: working-text
+description: "Use when writing or reviewing working text: a repository page, a code comment, a description or help text, a PR, an issue, a CI comment, a Notion page, or a diagram that a colleague will scan to get work done, or when a change moves code across the layers an architecture page declares. Not for a paper, an essay, or any text read start to finish."
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
 ---
 
-# Docs Discipline
+# Working Text
 
-> A page the reader skims and gets. Every fact is shown by the device that shows it fastest, and a paragraph carries only what no device shows. Every path, symbol, and check it names is real. A probe makes the two mechanical readings exact.
+This skill governs working text: anything a colleague reads to get work done in a repository, on GitHub, in CI output, in Notion, or in a diagram. A README, a comment, a description or help text, a PR or issue, a review reply, a commit body, an agent brief, a Mermaid chart. It does not govern a paper, an essay, or a book, which a reader studies rather than scans.
 
-Repository documentation is read by a programmer in a hurry and by agents, and this skill owns its shape and its facts. PR bodies and issues belong to the `/pr-and-issue-discipline` skill, AGENTS.md to the `/code-standards` skill.
+> Text the reader scans and gets. Every fact is shown by the device that shows it fastest, and a paragraph carries only what no device shows. Every path, symbol, and check it names is real. A probe makes the two mechanical readings exact.
+
+Working text is scanned to act on, not read to learn. This skill owns how it reads, its shape and its facts, wherever it appears. What each artifact must contain stays with its own skill: a PR body or issue with the `/pr-and-issue-discipline` skill, AGENTS.md with the `/code-standards` skill.
 
 Where `/unslop` is installed, it runs last over the prose that remains.
 
@@ -107,7 +109,7 @@ Facts:
 
 ### Prose inside artifacts
 
-Any description or help text a human reads inside a code artifact is a page under the paragraph, device, and heading rules above. The artifacts:
+Description or help text a human reads inside a code artifact is working text like any other, under the paragraph, device, and heading rules above. The artifacts:
 
 - a GitHub action or workflow `description`
 - a package manifest's description
@@ -118,9 +120,9 @@ A skill's frontmatter description is excluded: it is a trigger, owned by the `/c
 
 The artifact-specific facts:
 
-- **An action description** is a literal block (`|`) whose first line orients.
+- **An action description** is a literal block (`|`).
 - **Input and output descriptions** are one sentence each.
-- **Never `${{` inside a description.** GitHub evaluates it when the file loads, and it has broken a fleet's actions at load.
+- **Never `${{` inside an action or workflow description.** GitHub evaluates it when the file loads, and it has broken a fleet's actions at load.
 
 ## The probe
 
@@ -183,6 +185,6 @@ The page kind with the most to rot has its own recipe in `references/architectur
 - A reshaped page that lost a fact, added one, or dropped a heading anchor another page links to.
 - An architecture page whose module map shows an edge the code does not draw.
 - A box naming a symbol its file does not export, or a concept diagram with no `Demonstrated by:` line.
-- Prose inside a code artifact (an action or workflow `description`, a manifest description, CLI help, an issue or PR template) that breaks the page rules, an action description that is not a literal block opened by one orienting sentence or gives an input or output more than one sentence, or `${{` inside a description.
-- Wall-of-text prose anywhere a human skims: docs, reports, PR text (the `/pr-and-issue-discipline` skill's Readability rules own the PR body).
+- Prose inside a code artifact, per this skill's "Prose inside artifacts" subsection, that breaks the page rules. An action description that is not a literal block, or that gives an input or output more than one sentence. `${{` inside an action or workflow description.
+- Wall-of-text prose anywhere a human skims: docs, reports, PR text (the `/pr-and-issue-discipline` skill owns the PR body's content).
 

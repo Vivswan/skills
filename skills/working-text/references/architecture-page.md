@@ -51,14 +51,14 @@ The page header says what the checks prove: existence only. A caption-only box (
 
 ## The recipe
 
-The three scripts ship with the `/docs-discipline` skill. Copy them into the repository's scripts directory so its check command runs without the skill installed. They import only each other, bun, and the `oxc-parser` package.
+The three scripts ship with the `/working-text` skill. Copy them into the repository's scripts directory so its check command runs without the skill installed. They import only each other, bun, and the `oxc-parser` package.
 
 ```bash
 cp "<skill-dir>/scripts/"{arch-lint,render-architecture-map,check-architecture-page}.mts .github/scripts/
 bun add -d oxc-parser
 ```
 
-Without the parser every script exits 2 with `docs-discipline scripts need oxc-parser: bun add -d oxc-parser`.
+Without the parser every script exits 2 with `working-text scripts need oxc-parser: bun add -d oxc-parser`.
 
 ### 1. Declare the layers, then make the lint pass
 

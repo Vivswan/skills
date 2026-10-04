@@ -1,6 +1,8 @@
-# Docs Discipline
+# Working Text
 
-`/docs-discipline` fires when a page of a repository's documentation is written or reviewed: a README, a guide, a reference page, an architecture page, a docs site. Every fact is shown by the device that shows it fastest, and every path, symbol, and check the page names is real:
+`/working-text` governs working text: anything a colleague reads to get work done in a repository, on GitHub, in CI output, in Notion, or in a diagram. A README, a comment, a description or help text, a PR or issue, a review reply, a commit body, an agent brief, a Mermaid chart. Not a paper, an essay, or a book, which a reader studies rather than scans.
+
+Every fact is shown by the device that shows it fastest, and every path, symbol, and check the text names is real:
 
 | The reader must see | A device that showed it well |
 | --- | --- |
@@ -17,13 +19,13 @@
 From the collection:
 
 ```bash
-npx skills add Vivswan/skills -g --skill docs-discipline
+npx skills add Vivswan/skills -g --skill working-text
 ```
 
 Directly from this folder:
 
 ```bash
-npx skills add https://github.com/Vivswan/skills/tree/main/skills/docs-discipline -g
+npx skills add https://github.com/Vivswan/skills/tree/main/skills/working-text -g
 ```
 
 ## What It Does

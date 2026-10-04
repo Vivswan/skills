@@ -1,6 +1,6 @@
 # Spawn Briefs
 
-Every subagent spawn brief is self-contained. The agent may lack the task board, the plan, and the session history, so the brief carries everything.
+Every subagent spawn brief is self-contained. The agent may lack the task board, the plan, and the session history, so the brief carries everything. A brief, and any report a person reads back, follows the `/working-text` skill for its shape.
 
 ## Checklist
 

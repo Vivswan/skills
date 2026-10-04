@@ -6,7 +6,7 @@
 import { join } from "node:path";
 import { ROOT } from "./lib";
 
-const PROBE = join(ROOT, "skills", "docs-discipline", "scripts", "docs-probe.mts");
+const PROBE = join(ROOT, "skills", "working-text", "scripts", "docs-probe.mts");
 
 export const PAGE_SETS: readonly { flags: readonly string[]; patterns: readonly string[] }[] = [
   {

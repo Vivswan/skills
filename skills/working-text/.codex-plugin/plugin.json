@@ -1,0 +1,36 @@
+{
+  "name": "working-text",
+  "description": "Working text that scans well and names real code: the device picked from the content, a paragraph-cap and path probe, fact-preserving restructures, and the architecture page whose boxes name real symbols.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/working-text",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "documentation",
+    "readme",
+    "architecture",
+    "mermaid",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Working Text",
+    "shortDescription": "Working text that scans well and names real code.",
+    "longDescription": "Fires when working text is written or reviewed: anything a colleague scans to get work done, from a README or a comment to a PR or a diagram. Each fact is shown by the device that shows it fastest, paragraphs stay under 70 words, and a probe measures the cap and checks every named path. The architecture page adds a layering lint, a module map, and a page test.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/working-text",
+    "defaultPrompt": [
+      "This guide is a wall of text; reshape it without losing a fact.",
+      "Run the docs probe over docs/ and fix what it names.",
+      "Add an architecture page with a module map for this repository."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

@@ -14,7 +14,7 @@
 - lean AGENTS.md files
 - content-only commit messages
 - hooks that check and fail, or check, write the fix, and fail; nothing else
-- no text blobs (the shape rules live in `/docs-discipline`)
+- no text blobs (the shape rules live in `/working-text`)
 
 It doubles as a review-criteria companion: when installed alongside [`/rubber-duck-review`](../rubber-duck-review/), its `## Review Criteria` section is folded into the reviewer prompt automatically.
 

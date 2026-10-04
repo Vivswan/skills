@@ -1,0 +1,4 @@
+interface:
+  display_name: "Working Text"
+  short_description: "Working text that scans well and names real code."
+  brand_color: "#0F766E"

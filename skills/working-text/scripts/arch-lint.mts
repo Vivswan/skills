@@ -20,7 +20,7 @@ export const parseSync: typeof ParseSync = await (async () => {
   try {
     return (await import("oxc-parser")).parseSync;
   } catch {
-    console.error("docs-discipline scripts need oxc-parser: bun add -d oxc-parser");
+    console.error("working-text scripts need oxc-parser: bun add -d oxc-parser");
     process.exit(2);
   }
 })();
