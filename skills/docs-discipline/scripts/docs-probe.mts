@@ -246,7 +246,10 @@ function withinRoot(root: string, file: string): boolean {
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-/** The page's directory, every directory up to the root, then the extra bases: a skill's reference page names `scripts/x.mts` from the skill folder. */
+/**
+ * The page's directory, every directory up to the root, then the extra bases: a skill's reference
+ * page names `scripts/x.mts` from the skill folder.
+ */
 function bases(root: string, pageDir: string, extra: readonly string[]): string[] {
   const out = [pageDir];
   for (let dir = pageDir; dir !== root && dir.startsWith(root); dir = dirname(dir))

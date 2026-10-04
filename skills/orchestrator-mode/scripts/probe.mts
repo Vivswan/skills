@@ -108,32 +108,10 @@ function readRequiredFile(path: string): string {
 
 // --- fixed-string matching with token boundaries ---------------------------
 //
-// The literal is a fixed string (never a regex). Two traps shape the
-// matcher:
-//
-// 1. Longer siblings: a raw substring test reads "release.yml" inside
-//    "update-release.yml" as a hit and reports false drift on a correct
-//    landing. So a match only counts when it is not embedded in a longer
-//    word/filename token. Word characters are [A-Za-z0-9_-]; a dot embeds
-//    only when it connects the match to another word character (".yml"
-//    style), so a sentence-final dot stays a boundary and cannot produce a
-//    false zero on prose.
-//
-// 2. Reflow: per-line matching reads a rewrapped paragraph as a deletion.
-//    A reflow commit splits a long token across a line boundary and the
-//    per-line count silently drops to 0 - indistinguishable from the
-//    sentence being genuinely deleted. So the literal and the searched
-//    text BOTH collapse every whitespace run (spaces, tabs, newlines) to a
-//    single space before matching; a pure reflow only changes whitespace
-//    and therefore can never change a count. One edge policy on both
-//    sides: leading/trailing whitespace is boundary noise and is trimmed
-//    (anchoring, not literal whitespace, guards the edges), and a
-//    whitespace-only literal is rejected loudly at the entry points -
-//    under normalization it could only ever measure whitespace, which is
-//    exactly what a reflow changes. Matching happens in the normalized
-//    text, but evidence reports ORIGINAL lines: each match carries the
-//    first original line it starts on, plus endLine when the match spans
-//    a wrap.
+// Two inputs shaped the matcher; each would otherwise read as drift on a correct landing.
+//   "release.yml" inside "update-release.yml"  -> a raw substring hit, so a match embedded in a longer token does not count
+//   a paragraph rewrapped across lines         -> a per-line count of 0, so literal and text both collapse whitespace runs first
+// A dot embeds only when it joins the match to another word character (".yml"), so a sentence-final dot stays a boundary.
 
 function isWordChar(c: string | undefined): boolean {
   return c !== undefined && /[A-Za-z0-9_-]/.test(c);

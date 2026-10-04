@@ -373,16 +373,12 @@ function lockHolderAlive(lockPath: string): boolean {
 }
 
 /**
- * One gated attempt to take the ledger lock. EVERY create, inspection, or
- * break of the lock happens only while holding the O_EXCL gate
- * (<lock>.break), which is what makes check-then-unlink sound: between the
- * staleness/liveness verdict and the unlink nothing can replace the lock
- * path, because creating it requires the gate we hold and the only ungated
- * transition is a holder releasing its own lock - a removal that can only
- * turn the unlink into a no-op (ENOENT), never hand it a successor's lock.
- * If a process is SIGKILLed inside this microsecond window, the orphaned
- * gate pauses all acquisition and later writers fail loudly at timeout -
- * never a steal.
+ * One gated attempt at the ledger lock. Create, inspect, and break all happen under the O_EXCL
+ * gate (<lock>.break), which is what makes check-then-unlink sound: nothing can create the lock
+ * path without the gate we hold.
+ *
+ *   holder releases its OWN lock (the one ungated transition)  -> the unlink becomes an ENOENT no-op, never a successor's lock
+ *   holder SIGKILLed inside the gate                             -> gate orphaned: acquisition pauses, writers fail loudly at the timeout
  */
 function tryAcquireUnderGate(lockPath: string, gatePath: string, staleMs: number): boolean {
   try {

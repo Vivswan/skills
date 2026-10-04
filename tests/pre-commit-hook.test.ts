@@ -12,22 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 
-// Incident-class tests for the pre-commit hook: git exports GIT_DIR and
-// GIT_INDEX_FILE to hooks, and everything `bun run check:staged` spawns inherits
-// them, so an unscrubbed fixture git flow in a test would mutate the real
-// repository (fixture commits landed on real branches; core.bare/identity
-// overwrites corrupted the shared .git/config). The hook must scrub every
-// GIT_* variable before running the checks. The old snapshot guard over
-// .git/config is gone: the hermetic test environment (see
-// tests/git-isolation.test.ts) blocks accidental (cwd- or env-based)
-// discovery of the repository from tests - not deliberate targeting - so the
-// hook only scrubs, runs the checks, and propagates their exit status.
-//
-// A fake `bun` on PATH stands in for the check pipeline; scratch repos in
-// tmp stand in for the real repository ("victim") and a test fixture. The
-// hermetic launcher environment keeps every git spawned here contained, so
-// no extra per-suite env scrubbing is needed; simulated hook leaks are
-// added explicitly per test.
+// Incident class: git exports GIT_DIR and GIT_INDEX_FILE to hooks, everything `bun run check:staged`
+// spawns inherits them, and an unscrubbed fixture git flow then lands on the REAL repository
+// (fixture commits on real branches, core.bare and identity overwrites in the shared .git/config).
+// The hermetic launcher environment (tests/git-isolation.test.ts) already contains every git spawned
+// here, so each scenario adds the leaks it simulates explicitly and nothing else is scrubbed.
 
 const DISPATCHER = join(ROOT, ".githooks", "pre-commit");
 const HOOK = join(ROOT, ".githooks", "pre-commit.mts");

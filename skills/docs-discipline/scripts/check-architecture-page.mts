@@ -146,7 +146,10 @@ export function mermaidFences(markdown: string): Fence[] {
 export interface Page {
   lines: readonly string[];
   fences: readonly Fence[];
-  /** `lines[i]` when line i is page text, undefined inside any fence: headings, region markers, and demonstration lines are read from here only, so a quoted example never steers the walk. */
+  /**
+   * `lines[i]` when line i is page text, undefined inside any fence: headings, region markers, and
+   * demonstration lines are read from here only, so a quoted example never steers the walk.
+   */
   text: ReadonlyArray<string | undefined>;
 }
 

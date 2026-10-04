@@ -1,45 +1,23 @@
 #!/usr/bin/env bun
 /**
- * Fleet sweep: one JSON line per worktree of <repo-root>, plus an optional
- * transcript-sensor line. Replaces the hand-rolled zsh sweep whose documented
- * failure modes (word-split collapsing per-pid counts, unmatched globs
- * aborting the script, no `timeout` binary on macOS, self-matching greps,
- * vanished worktrees rendering every count as 0) are impossible here by
- * construction: every external command runs through execFile with an explicit
- * timeout, per-pid work iterates TS arrays, process attribution is by lsof
- * cwd (never argv or shell pipelines), and a worktree where anything fails
- * yields an ok:false row instead of a zeros row.
+ * Fleet sweep: a worktree where a git reading fails yields an ok:false row, never a row of zeros,
+ * and a broken sweep is a loud control line, never a quiet fleet. Processes are attributed by lsof
+ * cwd, never by argv, which a shell pipeline or a wrapper can misreport.
  *
  * Usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]
+ *   --base <ref>   aheadBehind against this committish (e.g. origin/develop) instead of origin's default branch
  *
- * --base <ref> measures every row's aheadBehind against <ref> (any
- * committish, e.g. origin/develop) instead of origin's default branch, for
- * sessions integrating into a non-default mainline. Omitted, the default
- * branch resolution below is unchanged.
- *
- * Output lines, in order:
- *   {"control":"FAILED","reason":...}          only when the sweep itself is
- *                                              broken (never a quiet fleet)
- *   {"lsof":{"ok":false,"error":...}}          only when process attribution
- *                                              is down (rows then carry [])
- *   {"lsof":{"ok":true,"degraded":true,...}}   lsof exited nonzero but still
- *                                              produced records; lists may
- *                                              omit unreadable processes
- *   {"defaultRef":{"ok":false,"error":...}}    only when origin's default
- *                                              branch cannot be resolved
- *                                              (rows carry aheadBehind:null)
- *   {"baseRef":{"ok":false,"error":...}}       only when an explicit --base
- *                                              ref is unresolvable or
- *                                              ambiguous (rows carry
- *                                              aheadBehind:null; never a
- *                                              fallback to the default
- *                                              branch)
+ * Output lines, in order, each only when its condition holds:
+ *   {"control":"FAILED","reason":...}          the sweep itself is broken
+ *   {"lsof":{"ok":false,"error":...}}          process attribution is down (rows carry processes:[])
+ *   {"lsof":{"ok":true,"degraded":true,...}}   lsof exited nonzero but produced records (lists may omit processes)
+ *   {"defaultRef":{"ok":false,"error":...}}    origin's default branch is unresolvable (rows carry aheadBehind:null)
+ *   {"baseRef":{"ok":false,"error":...}}       the --base ref is unresolvable or ambiguous (same, never a fallback)
  *   {"worktree":...,"ok":true,...}             one per worktree
- *   {"worktree":...,"ok":false,"error":...}    vanished dir or git failure
+ *   {"worktree":...,"ok":false,"error":...}    vanished dir, git failure, or readings that moved mid-row
  *   {"transcripts":{...}}                      only with --transcripts
  *
- * Exit codes: 0 sweep ran (ok:false rows included), 1 control failure,
- * 2 usage error.
+ * Exit: 0 sweep ran (ok:false rows included), 1 control failure, 2 usage error.
  */
 
 import { execFile } from "node:child_process";
@@ -424,15 +402,12 @@ type BaseRef = { ref: string; sha: string } | { ref: null; error: string };
 type PinnedGit = (args: string[]) => Promise<RunResult>;
 
 /**
- * Resolve an operator-supplied --base ref to a pinned sha. Any committish is
- * accepted (origin/develop, a local branch, a tag, a sha); --end-of-options
- * keeps a hostile ref string from being read as a git option, and ^{commit}
- * rejects non-commit objects. The sha is pinned once for the whole sweep for
- * the same reason as the default-branch sha below: a concurrent fetch moving
- * the ref mid-sweep would otherwise hand different rows different bases. An
- * explicitly requested base that cannot be resolved is a loud error - never
- * a silent fallback to the default branch, whose counts would be exactly the
- * wrong-branch readings the flag exists to prevent.
+ * Resolve the operator's --base ref to a sha pinned once for the whole sweep (same reason as in
+ * resolveDefaultRef: a fetch moving the ref mid-sweep would hand rows different bases). An
+ * unresolvable base is a loud error, never a fallback to the default branch, whose counts are
+ * exactly the wrong-branch readings the flag exists to prevent.
+ *   --end-of-options  -> a hostile ref string cannot be read as a git option
+ *   ^{commit}         -> a non-commit object (a tree, a blob) is refused
  */
 async function resolveBaseRef(repoRoot: string, ref: string): Promise<BaseRef> {
   // No --quiet here, unlike the default-branch probes: --quiet would also
@@ -553,19 +528,12 @@ async function worktreeRow(
     return { worktree: path, ok: false, error: "worktree directory no longer exists" };
   }
 
-  // A worktree dir that lost its .git file still exists, but `git -C` then
-  // discovers an enclosing checkout (this repo nests worktrees inside the
-  // main one) and every git reading below would describe the WRONG repo.
-  // Discovery happens ONCE, here; every later git call is pinned to the
-  // verified --git-dir/--work-tree so a .git file vanishing mid-sweep cannot
-  // make a later call re-discover the parent and report its numbers. The
-  // invariant: ALL identity reads for a row agree, verified by a final
-  // re-read. Each value comes from its own single-value call (never one call
-  // split on newline - a path containing a literal newline would shear the
-  // split), and because the two reads are separate they are bracketed
-  // against EACH OTHER: gitdir, then toplevel, then gitdir again, which must
-  // match before the pin is trusted. The end-of-row re-read closes the
-  // bracket around the row's readings the same way.
+  // A worktree dir that lost its .git file still exists, but `git -C` then discovers the ENCLOSING
+  // checkout (this repo nests worktrees inside the main one) and every reading would describe the
+  // wrong repo. So discovery runs once, bracketed, and every later call is pinned to the verified
+  // gitdir and work tree; the end-of-row re-read closes the same bracket around the readings.
+  //   gitdir -> toplevel (must be this path) -> gitdir again (must match the first) -> pin trusted
+  // One single-value call per value, never one call split on newline: a path holding a newline would shear the split.
   const gitDirResult = await run("git", ["-C", path, "rev-parse", "--absolute-git-dir"]);
   if (!gitDirResult.ok) return { worktree: path, ok: false, error: gitDirResult.error };
   const gitDir = gitValue(gitDirResult.stdout);
