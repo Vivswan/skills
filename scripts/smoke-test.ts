@@ -665,7 +665,8 @@ function checkExternalSources(xenoDirs: readonly string[]): void {
     if (errors.length > 0) fail(errors.join("\n"));
     // A declared own path that is not there is a stale claim: the sync would keep nothing, and the check would hide a hole.
     for (const own of sources[name]?.own ?? []) {
-      const target = join(dir, own);
+      // The slash is stripped so lstat inspects the entry itself: a symlink there is not a directory of ours.
+      const target = join(dir, own.replace(/\/$/, ""));
       const stat = lstatSync(target, { throwIfNoEntry: false });
       const wanted = own.endsWith("/") ? stat?.isDirectory() : stat?.isFile();
       if (!wanted)
