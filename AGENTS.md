@@ -24,7 +24,7 @@ Skills: Installable, plugin-ready skills that give coding agents disciplined wor
 
 ## Toolchain
 
-- bun: `bun install`, `bun test`, `bun run <script>` (scripts in `package.json`)
+- bun: `bun install`, `bun run <script>` (scripts in `package.json`)
 - `.bun-version` is managed by sync; pin another version in a repo-owned workflow's version input, not in the dotfile.
 
 ## Repository-specific guidance
