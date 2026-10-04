@@ -11,6 +11,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -669,6 +670,72 @@ describe("run-review.mts", () => {
     ] as const) {
       const r = run([...args]);
       expectFailure(r, { code: 2, stderr: "prepare" }, id);
+    }
+  });
+
+  test("prepare and a launch purge sibling rubber-duck-* dirs older than 24 h, by age alone", () => {
+    // Without this pin scratch dirs accumulate forever, or a purge that reaches
+    // by name instead of age removes another session's in-flight review, or
+    // follows a symlink out of tmp.
+    const privateTmp = mkdtempSync(join(tmpdir(), "run-review-purge-"));
+    const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const makeDir = (name: string, stale: boolean): string => {
+      const dir = join(privateTmp, name);
+      mkdirSync(dir);
+      writeFileSync(join(dir, "review.jsonl"), "");
+      if (stale) utimesSync(dir, dayAgo, dayAgo);
+      return dir;
+    };
+    try {
+      const staleCapture = makeDir("rubber-duck-stale", true);
+      const stalePrompt = makeDir("rubber-duck-prompt-stale", true);
+      const fresh = makeDir("rubber-duck-fresh", false);
+      const unrelated = makeDir("other-tool-stale", true);
+      const linkTarget = makeDir("not-rubber-duck-target", true);
+      const link = join(privateTmp, "rubber-duck-link");
+      symlinkSync(linkTarget, link);
+      const staleFile = join(privateTmp, "rubber-duck-file");
+      writeFileSync(staleFile, "");
+      utimesSync(staleFile, dayAgo, dayAgo);
+
+      const prepared = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
+      expect(prepared.code).toBe(0);
+      expect(prepared.stderr).toBe("");
+      expect(dirname(prepared.stdout.trimEnd())).toStartWith(
+        join(privateTmp, "rubber-duck-prompt-"),
+      );
+      expect(existsSync(staleCapture)).toBe(false);
+      expect(existsSync(stalePrompt)).toBe(false);
+      for (const kept of [fresh, unrelated, linkTarget, link, staleFile]) {
+        expect(existsSync(kept), kept).toBe(true);
+      }
+
+      // A launch purges too, and its own fresh capture dir survives its own purge.
+      const staleAgain = makeDir("rubber-duck-stale-again", true);
+      const launched = run(["codex", promptFile], { TMPDIR: privateTmp });
+      expect(launched.code).toBe(0);
+      expect(dirname(launched.report().capture)).toStartWith(join(privateTmp, "rubber-duck-"));
+      expect(existsSync(staleAgain)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(link)).toBe(true);
+
+      // A purge that cannot remove a dir is logged and the review still runs.
+      if (process.getuid?.() !== 0) {
+        const locked = makeDir("rubber-duck-locked", false);
+        chmodSync(locked, 0o555);
+        utimesSync(locked, dayAgo, dayAgo);
+        try {
+          const r = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
+          expect(r.code).toBe(0);
+          expect(r.stdout).toStartWith(join(privateTmp, "rubber-duck-prompt-"));
+          expect(r.stderr).toContain("stale scratch purge");
+          expect(r.stderr).toContain(locked);
+        } finally {
+          chmodSync(locked, 0o755);
+        }
+      }
+    } finally {
+      rmSync(privateTmp, { recursive: true, force: true });
     }
   });
 

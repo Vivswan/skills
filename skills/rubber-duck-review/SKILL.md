@@ -56,7 +56,7 @@ Use this skill when someone asks for:
     A large library or an unclear fit is a `non_blocking` entry whose claim begins `Ask the owner:`. The driver puts it to the user and builds nothing until they answer. A library that needs a runtime or API the repository has dropped is not a fit, and not a finding.
   - The standing test question: for each NEW test in the change, the fact it pins that the source does not already say. The reviewer never asks for a test without naming that fact.
     - A test that restates the source it reads is a finding whose fix is deletion: a workflow test asserting `needs` equals the list in the yaml, a constant pinned to its own literal, a config file the repository ships parsed and asserted back.
-    - The template carries the wording. The `/code-standards` skill's `references/tests.md` owns the rule, its three valid answers, and where a constant's value is pinned instead.
+    - The template carries the wording. The `/code-standards` skill's tests reference owns the rule, its three valid answers, and where a constant's value is pinned instead.
   - PII in anything the change publishes: anything that tells a reader who the author is, how they work, or how their machine is set up, including values measured or copied from the author's real environment. Every fixture is hand-authored. A provenance comment naming real data is a finding.
 
     The template carries the wording. The `/pr-and-issue-discipline` skill owns the rule and its substitutes. Paste the PR title, body, and comments into the prompt, since a sandboxed reviewer may not reach GitHub.
@@ -133,7 +133,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - `verdict.recorded_not_built`: speculative hardening the reviewer set aside. Step 6 says what happens to it.
   - `verdict.summary`: what was reviewed and how. Treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes.
   - `tool_calls`, `trajectory`: how many reads and commands preceded the verdict, and a compact row per reviewer step. A verdict whose trajectory shows a single `git diff` and no reads of the changed files is a weak review. Sharpen the prompt (name the files) and relaunch.
-  - `capture`: the full reviewer stream, kept for inspection. Read it when a finding or the summary looks off and you want the exact reviewer message.
+  - `capture`: the full reviewer stream, kept for 24 hours. Read it when a finding or the summary looks off and you want the exact reviewer message.
 - **Exit 1** (`review FAILED - relaunch`): that is no review at all, never a clean pass. Relaunch it.
 
   It means the stream was empty, cut mid-turn, truncated on its final line, contained error events, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. While the captured stream still exists, its path is in the failure message if you want to inspect why.
@@ -152,8 +152,9 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
     - 1: review failed or `--wait timed out` (relaunch).
     - 2: wrong reviewer or file, or no launch record beside the output file.
 - `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>` without `--wait` reads a finished run once: it exits 1 (`no exit status recorded`) while the reviewer is still running instead of blocking.
-- Every run that reached the reviewer keeps its scratch dir (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). The script snapshots your prompt into that dir, so all review artifacts travel and clean up together. The prompt directory you minted remains yours to remove.
-  - Remove exactly those two directories once the verdict is triaged, never a glob over the shared temp dir. One sweep of `rubber-duck-*` there deleted 53 directories and killed two other sessions' in-flight reviews.
+- Every run that reached the reviewer keeps its scratch dir for 24 hours (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). The script snapshots your prompt into that dir, so all review artifacts travel and clean up together.
+  - `prepare` and each launch first remove sibling `rubber-duck-*` directories older than 24 hours, by age alone, so the prompt directory you minted lives the same 24 hours. A younger one is another session's live review and is left alone, a symlink is never followed, and a purge that fails is reported on stderr and never fails the review.
+  - To clear your own two directories sooner, remove exactly those two, never a glob over the shared temp dir. A sweep of `rubber-duck-*` there kills other sessions' in-flight reviews.
   - A session that wants a sweepable space sets its own `TMPDIR` to a directory it created before launching. `prepare` and the launch both honor it.
   - A foreground launch whose reviewer binary is missing (exit 2) captured nothing and leaves nothing behind. A `--background` one keeps its dir so `--extract` can report the missing binary, so remove it after that.
 
