@@ -1,85 +1,29 @@
 #!/usr/bin/env bun
 /**
- * Launch a read-only cross-model reviewer and print its final verdict.
+ * Launch a read-only cross-model reviewer and print its verdict as one JSON report.
+ * Each reviewer CLI has a trap the launch retires; the usage text is USAGE below.
  *
- * Usage:
- *   run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt]
- *   run-review.mts <codex|claude|copilot> --extract <output-file>
- *   run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]
- *   run-review.mts prepare <section>
+ *   prompt through a shell       -> backticks and $(...) expand: spawn from an argv array
+ *   stdin left open              -> codex and claude block forever: 'ignore', or a file (EOF-ended)
+ *   codex narrates in the schema -> an empty verdict reads as clean: a tool call must precede it
+ *   predictable prompt path      -> one agent overwrites another's: prepare mints a private dir
+ *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged
  *
- * The verdict is the structured object in verdict-schema.json (blocking,
- * non_blocking, recorded_not_built, summary). codex and claude receive that
- * schema through their CLIs (--output-schema / --json-schema), so their final
- * message cannot be free text; copilot has no schema flag and must emit the
- * object itself. A message that does not parse as the schema object fails
- * the review.
- *
- * A well-formed message is still not a verdict on its own: codex applies the
- * schema to its narration too, so a turn that ends after "I will review the
- * changes now" produces a schema-valid object with empty findings. A review
- * has to read something, so the verdict counts only when at least one tool
- * call (a command, a file read) precedes it in the same turn; a turn with
- * none is a preamble and fails the review. copilot's plain-text output has no
- * trajectory to check, which is one reason it is the last-resort reviewer.
- *
- * On success stdout is one JSON object: the verdict, the tool-call count, the
- * path of the kept capture (the full reviewer stream, for inspecting any
- * message), and a compact trajectory (one row per reviewer step). Every run
- * that reached the reviewer keeps its capture dir so a surprising verdict can
- * be traced; remove it once triaged. A foreground launch that never started
- * the reviewer (binary not found) has nothing to keep and removes it; a
- * --background one keeps the dir, since --extract reads the recorded
- * not-found status from it.
- *
- * prepare mints a private directory under os.tmpdir() with mkdtemp (atomic,
- * so concurrent reviews can never share a path), leaves its marker file in
- * it, and prints the section's prompt file inside it. A launch accepts only a
- * regular file directly inside a marked directory: a predictable shared path,
- * which one agent could overwrite under another before the launch reads it,
- * is refused as a usage error, as is a symlink out of the directory. The
- * marker, not the location, is the provenance, so the prepare and launch
- * shells need not share TMPDIR.
- *
- * The reviewer is spawned directly from an argv array (never through a
- * shell), so backticks and $(...) in the prompt stay literal. stdin is
- * 'ignore' because both codex and claude otherwise block forever reading
- * additional input. The full stdout stream is captured to a scratch file
- * under os.tmpdir(), never the working tree, and the prompt is snapshotted
- * into the same scratch dir so every review artifact cleans up together.
- *
- * --stdin-prompt (codex/claude only) serves the prompt file itself as the
- * reviewer's stdin, for restricted environments that reject large prompt
- * arguments. A file fd is EOF-terminated, so delivery is complete by
- * construction and cannot hang: the stdin hang trap is an OPEN pipe.
- *
- * --background detaches a monitor copy of this script that runs the reviewer
- * to completion and records the reviewer, output filename, and exit status in
- * review.status beside the stream; --extract validates all three against its
- * own invocation and refuses to report a verdict until the recorded status is
- * a success, so extracting too early, from a failed run, or from the wrong
- * capture fails safe. --extract --wait polls that record until the exit is
- * recorded, then extracts; it is how a caller waits without hand-rolling a
- * poll over the record or the output path.
- *
- * Exit codes:
- *   0  verdict extracted and printed to stdout, or a --background launch
- *      started (that run's verdict comes later, via --extract)
- *   1  review FAILED - relaunch (empty or cut stream, error events, a final
- *      message that is not the schema object, a verdict with no tool calls
- *      before it, blank or unrecorded verdicts, a non-zero reviewer exit, or
- *      a --wait that timed out; an empty review must never read as clean)
- *   2  usage error (including no launch record beside a --wait output file)
- *      or reviewer binary not found
+ * Exit codes (tests/doc-drift.test.ts pins them to SKILL.md; change both together):
+ *   0  verdict printed, or a --background launch started (its verdict comes via --extract)
+ *   1  review FAILED - relaunch: no usable verdict, whatever the cause; never a clean pass
+ *   2  usage error, or the reviewer binary is not installed
  */
 
 import { spawn } from "node:child_process";
+import type { Dirent } from "node:fs";
 import {
   closeSync,
   existsSync,
   lstatSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -154,9 +98,12 @@ const USAGE = [
   "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]",
   "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir>  (internal)",
   "       run-review.mts prepare <section>",
+  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
 ].join("\n");
 
+const SCRATCH_PREFIX = "rubber-duck-";
 const PROMPT_DIR_PREFIX = "rubber-duck-prompt-";
+const SCRATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 const WAIT_POLL_MS = 2000;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
 const TIMEOUT_SECONDS = /^[1-9][0-9]*$/;
@@ -172,6 +119,29 @@ function usageError(message: string): never {
   throw new SilentExit();
 }
 
+/** The tmp dir is shared with other sessions' live reviews, so age alone decides and a
+ * symlink is never followed. A purge that fails is reported and must never fail the review. */
+function purgeStaleScratch(): void {
+  const cutoff = Date.now() - SCRATCH_RETENTION_MS;
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(tmpdir(), { withFileTypes: true });
+  } catch (error) {
+    process.stderr.write(`stale scratch purge skipped: ${String(error)}\n`);
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(SCRATCH_PREFIX)) continue;
+    const dir = join(tmpdir(), entry.name);
+    try {
+      if (lstatSync(dir).mtimeMs >= cutoff) continue;
+      rmSync(dir, { recursive: true, force: true });
+    } catch (error) {
+      process.stderr.write(`stale scratch purge skipped ${dir}: ${String(error)}\n`);
+    }
+  }
+}
+
 /** Mint a private directory for one review's prompt files and print the
  * section's prompt file path inside it. mkdtemp is atomic, so two callers can
  * never receive the same directory. */
@@ -179,6 +149,7 @@ function preparePrompt(section: string): void {
   if (!SECTION_NAME.test(section)) {
     usageError(`prepare: section must match ${SECTION_NAME}, got ${JSON.stringify(section)}`);
   }
+  purgeStaleScratch();
   const dir = mkdtempSync(join(tmpdir(), PROMPT_DIR_PREFIX));
   writeFileSync(join(dir, MINT_MARKER), "");
   process.stdout.write(`${join(dir, `${section}.md`)}\n`);
@@ -690,7 +661,7 @@ function runCapture(tool: Tool, delivery: Delivery, scratch: Scratch): void {
 }
 
 function runBackground(tool: Tool, prompt: string, stdinPrompt: boolean): void {
-  const scratch = scratchPaths(mkdtempSync(join(tmpdir(), "rubber-duck-")), tool);
+  const scratch = scratchPaths(mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
   // Snapshot the prompt: the caller's file may be edited or deleted before
   // the detached monitor gets around to reading it.
   const promptSnapshot = join(scratch.dir, "prompt.txt");
@@ -908,11 +879,12 @@ function main(): void {
   // caller's path) so a bad tool/flag combination is a parent-side usage
   // error even for --background, not a silent failure in the monitor.
   if (stdinPrompt) stdinDelivery(tool, promptFile);
+  if (captureDir === null) purgeStaleScratch();
   if (background) {
     runBackground(tool, prompt, stdinPrompt);
     return;
   }
-  const scratch = scratchPaths(captureDir ?? mkdtempSync(join(tmpdir(), "rubber-duck-")), tool);
+  const scratch = scratchPaths(captureDir ?? mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
   // Snapshot the prompt into the scratch dir (in capture mode this rewrites
   // the snapshot the parent already made): every review artifact, including
   // any code excerpts in the prompt, lives and dies with the capture. The
