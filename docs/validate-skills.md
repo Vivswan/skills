@@ -77,7 +77,7 @@ repo-platform's `ci.yml` pins the action to a commit on `main` (the comment reco
     mode: structure
 ```
 
-The action sets up bun from this repository's own root `.bun-version`, the pin the fleet sync keeps current. The bun pin never comes from the caller's checkout. The caller needs no bun step and no install step.
+The action sets up bun through the fleet's shared `bun-setup` action, which walks up from the action's folder to this repository's own root `.bun-version`, the pin the fleet sync keeps current. The bun pin never comes from the caller's checkout. The caller needs no bun step and no install step.
 
 ## How this repository runs it on itself
 
