@@ -201,11 +201,7 @@ For every form:
 - **No round numbers, no process narrative.** "Copilot round four" and "codex round two" name the session, not the change. The fact stays; the round it came from goes.
 - **Nothing part one already says.** A details section that restates `## How` doubled the body for no reader.
 
-**Redact captured output before publishing, and publish no PII anywhere**: strip secrets, tokens, and credentials. Redaction is not paraphrase: the command and the output structure stay verbatim. This is the single definition; the skills that gate on it point here.
-
-- **PII is anything that tells a reader who the author is, how they work, or how their machine is set up.** Two kinds: identity (a name, an employer, a real login, a hostname, a home path, an email), and anything measured or copied from the author's real environment (figures from real logs, real settings or transcripts, an inventory of installed tools), which identifies the author with no name in it.
-- **One substitute per kind:** `octocat`, `work-bot`, or `example-user` for a login; `example.com` for an employer, a domain, or a hostname; `example-user@example.com` for a whole email; `/home/user` or `~` for a home path; `/repo/...` for the checkout path; hand-written example values, said to be examples, for anything measured.
-- **What follows from the rule, the specimens, and what stays** (fixtures are hand-authored, a CI check posts no real figure; a product file name and the repository's own coordinate and gates are not PII): `references/redaction.md`.
+**Redact captured output before publishing, and publish no PII anywhere**: nothing published tells a reader who the author is, how they work, or how their machine is set up. `references/redaction.md` owns the definition: what to strip, what counts as PII, the substitutes, how to redact, and what stays.
 
 **Release-please reads the body.** In a repository released by release-please, Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) travel in the PR body as a commit-override block, the last element inside the Technical details section. Release-please parses that block in place of the squash message.
 
