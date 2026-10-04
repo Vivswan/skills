@@ -175,6 +175,8 @@ Specimen: a repository's hook that staged needed a `git add`, which needed a `gi
 
 Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences, and when the content is enumerable, enumerate it. The shape rules and the paragraph probe live in the `/docs-discipline` skill. PR bodies follow the `/pr-and-issue-discipline` skill's Readability rules.
 
+Prose a human reads inside a code artifact (an action description, a manifest description, CLI help) follows the `/docs-discipline` skill's page rules.
+
 ## Workflow
 
 1. **Writing code:** apply the standards as you go. They are cheaper at write time than at review time.
