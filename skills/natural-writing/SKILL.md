@@ -32,7 +32,7 @@ The catalog of signs changes over time (models change, and the community adds ne
 1. Live: fetch <https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing> (raw wikitext: `https://en.wikipedia.org/w/index.php?title=Wikipedia:Signs_of_AI_writing&action=raw`). Do this when auditing text for AI tells, when the user asks for a thorough pass, or when the bundled snapshot looks stale for the topic at hand.
 2. Snapshot: [references/signs-catalog.md](references/signs-catalog.md) is a distilled copy of the full page, reorganized as writing rules. Use it as the working checklist for every invocation. It is enough when offline or for routine drafting.
 
-Snapshot last synced: 2026-08-26, from page revision 1371415133 (2026-08-26T08:17:42Z). See "Maintaining the snapshot" below for how to update it.
+Snapshot last synced: 2026-10-03, from page revision 1378298730 (2026-10-03T21:44:53Z). See "Maintaining the snapshot" below for how to update it.
 
 [references/words-to-avoid.md](references/words-to-avoid.md) lists the words and phrases the page flags, organized for scanning, plus ready-made grep commands for the mechanical checks.
 
@@ -60,7 +60,7 @@ Apply the full catalog. The highest-value rules:
 6. **Attribute precisely or not at all.** No "experts argue", "observers have noted", "industry reports suggest". Name the source or drop the claim, and never imply many sources when there is one.
 7. **Never use a dash as punctuation.** No em dashes (—), and no sneaking the same construction back in with an en dash (–) or a spaced hyphen ( - ), which swaps the character while keeping the tell. Restructure instead: a comma, a colon, parentheses, or two sentences. Hyphens stay only inside compound words, and en dashes only in numeric ranges.
 8. **Format like a human.** Prose first, and lists only when the content is genuinely enumerable. Sentence case headings, and bold almost nothing. No bullet lists where every item is a bold label plus a colon, no emoji decoration, no needless small tables, no horizontal rules before headings, no skipped heading levels.
-9. **No chat artifacts.** No "I hope this helps", "Certainly!", "Would you like…", "Here is a…" framing, and no knowledge-cutoff disclaimers. No speculation dressed as fact ("details are not widely documented, but likely…"). No unfilled placeholders like `[Your Name]` or `2025-XX-XX`.
+9. **No chat artifacts.** No "I hope this helps", "Certainly!", "Would you like…", "Here is a…" framing, no knowledge-cutoff disclaimers, and no advice on how to weigh a source ("should be treated as X rather than Y"). No speculation dressed as fact ("details are not widely documented, but likely…"). No unfilled placeholders like `[Your Name]` or `2025-XX-XX`.
 10. **Use the target medium's markup**, never Markdown headed for a non-Markdown destination. Never invent citations, links, DOIs, ISBNs, or page numbers. Verify every reference you emit, and strip tool residue (`utm_source=`, `turn0search0`, `oaicite`, `[cite: 1]`).
 11. **Vary rhythm, and repeat words when natural.** Reusing the same noun beats cycling synonyms. Mix sentence lengths. Commit to definite statements ("was the first") and use plain verbs (wrote, used, moved, tried, died).
 

@@ -1,6 +1,6 @@
 # Signs of AI writing: full catalog
 
-Distilled from [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing) (WP:AISIGNS). Snapshot synced 2026-08-26 from page revision 1371415133 (2026-08-26T08:17:42Z).
+Distilled from [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing) (WP:AISIGNS). Snapshot synced 2026-10-03 from page revision 1378298730 (2026-10-03T21:44:53Z).
 
 The live page is the source of truth. Refresh per SKILL.md when it changes.
 
@@ -25,9 +25,11 @@ Instead: State what happened. If something matters, show the specific, checkable
 
 ### 1.2 Canned emphasis on notability, attribution, and coverage
 
-Watch for: *independent coverage*, *local/regional/national media outlets*, *trade publications*, *profiled in*, *written by a leading expert*, *maintains an active social media presence*, *featured in X, Y, and other prominent outlets*.
+Watch for: *independent coverage*, *local/regional/national media outlets*, *trade publications*, *cited/featured/profiled in*, *was identified by*, *written by a leading expert*, *maintains an active social media presence*, *featured in X, Y, and other prominent outlets*.
 
-LLMs prove importance by cataloging where a subject was covered and what kind of sources those are. They often echo notability-guideline language verbatim, and often misattribute their own superficial analysis to the named source.
+LLMs prove importance by cataloging where a subject was covered and what kind of sources those are. They often echo notability-guideline language verbatim, as if the justification for the edit leaked into the text, and often misattribute their own superficial analysis to the named source.
+
+The sign is narrow. Press releases cite clippings too; the tell is the focus on the sources themselves (their contents, their availability in a public search, their place in the media landscape) in that idiosyncratic phrasing.
 
 Instead: Report the substance a source contains, not the fact of coverage. Never claim a source says something it does not.
 
@@ -73,7 +75,7 @@ Instead: Open about the subject itself, in a natural sentence. "Refers to" almos
 
 Watch for section headings shaped "X and Y", and especially *Awards and recognition* or plain *Recognition* sections.
 
-The wording "Awards and recognition" is nearly ubiquitous in AI-generated articles. It is the heading-level form of inflated legacy (1.1) and canned coverage-claims (1.2).
+The wording "Awards and recognition" is nearly ubiquitous in AI-generated articles, and far more common than in human writing even against articles tagged as promotional. It is the heading-level form of inflated legacy (1.1) and canned coverage-claims (1.2).
 
 Instead: Name sections after their actual content. If awards matter, state which award, from whom, for what.
 
@@ -107,7 +109,9 @@ Instead: *Is, are, was, has.* The plainest linking verb is usually right, and us
 
 Watch for: *in connection with/to*, *connected with/to*, *in association with*, *associated with*, and intensified forms like *particularly/widely associated*.
 
-Newer LLMs abstract a relationship away instead of stating it. The fix words are plain: *of*, *for*, *by*, or a defined relationship (*working in/with*, *used in/for*, *caused by*). This indirection alone proves nothing, but its abundance alongside other signs does.
+LLMs allude to two subjects being "connected to" or "associated with" each other instead of stating the relationship: "sources identified John Doe as being associated with leadership of ExampleCorp" for "John Doe was the CEO of ExampleCorp". It often rides with promotional buzz and AI vocabulary, sometimes stacked (*particularly/widely associated*).
+
+The fix words are plain: *of*, *for*, *by*, or a defined relationship (*working in/with*, *used in/for*, *caused by*). This indirection alone proves nothing, but its abundance alongside other signs does.
 
 Instead: State the actual relationship. "Is associated with the orchestra" becomes "plays in the orchestra", "conducted the orchestra", or whatever is true.
 
@@ -117,7 +121,7 @@ Three templates:
 
 - *Not just X, but Y*: "not only dismissive but also unnecessarily harsh"; "doesn't just undermine the argument; it questions their very right to participate".
 - *Not X, but Y*: "It's not a mirror but a portal"; "Not a career, not a body of work, not sustained relevance — just an algorithmic moment".
-- *X rather than Y*: the reversed form, especially common in Grok output.
+- *Y rather than X*: the reversed form, especially common in Grok output and present in ChatGPT and Claude output too ("Rather than simply retelling a classical legend, the film adapts…").
 
 The construction preemptively corrects a misconception nobody had.
 
@@ -126,6 +130,8 @@ Instead: Assert the true thing directly. Use contrast only when a real, relevant
 ### 2.5 Rule of three
 
 Triads everywhere: "adjective, adjective, adjective"; "short phrase, short phrase, and short phrase"; three-item example lists ("tiles, metals, and plastics") used to make thin analysis look comprehensive.
+
+The sign is stronger where nobody would bother with such a flourish, such as an edit summary.
 
 Instead: Let the content set the count. Two items, four items, one item. If every list in the piece has exactly three members, that's the tell.
 
@@ -149,7 +155,7 @@ Instead: Prose paragraphs. Use a list only when items are genuinely parallel and
 
 The Wikipedia page flags overuse. LLM text uses em dashes (—) more often than comparable human text, in places humans use commas, parentheses, or colons. It uses them in punchy sales rhythm ("we do seem to have different interpretations — and that's the problem"), and usually spaced, contrary to typographic practice.
 
-The rate varies by model era: a July 2026 study found that of contemporary models only Claude used em dashes more than professional writers, and ChatGPT used them less.
+The rate varies by model era: a July 2026 study found that of contemporary models only Claude used em dashes more than professional writers, and ChatGPT used them less. In September 2026 the page itself noted the sign is rarer in current output and may move to its historical list.
 
 This skill goes further: never use a dash as a sentence-level connector. That means no em dash, and no substituting the same construction with an en dash (–) or a spaced hyphen ( - ), since swapping the character keeps the tell.
 
@@ -161,7 +167,7 @@ Emoji decorating headings or bullet lists (🚀 for launches, 🧠 for analysis,
 
 ### 3.6 Unnecessary tables
 
-Small tables for facts that read naturally as prose ("Market Valuation (2024) | ~USD 2.1 billion"). Instead: Prose for a handful of facts. Tables only for genuinely tabular data.
+Small, minimally formatted tables for facts that read naturally as prose ("Market Valuation (2024) | ~USD 2.1 billion"), and Markdown table syntax pasted inside a wikitable, which renders as garbage. Instead: Prose for a handful of facts. Tables only for genuinely tabular data, in the destination's markup.
 
 ### 3.7 Curly quotation marks and apostrophes
 
@@ -193,15 +199,17 @@ Sections set at h1 (`=` in wikitext, `#` in Markdown), often from mistranslated 
 
 ### 4.1 Collaborative chatter
 
-Watch for: *I hope this helps*, *Of course!*, *Certainly!*, *You're absolutely right*, *Would you like…*, *is there anything else*, *let me know*, *here is a…*, *more detailed breakdown*, meta-advice about the deliverable ("ensure the content is presented in a neutral tone"), and leftover instructions ("Delete this section before submission").
+Watch for: *I hope this helps*, *Of course!*, *Certainly!*, *You're absolutely right*, *Would you like…*, *is there anything else*, *let me know*, *here is a…*, *more detailed breakdown*, meta-advice about the deliverable ("ensure the content is presented in a neutral tone"), leftover instructions ("Delete this section before submission"), and pasted prompt templates ("List the areas you want to contribute to. Example: …").
 
 Instead: The deliverable contains only the deliverable. Conversation goes in the conversation.
 
-### 4.2 Knowledge-cutoff disclaimers and speculation about gaps
+### 4.2 Disclaimers: knowledge cutoffs, source availability, how to read a source
 
-Watch for: *as of my last knowledge update*, *up to my last training update*, *while specific details are limited/scarce…*, *not widely available/ documented/disclosed*, *…in the provided/available sources/search results…*, *based on available information*, *maintains a low profile*, *keeps personal details private*, and "likely/probably" bridges into invented specifics ("the mountain likely supports…").
+Watch for: *as of my last knowledge update*, *up to my last training update*, *while specific details are limited/scarce…*, *not widely available/ documented/disclosed*, *…in the provided/available sources/search results…*, *based on available information*, *maintains a low profile*, *keeps personal details private*, *[claim] should be treated as … rather than …*, and "likely/probably" bridges into invented specifics ("the mountain likely supports…").
 
 The claim that information "is not documented" is itself speculation, and what follows it is usually fabrication.
+
+As of 2026 chatbots also tell the reader how to weigh a source, in a negative parallelism: "claims concerning its miraculous suspension should be treated as religious tradition rather than as an archaeological explanation". It is the didactic disclaimer of section 7 in a new coat.
 
 Instead: Say plainly what you verified and what you don't know, without boilerplate, and never backfill a gap with plausible-sounding guesses.
 
@@ -216,6 +224,8 @@ Instead: Fill every blank with real content or remove the frame. Grep for `[`, `
 ### 5.1 Wrong markup for the medium
 
 Markdown syntax (`**bold**`, `## heading`, `[text](url)`, `---`) in destinations that use another language (wikitext, HTML, plain email, rich-text platforms), or a mix of both from a partial conversion. The double footprint (for example, Markdown headers plus fenced ` ```wikitext ` blocks) is a strong tell. Related: hallucinated wikitext, non-existent templates, plausible-sounding but non-existent categories, and broken syntax generally.
+
+Recent models also drop words or punctuation inside category markup, breaking it visibly. A broken category may be fixed by the time you look, so an audit checks earlier revisions.
 
 Instead: Know the destination's markup and emit only that, syntactically valid. Never invent templates, categories, config keys, or link targets. Verify anything you didn't copy from a real source.
 
@@ -262,7 +272,7 @@ From the page's "edit summaries", "comments", and "submission statements" sectio
 - Overemphasis on citedness: "added sourced content", "with independent sources", instead of saying what the content is.
 - Itemized markup minutiae: naming infobox or reference parameters and templates, with brackets and equals signs, at a granularity new editors never volunteer.
 - Stating the obvious about review feedback: "addressed reviewer feedback", "per reviewer feedback".
-- Deflection when questioned: downplaying AI use while assuring effort and compliance, dismissing concerns as speculation rather than "concrete" evidence, urging critics to focus on the content instead of its origin, and letter openings like "Dear Wikipedia Editorial Team".
+- Deflection when questioned: downplaying AI use while assuring effort and compliance, dismissing concerns as speculation rather than "concrete" evidence, urging critics to focus on the content instead of its origin, openers like "I understand your concern about AI-generated…", and letter openings like "Dear Wikipedia Editorial Team".
 - Assurances in place of evidence.
 
 These are rigid formulae: the more a summary deviates from the pattern, the less likely it is AI, even when long or formal.
@@ -308,7 +318,7 @@ The page lists signals that do NOT indicate AI. Don't contort writing to avoid t
 
 Also from the source's caveats:
 
-- Humans detect AI text barely better than chance (heavy LLM users reach roughly 90%, still with false positives), and automated detectors have real error rates.
+- Humans detect AI text barely better than chance. In a 2025 preprint, expert annotators caught 90% of AI text and misflagged 3.3% of human text; participants who rarely used LLMs were near coin-flip. Automated detectors have real error rates.
 - Human writing is drifting toward LLM style as people absorb it.
 - So in audit mode: report signs and density, state likelihood, never claim certainty.
 - The deeper problems behind the signs (fabrication, unverified claims, promotion) matter more than the surface tells. Fixing only the surface makes text harder to check, not better.
