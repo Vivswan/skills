@@ -87,12 +87,17 @@ describe("vale styles", () => {
       const entries = id.endsWith(".TrailingParticiple")
         ? participles(rule.tokens ?? [])
         : (rule.tokens ?? Object.keys(rule.swap ?? {}));
-      for (const entry of entries)
-        if (!source.includes(lower(entry))) missing.push(`${id}: ${entry}`);
+      for (const entry of entries) if (!listsEntry(source, entry)) missing.push(`${id}: ${entry}`);
     }
     expect(missing).toEqual([]);
   });
 });
+
+/** True when the skill text lists `entry` as a whole word or phrase, so `bust` does not ride on `robust`. */
+function listsEntry(source: string, entry: string): boolean {
+  const escaped = lower(entry).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(source);
+}
 
 /** The trailing-participle rule is one alternation; its members are the words the skill lists. */
 function participles(tokens: string[]): string[] {
