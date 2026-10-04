@@ -77,11 +77,11 @@ repo-platform's `ci.yml` pins the action to a commit on `main` (the comment reco
     mode: structure
 ```
 
-The action sets up its own bun from the `.bun-version` next to `action.yml`, so the caller needs no bun step and no install step.
+The action sets up bun from this repository's own root `.bun-version`, the pin the fleet sync keeps current. The bun pin never comes from the caller's checkout. The caller needs no bun step and no install step.
 
 ## How this repository runs it on itself
 
-- CI: the `validate-skills-action` job in `.github/workflows/checks.yml` runs the composite action on this checkout in `structure` mode, inside the all-green gate. That job exercises the action as repo-platform consumes it, `action.yml` and its own bun pin included.
+- CI: the `validate-skills-action` job in `.github/workflows/checks.yml` runs the composite action on this checkout in `structure` mode, inside the all-green gate. That job exercises the action as repo-platform consumes it, `action.yml` and the root bun pin included.
 - Locally and in the pre-commit hook, `bun run validate` runs the same script with the defaults (`bun run check` includes it):
 
 ```sh
