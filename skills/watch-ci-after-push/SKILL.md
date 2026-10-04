@@ -42,14 +42,22 @@ Still empty after ~15s? That usually means no workflow triggers on this ref. Say
 
 ### 2. Watch in the background
 
-Preferred: spawn a **background subagent** with this brief, then keep working. Never sleep or poll waiting for it. Act on its report when the completion notification arrives:
+Preferred: spawn a **background subagent** with this brief, then keep working while it runs the script in the foreground of its own turn. Never sleep or poll waiting for it. Act on its report when the completion notification arrives:
 
 ```text
-Watch the CI runs for commit <full-sha> on <repo>: run
-"<skill-dir>/scripts/watch-ci.sh <full-sha>" from the repo root and
-report its full output. Exit 0: all green (skipped runs count as
-pass). Say so in one line. Exit 1: some workflow's latest run ended
-with any non-success, non-skipped conclusion (e.g.
+Your ENTIRE value is one report to whoever spawned you: the CI
+verdict for commit <full-sha> on <repo>, as the script's full output
+and its exit code, in every branch (green, red, or tooling trouble).
+A stop without that report is total failure. Procedure: run
+"<skill-dir>/scripts/watch-ci.sh" <full-sha> from the repo root as a
+FOREGROUND shell command inside your own turn, with the longest
+timeout your harness allows for a foreground command (Claude Code
+defaults to a 10-minute cap). If the script is still running when that
+cap hits, run it again: it is idempotent and re-reads the runs.
+Never run it as a background command, and do not end your turn
+until the script has exited. Then report. Exit 0: all green (skipped
+runs count as pass). Say so in one line. Exit 1: some workflow's
+latest run ended with any non-success, non-skipped conclusion (e.g.
 failure/cancelled/timed_out). Include the FAIL lines and the log
 excerpts. Exit 2: discovery or gh itself failed, or the expected
 workflow (default: the one named "CI") never registered a run on
@@ -57,6 +65,8 @@ the SHA. Report that as tooling trouble, NEVER as a red pipeline.
 Report even on success; never go silent. You watch and report ONLY:
 never fix, commit, or push from this role.
 ```
+
+The foreground clause is there because a watcher that backgrounds the script and ends its turn completes with nothing, so the lead receives an empty report and the verdict never arrives.
 
 Fallback without subagents: run the bundled `scripts/watch-ci.sh` as a background shell command. It does discovery, watching, and the failure report in one command.
 
