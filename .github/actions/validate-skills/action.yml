@@ -3,27 +3,31 @@
 # Contract: docs/validate-skills.md.
 
 name: Validate Skills
-description: >-
-  Validates a repository hosting agent skills (Vivswan/skills' validator).
-  Two modes: structure (offline; the plugin manifests parse and reference
-  real skill folders, and every folder under the skills directory satisfies
-  the SKILL.md frontmatter contract) and discovery (runs the real skills CLI,
-  `npx skills add <repo> --list` at a pinned version, against the checkout
-  and asserts every published skill appears in the listing - needs network
-  for the npx download, so callers give it its own job). An empty skills
-  catalog (the starter's seeded state) passes both modes.
+description: |
+  Validates a repository hosting agent skills: its plugin manifests and its skill folders (Vivswan/skills' validator).
+
+  Two modes, chosen by the `mode` input:
+    - structure: offline. The plugin manifests parse and name real skill folders, and every folder under the skills
+      directory satisfies the SKILL.md frontmatter contract.
+    - discovery: runs the real skills CLI at a pinned version against the checkout and asserts every published skill
+      appears in its listing. It downloads the CLI with npx, so give it its own job with network.
+
+  An empty skills catalog passes both modes.
+
+  The caller needs no bun step and no install step: the action sets up bun from its own repository's pin. What each
+  mode checks, line by line, is docs/validate-skills.md.
 
 inputs:
   skills-dir:
-    description: Directory holding the repository's agent skills (relative to the repo root)
+    description: Directory holding the repository's agent skills, relative to the repo root.
     required: false
     default: skills
   plugin-manifest:
-    description: Path of the plugin manifest listing the published skills
+    description: Path of the plugin manifest listing the published skills.
     required: false
     default: .claude-plugin/plugin.json
   mode:
-    description: structure (offline manifest and skill-folder checks) or discovery (npx skills CLI listing)
+    description: structure for the offline manifest and skill-folder checks, or discovery for the skills CLI listing.
     required: false
     default: structure
 

@@ -105,6 +105,23 @@ Facts:
 - **Cut only what the reader does not need.** Implementation detail, repetition, and filler go, while definitions, reasoning, limitations, and next steps stay. A cut is a content change the PR names, and a restructure (below) moves every fact and cuts none.
 - **Open with one orienting sentence** saying what the page is and what it is not, then whatever the reader needs first. Never background.
 
+### Prose inside artifacts
+
+Any description or help text a human reads inside a code artifact is a page under the paragraph, device, and heading rules above. The artifacts:
+
+- a GitHub action or workflow `description`
+- a package manifest's description
+- CLI help text
+- issue and PR templates
+
+A skill's frontmatter description is excluded: it is a trigger, owned by the `/craft-skills-and-memories` skill.
+
+The artifact-specific facts:
+
+- **An action description** is a literal block (`|`) whose first line orients.
+- **Input and output descriptions** are one sentence each.
+- **Never `${{` inside a description.** GitHub evaluates it when the file loads, and it has broken a fleet's actions at load.
+
 ## The probe
 
 The probe reports the two readings a reviewer otherwise takes by eye. `scripts/docs-probe.mts` ships with this skill and reads a page's prose units, the paragraphs and list items.
@@ -166,5 +183,6 @@ The page kind with the most to rot has its own recipe in `references/architectur
 - A reshaped page that lost a fact, added one, or dropped a heading anchor another page links to.
 - An architecture page whose module map shows an edge the code does not draw.
 - A box naming a symbol its file does not export, or a concept diagram with no `Demonstrated by:` line.
+- Prose inside a code artifact (an action or workflow `description`, a manifest description, CLI help, an issue or PR template) that breaks the page rules, an action description that is not a literal block opened by one orienting sentence or gives an input or output more than one sentence, or `${{` inside a description.
 - Wall-of-text prose anywhere a human skims: docs, reports, PR text (the `/pr-and-issue-discipline` skill's Readability rules own the PR body).
 
