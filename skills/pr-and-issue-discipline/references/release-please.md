@@ -8,7 +8,9 @@ The headline rule is in `SKILL.md` (PR Bodies, "Release-please reads the body");
 - **One `BREAKING CHANGE` note per commit** (the last footer wins): several breaks go into one footer whose value spans several lines, one break per line, or into one `BEGIN_NESTED_COMMIT` / `END_NESTED_COMMIT` block per break.
 - **A bad block is repaired after the merge** by editing the merged PR's body; release-please re-reads it on its next run, and the dropped commit returns to the release.
 
-The override changes release-please's parsed message, not the git commit: a repository whose release tool reads the squash commit itself keeps its footers in that commit message, under its own rules. The block is written for a tool, so it is the last element inside the Technical details section; release-please matches the markers inside a `<details>` element. In a release-please repository, a PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) closes its details section with:
+The override changes release-please's parsed message, not the git commit: a repository whose release tool reads the squash commit itself keeps its footers in that commit message, under its own rules.
+
+The block is written for a tool, so it is the last element inside the Technical details section; release-please matches the markers inside a `<details>` element. In a release-please repository, a PR whose merge must carry Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) closes its details section with:
 
 ```text
 BEGIN_COMMIT_OVERRIDE

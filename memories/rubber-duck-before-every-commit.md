@@ -12,4 +12,8 @@ Every commit and every merge, no matter how small, is preceded by a cross-model 
 
 **Why:** The failure mode is scope creep on a one-time allowance: a review skipped for a "trivial" follow-up commit ships exactly the defect the review existed to catch, and a pass recorded against one gate gets silently reused to wave a neighboring gate through. Trivial-looking diffs are where unreviewed breakage hides, because nothing else is looking at them.
 
-**How to apply:** Run the review before the commit, scoped to the staged diff; after any fix round, re-run it on the new final content - a review of a superseded state counts for nothing. At merge time, the review scopes to the full branch diff. A waiver is never self-granted: only the gate's owner can grant one, it is recorded, and it is consumed by that single gate. See [[fire-relevant-skills-and-memories]] for the checkpoint that makes this rule fire, and [[gate-exit-conditions-the-merge]] for how the landing command itself is issued.
+**How to apply:** Run the review before the commit, scoped to the staged diff; after any fix round, re-run it on the new final content - a review of a superseded state counts for nothing. At merge time, the review scopes to the full branch diff.
+
+A waiver is never self-granted: only the gate's owner can grant one, it is recorded, and it is consumed by that single gate.
+
+See [[fire-relevant-skills-and-memories]] for the checkpoint that makes this rule fire, and [[gate-exit-conditions-the-merge]] for how the landing command itself is issued.

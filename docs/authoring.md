@@ -41,7 +41,7 @@ This keeps the repo compatible with:
 9. Add the skill to the `skill` dropdown in [`.github/ISSUE_TEMPLATE/bug_report.yml`](../.github/ISSUE_TEMPLATE/bug_report.yml).
 10. Ship a byte-identical copy of the root `LICENSE.md` in the skill folder, set frontmatter `metadata.author` to the plugin author's first name, and never set `metadata.internal` or add a `metadata.json` (the install CLI drops both silently).
 11. Explicit-invocation-only skills set `disable-model-invocation: true` in the frontmatter AND `policy.allow_implicit_invocation: false` in `agents/openai.yaml`; the README entry then goes under "Invoked by you", otherwise under "Automatic".
-12. Commit; the pre-commit hook's `bun run check:staged` runs the validator and smoke test, which enforce every item above plus frontmatter limits (`name` <= 64 characters, `description` <= 1024), the codex manifest's `homepage` and `keywords`, and `interface.short_description` at 25 to 64 characters. It also runs the docs probe: paragraphs and list items in first-party `SKILL.md` files and the template are capped at 70 words.
+12. Commit; the pre-commit hook's `bun run check:staged` runs the validator and smoke test, which enforce every item above plus frontmatter limits (`name` <= 64 characters, `description` <= 1024), the codex manifest's `homepage` and `keywords`, and `interface.short_description` at 25 to 64 characters. It also runs the docs probe: paragraphs and list items in first-party `SKILL.md` and `references/*.md` files and the template are capped at 70 words.
 
 ## Xeno Skills
 
