@@ -1,0 +1,14 @@
+# The /unslop skill's filler phrases and fancy synonyms, rules 23 and 31, each with the plain word that skill gives.
+extends: substitution
+message: "Write '%s' for '%s' (unslop rules 23 and 31)"
+level: error
+ignorecase: true
+swap:
+  in order to: to
+  due to the fact that: because
+  it is important to note that: (delete it)
+  utilize: use
+  leverage: use
+  facilitate: help
+  numerous: many
+  in the event that: if

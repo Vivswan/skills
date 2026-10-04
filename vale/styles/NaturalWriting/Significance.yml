@@ -1,0 +1,30 @@
+# Inflated significance, the /natural-writing skill's list: a phrase that claims importance instead of stating a checkable fact.
+extends: existence
+message: "'%s' claims significance. State the fact instead"
+level: error
+ignorecase: true
+tokens:
+  - is a testament
+  - is a reminder
+  - vital role
+  - significant role
+  - crucial role
+  - pivotal role
+  - pivotal moment
+  - key moment
+  - underscores its importance
+  - highlights its significance
+  - reflects broader
+  - symbolizing its ongoing
+  - enduring legacy
+  - lasting legacy
+  - setting the stage for
+  - represents a shift
+  - marks a shift
+  - key turning point
+  - evolving landscape
+  - focal point
+  - indelible mark
+  - deeply rooted
+  - generated debate
+  - prompted broader reflection
