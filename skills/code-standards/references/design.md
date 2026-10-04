@@ -12,16 +12,16 @@ Why: an instance fix leaves the failure class alive, so the same toil returns on
 
 How to apply:
 
-- When a failure has recurred, or has a standing cause you can trigger (the `/never-twice` skill's floor), pause the point fix and ask what mechanism would make the whole class impossible or self-healing. Candidates: a workflow that repairs it automatically, a test or tripwire that fails at the source, a type that forbids the state, a generator that derives the repeated artifact.
+- When a failure passes the judgment of the `/never-twice` skill's floor, pause the point fix and ask what mechanism would make the whole class impossible or self-healing. Candidates: a workflow that repairs it automatically, a test or tripwire that fails at the source, a type that forbids the state, a generator that derives the repeated artifact.
 - Prefer the mechanism even when it costs more than the point fix.
 - Still apply the point fix when something is bleeding, but do not stop there.
 
-### Guard recurring problems with tests
+### Guard what passes the floor
 
-The recurrence trigger has two forms:
+The judgment of the `/never-twice` skill's floor, not a second occurrence, decides when this applies. Once a failure passes it:
 
-- **It already recurred**: the same problem showing up a second or third time is proof the class is alive. The next fix ships with the highest reachable rung (a type that forbids the state, a test, a tripwire, a CI check) so it either never happens again or is caught early when it does.
-- **It reproduces on demand**: a standing cause you can trigger, as the `/never-twice` skill's floor defines it, so do not wait for the second occurrence. Take the highest reachable rung now: a type or structure that makes the state impossible, else a test, tripwire, or pipeline fix, else a written rule recorded as debt. Foreseeing recurrence with no reproduction is a record, not a guard, per that floor.
+- **Take the highest reachable rung now**: a type or structure that makes the state impossible, else a test, tripwire, or pipeline fix, else a written rule recorded as debt. Do not wait for a second occurrence; one is evidence for the judgment, not a trigger.
+- **Put the guard where the condition lives,** as the `/never-twice` floor's constraint says; its own pipeline or process carries the check.
 
 When the fix is outside your reach (another repository, CI you cannot edit, a process the user owns), propose it concretely. Name the pipeline that needs fixing and how to fix it, rather than silently absorbing the recurrence.
 
