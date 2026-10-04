@@ -65,16 +65,22 @@ These are devices that carried real pages well, with the content each fits. A pa
 | how a change reads | a before block and an after block | the comparison is the visualization |
 | plain facts | bullets, each opened by a bold lead-in that names the fact | the reader scans the lead-ins and stops where it matters |
 
+A change of device must show the content faster than the device it replaces, or the device stays. A table earns its place only when the items share two or more fields a reader compares down a column. A one-line-per-item list turned into a name-and-description table gained nothing and goes back.
+
+Monotony is a wall of its own: table after table, or bullet after bullet, down a page reads like a spreadsheet. Treat it as a signal to regroup or merge the content, with any device change still subject to the gain test above. Bullets that stay the fastest carrier for every section stay.
+
 Four rules hold across every device:
 
-- **Every device is a choice.** A table, a bullet list, a link, or a diagram appears because it shows this content faster than prose would. It never appears because the previous section had one. The test is the skim. A reader who takes in only the headings, the first sentences, the tables, the diagrams, the captured blocks, and the emphasized text gets the whole story.
-- **One carrier per point.** A diagram followed by a paragraph re-explaining it means the diagram failed. Fix the diagram or drop the paragraph.
+- **Every device is a choice.** A table, a bullet list, a link, or a diagram appears because it shows this content faster than prose would. It never appears because the previous section had one. The test is the skim (the two layers, below).
+- **One carrier per point.** A diagram followed by a paragraph re-explaining it means the diagram failed, so fix the diagram or drop the paragraph. Never carry the same content as a table and again as prose or a diagram. A diagram's accessible text alternative (alt text, or a one-sentence equivalent for screen readers) is not a second carrier.
 - **A bullet is for a list.** Bullets carry items that are a list or a checklist. A line of reasoning stays prose. Turning every sentence into a bullet hides which ones are the same kind of thing.
 - **Break a convention when the content reads better without it.** Troubleshooting pages that dropped their tables for the three-line triple read better than the tables did. Say why in the review, not in the page.
 
 ## Write for the reader who skims
 
 Every reader of these pages skims, then reads one section closely. Both readers are served by the same rules, and the page holds enough detail to be useful without becoming exhaustive.
+
+**Two layers.** The top layer (headings, figures, diagrams, captured blocks, the shape of tables, first sentences, emphasized text) carries the whole sense of the page on its own. The detail layer (paragraph bodies, table cells) is what a reader opens for more. Every device choice above serves the top layer.
 
 Shape:
 
@@ -145,15 +151,15 @@ The page kind with the most to rot has its own recipe in `references/architectur
 
 - A paragraph or list item over 70 words (run `docs-probe.mts` rather than counting by eye), or a paragraph over three sentences.
 - Prose that describes what a device would show in one glance: a command without its output, a rule the reader must reconstruct from a paragraph, a break whose observable symptom is not stated.
-- A device followed by a paragraph re-explaining it, or a bullet under a diagram that restates an arrow.
+- A device change with no gain (a one-line list turned into a name-and-description table), device monotony where regrouping or merging the content would have read faster (table after table, bullet after bullet), or content carried twice (a paragraph re-explaining a diagram, a bullet restating an arrow, but not a diagram's alt text or one-sentence screen-reader equivalent).
 - A fact restated on a second page where a link to its owner would do.
 - An internal link whose target or anchor does not resolve.
 - A links or navigation section on a page that is not an index.
 - A heading naming the reader's level instead of the content.
 - Headings that do not outline the page when read in sequence, or headings on a page under about 500 words.
 - A section whose key point sits after the setup, or a list nested inside a list.
-- Bullets carrying a line of reasoning that should be prose, or a device used because the last section had one.
-- A page whose headings, first sentences, tables, diagrams, captured blocks, and emphasized text do not carry the story on their own.
+- Bullets carrying a line of reasoning that should be prose.
+- A page whose top layer (headings, figures, diagrams, captured blocks, the shape of tables, first sentences, emphasized text) does not carry the story on its own.
 - An assumption, a supplied claim, a risk, a recommendation, or an unverified reading presented as a confirmed fact.
 - A shortened page that dropped a definition, a reason, a limitation, or a next step the reader needed.
 - A path, link, symbol, or check the page names that does not exist (the probe for paths and links, `check-architecture-page.mts` for diagram boxes).

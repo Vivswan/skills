@@ -15,6 +15,8 @@ The test for whatever ships: if a new member of the failure class appears tomorr
 
 A runtime guard that fails loudly but late, after shipping, is an instance fix, not a rung.
 
+The ladder stands on a floor: a failure that has neither recurred nor can be reproduced on demand is repaired and recorded, never guarded against.
+
 ## Install
 
 From the collection:
@@ -31,6 +33,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/never-twice -g
 
 ## What It Does
 
+- Starts at a failure that has recurred or reproduces on demand. One seen once that cannot be reproduced is repaired and recorded (where seen, what observed), never guarded against
 - Names the failure class in one sentence. If it cannot be named, it is not a class yet
 - Finds the substrate that admits new members: convention-synced artifacts, strings where closed sets belong, state kept in prose, hand-typed rituals
 - Climbs as close to rung 1 as the task allows and ships it. A lower-rung fallback ships only with the more durable rung's gap named and tracked

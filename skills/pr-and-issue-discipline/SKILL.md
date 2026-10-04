@@ -53,8 +53,7 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 
 These rules bind PR bodies and the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
 
-- **Pick the device from the content.** Paragraphs, bullets, tables, and fenced blocks mix. Each appears because it shows this content faster, never because the last section had one.
-- **A bullet is for a list.** Parallel items, steps, options, findings. A line of reasoning stays prose. Turning every sentence into a bullet hides which ones are the same kind of thing.
+- **Paragraphs, bullets, tables, and fenced blocks mix.** Which device carries which content is the `/docs-discipline` skill's rule set (pick the device from the content, a bullet is for a list, no gainless change, monotony as a signal to regroup, one carrier per point), applied to the PR body unchanged.
 - **Short paragraphs are fine.** One idea per paragraph, one to three sentences, under 70 words. Short sentences, about 20 words, one idea each.
 - **No semicolon chains.** A semicolon joining clauses means two sentences were forced into one. Split them.
 - **Bold lead-ins on bullets.** The bold words name the point so a skim reads the lead-ins alone.
@@ -188,7 +187,7 @@ For every form:
 
 - Blocks show, prose tells. Where behavior is observable, the opening block is an actual command and its actual output, complete enough to stand alone; never manufacture output or add it only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
 - `## How` is 3 to 6 bullets by default, more when the mechanism has more moving parts. One small diagram or table may replace them where it explains the mechanism faster. Each bullet is one sentence of about 15 words with a bold lead-in.
-- One carrier per point: a diagram followed by a bullet re-explaining it means the diagram failed. Never a `## How` paragraph per review round.
+- Never a `## How` paragraph per review round.
 - `## Proof` is 2 to 4 bullets by default, naming focused behavioral tests or stable checks, with the latest totals where numbers exist. Never one line per review round ("round 3: 20 passed", "round 4: 83 passed"): a new run overwrites the old number. Do not turn it into transient CI, approval, or review status.
 - Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above.
 - The diff carries the detail. Part one never narrates the implementation process, reduction history, transient status, future work, or the entire diff. It carries line counts only when they contradict the stated purpose, and then the `/pr-landing-discipline` skill's line accounting says when and the reason comes with them.
