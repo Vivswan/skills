@@ -46,7 +46,7 @@
  *     grep terms vs the word list, the reviewer preamble
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { validateSkillDir } from "../.github/actions/validate-skills/validate_skills";
 import type { Frontmatter, Marketplace, RootManifest } from "./lib";
@@ -631,12 +631,12 @@ function checkExternalPlugin(marketplace: Marketplace, xenoNames: ReadonlySet<st
 }
 
 /**
- * Every folder under xeno/ is a pinned copy: in sources.yml, indexed in the group README, and held to the same
+ * Every folder under xeno/ is a pinned copy: in sources.yaml, indexed in the group README, and held to the same
  * per-folder contract the action applies to skills/ (a vendored copy carries only what its upstream folder carries,
  * so this catalog's own extras, README.md and the codex manifest, are not required of it).
  */
 function checkExternalSources(xenoDirs: readonly string[]): void {
-  const sourcesPath = join(XENO_DIR, "sources.yml");
+  const sourcesPath = join(XENO_DIR, "sources.yaml");
   if (xenoDirs.length === 0 && !existsSync(sourcesPath)) return;
   requireFile(sourcesPath);
   const indexPath = join(XENO_DIR, "README.md");
@@ -663,6 +663,16 @@ function checkExternalSources(xenoDirs: readonly string[]): void {
     }
     const errors = validateSkillDir(dir, rel(dir));
     if (errors.length > 0) fail(errors.join("\n"));
+    // A declared own path that is not there is a stale claim: the sync would keep nothing, and the check would hide a hole.
+    for (const own of sources[name]?.own ?? []) {
+      const target = join(dir, own);
+      const stat = lstatSync(target, { throwIfNoEntry: false });
+      const wanted = own.endsWith("/") ? stat?.isDirectory() : stat?.isFile();
+      if (!wanted)
+        fail(
+          `${rel(sourcesPath)}: ${name}.own names ${own}, which is not a ${own.endsWith("/") ? "directory" : "file"} in ${rel(dir)}/`,
+        );
+    }
     if (!indexText.includes(`[\`${name}\`](./${name}/)`)) {
       fail(`${rel(indexPath)}: the table is missing a row for '${name}' linking ./${name}/`);
     }

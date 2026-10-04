@@ -70,7 +70,11 @@ type Fixture = {
 // A codex home whose chrome cache, `latest` link, and config still describe
 // OLD_VERSION while the app bundle ships NEW_VERSION, with no launcher yet.
 async function staleFixture(
-  options: { withConfig?: boolean; pinnedEntry?: "directory" | "link-to-other-bundle" } = {},
+  options: {
+    withConfig?: boolean;
+    pinnedEntry?: "directory" | "link-to-other-bundle";
+    cliRelativePath?: string;
+  } = {},
 ): Promise<Fixture> {
   // realpath: the preflight canonicalizes the plugin dir, so expected config
   // values must be built from the same canonical form (macOS tmp is a symlink).
@@ -84,7 +88,7 @@ async function staleFixture(
   const pluginDir = path.join(pluginsDir, "chrome");
   const browserSourceDir = path.join(pluginsDir, "browser");
 
-  await writeExecutable(path.join(resources, "codex"), "#!/bin/sh\n");
+  await writeExecutable(path.join(resources, options.cliRelativePath ?? "codex"), "#!/bin/sh\n");
   await writeChromePlugin(pluginDir, NEW_VERSION, NEW_CLIENT);
   await fs.mkdir(path.join(browserSourceDir, "scripts"), { recursive: true });
   await fs.writeFile(path.join(browserSourceDir, "scripts", "browser-client.mjs"), NEW_CLIENT);
@@ -209,72 +213,75 @@ async function snapshot(fixture: Fixture) {
   };
 }
 
-test("sync repairs a stale codex home and --check then passes", async () => {
-  const fixture = await staleFixture();
-  const sync = await runPreflight(fixture);
-  const after = await snapshot(fixture);
-  const check = await runPreflight(fixture, "--check");
-  const realCli = path.join(fixture.resources, "codex");
+test.each(["codex", "codex-cli/bin/codex"])(
+  "sync resolves the app CLI at %s and preserves the full repaired state",
+  async (cliRelativePath) => {
+    const fixture = await staleFixture({ cliRelativePath });
+    const sync = await runPreflight(fixture);
+    const after = await snapshot(fixture);
+    const check = await runPreflight(fixture, "--check");
+    const realCli = path.join(fixture.resources, cliRelativePath);
 
-  expect({ sync, after, check }).toEqual({
-    sync: {
-      exitCode: 0,
-      stderr: "",
-      stdout: [
-        "Chrome plugin preflight synchronized.",
-        `App bundle: ${NEW_VERSION}`,
-        `Latest: ${await fs.realpath(fixture.pluginDir)}`,
-        `Pinned cache entries: ${OLD_VERSION}`,
-        `Browser companion caches: ${fixture.browserCacheRoot}`,
-        "Browser auth: process-only OpenAI provider override installed; main provider unchanged.",
-        "",
-      ].join("\n"),
-    },
-    after: {
-      configMode: 0o600,
-      config: {
-        model_provider: "custom",
-        mcp_servers: {
-          other: {
-            env: { CODEX_CLI_PATH: "/other/cli", BROWSER_USE_CODEX_APP_VERSION: OLD_VERSION },
-          },
-          node_repl: {
-            env: {
-              NODE_REPL_TRUSTED_CODE_PATHS: [
-                fixture.home,
-                path.join(fixture.home, "plugins"),
-                path.join(fixture.resources, "cua_node/lib/node_modules"),
-              ].join(":"),
-              CODEX_HOME: fixture.home,
-              BROWSER_USE_CODEX_APP_VERSION: NEW_VERSION,
-              CODEX_CLI_PATH: path.join(fixture.home, "scripts", "browser-codex"),
+    expect({ sync, after, check }).toEqual({
+      sync: {
+        exitCode: 0,
+        stderr: "",
+        stdout: [
+          "Chrome plugin preflight synchronized.",
+          `App bundle: ${NEW_VERSION}`,
+          `Latest: ${await fs.realpath(fixture.pluginDir)}`,
+          `Pinned cache entries: ${OLD_VERSION}`,
+          `Browser companion caches: ${fixture.browserCacheRoot}`,
+          "Browser auth: process-only OpenAI provider override installed; main provider unchanged.",
+          "",
+        ].join("\n"),
+      },
+      after: {
+        configMode: 0o600,
+        config: {
+          model_provider: "custom",
+          mcp_servers: {
+            other: {
+              env: { CODEX_CLI_PATH: "/other/cli", BROWSER_USE_CODEX_APP_VERSION: OLD_VERSION },
+            },
+            node_repl: {
+              env: {
+                NODE_REPL_TRUSTED_CODE_PATHS: [
+                  fixture.home,
+                  path.join(fixture.home, "plugins"),
+                  path.join(fixture.resources, "cua_node/lib/node_modules"),
+                ].join(":"),
+                CODEX_HOME: fixture.home,
+                BROWSER_USE_CODEX_APP_VERSION: NEW_VERSION,
+                CODEX_CLI_PATH: path.join(fixture.home, "scripts", "browser-codex"),
+              },
             },
           },
+          shell_environment_policy: {
+            set: { NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: sha256(NEW_CLIENT) },
+          },
         },
-        shell_environment_policy: {
-          set: { NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: sha256(NEW_CLIENT) },
-        },
+        launcher: browserAuthLauncher(realCli),
+        launcherMode: 0o700,
+        chromeLatest: await fs.realpath(fixture.pluginDir),
+        chromeNewEntry: await fs.realpath(fixture.pluginDir),
+        chromeOldEntryClient: NEW_CLIENT,
+        chromeOldEntryVersion: NEW_VERSION,
+        rollbackClient: OLD_CLIENT,
+        browserLatest: await fs.realpath(fixture.browserSourceDir),
+        browserEntryClient: NEW_CLIENT,
       },
-      launcher: browserAuthLauncher(realCli),
-      launcherMode: 0o700,
-      chromeLatest: await fs.realpath(fixture.pluginDir),
-      chromeNewEntry: await fs.realpath(fixture.pluginDir),
-      chromeOldEntryClient: NEW_CLIENT,
-      chromeOldEntryVersion: NEW_VERSION,
-      rollbackClient: OLD_CLIENT,
-      browserLatest: await fs.realpath(fixture.browserSourceDir),
-      browserEntryClient: NEW_CLIENT,
-    },
-    check: {
-      exitCode: 0,
-      stderr: "",
-      // The sync created the NEW_VERSION link, so the check now lists it too.
-      stdout: sync.stdout
-        .replace("synchronized", "verified")
-        .replace(`entries: ${OLD_VERSION}`, `entries: ${OLD_VERSION}, ${NEW_VERSION}`),
-    },
-  });
-});
+      check: {
+        exitCode: 0,
+        stderr: "",
+        // The sync created the NEW_VERSION link, so the check now lists it too.
+        stdout: sync.stdout
+          .replace("synchronized", "verified")
+          .replace(`entries: ${OLD_VERSION}`, `entries: ${OLD_VERSION}, ${NEW_VERSION}`),
+      },
+    });
+  },
+);
 
 // Both roots are persisted (symlink targets, launcher path, config values):
 // given relative to the caller's cwd they must yield the same absolute paths

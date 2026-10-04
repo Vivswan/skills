@@ -13,6 +13,7 @@ import {
 import { join } from "node:path";
 import {
   check,
+  isOwn,
   loadSources,
   parseSources,
   renderSources,
@@ -336,7 +337,7 @@ describe("changing an override is not a hand edit", () => {
   });
 });
 
-describe("sources.yml round-trips through Bun.YAML", () => {
+describe("sources.yaml round-trips through Bun.YAML", () => {
   test("every string the parser accepts comes back as the same string, and an empty registry is valid", () => {
     // Bun.YAML reads a bare 1e3 as a number and a bare @foo as an error, so the
     // renderer must quote them; a comment-only file parses to null.
@@ -409,18 +410,18 @@ describe("Copilot round on PR 136", () => {
   test("a symlinked registry file is refused on read and on write", () => {
     const dir = temp.dir("sync-xeno-sources-");
     writeFileSync(join(dir, "real.yml"), "");
-    symlinkSync(join(dir, "real.yml"), join(dir, "sources.yml"));
-    expect(() => loadSources(join(dir, "sources.yml"))).toThrow(
+    symlinkSync(join(dir, "real.yml"), join(dir, "sources.yaml"));
+    expect(() => loadSources(join(dir, "sources.yaml"))).toThrow(
       /a symlink; the registry is a plain file/,
     );
-    expect(() => writeSources({}, join(dir, "sources.yml"))).toThrow(
+    expect(() => writeSources({}, join(dir, "sources.yaml"))).toThrow(
       /a symlink; the registry is a plain file/,
     );
   });
 
-  test("a pin move keeps the inline comments and styles of sources.yml", () => {
+  test("a pin move keeps the inline comments and styles of sources.yaml", () => {
     const dir = temp.dir("sync-xeno-sources-");
-    const path = join(dir, "sources.yml");
+    const path = join(dir, "sources.yaml");
     writeFileSync(
       path,
       `# header\nalpha:\n  url: u # reviewed by the owner\n  path: p\n  commit: ${"a".repeat(40)} # pinned 2026-09-14\n  license: "MIT"\n`,
@@ -577,5 +578,167 @@ describe("license_file", () => {
     const declared = { alpha: { ...(synced.alpha as Source), licenseFile: "NOTICE" } };
     expect(() => check(declared, xeno)).toThrow(/license_file NOTICE does not exist/);
     expect(() => update(declared, xeno)).toThrow(/license_file NOTICE does not exist/);
+  });
+});
+
+describe("own paths: this repository's files inside a copy", () => {
+  test("a declared own path survives a rewrite and is not drift; an undeclared extra is still a hand edit", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const first = update({ alpha: source(up.url, "0".repeat(40), { own: ["vale/"] }) }, xeno);
+    const pin = first.sources.alpha?.commit.slice(0, 7);
+    mkdirSync(join(xeno, "alpha", "vale"), { recursive: true });
+    writeFileSync(join(xeno, "alpha", "vale", "Rule.yml"), "extends: existence\n");
+    chmodSync(join(xeno, "alpha", "vale", "Rule.yml"), 0o755);
+    expect(check(first.sources, xeno)).toEqual([
+      { name: "alpha", status: "current", detail: `at ${pin}` },
+    ]);
+    const head = commitUpstream(
+      up.dir,
+      { "plugins/skills/alpha/SKILL.md": SKILL.replace("body", "new body") },
+      "two",
+    );
+    const second = update(first.sources, xeno);
+    expect([
+      second.reports,
+      second.sources.alpha?.commit,
+      readFileSync(join(xeno, "alpha", "SKILL.md"), "utf8"),
+      readFileSync(join(xeno, "alpha", "vale", "Rule.yml"), "utf8"),
+      (statSync(join(xeno, "alpha", "vale", "Rule.yml")).mode & 0o111) !== 0,
+    ]).toEqual([
+      [
+        {
+          name: "alpha",
+          status: "updated",
+          detail: `${pin} -> ${head.slice(0, 7)} on the default branch`,
+        },
+      ],
+      head,
+      SKILL.replace("body", "new body"),
+      "extends: existence\n",
+      true,
+    ]);
+    expect(check(second.sources, xeno)).toEqual([
+      { name: "alpha", status: "current", detail: `at ${head.slice(0, 7)}` },
+    ]);
+    writeFileSync(join(xeno, "alpha", "stray.yml"), "mine\n");
+    expect(check(second.sources, xeno)).toEqual([
+      { name: "alpha", status: "modified", detail: `differs from ${head.slice(0, 7)}: stray.yml` },
+    ]);
+    expect(() => update(second.sources, xeno)).toThrow(/stray\.yml.*never overwrites a hand edit/s);
+  });
+
+  test("an empty own directory survives a rewrite", () => {
+    const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
+    const xeno = temp.dir("sync-xeno-copy-");
+    const first = update({ alpha: source(up.url, "0".repeat(40), { own: ["vale/"] }) }, xeno);
+    mkdirSync(join(xeno, "alpha", "vale"), { recursive: true });
+    commitUpstream(
+      up.dir,
+      { "plugins/skills/alpha/SKILL.md": SKILL.replace("body", "two") },
+      "two",
+    );
+    const second = update(first.sources, xeno);
+    expect([
+      second.reports[0]?.status,
+      statSync(join(xeno, "alpha", "vale")).isDirectory(),
+    ]).toEqual(["updated", true]);
+  });
+
+  // The guard runs before the first byte is removed, so a collision never costs an owned file.
+  test.each([
+    [
+      "a file where the own directory stands",
+      ["vale/"],
+      "plugins/skills/alpha/vale",
+      /carries vale, which collides with a path own claims/,
+    ],
+    [
+      "a file under the own directory",
+      ["vale/"],
+      "plugins/skills/alpha/vale/Rule.yml",
+      /carries vale\/Rule\.yml, which collides with a path own claims/,
+    ],
+    [
+      "a file where an ancestor of the own directory stands",
+      ["vale/local/"],
+      "plugins/skills/alpha/vale",
+      /carries vale, which collides with a path own claims/,
+    ],
+    [
+      "a directory where the own file stands",
+      ["NOTICE.local"],
+      "plugins/skills/alpha/NOTICE.local/readme.md",
+      /carries NOTICE\.local\/readme\.md, which collides with a path own claims/,
+    ],
+  ])(
+    "upstream adding %s stops the sync and the check before anything is deleted",
+    (_name, own, added, message) => {
+      const up = upstream({ "plugins/skills/alpha/SKILL.md": SKILL });
+      const xeno = temp.dir("sync-xeno-copy-");
+      const first = update({ alpha: source(up.url, "0".repeat(40), { own }) }, xeno);
+      const entry = own[0] ?? "";
+      const ownFile = entry.endsWith("/")
+        ? join(xeno, "alpha", entry, "Rule.yml")
+        : join(xeno, "alpha", entry);
+      mkdirSync(join(ownFile, ".."), { recursive: true });
+      writeFileSync(ownFile, "ours\n");
+      commitUpstream(up.dir, { [added]: "theirs\n" }, "upstream collides");
+      expect(() => update(first.sources, xeno)).toThrow(message);
+      expect(() => check(first.sources, xeno)).toThrow(message);
+      expect(readFileSync(ownFile, "utf8")).toBe("ours\n");
+    },
+  );
+
+  test.each([
+    ["an empty list", "own: []", /non-empty list/],
+    ["SKILL.md", "own: [SKILL.md]", /cannot claim SKILL.md/],
+    ["an absolute path", "own: [/vale/]", /folder-relative/],
+    ["a parent segment", "own: [../vale/]", /folder-relative/],
+    ["a glob", "own: ['vale/*.yml']", /folder-relative/],
+    [
+      "a path listed twice",
+      "own: [vale/, vale/]",
+      /more than once, or together with a path under it/,
+    ],
+    [
+      "a file under a listed directory",
+      "own: [vale/, vale/Rule.yml]",
+      /more than once, or together with a path under it/,
+    ],
+    [
+      "a name spelled as file and as directory",
+      "own: [vale, vale/]",
+      /more than once, or together with a path under it/,
+    ],
+    [
+      "a path under a name spelled as a file",
+      "own: [vale, vale/Rule.yml]",
+      /more than once, or together with a path under it/,
+    ],
+    [
+      "the license file",
+      "license_file: LICENSE\n  own: [LICENSE]",
+      /cannot claim the license file/,
+    ],
+  ])("own with %s is refused", (_name, line, message) => {
+    const text = `alpha:\n  url: u\n  path: p\n  commit: ${"a".repeat(40)}\n  license: MIT\n  ${line}\n`;
+    expect(() => parseSources(text)).toThrow(message);
+  });
+
+  test("isOwn matches a file by name and a directory by prefix, and round-trips through the registry", () => {
+    const own = { own: ["vale/", "NOTICE.local"] };
+    expect(
+      [
+        "vale/Rule.yml",
+        "vale/deep/x.yml",
+        "NOTICE.local",
+        "valet.md",
+        "NOTICE.local.bak",
+        "SKILL.md",
+      ].map((p) => isOwn(own, p)),
+    ).toEqual([true, true, true, false, false, false]);
+    const text = renderSources({ alpha: source("u", "a".repeat(40), { own: own.own }) });
+    expect(parseSources(text).alpha?.own).toEqual(["vale/", "NOTICE.local"]);
   });
 });

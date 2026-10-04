@@ -133,7 +133,11 @@ async function sha256(filePath: string): Promise<string> {
 }
 
 async function syncNodeReplBrowserTrust(sourceDir: string, version: string): Promise<void> {
-  const realCliPath = path.resolve(sourceDir, "../../../..", "codex");
+  const resourcesDir = path.resolve(sourceDir, "../../../..");
+  const packagedCliPath = path.join(resourcesDir, "codex-cli", "bin", "codex");
+  const realCliPath = (await exists(packagedCliPath))
+    ? packagedCliPath
+    : path.join(resourcesDir, "codex");
   await fs.access(realCliPath, fsConstants.X_OK);
   const launcherSource = browserAuthLauncher(realCliPath);
   const clientHash = await sha256(path.join(sourceDir, "scripts", "browser-client.mjs"));

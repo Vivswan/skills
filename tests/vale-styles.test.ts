@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { ROOT } from "../scripts/lib";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { ROOT, walkFiles } from "../scripts/lib";
 
-const STYLES = join(ROOT, "vale", "styles");
+/** Vale reads every *.yml under the two folders a consumer names as styles, so every one of them must be a rule. */
+const STYLE_ROOTS = ["skills", "xeno"];
 
 type Rule = {
   extends: string;
@@ -13,53 +14,81 @@ type Rule = {
   swap?: Record<string, string>;
 };
 
-function rules(): { style: string; name: string; rule: Rule }[] {
-  const out: { style: string; name: string; rule: Rule }[] = [];
-  for (const style of readdirSync(STYLES).sort()) {
-    for (const file of readdirSync(join(STYLES, style)).sort()) {
-      const rule = Bun.YAML.parse(readFileSync(join(STYLES, style, file), "utf8")) as Rule;
-      out.push({ style, name: file.replace(/\.yml$/, ""), rule });
-    }
-  }
-  return out;
+function ruleFiles(): string[] {
+  return STYLE_ROOTS.flatMap((top) =>
+    readdirSync(join(ROOT, top), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .flatMap((entry) => {
+        const dir = join(ROOT, top, entry.name, "vale");
+        return statSync(dir, { throwIfNoEntry: false })?.isDirectory()
+          ? readdirSync(dir)
+              .filter((file) => file.endsWith(".yml"))
+              .map((file) => join(dir, file))
+          : [];
+      }),
+  ).sort();
+}
+
+/** The id Vale gives a rule: the path from the styles root with slashes as dots and no extension. */
+const ruleId = (file: string) =>
+  relative(ROOT, file)
+    .replace(/\.yml$/, "")
+    .replaceAll("/", ".");
+
+function rules(): { id: string; skill: string; rule: Rule }[] {
+  return ruleFiles().map((file) => ({
+    id: ruleId(file),
+    skill: relative(ROOT, file).split("/")[1] ?? "",
+    rule: Bun.YAML.parse(readFileSync(file, "utf8")) as Rule,
+  }));
 }
 
 const lower = (text: string) => text.toLowerCase();
 
 describe("vale styles", () => {
-  // Two styles naming one word report every hit twice; nothing in Vale forbids it.
+  // Vale parses every .yml under a style folder as a rule; a stray one (a registry, a config) breaks every consumer.
+  test("the only .yml files under skills/ and xeno/ are Vale rules in a vale/ folder", () => {
+    const stray = STYLE_ROOTS.flatMap((top) => walkFiles(join(ROOT, top)))
+      .filter((file) => file.endsWith(".yml"))
+      .map((file) => relative(ROOT, file))
+      .filter((file) => !/^(skills|xeno)\/[^/]+\/vale\/[^/]+\.yml$/.test(file));
+    expect(stray).toEqual([]);
+  });
+
+  // Two rules naming one word report every hit twice; nothing in Vale forbids it.
   test("one owner per word across the existence rules", () => {
     const owners = new Map<string, string[]>();
-    for (const { style, name, rule } of rules()) {
+    for (const { id, rule } of rules()) {
       if (rule.extends !== "existence") continue;
       for (const token of rule.tokens ?? []) {
         const key = lower(token);
-        owners.set(key, [...(owners.get(key) ?? []), `${style}.${name}`]);
+        owners.set(key, [...(owners.get(key) ?? []), id]);
       }
     }
     const shared = [...owners].filter(([, where]) => where.length > 1);
     expect(shared).toEqual([]);
   });
 
-  // The styles are derived from skill text; a word the skill drops must leave the style too.
+  // The rules are derived from skill text; a word the skill drops must leave the rule too.
   test("every natural-writing and unslop token appears in the skill text it comes from", () => {
-    const wordsToAvoid = lower(
-      readFileSync(
-        join(ROOT, "skills", "natural-writing", "references", "words-to-avoid.md"),
-        "utf8",
+    const sources: Record<string, string> = {
+      "natural-writing": lower(
+        readFileSync(
+          join(ROOT, "skills", "natural-writing", "references", "words-to-avoid.md"),
+          "utf8",
+        ),
       ),
-    );
-    const unslop = lower(readFileSync(join(ROOT, "xeno", "unslop", "SKILL.md"), "utf8"));
+      unslop: lower(readFileSync(join(ROOT, "xeno", "unslop", "SKILL.md"), "utf8")),
+    };
     const missing: string[] = [];
-    for (const { style, name, rule } of rules()) {
-      const source = style === "Unslop" ? unslop : style === "NaturalWriting" ? wordsToAvoid : null;
-      if (source === null) continue;
-      const entries =
-        name === "TrailingParticiple"
-          ? participles(rule.tokens ?? [])
-          : (rule.tokens ?? Object.keys(rule.swap ?? {}));
+    for (const { id, skill, rule } of rules()) {
+      const source = sources[skill];
+      if (source === undefined) continue;
+      const entries = id.endsWith(".TrailingParticiple")
+        ? participles(rule.tokens ?? [])
+        : (rule.tokens ?? Object.keys(rule.swap ?? {}));
       for (const entry of entries)
-        if (!source.includes(lower(entry))) missing.push(`${style}.${name}: ${entry}`);
+        if (!source.includes(lower(entry))) missing.push(`${id}: ${entry}`);
     }
     expect(missing).toEqual([]);
   });

@@ -1,6 +1,6 @@
 # Word-level AI tells from the /natural-writing skill's "AI vocabulary" and "copula avoidance" lists
 # (references/words-to-avoid.md), minus the words the /unslop skill's rules 7 and 8 already own in
-# Unslop/AIVocabulary.yml: one owner per word, so a consumer running both styles sees one report per hit.
+# xeno/unslop/vale/AIVocabulary.yml: one owner per word, so a consumer running both styles sees one report per hit.
 # Left out, each for a literal use in a code repository: underscore and underscores (the character), features
 # (a product's), key (a map's), valuable, highlight (an editor's), landscape (a page's), represents a, refers to,
 # offers a, maintains a, and the Grok-era research words causal, correlate, empirical.
