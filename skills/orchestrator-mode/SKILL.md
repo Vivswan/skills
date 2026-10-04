@@ -73,7 +73,12 @@ Confirm what the repo itself answers instead of asking open-ended: branch protec
 
   Whenever the live-stream count drops, re-scan the board and backlog for startable work: queued tasks whose collisions are avoidable with territory notes, read-only passes (integration reviews, audits), prep for the next phase.
 - **No "next cycle" parking.** "We'll pick this up next wave" is not a state. Identified work goes on the board immediately and starts as soon as capacity allows, and work that cannot start yet carries its named blocking dependency on the board. What is banned is the deferred note and the mental backlog entry: work that exists nowhere but in prose.
-- **Never drop incidental findings silently** (failing tooling, drifted docs, an unrelated bug, a defective skill or memory). Board them immediately, or report them to the user when out of session scope. Builders report out-of-territory findings in their completion signal instead of fixing them, so territories stay clean.
+
+  The user's merge is never such a dependency, for a dependent track or for the next wave. Dependent work takes its base from section 6.
+- **Never drop incidental findings silently** (failing tooling, drifted docs, an unrelated bug, a defective skill or memory). Board them immediately and triage the in-scope ones by size, or report them to the user when out of session scope. Builders report out-of-territory findings in their completion signal instead of fixing them, so territories stay clean.
+  - **Small** (a bounded fix with an obvious shape) becomes its own track and lands by the session's gate and cadence, with no extra ask about the finding itself.
+  - **Big** (a new mechanism, a structural move, a changed contract) goes to the user in one message before any work starts.
+  - **One-time** (something vanished once, a service was down once, no mechanism known) goes on the board or in the report as a record, with no guard built. When recurrence or a standing cause earns a guard is the `/never-twice` skill's floor.
 - **Prefer a fresh agent per task** over reusing one agent for a queue. Long-lived multi-task workers accumulate context until they degrade or need handovers. Reuse is justified only when concurrently-open tasks genuinely share files, and even then each task signals and lands separately.
 - **Split growing waves into per-surface builders.** When a wave's scope grows past roughly 8-10 items spanning disjoint surfaces, do not keep routing additions to the one running builder. Ask it for a done/in-progress/not-started snapshot, let it keep the surfaces it is entangled with, and spawn sibling builders for whole untouched surfaces with region-level grants on shared files.
 

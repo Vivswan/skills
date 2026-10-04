@@ -23,6 +23,10 @@ The ladder is not a menu, and preference decays exponentially down it. Rung 1 is
 
 A rung-3 or rung-4 landing is a **debt**, not a resolution. When a higher rung becomes reachable, convert the rule or vigilance entry up the ladder.
 
+**The floor the ladder stands on:** a single occurrence with no known mechanism is repaired and recorded (where it was seen, what was observed), never guarded against. The ladder starts at the second occurrence, or at the first with a standing cause you can name.
+
+Specimen: a review launcher's scratch directory vanished once mid-run with no known cause. The run was relaunched and the event recorded, no guard built.
+
 ## Workflow
 
 1. **Name the class** in one sentence: "any new Event member can ship without a roster entry." If you cannot, it is not a class yet: fix the instance and move on.
@@ -122,5 +126,6 @@ Skills that run code reviews (such as `/rubber-duck-review`) expand this section
 - for each, name the rung the fix sits on, propose a concrete more durable rung, and say why it is reachable within this change's scope (or why it is not)
 - apply the test to whatever ships: if a new member of the class appears tomorrow, is it impossible to build, stopped in CI, caught by a loaded rule, or silent?
 - deletions of rules, guards, or checks that map to neither a successor covering their class nor a deliberate cut with its reason recorded in the change (Deleting a Guard, above)
+- a guard built against a single occurrence with no named mechanism (the floor, above): the response is to repair and record it, not to guard against it
 
 Triage the resulting findings with the workflow above.
