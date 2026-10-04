@@ -16,9 +16,9 @@ on:
   workflow_call:
 
 jobs:
-  # Typecheck, Biome lint, structural validation, and cross-file consistency
-  # checks (see the "check" script in package.json). uv provides the uvx
-  # runner behind lint:json. YAML lint is the managed ci.yml's, not repeated here.
+  # The job's steps are the "check" script in package.json. uv is set up for
+  # lint:json, which runs through uvx. YAML lint is the managed ci.yml's, not
+  # repeated here.
   check:
     runs-on: ubuntu-latest
     steps:
