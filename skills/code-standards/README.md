@@ -13,6 +13,7 @@
 - no planning references in code
 - lean AGENTS.md files
 - content-only commit messages
+- hooks that check and fail, never stage, commit, or fix to pass
 - no text blobs (the shape rules live in `/docs-discipline`)
 
 It doubles as a review-criteria companion: when installed alongside [`/rubber-duck-review`](../rubber-duck-review/), its `## Review Criteria` section is folded into the reviewer prompt automatically.
