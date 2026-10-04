@@ -99,7 +99,7 @@ jobs:
             gh pr edit "$existing" --body-file "$RUNNER_TEMP/body.md"
             echo "updated PR #$existing"
           else
-            gh pr create --draft --base "${GITHUB_REF_NAME:-main}" --head "$BRANCH" \
+            gh pr create --base "${GITHUB_REF_NAME:-main}" --head "$BRANCH" \
               --title "chore(xeno): sync vendored skills to their upstream heads" \
               --body-file "$RUNNER_TEMP/body.md"
           fi
