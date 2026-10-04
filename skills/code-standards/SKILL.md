@@ -158,6 +158,19 @@ Specimen of the one sanctioned attribution, human community credit in repos that
 
 Full detail, including the email-patch exception: `references/artifacts.md`.
 
+### Hooks check, never commit
+
+A pre-commit hook checks what the developer staged and reports. It never changes what the commit contains.
+
+- **Allowed:** check, fail.
+- **Allowed:** check, fail, write the fix into the working tree, still fail.
+- **Forbidden:** check, fix, pass.
+- **Forbidden:** `git add` or `git commit` inside a hook, so no formatter-and-restage step (lint-staged and its kind are out).
+
+The developer's move after a failure: run the generator or formatter, stage the result, rerun the commit.
+
+Specimen: a repository's hook that staged needed a `git add`, which needed a `git status` guard, which needed scratch-repo tests. One of those tests ran under the hook's leaked `GIT_DIR` and rewrote the real checkout's config. A check-only hook removes that whole class of tooling, and with it the "which git variable leaks into which child" failures.
+
 ### No blobs of text
 
 Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences, and when the content is enumerable, enumerate it. The shape rules and the paragraph probe live in the `/docs-discipline` skill. PR bodies follow the `/pr-and-issue-discipline` skill's Readability rules.
@@ -191,6 +204,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
+- A pre-commit hook that stages, commits, or turns its own failing check green by editing files (a formatter-and-restage step included).
 
 Triage findings against the standards above. Each criterion maps to one.
 
