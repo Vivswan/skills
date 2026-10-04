@@ -1,49 +1,9 @@
 #!/usr/bin/env bun
 
 /**
- * Consistency checks for the skills collection. Complements the
- * validate-skills action (per-folder structure, the baseline any skills
- * repository can call; `bun run validate` runs it here) with everything
- * specific to THIS catalog:
- *
- *   - the per-skill files this catalog requires beyond SKILL.md: README.md
- *     and a codex manifest named for the folder
- *   - template/: its files, and metadata.internal kept true so the
- *     placeholder skill never ships
- *   - xeno/: every vendored copy held to the action's SKILL.md contract
- *   - marketplace shape: one root plugin publishing "./" under plugin.json's
- *     name, and the xeno plugin publishing "./xeno"
- *
- * and drift across files that still passes structural validation:
- *
- *   - template placeholders left behind in a published skill
- *   - version fields anywhere but marketplace.json metadata.version, the
- *     catalog's single source of truth
- *   - catalog drift: a skill folder missing from the root plugin manifest, a
- *     marketplace entry disagreeing with the plugin manifest, or a strict:false
- *     entry that would make Claude Code refuse to load the plugin
- *   - files named metadata.json inside a skill (npx skills drops them at install)
- *   - listing drift: plugin.json skills[] entries without a skill folder, and
- *     README skill-list entries and bug-form dropdown options kept in exact
- *     correspondence with the skill folders (stale and missing both fail)
- *   - README mermaid graph drift: a node labeling a retired skill, a skill
- *     with no node, or an edge endpoint no node definition labels
- *   - README invocation-grouping drift: the Automatic vs "Invoked by you"
- *     headings and the Usage paragraph's explicit-invocation roster tracking
- *     each skill's disable-model-invocation frontmatter
- *   - author, license, and homepage copies disagreeing with their canonical
- *     .claude-plugin/plugin.json fields
- *   - interface drift: the SKILL.md H1 title, the codex manifest's
- *     interface.displayName, and agents/openai.yaml (when present)
- *     disagreeing on display name, short description, or brand color
- *   - explicit-invocation drift: disable-model-invocation in SKILL.md
- *     frontmatter set without agents/openai.yaml's
- *     policy.allow_implicit_invocation:false, or vice versa
- *   - descriptions that are summaries instead of "Use when ..." triggers
- *   - self-guarding of the placeholder markers against template/ rewording
- *   - skill-content cross-references: review-criteria auto-discovery (the rule
- *     stated, declared sections non-empty), the pinned Wikipedia revision,
- *     grep terms vs the word list, the reviewer preamble
+ * Consistency checks for THIS catalog. The validate-skills action (`bun run validate`) is the
+ * per-folder baseline any skills repository can call; everything here is either specific to this
+ * catalog or drift ACROSS files that still passes structural validation.
  */
 
 import { existsSync, lstatSync, readFileSync } from "node:fs";

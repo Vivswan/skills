@@ -4,32 +4,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 
-// Exit-matrix test for the watch-ci helper: a fake `gh` on PATH drives every
-// branch of the script, pinning the contract its reviews established - a red
-// run exits 1, a gh operational failure exits 2 (never 1), a green fleet
-// exits 0, and a red run outranks a gh hiccup. The unit of judgment is the
-// workflow: only the latest run per workflow is judged, older re-triggered
-// runs are reported as superseded without affecting the exit code, and every
-// poll is one GraphQL snapshot so a run registered or re-run mid-watch is
-// waited on like any other. The expected-workflow gate (default "CI",
-// overridden by --expect-workflow) turns an absent gate workflow into exit 2
-// with evidence, never a vacuous pass. Polls sleep 60 s; a fake `sleep` logs
-// each duration and returns at once.
+// Exit-matrix test for watch-ci.sh: a fake `gh` on PATH drives every branch of the script, and a
+// fake `sleep` logs each requested duration and returns at once, so a scenario pins its whole
+// polling shape without waiting. The exit contract under test:
+//   red run                                                                         -> 1
+//   gh operational failure                                                          -> 2, never 1
+//   green fleet                                                                     -> 0
+//   expected workflow absent (default "CI", or --expect-workflow)                   -> 2 with evidence, never a vacuous pass
+//   red run plus a completed run with no conclusion, or an absent expected workflow -> 1, red outranks both
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.sh");
 
-// Dispatch validates the EXACT invocations watch-ci.sh makes. Every mismatch
-// is appended to the GH_VIOLATIONS file, which each test asserts is empty.
-// The Actions REST endpoints (run list/watch/view --json) answer a 403 rate
-// limit AND record a violation: the script must never reach them.
-// The graphql answer is raw GraphQL JSON built from the fixture and piped
-// through the real jq with the --jq filter the script passed, so the filter's
-// field order, enum lowercasing, and external-suite drop are under test.
-// GH_RUNS entries are "id" (COMPLETED), "id@<status>" (still running), or
-// "id@<status>@<updatedAt>" (an empty status is COMPLETED; default t1); with
-// GH_RUNS<n> set, that snapshot is served from the n-th snapshot onward (a
-// snapshot is one first-page call plus its cursor pages). GH_PAGE_SIZE splits
-// a snapshot into pages; the cursor for page k is "page<k>".
+// The fake validates the EXACT invocations watch-ci.sh makes: a mismatch lands in GH_VIOLATIONS, and
+// the Actions REST endpoints other than `run view <id> --log-failed` answer a 403 rate limit AND
+// record one, since the script must never reach them. The GraphQL reply is piped through the real jq
+// with the filter the script passed, so the filter's field order, enum lowercasing, and
+// external-suite drop are under test.
+//   GH_RUNS="7 8@in_progress 9@completed@t2"  -> run id, optional status (empty = COMPLETED), optional updatedAt (default t1)
+//   GH_RUNS<n>                                 -> served from the n-th snapshot on (a snapshot = one first-page call + its cursor pages)
+//   GH_PAGE_SIZE=2                             -> pages of two runs; the cursor for page k is "page<k>"
 const FAKE_GH = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${GH_VIOLATIONS}"; }
 rate_limited() { echo "HTTP 403: API rate limit exceeded for user ID 1" >&2; exit 1; }

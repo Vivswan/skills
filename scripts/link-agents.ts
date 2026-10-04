@@ -1,30 +1,17 @@
 /**
- * Replace the installed copies of this repo's skills in ~/.agents/skills with
- * symlinks into the working tree, so edits here are live in every agent
- * without re-running `npx skills add .`.
+ * Replace the installed copies of this repo's skills in ~/.agents/skills with symlinks into the
+ * working tree, so an edit here is live in every agent without re-running `npx skills add .`.
  *
- * `npx skills add` copies the skill source into ~/.agents/skills/<name> (the
- * per-agent directories like ~/.claude/skills symlink to that copy, not to
- * the source). Direct source linking is an open feature request upstream
- * (vercel-labs/skills#748), so this script rewires the canonical copy.
- *
- * After linking, installs of skills this repo no longer ships are pruned:
- * symlinks in ~/.agents/skills that point into this repo's skills/ but no
- * longer name a current skill, installed copies that the npx skills lockfile
- * (~/.agents/.skill-lock.json) attributes to this repo, and per-agent
- * pointers (e.g. ~/.claude/skills/<name>) left behind by those removals.
- * Skills from other repos are never touched; a copy that cannot be
- * attributed is kept and reported instead of guessed at.
+ * `npx skills add` copies the source into ~/.agents/skills/<name>, and the per-agent directories
+ * (~/.claude/skills, ...) symlink to that copy, never to the source. Linking the source directly
+ * is an open upstream request (vercel-labs/skills#748), so this script rewires the canonical copy.
  *
  * Usage: bun scripts/link-agents.ts [--dry-run | --add]
- * `--dry-run` reports every link and prune without changing anything.
- * `--add` first runs `npx skills add . --global` interactively (its UI wires
- * the per-agent pointers but overwrites the canonical symlinks with copies),
- * then re-links automatically once it exits successfully. The install is
- * always global (user-level) and never passes --copy, so per-agent
- * directories keep symlinking into ~/.agents/skills.
- * Revert: re-run `npx skills add . --all` (the CLI overwrites the symlinks
- * with fresh copies).
+ *   --dry-run  reports every link and prune, changes nothing
+ *   --add      runs `npx skills add . --global` first (its UI wires the per-agent pointers but
+ *              overwrites the canonical symlinks with copies), then links; never --copy, so the
+ *              per-agent directories keep symlinking into ~/.agents/skills
+ * Revert: `npx skills add . --all` overwrites the symlinks with fresh copies.
  */
 
 import { spawnSync } from "node:child_process";

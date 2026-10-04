@@ -3,63 +3,13 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 /**
- * Doc-drift gate for the doc-to-script surfaces in the map below - exactly
- * those, nothing broader:
+ * Doc-drift gate for the doc-to-script surfaces in SURFACES below, exactly those: each contract the doc cites about its
+ * script (usage shapes, flags, exit codes, output fields) is pinned on both sides, so a one-sided rename fails here until
+ * both move. Non-contract citations (external commands, git idioms, path examples) stay unpinned; nothing here runs a script.
  *
- * - skills/orchestrator-mode/references/fleet-monitor.md <-> the four fleet
- *   scripts (sweep.mts, probe.mts, ledger.mts, baseline.mts): every CONTRACT
- *   the doc cites about them, namely CLI invocation shapes and their
- *   arity/usage contracts, ledger worker states, sweep-row and diagnostic
- *   output fields, transcript-report fields, and token-table schema keys.
- * - skills/rubber-duck-review/SKILL.md <-> its scripts/run-review.mts: the
- *   four usage shapes (prepare, launch, --extract, and --extract --wait), the
- *   three reviewer invocations with their tool-restriction flags, the
- *   --background and --stdin-prompt flag dispatches with their
- *   output-emission and stdin-delivery sites, the --wait poll interval,
- *   default timeout, and its two failure literals, and the exit-code 0/1/2
- *   semantics including the "review FAILED - relaunch" verdict literal.
- * - skills/watch-ci-after-push/SKILL.md <-> its scripts/watch-ci.sh: the
- *   invocation shape (one full-SHA argument, defaulting to HEAD), the
- *   GraphQL discovery query and its full-SHA lookup, the exit-code 0/1/2
- *   semantics at their exit sites, the expected-workflow gate (its
- *   --expect-workflow override, its missing-evidence message, and the
- *   manual-dispatch hint), the failing-log excerpt command, the
- *   superseded/FAIL/skip reporting literals, and the 60 s poll interval at
- *   its declaration and its sleep.
- * - skills/watch-ci-after-push/SKILL.md <-> its
- *   scripts/wait-for-pr-event.mts: the invocation shape, the --until event
- *   set with its default, the interval defaults and floor, the
- *   baseline-first discipline, and the exit-code 0/1/2/3 semantics at their
- *   emission sites.
- * - skills/worktree-hygiene/SKILL.md <-> its scripts/retire-branch.mts: the
- *   invocation shape, every flag the section cites, the rehearsal and
- *   landing-gate literals, and the exit-code 1/2/3 constants at their exit
- *   sites.
- * - skills/codex-browser-fix/SKILL.md <-> its scripts/browser-plugin-preflight.mts
- *   and scripts/browser-auth-launcher.mts: the --check and --plugin-dir
- *   flags with their exit codes, the CODEX_HOME root, the launcher path and
- *   its app-server-only provider override, the config tables it rewrites,
- *   and the rollback root.
- *
- * Non-contract citations (external commands like pgrep/ps, git idioms, path
- * examples) are deliberately unpinned. Each entry must appear in both the doc
- * and its script source; a one-sided rename fails this test until doc and
- * script move together. The script side is matched byte-for-byte. The doc
- * side is matched with whitespace runs collapsed and, on lines inside a bash
- * or sh fence only, the leading comment marker removed, so a pin names a
- * phrase, not where the prose happens to wrap.
- *
- * Entries pin a distinctive form PER SIDE: the doc side is a usage-line,
- * sample-JSON, or rendered-contract fragment as the doc prints it, and the
- * script side is a CODE-SHAPED fragment (an object-literal key at the
- * emission site, a dispatch literal or usage-error string, an echo or case
- * literal, a declaration literal) - never a bare word that a stale comment
- * could satisfy. A pin matches its side exactly once unless it declares how
- * often it is meant to occur, so a fragment that drifts into ambiguity fails
- * by construction: a script pin that covers several code sites states their
- * exact number, and a doc pin the prose repeats states ">=1". The gate's job
- * is doc-to-source text pinning only; actually executing the scripts is the
- * per-script *.test.ts suites' job.
+ * A pin is a form distinctive on ITS side, never a bare word a stale comment could satisfy:
+ *   doc side     -> the usage line, sample JSON, or rendered contract fragment as the doc prints it
+ *   script side  -> a code-shaped fragment: an object-literal key at its emission site, a dispatch or usage-error literal, an echo or case literal
  */
 
 const ROOT = join(import.meta.dir, "..");

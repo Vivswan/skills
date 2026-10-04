@@ -1,32 +1,17 @@
 #!/usr/bin/env bun
 /**
- * Wire the git-native pre-commit hook; runs as the package "prepare" script
- * on every `bun install`.
+ * Wire the git-native pre-commit hook; runs as the package "prepare" script on every `bun install`.
  *
- * The dispatcher (.githooks/pre-commit) is COPIED into the repository's
- * common hooks directory - shared by all linked worktrees - instead of
- * setting core.hooksPath: a hooksPath pointing at a checkout-relative
- * directory silently runs NO hook in any checkout that lacks the directory
- * (a sibling worktree on an older branch, or the same checkout after
- * switching to one). The installed dispatcher fails closed instead: it
- * refuses the commit when the checkout carries no hook logic.
+ * The dispatcher (.githooks/pre-commit) is COPIED into the common hooks directory, shared by every
+ * linked worktree, instead of setting core.hooksPath, because a checkout-relative hooksPath fails
+ * open in a checkout that lacks the directory (a sibling worktree on an older branch, or this one
+ * after switching to such a branch):
+ *   core.hooksPath     -> NO hook runs there, silently
+ *   copied dispatcher  -> refuses the commit there, since the checkout carries no hook logic
  *
- * Ordering invariant: every abort condition but one is checked BEFORE
- * anything is mutated, so a refused install leaves the previous hook wiring
- * fully intact - never a state where husky is unwired but the dispatcher is
- * not yet installed. The one verify-AFTER-mutate exception is the post-unset
- * re-read of the local hooksPath (an include-carried husky value is only
- * detectable once the unset has run); by then the dispatcher is already
- * published, so failing there still leaves commits checked. The install
- * never destroys what it does not own: only the known husky hooksPath is
- * migrated, any other value in any scope aborts, and a pre-existing
- * hooks/pre-commit (file, symlink, or anything else) not written by this
- * script is left untouched.
- *
- * Outside a git repository (an exported tarball, say) there is nothing to
- * wire, and installs must not fail there - but a directory that HAS a .git
- * entry which git cannot read is a broken checkout, not a tarball, and
- * skipping it would recreate the silent no-hook state.
+ * Every precondition is checked before anything is mutated, so a refused install leaves the previous
+ * wiring intact. The mutations publish the dispatcher first and unwire husky last, so no failure in
+ * either step, or in the re-read after the unset, leaves fewer commits checked than before.
  */
 
 import {
@@ -42,21 +27,13 @@ import {
 import { isAbsolute, join, resolve } from "node:path";
 import { ROOT } from "./lib";
 
-// The repository is the one containing the working directory (`bun install`
-// runs prepare at the package root); the dispatcher source always comes from
-// this checkout. git spawns get NO GIT_* variables at all: the survivor
-// check below must see the configuration that a normal, unmasked `git
-// commit` will see, and every GIT_* variable is a transient redirection
-// away from exactly that - GIT_DIR points at another repository, GIT_CONFIG
-// at an arbitrary file, GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM/
-// GIT_CONFIG_NOSYSTEM select or hide the real global and system files
-// (`GIT_CONFIG_GLOBAL=/dev/null bun install` would pass the check and leave
-// the dispatcher shadowed for every later unmasked commit), and
-// GIT_CONFIG_COUNT/KEY_n/VALUE_n/PARAMETERS inject transient entries.
-// Unknown GIT_* variables default to scrubbed (fail-safe), not inherited
-// (fail-open) - a blocklist loses this game one variable at a time. Tests
-// isolate the global scope through HOME/XDG_CONFIG_HOME instead, which the
-// installer reads the same way commit-time git does.
+// git here sees NO GIT_* variable: the hooksPath checks below must read the configuration an
+// unmasked `git commit` will read, and several GIT_* variables redirect that read transiently. The
+// whole prefix is scrubbed rather than a blocklist, since a blocklist loses one new variable at a time.
+// Inherited unscrubbed, each of these would bend those checks:
+//   GIT_CONFIG_GLOBAL=/dev/null bun install           -> the check passes, dispatcher shadowed at every later commit
+//   GIT_DIR, GIT_CONFIG, GIT_CONFIG_COUNT/KEY_n/VALUE_n -> another repository, another file, injected entries
+// Tests isolate the global scope through HOME/XDG_CONFIG_HOME instead, which git reads unmasked.
 const env: Record<string, string> = {};
 for (const [key, value] of Object.entries(process.env)) {
   if (value === undefined) continue;
