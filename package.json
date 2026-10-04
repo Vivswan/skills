@@ -15,7 +15,7 @@
     "lint": "biome ci .",
     "lint:json": "uvx --no-config check-jsonschema --schemafile https://json.schemastore.org/package.json package.json && uvx --no-config check-jsonschema --builtin-schema vendor.github-issue-forms .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml && uvx --no-config check-jsonschema --schemafile https://json.schemastore.org/github-issue-config.json .github/ISSUE_TEMPLATE/config.yml",
     "check:fix": "biome check --write .",
-    "check:docs": "bun skills/docs-discipline/scripts/docs-probe.mts README.md docs/*.md xeno/README.md skills/README.md skills/*/README.md memories/README.md && bun skills/docs-discipline/scripts/docs-probe.mts --shape-only skills/*/SKILL.md template/SKILL.md",
+    "check:docs": "bun skills/docs-discipline/scripts/docs-probe.mts README.md CONTRIBUTING.md docs/*.md xeno/README.md skills/README.md skills/*/README.md memories/*.md template/README.md template/references/*.md && bun skills/docs-discipline/scripts/docs-probe.mts --shape-only skills/*/SKILL.md skills/*/references/*.md template/SKILL.md",
     "check": "bun run typecheck && bun run lint && bun run lint:json && bun run check:docs && bun run test && bun run validate && bun run smoke",
     "check:staged": "bun scripts/check-staged.mts",
     "sync-xeno": "bun scripts/sync-xeno.mts"

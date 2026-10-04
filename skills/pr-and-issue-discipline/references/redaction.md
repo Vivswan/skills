@@ -2,10 +2,24 @@
 
 The headline rule and the substitutes are in `SKILL.md` (PR Bodies, "Redact captured output"); this page carries the full detail.
 
-**Redact captured output before publishing, and publish no PII anywhere.** Strip secrets, tokens, and credentials. PII is anything that tells a reader who the author is, how they work, or how their machine is set up. The rule covers everything a PR or issue publishes: titles, bodies, commit messages, code, test fixtures, docs, captured Before/After blocks, review replies, CI comments, and issue replies. Redaction is not paraphrase: the command and the output structure stay verbatim. This paragraph is the single definition; the skills that gate on it point here.
+**Redact captured output before publishing, and publish no PII anywhere.** Strip secrets, tokens, and credentials. PII is anything that tells a reader who the author is, how they work, or how their machine is set up.
 
-- **Identity.** Names, employers, real account logins and usernames, hostnames and machine names, home paths under a real user, emails. One substitute per kind: `octocat`, `work-bot`, or `example-user` for a login or username; `example.com` for an employer, a domain, or a hostname; `example-user@example.com` for a whole email, never just its host; `/home/user` or `~` for a home path; `/repo/...` for the checkout path (a captured row published with `/repo/...` in place of the machine's real checkout path is the worked example).
+The rule covers everything a PR or issue publishes: titles, bodies, commit messages, code, test fixtures, docs, captured Before/After blocks, review replies, CI comments, and issue replies. Redaction is not paraphrase: the command and the output structure stay verbatim. This page is the single definition; the skills that gate on it point here.
+
+- **Identity.** Names, employers, real account logins and usernames, hostnames and machine names, home paths under a real user, emails. One substitute per kind, in the table below.
 - **Anything measured or copied from the author's real environment.** Figures, statistics, and profiles computed from real logs or sessions; real settings, configuration, transcripts, and logs; inventories of what the author has installed or uses. All of it identifies the author with no name in it. Substitute: hand-written example values that show only what the text discusses, and the text says they are examples.
+
+The identity substitutes:
+
+| Kind | Substitute |
+| --- | --- |
+| a login or username | `octocat`, `work-bot`, or `example-user` |
+| an employer, a domain, or a hostname | `example.com` |
+| a whole email | `example-user@example.com`, never just its host |
+| a home path | `/home/user` or `~` |
+| the checkout path | `/repo/...` |
+
+A captured row published with `/repo/...` in place of the machine's real checkout path is the worked example.
 
 What follows from the second kind:
 
