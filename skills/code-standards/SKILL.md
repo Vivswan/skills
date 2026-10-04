@@ -164,8 +164,8 @@ A pre-commit hook checks what the developer staged and reports. It never changes
 
 - **Allowed:** check, fail.
 - **Allowed:** check, fail, write the fix into the working tree, still fail.
-- **Forbidden:** check, fix, pass.
-- **Forbidden:** `git add` or `git commit` inside a hook, so no formatter-and-restage step (lint-staged and its kind are out).
+- **Forbidden:** changing what the commit contains: no stage, no commit, no formatter-and-restage step (lint-staged and its kind are out).
+- **Forbidden:** anything else: no fix-then-pass, no git command that writes (`stash push`, `checkout`, `reset`, `push`, a `config` set), no network. A read-only query (`git diff --cached --name-only`, `git config --get`) stays.
 
 The developer's move after a failure: run the generator or formatter, stage the result, rerun the commit.
 
@@ -204,7 +204,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
-- A pre-commit hook that stages, commits, or turns its own failing check green by editing files (a formatter-and-restage step included).
+- A pre-commit hook that does anything beyond check-and-fail or check-write-the-fix-and-fail: staging, committing, a writing git command, fix-then-pass, network.
 
 Triage findings against the standards above. Each criterion maps to one.
 
