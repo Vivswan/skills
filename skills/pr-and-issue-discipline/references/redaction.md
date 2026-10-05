@@ -30,5 +30,5 @@ What follows for anything measured or copied:
 
 Specimens: a real account login copied from pasted terminal output into a test fixture and a PR body, shipped as `work-bot`; a statistical profile measured from the author's real sessions and committed as a test fixture, replaced by a hand-written one, every figure of the old file grepped out of the replacing PR, and the history rewritten to drop the original.
 
-A product file name that happens to contain a vendor's word (a PowerShell profile filename, a devcontainer base image), a repository's own `owner/repo` coordinate in its install command, and the repository's own tooling and gates (the review tool a body's Gates line names, a check's run count) are facts about the repository, not the author, and stay.
+A product file name that happens to contain a vendor's word (a PowerShell profile filename, a devcontainer base image), a repository's own `owner/repo` coordinate in its install command, a plugin marketplace manifest's owner contact (a publishing contact the marketplace requires), and the repository's own tooling and gates (the review tool a body's Gates line names, a check's run count) are facts about the repository, not the author, and stay.
 

@@ -47,4 +47,4 @@ Installable skills for coding agents. Consumers run `npx skills add Vivswan/skil
 ### Working here
 
 - The pre-commit hook runs `bun run check:staged` (fast static checks plus the tests a staged file reaches, by import or by name); the full `bun run check` is CI's, never run locally. `docs/authoring.md` walks a new skill through the layout the smoke test enforces.
-- Commits carry the author email `58091053+Vivswan@users.noreply.github.com` and no attribution lines.
+- Commits carry the author email `58091053+Vivswan@users.noreply.github.com`.
