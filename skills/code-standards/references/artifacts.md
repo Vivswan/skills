@@ -14,7 +14,6 @@ How to apply:
 - **Keep only what no file answers:** purpose, hard rules, decisions a reader would otherwise reverse (one file pointer each), safety constraints, release rules.
 - **Short bullets a human skims.** No long paragraphs, no walls of text.
 - **Delete any test that pins AGENTS.md text.** Guidance is not a fixture. A test that checks paths a doc names still exist is a stale-pointer guard and stays.
-- **A change touching only AGENTS.md or CLAUDE.md skips the review loop:** no codex or Copilot round, `git commit --no-verify`, PR opened ready, CI the only gate, the owner merges.
 - **When a file already meets this,** leave it and say so.
 - **README, CONTRIBUTING, and the rest of the repository's documentation** are pages of the `/working-text` skill, not this rule's.
 

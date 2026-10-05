@@ -141,7 +141,6 @@ AGENTS.md (and CLAUDE.md) holds the project's guiding principles and nothing an 
 - **Cut:** anything a specific file answers, even when essential. That means layout trees, the commands block (the manifest and hooks are the source), naming conventions a linter carries, checklists a test enforces, and per-module behavior. A one-line pointer replaces each.
 - **Shape:** short bullets a human skims. No long paragraphs, no walls of text.
 - **No tests pin it.** A test asserting AGENTS.md text turns guidance into a fixture. Delete it.
-- **No review loop.** A change touching only AGENTS.md or CLAUDE.md gets no codex or Copilot round and is committed with `git commit --no-verify`. The PR opens ready and its CI is the only gate.
 - **Already lean:** leave it alone and say so.
 
 Specimen: a tail of 66 lines (a layout tree, a 17-item authoring checklist the smoke test enforced, release notes) became 15: one line on what the repo is, five principles, two working rules. The checklist moved to the authoring doc it was duplicating.
