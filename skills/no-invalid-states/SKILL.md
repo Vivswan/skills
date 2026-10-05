@@ -123,7 +123,7 @@ For each accepted candidate, work through this checklist:
 
 1. State the invariant and the invalid state currently representable.
 2. Introduce the stronger representation.
-3. Put validation at the boundary: one parser or factory that turns raw data into the strong type, with a real error path.
+3. Put validation at the boundary: one parser or factory that turns raw data into the strong type, with a real error path. What a new boundary does with malformed input (repair when one unambiguous repair exists, refuse otherwise) is the `/code-standards` skill's rule; an existing boundary keeps its behaviour under this refactor, per the rule below.
 4. Change internal APIs to accept the strong type, so downstream code cannot receive an unvalidated value.
 5. Remove checks the new representation makes logically impossible.
 6. Keep, and briefly justify, checks that remain because they are dynamic.
