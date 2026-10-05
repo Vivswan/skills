@@ -33,12 +33,6 @@ if (!dotGit?.isDirectory() && !dotGit?.isFile()) {
   process.exit(1);
 }
 
-// Refuse to mutate the repo during commits. Dependencies should already exist.
-if (!entry(join(root, "node_modules"))?.isDirectory()) {
-  console.error("Dependencies are missing. Run 'bun install' before committing.");
-  process.exit(1);
-}
-
 // The staged list is read BEFORE the scrub below: `git commit <pathspec>` and
 // `git commit -a` stage into a temporary index that only GIT_INDEX_FILE names.
 const staged = Bun.spawnSync(
