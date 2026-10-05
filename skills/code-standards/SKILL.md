@@ -169,6 +169,8 @@ A pre-commit hook checks what the developer staged and reports. It never changes
 
 A hook installs nothing: no runtime, no dependencies, no tool fetch. Setup is a bootstrap command the developer runs once, and a hook that finds a tool or `node_modules` missing fails naming that command.
 
+A hook runs only checks the repository's own toolchain provides (bun scripts in a bun repository, uv in a Python one). A check that needs another language runtime or a separately installed binary (a YAML linter via uv in a bun repository, actionlint, gitleaks) is CI's, where the shipped actions run it identically for every repository.
+
 The developer's move after a failure: run the generator or formatter, stage the result, rerun the commit.
 
 Specimen: a repository's hook that staged needed a `git add`, which needed a `git status` guard, which needed scratch-repo tests. One of those tests ran under the hook's leaked `GIT_DIR` and rewrote the real checkout's config. A check-only hook removes that whole class of tooling, and with it the "which git variable leaks into which child" failures.
@@ -208,7 +210,7 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
-- A pre-commit hook that does anything beyond check-and-fail or check-write-the-fix-and-fail: staging, committing, a writing git command, fix-then-pass, network, an install or tool fetch, or a missing-tool failure that does not name the bootstrap command.
+- A pre-commit hook that does anything beyond check-and-fail or check-write-the-fix-and-fail: staging, committing, a writing git command, fix-then-pass, network, an install or tool fetch, a check from outside the repository's own toolchain, or a missing-tool failure that does not name the bootstrap command.
 
 Triage findings against the standards above. Each criterion maps to one.
 
