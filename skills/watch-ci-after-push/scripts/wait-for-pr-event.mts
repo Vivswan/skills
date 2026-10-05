@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Fully local, zero-token waiter for pull-request activity: the
-// comment/review sibling of watch-ci.sh. Sleep on this instead of having an
+// comment/review sibling of watch-ci.mts. Sleep on this instead of having an
 // agent poll the PR.
 //
 // A COMPLETE baseline snapshot (issue-comment count, review-thread counts,

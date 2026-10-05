@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 
-// Exit-matrix test for watch-ci.sh: a fake `gh` on PATH drives every branch of the script, and a
+// Exit-matrix test for watch-ci.mts: a fake `gh` on PATH drives every branch of the script, and a
 // fake `sleep` logs each requested duration and returns at once, so a scenario pins its whole
 // polling shape without waiting. The exit contract under test:
 //   red run                                                                         -> 1
@@ -13,13 +13,12 @@ import { ROOT } from "../scripts/lib";
 //   expected workflow absent (default "CI", or --expect-workflow)                   -> 2 with evidence, never a vacuous pass
 //   red run plus a completed run with no conclusion, or an absent expected workflow -> 1, red outranks both
 
-const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.sh");
+const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.mts");
 
-// The fake validates the EXACT invocations watch-ci.sh makes: a mismatch lands in GH_VIOLATIONS, and
+// The fake validates the EXACT invocations watch-ci.mts makes: a mismatch lands in GH_VIOLATIONS, and
 // the Actions REST endpoints other than `run view <id> --log-failed` answer a 403 rate limit AND
-// record one, since the script must never reach them. The GraphQL reply is piped through the real jq
-// with the filter the script passed, so the filter's field order, enum lowercasing, and
-// external-suite drop are under test.
+// record one, since the script must never reach them. The GraphQL reply is the raw JSON GitHub
+// would send (uppercase enums, external suites included), so the script's own parsing is under test.
 //   GH_RUNS="7 8@in_progress 9@completed@t2"  -> run id, optional status (empty = COMPLETED), optional updatedAt (default t1)
 //   GH_RUNS<n>                                 -> served from the n-th snapshot on (a snapshot = one first-page call + its cursor pages)
 //   GH_PAGE_SIZE=2                             -> pages of two runs; the cursor for page k is "page<k>"
@@ -28,11 +27,11 @@ violate() { echo "$*" >> "\${GH_VIOLATIONS}"; }
 rate_limited() { echo "HTTP 403: API rate limit exceeded for user ID 1" >&2; exit 1; }
 if [ "$*" = "repo view --json nameWithOwner -q .nameWithOwner" ]; then
   [ "\${GH_REPO_EXIT:-0}" -ne 0 ] && exit "\${GH_REPO_EXIT}"
-  echo "octo/example"; exit 0
+  echo "octocat/repo"; exit 0
 fi
 if [ "$1 $2" = "api graphql" ]; then
   shift 2
-  query=""; owner=""; name=""; oid=""; cursor=""; filter=""
+  query=""; owner=""; name=""; oid=""; cursor=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
       -f) case "$2" in
@@ -40,16 +39,14 @@ if [ "$1 $2" = "api graphql" ]; then
             oid=*) oid="\${2#oid=}";; cursor=*) cursor="\${2#cursor=}";;
             *) violate "graphql var: $2"; exit 64;;
           esac; shift 2;;
-      --jq) filter="$2"; shift 2;;
       *) violate "graphql arg: $1"; exit 64;;
     esac
   done
-  [ "$owner/$name/$oid" = "octo/example/deadbeef" ] || { violate "graphql target: $owner/$name/$oid"; exit 64; }
+  [ "$owner/$name/$oid" = "octocat/repo/deadbeef" ] || { violate "graphql target: $owner/$name/$oid"; exit 64; }
   case "$query" in
     'query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String)'*'object(oid: $oid)'*'checkSuites(first: 100, after: $cursor)'*'pageInfo { hasNextPage endCursor }'*) ;;
     *) violate "graphql query: $query"; exit 64;;
   esac
-  [ -n "$filter" ] || { violate "graphql without --jq"; exit 64; }
   [ "\${GH_GQL_EXIT:-0}" -ne 0 ] && exit "\${GH_GQL_EXIT}"
   page=1
   case "$cursor" in "") ;; page[0-9]*) page="\${cursor#page}";; *) violate "graphql cursor: $cursor"; exit 64;; esac
@@ -88,12 +85,14 @@ if [ "$1 $2" = "api graphql" ]; then
     done
   fi
   if [ "$more" = true ]; then info="{\\"hasNextPage\\":true,\\"endCursor\\":\\"page$((page + 1))\\"}"; else info="{\\"hasNextPage\\":false,\\"endCursor\\":null}"; fi
-  printf '{"data":{"repository":{"object":{"checkSuites":{"nodes":[%s],"pageInfo":%s}}}}}' "$nodes" "$info" | jq -r "$filter"
+  printf '{"data":{"repository":{"object":{"checkSuites":{"nodes":[%s],"pageInfo":%s}}}}}' "$nodes" "$info"
   # Partial-then-fail: rows above were already printed, then gh dies, from the second snapshot on.
   if [ -n "\${GH_EXIT_AFTER_OUTPUT:-}" ] && [ "$c" -ge 2 ]; then exit "\${GH_EXIT_AFTER_OUTPUT}"; fi
   exit 0
 fi
 if [ "$*" = "run view $3 --log-failed" ]; then
+  [ -z "\${GH_LOG_LINES:-}" ] || awk -v n="\${GH_LOG_LINES}" 'BEGIN { for (i = 1; i <= n; i++) printf "log line %d %s\\n", i, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }'
+  [ -z "\${GH_LOG_STDERR:-}" ] || echo "\${GH_LOG_STDERR}" >&2
   echo "\${GH_LOG_TEXT:-log excerpt for $3}"; exit "\${GH_LOG_EXIT:-1}"
 fi
 case "$1 $2" in
@@ -112,10 +111,10 @@ chmodSync(join(binDir, "sleep"), 0o755);
 afterAll(() => rmSync(binDir, { recursive: true, force: true }));
 
 let scenario = 0;
-// Handled gh failures used to fire the ERR trap inside their $(...) subshell
-// as well, so every scenario asserts this message is absent; the unhandled
-// table opts out via { unhandled: true } and counts it itself.
-const TRAP_MESSAGE = "unexpected command failure";
+// Every handled failure (gh, usage, a missing workflow) prints its own message
+// and exits 2 without this one, so every scenario asserts it is absent; the
+// internal-failure test opts out via { unhandled: true } and counts it itself.
+const TRAP_MESSAGE = "unexpected failure";
 // Spawns the script with the given argv exactly; run() below is the common
 // flags-then-SHA shape. Returns the snapshot count (first-page graphql calls)
 // and every sleep the script asked for, so a scenario pins its whole polling shape.
@@ -124,7 +123,7 @@ function runArgv(env: Record<string, string>, argv: string[], opts: { unhandled?
   const violations = join(binDir, `violations-${scenario}`);
   const calls = join(binDir, `calls-${scenario}`);
   const sleepLog = join(binDir, `sleeps-${scenario}`);
-  const result = Bun.spawnSync(["bash", SCRIPT, ...argv], {
+  const result = Bun.spawnSync(["bun", SCRIPT, ...argv], {
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
@@ -180,7 +179,7 @@ function sameWorkflow(ids: string[], name = "CI"): Record<string, string> {
   return env;
 }
 
-describe("watch-ci.sh exit matrix", () => {
+describe("watch-ci.mts exit matrix", () => {
   test("gh broken at discovery exits 2, not 1", () => {
     const r = run({ GH_GQL_EXIT: "4" });
     expect(r.code).toBe(2);
@@ -241,9 +240,33 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.stdout).toBe("pass: CI-2 (2)\nFAIL(failure): CI-1 (1)\nlog excerpt for 1\n");
   });
 
+  test("the log excerpt is the last 80 lines of gh's merged stream, however long the log", () => {
+    // The excerpt is the tail of ONE stream, as `2>&1 | tail -80` read it: a
+    // stderr line keeps its place between stdout lines, and a log past 1 MiB
+    // (spawnSync's default maxBuffer) still ends with its final lines instead
+    // of a truncated prefix's tail.
+    const lines = 20000;
+    const r = run({
+      GH_RUNS: "1",
+      GH_CONCLUSION_1: "failure",
+      GH_LOG_LINES: String(lines),
+      GH_LOG_STDERR: "warning after the log",
+      GH_LOG_TEXT: "FINAL FAILURE",
+    });
+    const tail = Array.from(
+      { length: 78 },
+      (_, i) => `log line ${lines - 77 + i} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`,
+    );
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe(
+      `FAIL(failure): CI-1 (1)\n${tail.join("\n")}\nwarning after the log\nFINAL FAILURE\n`,
+    );
+  });
+
   // The incident this design exists for: every Actions REST endpoint answers
-  // a 403 secondary rate limit for an hour while GraphQL keeps answering. The
-  // verdict must still be reached; only the log excerpt shows the limit.
+  // a 403 secondary rate limit that outlives the run while GraphQL keeps
+  // answering. The verdict must still be reached; only the log excerpt shows
+  // the limit.
   const incidentCases: {
     id: string;
     env: Record<string, string>;
@@ -414,35 +437,24 @@ describe("watch-ci.sh exit matrix", () => {
     expect(r.stderr).toContain("run 2 (CI-2) is completed but carries no conclusion");
   });
 
-  // sort and tr die inside compute_missing (registration polling); sleep dies
-  // at the first poll of a running run. Exactly one message: a subshell
-  // re-raise must not print its own.
-  const unhandledCases: { id: string; env: Record<string, string>; reason: string }[] = [
-    { id: "sort", env: {}, reason: "unguarded plumbing must reach the trap, not set -e" },
-    { id: "tr", env: {}, reason: "the expectation split must fail loudly, not empty the gate" },
-    {
-      id: "sleep",
-      env: { GH_RUNS: "1@in_progress" },
-      reason: "a failure in the poll loop must surface as tooling trouble",
-    },
-  ];
-  test.each(unhandledCases)(
-    "an unguarded internal tool failure exits 2 with no verdict, never 1 or a vacuous 0: $id ($reason)",
-    (c) => {
-      const failDir = join(binDir, `${c.id}-fail-bin`);
-      mkdirSync(failDir, { recursive: true });
-      writeFileSync(join(failDir, c.id), "#!/usr/bin/env bash\nexit 1\n");
-      chmodSync(join(failDir, c.id), 0o755);
-      const r = run(
-        { GH_RUNS: "1", PATH: `${failDir}:${binDir}:${process.env.PATH ?? ""}`, ...c.env },
-        DEFAULT_ARGS,
-        { unhandled: true },
-      );
-      expect(r.code, c.id).toBe(2);
-      expect(r.stderr.split(TRAP_MESSAGE).length - 1, c.id).toBe(1);
-      expect(r.stdout, c.id).toBe("");
-    },
-  );
+  test("an internal failure in the poll loop exits 2 with no verdict, never 1 or a vacuous 0", () => {
+    // The script sleeps through a child process; a sleep that dies at the
+    // first poll of a running run is the one internal failure a fake on PATH
+    // can inject. Exactly one message: the failure must surface as tooling
+    // trouble, not as a pipeline verdict.
+    const failDir = join(binDir, "sleep-fail-bin");
+    mkdirSync(failDir, { recursive: true });
+    writeFileSync(join(failDir, "sleep"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(join(failDir, "sleep"), 0o755);
+    const r = run(
+      { GH_RUNS: "1@in_progress", PATH: `${failDir}:${binDir}:${process.env.PATH ?? ""}` },
+      DEFAULT_ARGS,
+      { unhandled: true },
+    );
+    expect(r.code).toBe(2);
+    expect(r.stderr.split(TRAP_MESSAGE).length - 1).toBe(1);
+    expect(r.stdout).toBe("");
+  });
 
   test("an older cancelled run of a re-triggered workflow is superseded, not red", () => {
     // Unsorted ids of different digit lengths pin the numeric (not lexical)

@@ -49,8 +49,8 @@ Your ENTIRE value is one report to whoever spawned you: the CI
 verdict for commit <full-sha> on <repo>, as the script's full output
 and its exit code, in every branch (green, red, or tooling trouble).
 A stop without that report is total failure. Procedure: run
-"<skill-dir>/scripts/watch-ci.sh" <full-sha> from the repo root as a
-FOREGROUND shell command inside your own turn, with the longest
+bun "<skill-dir>/scripts/watch-ci.mts" <full-sha> from the repo root
+as a FOREGROUND shell command inside your own turn, with the longest
 timeout your harness allows for a foreground command (Claude Code
 defaults to a 10-minute cap). If the script is still running when that
 cap hits, run it again: it is idempotent and re-reads the runs.
@@ -68,12 +68,12 @@ never fix, commit, or push from this role.
 
 The foreground clause is there because a watcher that backgrounds the script and ends its turn completes with nothing, so the lead receives an empty report and the verdict never arrives.
 
-Fallback without subagents: run the bundled `scripts/watch-ci.sh` as a background shell command. It does discovery, watching, and the failure report in one command.
+Fallback without subagents: run the bundled `scripts/watch-ci.mts` with bun as a background shell command. It does discovery, watching, and the failure report in one command.
 
 The path is relative to the installed skill folder, not the repo under review. Redirect its output to a file, and read that file when it exits:
 
 ```bash
-bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1
+bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1
 # exit 0: latest run per workflow green (older re-triggered runs are reported
 # as superseded, not judged); 1: some latest run ended with a non-success,
 # non-skipped conclusion (log excerpts in the file); 2: no runs registered or
@@ -82,13 +82,13 @@ bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.o
 
 The script refuses a vacuous green: the expected workflow (by default the one named `CI`) must be among the discovered runs, or it exits 2 naming what it did find.
 
-A repo whose gate workflow has a different name passes `--expect-workflow <name>` (repeatable or comma-separated) before the SHA. Names match exactly and case-sensitively, so a comma or newline can never be part of an expected name. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`.
+A repo whose gate workflow has a different name passes `--expect-workflow <name>` (repeatable or comma-separated) before the SHA. Names match exactly and case-sensitively, so a comma or newline can never be part of an expected name, and a name that starts with a dash is passed as `--expect-workflow=<name>`. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`.
 
 Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything. Only a persistent failure exits 2.
 
 The exit codes are ranked, not independent: a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2). A missing gate workflow plus a red bystander therefore exits 1, with the missing-workflow message still printed. Clear the red run, then watch again for the gate.
 
-In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the GraphQL discovery, the exit semantics, the expected-workflow gate, the superseded/FAIL/skip lines) to `scripts/watch-ci.sh`. A rename on either side fails CI until doc and script move together.
+In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the GraphQL discovery, the exit semantics, the expected-workflow gate, the superseded/FAIL/skip lines) to `scripts/watch-ci.mts`. A rename on either side fails CI until doc and script move together.
 
 ### 3. Report
 
@@ -117,7 +117,7 @@ Three rules follow:
 
 - **Discover and poll through GraphQL, never the Actions REST endpoints.** The bundled scripts read every workflow run on the commit, with its status and conclusion, in one `gh api graphql` request per page of 100 check suites per poll, and touch REST only for failed-job logs (`gh run view <id> --log-failed`, once per failed run).
 - **One CI poller per session at a time.** Queue the next push behind the running watcher. When the branch's runs share a `concurrency` group key, watch only the newest mainline tip instead: an older tip's watcher can end with no verdict to report (the group behavior is spelled out below).
-- **The sustained poll interval is at least 60 s.** The bundled script sleeps 60 s between polls (`poll_interval=60`).
+- **The sustained poll interval is at least 60 s.** The bundled script sleeps 60 s between polls (`POLL_INTERVAL_SECONDS = 60`).
 
 A hand-rolled watcher follows the same rules: discovery through the query in step 1, and never `gh run watch` at its 3 s default. A rate-limited GraphQL answer is tooling trouble (exit 2), never a reason to fall back to REST.
 

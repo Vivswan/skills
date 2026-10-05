@@ -17,7 +17,7 @@ const FILES = new Map<string, string>([
   ["tests/probe.test.ts", 'import { probe } from "../scripts/probe";'],
   [
     "tests/watch-ci-script.test.ts",
-    'const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.sh");',
+    'const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.mts");',
   ],
   [
     "tests/doc-drift.test.ts",
@@ -38,13 +38,13 @@ describe("selectTests", () => {
     ["the preload selects every test even when it is not in the map", ["tests/preload.ts"], ALL],
     [
       "a skill script run by path selects the test that names it",
-      ["skills/watch-ci-after-push/scripts/watch-ci.sh"],
+      ["skills/watch-ci-after-push/scripts/watch-ci.mts"],
       ["tests/watch-ci-script.test.ts"],
     ],
     ["a staged test runs itself", ["tests/doc-drift.test.ts"], ["tests/doc-drift.test.ts"]],
     [
       "a deleted script, absent from the map, still selects the test that names it",
-      ["scripts/gone.mts", "skills/watch-ci-after-push/scripts/watch-ci.sh"],
+      ["scripts/gone.mts", "skills/watch-ci-after-push/scripts/watch-ci.mts"],
       ["tests/watch-ci-script.test.ts"],
     ],
     [
