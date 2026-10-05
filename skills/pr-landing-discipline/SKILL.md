@@ -110,7 +110,14 @@ reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage endCurso
 
 Paginate with `after: <endCursor>` while `hasNextPage` is true. A fixed first page is not the full set.
 
-Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft, and prefer balanced or high reasoning where the repo exposes the setting). Requesting a Copilot review via the REST reviewers endpoint takes the reviewer login `Copilot`, exactly. `copilot-pull-request-reviewer[bot]` silently no-ops (a 201 response with empty `requested_reviewers`).
+Bot reviews that do not fire automatically on drafts are requested explicitly (e.g. add Copilot as a reviewer on the draft, and prefer balanced or high reasoning where the repo exposes the setting). The path that registers every time is the GraphQL mutation with Copilot's bot id:
+
+```bash
+pr_id="$(gh pr view <n> --json id --jq .id)"
+gh api graphql -f query='mutation($pr: ID!) { requestReviews(input: {pullRequestId: $pr, botIds: ["BOT_kgDOCnlnWA"], union: true}) { clientMutationId } }' -f pr="$pr_id"
+```
+
+The REST reviewers endpoint is the fallback. It takes the login `Copilot`, exactly, and on some days answers 201 with an empty `requested_reviewers` and no timeline event, request after request; `copilot-pull-request-reviewer[bot]` always no-ops that way.
 
 GraphQL `reviewRequests` hides a pending Copilot request either way, so the issue timeline is the only confirmation the request registered. Between rounds, never poll. Where the `/watch-ci-after-push` skill is installed, sleep on its `wait-for-pr-event` script, a background waiter whose exit wakes the session and names what changed.
 
