@@ -200,6 +200,10 @@ For every form:
 
 **Redact captured output before publishing, and publish no PII anywhere**: nothing published tells a reader who the author is, how they work, or how their machine is set up. `references/redaction.md` owns the definition: what to strip, what counts as PII, the substitutes, how to redact, and what stays.
 
+**The title's type names the behavior change, never the diff's shape.** If anything observable changed for a user or an integrator, the type is a visible one (`fix`, `feat`, `perf`, `revert`), even when the work began as a refactor or is mostly a move. `refactor` means every existing expectation still holds (tests may be restructured, never re-expected) and nothing observable moved.
+
+Release-please lists those types in the changelog and hides `refactor`, so a fix labelled refactor vanishes from the release notes.
+
 **Release-please reads the body.** In a repository released by release-please, Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) travel in the PR body as a commit-override block, the last element inside the Technical details section. Release-please parses that block in place of the squash message.
 
 - **The marker words appear nowhere else in the body.**
@@ -264,7 +268,7 @@ Over the cap means cut, not justify. Move detail down into part two, which has r
 - **Every claim still true.** The opening block is still accurate (its After side, or its only side, is what the code does now), the Proof numbers are the final run's, and every file named as current still exists under that name.
 - **Scope drift.** Work the review rounds added or removed is in the body, or its absence is deliberate.
 - **Sorting.** Part one holds what the reader needs about the change as it is now. Anything that became detail moved down; anything that became important (a review finding that changed the change, a line count that contradicts the purpose) moved up.
-- **Title.** Type and subject name what landed, not the opening plan.
+- **Title.** Type and subject name what landed, not the opening plan; the type follows the behavior rule above (a visible type once anything observable moved, never `refactor`).
 - **Size.** Part one is under 150 words, and no semicolon joins two clauses. `## How` and `## Proof` sit at their defaults unless this change needs more.
 
 A body that no longer matches, or no longer fits, is edited before the flip, never after the reader finds it.

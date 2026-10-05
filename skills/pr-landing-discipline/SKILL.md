@@ -155,7 +155,7 @@ The TARGET below is the kind the purpose acts on: source for a library change, s
 | Simplification, consolidation, retirement | target net negative; tests down only for the behavior removed | target net zero or up |
 | Bug fix | target touched at the defect site; tests up by the regression case | target grows well past the defect site, or tests +0 |
 | Feature | target and tests both up | tests +0 |
-| Behavior-preserving refactor | existing tests pass unchanged (restructuring or strengthening them is fine) | an existing test now expects a different output: the behavior changed, so the purpose is misstated |
+| Behavior-preserving refactor | existing tests pass unchanged (restructuring or strengthening them is fine) | an existing test now expects a different output: the behavior changed, so the purpose is misstated and the title's type is a visible one, not `refactor` (the `/pr-and-issue-discipline` skill's title rule) |
 | Docs or contract change | only docs and contract files change | executable code changes |
 
 Where a row says tests +0, naming the existing test that already covers the change answers it: a fix an existing assertion now pins, a feature an existing data-driven suite already exercises. Tests +0 on a deletion with no behavior of its own needs no words when the body carries the census (grep counts of the removed thing, before and after). The `/code-standards` skill's `references/tests.md` sets the census.
