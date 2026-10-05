@@ -272,19 +272,17 @@ const SURFACES: Record<string, Surface> = {
       },
     ],
   },
-  "watch-ci-after-push/SKILL.md <-> watch-ci.sh": {
+  "watch-ci-after-push/SKILL.md <-> watch-ci.mts": {
     docPath: join(WATCH_CI, "SKILL.md"),
-    scriptPath: join(WATCH_CI, "scripts", "watch-ci.sh"),
+    scriptPath: join(WATCH_CI, "scripts", "watch-ci.mts"),
     tokens: [
       {
-        doc: '"<skill-dir>/scripts/watch-ci.sh" <full-sha>',
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the parameter-expansion source fragment
-        script: 'sha="${1:-$(git rev-parse HEAD)}"',
+        doc: 'bun "<skill-dir>/scripts/watch-ci.mts" <full-sha>',
+        script: "sha: shaToken?.value ?? gitHead(),",
       },
       {
-        doc: 'bash "<skill-dir>/scripts/watch-ci.sh" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1',
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the parameter-expansion source fragment
-        script: 'sha="${1:-$(git rev-parse HEAD)}"',
+        doc: 'bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1',
+        script: 'spawnSync("git", ["rev-parse", "HEAD"]',
       },
       {
         doc: "**FULL 40-character SHA**: the GraphQL `object(oid:)` lookup rejects short SHAs outright",
@@ -292,60 +290,73 @@ const SURFACES: Record<string, Surface> = {
       },
       {
         doc: "in one `gh api graphql` request per page of 100 check suites per poll",
-        script:
-          'gh api graphql -f query="$suites_query" -f owner="$owner" -f name="$name" -f oid="$sha" "$@" --jq "$suites_filter"',
+        script: '["api", "graphql", "-f"',
+      },
+      {
+        doc: "in one `gh api graphql` request per page of 100 check suites per poll",
+        script: "checkSuites(first: 100, after: $cursor)",
       },
       {
         doc: 'select(.app.slug == "github-actions" and .workflowRun != null)',
-        script: 'select(.app.slug == "github-actions" and .workflowRun != null)',
+        script: 'if (app.slug !== "github-actions" || workflowRun === null) continue;',
       },
       {
         doc: "exit 0: latest run per workflow green",
         script:
-          '[ "$fail" -eq 1 ] && exit 1\n[ -n "$missing" ] && exit 2\n[ "$gherr" -eq 1 ] && exit 2\nexit 0',
+          "  if (failed) return 1;\n  if (missing.length > 0) return 2;\n  if (ghTrouble) return 2;\n  return 0;",
       },
       {
         doc: "a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2)",
         script:
-          '[ "$fail" -eq 1 ] && exit 1\n[ -n "$missing" ] && exit 2\n[ "$gherr" -eq 1 ] && exit 2',
+          "  if (failed) return 1;\n  if (missing.length > 0) return 2;\n  if (ghTrouble) return 2;",
       },
       {
         doc: "Exit 0: all green (skipped runs count as pass)",
-        script: 'echo "skip: $wfname ($id)"',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "print(`skip: ${run.name} (${run.id})`);",
       },
       {
         doc: "1: some latest run ended with a non-success, non-skipped conclusion",
-        script: 'fail=1\n      echo "FAIL($conclusion): $wfname ($id)"',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "failed = true;\n      print(`FAIL(${run.conclusion}): ${run.name} (${run.id})`);",
       },
       {
         doc: "Exit 1: some workflow's latest run ended with any non-success, non-skipped conclusion",
-        script: '[ "$fail" -eq 1 ] && exit 1',
+        script: "if (failed) return 1;",
       },
-      { doc: "Include the FAIL lines", script: 'echo "FAIL($conclusion): $wfname ($id)"' },
+      {
+        doc: "Include the FAIL lines",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "print(`FAIL(${run.conclusion}): ${run.name} (${run.id})`);",
+      },
       {
         doc: "older re-triggered runs are reported as superseded, not judged",
-        script: 'echo "superseded: $wfname ($id)"',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "print(`superseded: ${run.name} (${run.id})`);",
       },
       {
         doc: "(log excerpts in the file)",
-        script: 'gh run view "$id" --log-failed 2>&1 | tail -80 || true',
+        script: `'exec gh run view "$1" --log-failed 2>&1'`,
       },
       {
         doc: "2: no runs registered or gh failed",
         script:
-          'echo "no workflow runs registered for $sha after ~15s (or gh failed; check stderr above, gh auth status, and the remote)" >&2\n  exit 2',
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          "`no workflow runs registered for ${sha} after ~15s (or gh failed; check stderr above, gh auth status, and the remote)`",
       },
       {
         doc: "Exit 2: discovery or gh itself failed",
-        script: '[ "$gherr" -eq 1 ] && exit 2',
+        script: "if (ghTrouble) return 2;",
       },
       {
         doc: "`--expect-workflow <name>` (repeatable or comma-separated)",
-        script: "    --expect-workflow)",
+        script: '"expect-workflow": { type: "string", multiple: true }',
       },
       {
         doc: "or it exits 2 naming what it did find",
-        script: 'echo "expected workflow(s) not found for $sha: $missing; discovered only:',
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          '`expected workflow(s) not found for ${sha}: ${missing.join(", ")}; discovered only: ${found}.`',
       },
       {
         doc: "dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`",
@@ -353,19 +364,19 @@ const SURFACES: Record<string, Surface> = {
       },
       {
         doc: "Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything",
-        script: "discover_with_retry() {",
+        script: "const POLL_RETRY_ATTEMPTS = 3;",
       },
       {
-        doc: "The bundled script sleeps 60 s between polls (`poll_interval=60`)",
-        script: "poll_interval=60",
+        doc: "The bundled script sleeps 60 s between polls (`POLL_INTERVAL_SECONDS = 60`)",
+        script: "const POLL_INTERVAL_SECONDS = 60;",
       },
       {
-        doc: "The bundled script sleeps 60 s between polls (`poll_interval=60`)",
-        script: 'sleep "$poll_interval"',
+        doc: "The bundled script sleeps 60 s between polls (`POLL_INTERVAL_SECONDS = 60`)",
+        script: "sleep(POLL_INTERVAL_SECONDS);",
       },
       {
         doc: "touch REST only for failed-job logs (`gh run view <id> --log-failed`, once per failed run)",
-        script: 'gh run view "$id" --log-failed 2>&1 | tail -80 || true',
+        script: `'exec gh run view "$1" --log-failed 2>&1'`,
       },
     ],
   },
