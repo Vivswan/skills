@@ -65,7 +65,7 @@ xargs -I{} gh api -H 'Accept: application/vnd.github.diff' "repos/{owner}/{repo}
 rm -f "$out" "$diff" "$shas" "$old" "$needles"
 ```
 
-`grep exit 1` is clean. `grep exit 0` lists the hits, each read before it is called. The permitted matches are a product file name that carries a vendor's word, and the repository's own `owner/repo` coordinate in its install command.
+`grep exit 1` is clean. `grep exit 0` lists the hits, each read before it is called. The permitted matches are the ones the `/pr-and-issue-discipline` skill's `references/redaction.md` lists under what stays.
 
 A 4+ digit needle that coincides with a year, a sha fragment, or a port in an unrelated line is dismissed with that reading named. Every other hit is a blocking finding. A hit on a provenance phrase is a finding against the fixture it describes, whose fix is a hand-written fixture.
 
