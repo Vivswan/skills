@@ -134,7 +134,9 @@ Delete these and repoint the importers or callers at the defining module or real
 
 A wrapper earns its existence only by adding something real (a default, a conversion, error mapping, an injected dependency, a narrowed type). In Python, `__init__.py` stays EMPTY unless absolutely necessary: re-exports there are the same barrel.
 
-Full detail, including the migration-staging exception and what is not a barrel: `references/structure.md`.
+A confusing layout is the same defect one level up: any file or folder may move, a pure move is its own PR with an export census and an equal test count, every path the move changes follows it (references from elsewhere, relative paths inside the moved file), and a whole-repo reorganisation is proposed as a target layout first.
+
+Full detail, including the migration-staging exception, what is not a barrel, and the move rules: `references/structure.md`.
 
 ### No planning references in code
 
@@ -217,6 +219,7 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - A boundary that refuses state the tool outputs and could repair unambiguously, repairs input the tool only reads, or lets malformed input through to fail later; a healing step whose comment argues instead of stating the rule.
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
+- A move that leaves a path it changed unrepaired (an importer, a workflow or manifest path, a comment, a relative path inside the moved file), that edits the moved code beyond its paths in the same PR, or that lacks the export census and test count; a confusing layout kept because moving files is "churn".
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
@@ -229,5 +232,5 @@ Triage findings against the standards above. Each criterion maps to one.
 - `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort
 - `references/tests.md`: the minimum standard for tests, what counts as weak, the drift question every test answers, proving a guard test with a negative control, the census rule for deletions, hand-authored fixtures and the output-path rule for tools that measure real data
 - `references/comments.md`: what a good comment carries, tell then show, the two-question test, the specimens, the TODO ban, planning references
-- `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging
+- `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging, the pure-move PR and the target layout for a reorganisation
 - `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions
