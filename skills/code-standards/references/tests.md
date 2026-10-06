@@ -49,6 +49,14 @@ Every test answers "what would drift silently without this?" in its name or firs
 
 "The source says so" is not an answer. A test that restates what it read is edited in the same commit as the source, so nothing can drift under it. It is deleted in the PR that notices it, and a reviewer asking for one is declined with this rule.
 
+### A check earns its place
+
+What fails loudly on its own gets no check, nor does what the toolchain fixes itself: bun fetching a missing tool is its feature, not a failure. A missing package, a stale lockfile, a wrong toolchain all show in the next build or gate and are fixed then; a pre-check for one is deleted.
+
+What would fail silently gets a test, and it is never skipped as "it would fail anyway".
+
+Specimen: a 500-line pre-commit script compared installed packages against the lockfile. Every case it caught failed on its own in the next build. The script was deleted.
+
 ### A constant is the source
 
 A test of a single constant is the same restatement one hop closer. So is a test of a variable that is itself the source of its value (a default, a key name, an argv literal, a path). The literal sits once in the source and once in the test, and every new constant invites a new one.

@@ -61,6 +61,7 @@ Agents drift toward many small weak tests. The fix is tests that each pin a whol
 - **The drift question.** Every test answers "what would drift silently without this?" in its name or first line. Three answers count: an external fact the platform does not enforce for us, a cross-file consistency the source cannot express, or a regression with a named incident. "The source says so" means no test.
 - **A constant is the source.** A test of a single constant restates the source and grows with it. So does a test of a variable that is itself the source of its value (a default, a key name, an argv literal, a path).
 - **A shipped file is the source.** A test that parses a file the repository ships (a lint table, a workflow fragment, a settings layer) and asserts its contents back is the same restatement. A data file is not external because it is not code.
+- **A check earns its place.** What fails loudly on its own gets no check, nor does what the toolchain fixes itself (bun fetching a missing tool is its feature, not a failure): a missing package, a stale lockfile, a wrong toolchain all show in the next build and are fixed then. What would fail silently gets a test, never skipped as "it would fail anyway".
 - **Pin the value where it leaves the program** (the bytes written to a file, the line printed, the request sent), and only when that boundary is an external contract.
 - **Shape-only tests go.** Delete tests that only assert a shape, a type, or that something exists. If that fact matters, assert it inside a test that also checks the value.
 - **Parametrize one axis.** When hand-written cases differ only along one input axis, replace them with one parametrized case list.
@@ -176,7 +177,7 @@ A pre-commit hook checks what the developer staged and reports. It never changes
 - **Forbidden:** changing what the commit contains: no stage, no commit, no formatter-and-restage step (lint-staged and its kind are out).
 - **Forbidden:** anything else: no fix-then-pass, no git command that writes (`stash push`, `checkout`, `reset`, `push`, a `config` set), no network. A read-only query (`git diff --cached --name-only`, `git config --get`) stays.
 
-A hook itself installs nothing and goes no further than the tooling already offers. A toolchain that fetches what it needs on its own (bun does) is the toolchain's feature, not the hook installing. A check earns its place: a failure that is loud on its own, such as a missing `node_modules` the first bun script reports, needs no pre-check in front of it.
+A hook itself installs nothing and goes no further than the tooling already offers. A toolchain that fetches what it needs on its own (bun does) is the toolchain's feature, not the hook installing. A pre-check in front of a failure the tooling shows on its own is the check that never earns its place (see the tests floor above).
 
 The developer's move after a failure: run the generator or formatter, stage the result, rerun the commit.
 
@@ -204,6 +205,7 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - Tests that assert only a shape, a type, or that something exists.
 - Hand-written test functions that differ only along one input axis and should be one parametrized case list.
 - A guard test never seen failing on the bug it guards.
+- A check for a failure that is already loud without it or that the toolchain fixes itself, or a silent failure the project depends on left untested as "it would fail anyway".
 - A new test that restates the source it reads (a workflow test pinning `needs` to the list in the yaml, a constant pinned to its own literal, a shipped config file parsed and asserted back), or whose name or first line does not say what would drift silently without it.
 - A test manufactured for a deletion with no behavior of its own in place of a census in the PR body or landing report.
 - A fixture recorded from real data, a provenance comment saying so, or a tool that measures real data with a default output path or one inside the repository.
@@ -218,7 +220,7 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
-- A pre-commit hook that does anything beyond check-and-fail or check-write-the-fix-and-fail: staging, committing, a writing git command, fix-then-pass, network, an install or tool fetch, or a pre-check for a failure the tooling already shows loudly.
+- A pre-commit hook that does anything beyond check-and-fail or check-write-the-fix-and-fail: staging, committing, a writing git command, fix-then-pass, network, an install or tool fetch.
 
 Triage findings against the standards above. Each criterion maps to one.
 
