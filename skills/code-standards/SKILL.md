@@ -113,6 +113,16 @@ Specimen, a stack of eight one-fact sentences rewritten as tell, then rows:
 
 Full detail, the before/after specimens, and the TODO ban: `references/comments.md`.
 
+### Heal at the boundary, or refuse there
+
+Malformed input or state with one unambiguous repair is repaired at the boundary, reported where a user would want to know, and the program continues. Input with no repair, or with several candidate repairs, is refused at that same boundary. Nothing malformed passes through to fail later.
+
+Ownership follows the direction of data. What the tool only reads (a user's settings file, CLI arguments, a caller's payload) is never its own: a malformation there is refused, naming the key and the fix. What it outputs, directly or through something it drives (applied state, rendered config, caches, generated files), may be its own and is healed toward what the user declared. Unclear direction: ask the owner.
+
+A tool's own section inside a user-authored file splits the same way. A malformation the user typed there is reported, never healed, and the bad slot reads as absent where that is safe. A schema migration may rewrite that section once, since the tool moves its own data between its own shapes. Nothing outside the section is touched.
+
+A quoted `"true"` in a config file the tool manages is healed, since the tool could have written it right. The same `"true"` in the user's settings is the user's error and is refused. A comment on a healing step states the rule in one line and does not argue for it. Where the boundary sits is the `/no-invalid-states` skill's question.
+
 ### No barrel files or pass-through functions
 
 Delete these and repoint the importers or callers at the defining module or real function:
@@ -203,6 +213,7 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
 - Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), several ideas in one sentence, prose packed to fit a cap.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
+- A boundary that refuses state the tool outputs and could repair unambiguously, repairs input the tool only reads, or lets malformed input through to fail later; a healing step whose comment argues instead of stating the rule.
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
