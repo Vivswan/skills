@@ -22,6 +22,18 @@ The same rule one level down: a function whose whole body forwards to another fu
 
 A wrapper earns its existence only by adding something real: a default, a conversion, error mapping, an injected dependency, a narrowed type.
 
+## A confusing layout is a defect
+
+Folder structure is code. A layout that confuses a reader is tech debt and is fixed, not preserved; any file or folder may move, and nothing in a repository is off limits.
+
+A path something outside the repository reads by name (`.github/workflows/`, a skill folder's `SKILL.md`, a published package's import path) is that reader's contract, not layout; moving it is a visible change, never a pure move. Everything else is layout.
+
+A pure move lands as its own PR. Every path the move changes follows it in the same change: references to the old path from elsewhere (importers, workflow and manifest paths, comments) and relative paths inside the moved file. Nothing is left behind to keep old paths working (the barrel rule above).
+
+The PR body carries an export census (the exported names before and after, equal) and the test count (equal). A move mixed with an edit hides the edit inside rename rows; split them.
+
+A whole-repo reorganisation is proposed as a target layout first, one tree with one line per folder saying what lives there, and files move only after the owner agrees to it.
+
 ## The same rule in other languages
 
 - **Python**: `__init__.py` runs at package import, so keep it EMPTY unless absolutely necessary. Re-exporting symbols from it builds a barrel: the real dependency graph hides behind the package name and import cycles become easy to mint. Importers name the defining module (`from pkg.user import User`, not `from pkg import User`).
