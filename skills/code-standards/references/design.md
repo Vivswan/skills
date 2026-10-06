@@ -78,8 +78,12 @@ A good library is maintained (a release or a merged fix within the year), licens
 
 How to apply:
 
-- Before writing a parser, a fetcher, a schema, a format converter, a retry loop, or a CLI framework, look for the package that does it. The search takes minutes and the maintenance it saves lasts years.
-- A large library, or a fit that is unclear (it does most of the job, or it does the job a different way), is a question to the owner before the work, with the library named.
+- Before writing a parser, a fetcher, a schema, a format converter, a retry or backoff loop, a lock or serializer, a date or zone helper, a static scanner, or CLI plumbing, search for the package that does it. The search takes minutes and the maintenance it saves lasts years.
+- The search is recorded where the change is described (the brief, then the PR body or the landing report): the library used, or what was searched and why nothing fits.
+- A tool already present in the repository counts as the library: a lint rule engine's restricted-syntax rule in place of a hand-written AST scanner, a linter already in the job in place of a second checker, a framework's built-in search in place of a custom one.
+- The rule covers code a change adds, moves, touches, reuses, or depends on, not only code it adds. A moved or reused helper is reviewed as if new. A change routed through a hand-rolled loop asks whether the loop should exist.
+- A confirmed library candidate becomes a swap task on the board; it is never filed as "recorded, not built". A large library or an unclear fit asks the owner first, next bullet, and the task follows their answer.
+- A large library, or a fit that is unclear (it does most of the job, or it does the job a different way), is a question to the owner before the work, with the library named. The owner decides, never the lead or builder. Dependency weight is not a reason to keep hand-rolled code.
 - The one exception: a library that needs a runtime or API the repository has dropped is not a fit, however good. Specimen: a dependency graph tool that requires the TypeScript compiler API is not a fit for a repository pinned to a TypeScript that no longer ships one. The hand-rolled parser walk stays, and the reason is recorded where the walk lives.
 - At review, a reviewer treats hand-rolled code whose whole job a good library does as a finding that names the library. A finding that names no library is a style opinion.
 

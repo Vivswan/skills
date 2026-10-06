@@ -49,6 +49,8 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 | `## Proof` | 2 to 4 bullets by default, latest totals only |
 | `Technical details` | No length cap. One fact per line, one sentence each |
 
+When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` carries one more bullet: `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
+
 **Readability is an accessibility requirement.** Readers include people with dyslexia, and a wall of prose costs them the PR. The standard is the one the `/working-text` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
 
 These rules bind PR bodies and the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
@@ -86,6 +88,7 @@ changed: api -> dependency closure {base, api} -> shards: [base, base+api]
 - **Validates the manifest** against the checkout before anything else runs.
 - **Closes each changed context** over its declared dependencies.
 - **Emits the GitHub Actions matrix** from the closure, one shard per entry.
+- **Library:** `ajv`, covers the manifest schema validation.
 
 ## Proof
 
@@ -118,6 +121,8 @@ scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; age
 before: probe start -> fixed 120s -> timeout -> agent marked dead (mid-build)
 after:  probe start -> 120s up -> build lock held? -> extend to 300s -> live verdict
 ```
+
+- **Library:** the runtime's own one-call file lock, covers the build lock.
 
 ## Proof
 

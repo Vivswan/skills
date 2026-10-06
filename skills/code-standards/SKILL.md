@@ -48,6 +48,8 @@ Full detail: `references/design.md`.
 
 Never hand-roll what a good library already does: the hand-rolled version is maintained for as long as the code lives, the library by its authors. A large library, or a fit that is unclear, is a question to the owner before the work. Otherwise the library wins.
 
+The search happens before the first line and is written down: the brief, then the PR body or the landing report, names the library used, or the search and why nothing fits. A tool already in the repository counts as the library. The rule covers code a change adds, moves, touches, reuses, or depends on, not only code it adds.
+
 Specimen: an audit of one repository's CI scripts found five whose whole job existing tooling already did. A published package covered four (two schema fetchers, an events enum, generated action docs). A build followed by `git diff --exit-code` covered the drift check.
 
 Full detail, including what makes a library good and the one exception (a library that needs a runtime or API the repository has dropped): `references/design.md`.
@@ -213,7 +215,7 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - A fixture recorded from real data, a provenance comment saying so, or a tool that measures real data with a default output path or one inside the repository.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
-- Hand-rolled code whose whole job a good library already does. The finding names the library and what it covers.
+- Hand-rolled code, added, moved, touched, reused, or depended on, whose whole job a good library or a tool already in the repository does; the finding names the library and what it covers. A change in a library-shaped category whose record (the brief, then the PR body or the landing report) names no library and no search.
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
 - Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), several ideas in one sentence, prose packed to fit a cap.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
