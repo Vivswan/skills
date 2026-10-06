@@ -16,10 +16,4 @@ if [ ! -f .githooks/pre-commit.mts ]; then
 	exit 1
 fi
 
-if ! command -v bun >/dev/null 2>&1; then
-	echo "pre-commit: bun not found on PATH; the hook cannot run." >&2
-	echo "Install it from https://bun.sh (curl -fsSL https://bun.sh/install | bash) and retry." >&2
-	exit 1
-fi
-
 exec bun .githooks/pre-commit.mts "$@"

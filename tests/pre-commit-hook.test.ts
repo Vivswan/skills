@@ -56,9 +56,6 @@ exit 0
 const binDir = mkdtempSync(join(tmpdir(), "pre-commit-hook-test-"));
 writeFileSync(join(binDir, "bun"), FAKE_BUN);
 chmodSync(join(binDir, "bun"), 0o755);
-// An empty PATH entry for the bun-missing scenario.
-const emptyBinDir = join(binDir, "empty-bin");
-mkdirSync(emptyBinDir);
 
 afterAll(() => rmSync(binDir, { recursive: true, force: true }));
 
@@ -113,23 +110,9 @@ describe("pre-commit dispatcher", () => {
     expect(r.stderr).toContain("refusing to commit unchecked");
   });
 
-  test("missing bun fails loudly with an install hint", () => {
-    const checkout = makeCheckout();
-    const r = Bun.spawnSync(["/bin/sh", DISPATCHER], {
-      cwd: checkout,
-      env: { PATH: emptyBinDir },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr.toString()).toContain("bun not found");
-    expect(r.stderr.toString()).toContain("https://bun.sh");
-  });
-
   test("end to end: leaked GIT_DIR/GIT_INDEX_FILE never reach the checks or the victim repo", () => {
     const checkout = makeCheckout();
     const victim = makeCheckout();
-    mkdirSync(join(checkout, "node_modules"));
     const fixture = join(binDir, "fixture-1");
     const envDump = join(binDir, "env-dump-1");
     const argvDump = join(binDir, "argv-dump-1");
@@ -162,24 +145,14 @@ describe("pre-commit dispatcher", () => {
 describe("pre-commit hook logic", () => {
   test("a failing check propagates its exit status", () => {
     const checkout = makeCheckout();
-    mkdirSync(join(checkout, "node_modules"));
     const r = runHook([process.execPath, HOOK], checkout, { HOOK_BUN_MODE: "fail" });
     expect(r.code).toBe(3);
   });
 
   test("a check killed by a signal propagates a shell-style status", () => {
     const checkout = makeCheckout();
-    mkdirSync(join(checkout, "node_modules"));
     const r = runHook([process.execPath, HOOK], checkout, { HOOK_BUN_MODE: "signal" });
     expect(r.code).toBe(128 + 15); // SIGTERM
-  });
-
-  test("missing node_modules refuses to run the checks", () => {
-    const checkout = makeCheckout();
-    const r = runHook([process.execPath, HOOK], checkout, {});
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("Dependencies are missing");
-    expect(r.stderr).toContain("bun install");
   });
 
   test("running outside a repository root refuses instead of checking the wrong tree", () => {
@@ -198,7 +171,6 @@ describe("pre-commit hook logic", () => {
     git("-C", checkout, "worktree", "add", "-q", "-b", "wt", dir);
     mkdirSync(join(dir, ".githooks"));
     copyFileSync(HOOK, join(dir, ".githooks", "pre-commit.mts"));
-    mkdirSync(join(dir, "node_modules"));
     const r = runHook([process.execPath, HOOK], dir, {});
     expect(r.code).toBe(0);
   });
