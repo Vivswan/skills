@@ -1,6 +1,6 @@
 # Rubber Duck Review
 
-`/rubber-duck-review` is a portable review skill for getting a second opinion from another model without giving that reviewer write access.
+`/rubber-duck-review` is a portable review skill for getting a second opinion from another model, with the reviewer kept read-only wherever the host can enforce it.
 
 ## Install
 
@@ -20,7 +20,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/rubber-duck-re
 
 - Launches a review-only pass with another model, tool, or CLI
 - Ships `scripts/run-review.mts`, which spawns the reviewer safely (no shell, stdin closed or fed from the prompt file, stream captured to a tmp dir kept for 24 hours) and prints the extracted verdict
-- Keeps the reviewer read-only
+- Keeps the reviewer read-only. Where codex's bubblewrap sandbox cannot start (a container whose AppArmor profile denies mount propagation), it reviews an unsandboxed snapshot copy of the repository, removed when the review ends (or reported as not removed), and the report says so
 - Focuses findings on demonstrable defects and design quality. Speculative hardening is recorded, not built, unless the user asks or, in a repository with more than 100 GitHub stars, confirms it after being shown the risk
 - Encourages re-review after fixes
 

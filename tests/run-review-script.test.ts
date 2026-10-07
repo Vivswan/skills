@@ -86,8 +86,22 @@ const CLAUDE_RESULT_LINE = JSON.stringify({
 
 const FAKE_CODEX = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
-if [ "$1 $2 $3 $4 $5" != "exec --json --sandbox read-only --output-schema" ] || [ "$#" -ne 7 ]; then
+# The launch probes the sandbox with a no-op first. STUB_SANDBOX=bwrap plays a
+# container whose AppArmor profile denies bubblewrap's mount propagation.
+if [ "$1 $2 $3" = "sandbox -- true" ] && [ "$#" -eq 3 ]; then
+  if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then
+    echo 'bwrap: Failed to make / slave: Permission denied' >&2; exit 1
+  fi
+  exit 0
+fi
+if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then policy=danger-full-access; else policy=read-only; fi
+if [ "$1 $2 $3 $4 $5" != "exec --json --sandbox $policy --output-schema" ] || [ "$#" -ne 7 ]; then
   violate "codex argv: $*"; exit 64
+fi
+if [ -n "\${STUB_CWD_REPORT:-}" ]; then
+  { echo "$PWD"; git rev-parse --show-toplevel; git --no-pager diff --cached --name-only; } > "\${STUB_CWD_REPORT}"
+  # A write the prompt forbade: it must land in the copy, never in the checkout under review.
+  touch "$(git rev-parse --show-toplevel)/REVIEWER_WROTE"
 fi
 if [ "$6" != "\${STUB_SCHEMA}" ] || [ ! -f "$6" ]; then
   violate "codex schema: $6"; exit 64
@@ -244,17 +258,28 @@ esac
 exit "\${STUB_EXIT:-0}"
 `;
 
+/** The copy-mode snapshot runs `cp` through PATH, so this stub can fail it midway. */
+const FAKE_CP = `#!/usr/bin/env bash
+if [ "\${STUB_CP_FAIL:-0}" = "1" ]; then
+  mkdir -p "$3"; : > "$3/partial"; echo "cp: disk full" >&2; exit 1
+fi
+exec /bin/cp "$@"
+`;
+
 const binDir = mkdtempSync(join(tmpdir(), "run-review-test-"));
 const emptyBinDir = mkdtempSync(join(tmpdir(), "run-review-nobin-"));
 for (const [name, body] of [
   ["codex", FAKE_CODEX],
   ["claude", FAKE_CLAUDE],
   ["copilot", FAKE_COPILOT],
+  ["cp", FAKE_CP],
 ] as const) {
   writeFileSync(join(binDir, name), body);
   chmodSync(join(binDir, name), 0o755);
 }
 const mintedDirs: string[] = [];
+/** Fixture repositories and bare directories the copy-mode cases run from. */
+const fixtureDirs: string[] = [];
 /** Prompt files reach a launch only through a `prepare`-minted path. */
 function mintPrompt(section: string, content: string = PROMPT): string {
   const result = Bun.spawnSync([process.execPath, SCRIPT, "prepare", section], {
@@ -274,23 +299,26 @@ afterAll(() => {
   rmSync(binDir, { recursive: true, force: true });
   rmSync(emptyBinDir, { recursive: true, force: true });
   for (const dir of mintedDirs) rmSync(dir, { recursive: true, force: true });
+  for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true });
 });
 
 interface Report {
   verdict: Record<string, unknown>;
   tool_calls: number;
   capture: string;
+  sandbox?: "copy";
   trajectory: { event: string; text?: string }[];
 }
 
 let scenario = 0;
-function run(args: string[], env: Record<string, string> = {}, path?: string) {
+function run(args: string[], env: Record<string, string> = {}, path?: string, cwd?: string) {
   scenario += 1;
   const violations = join(binDir, `violations-${scenario}`);
   const promptCopy = join(binDir, `prompt-copy-${scenario}`);
   // process.execPath is absolute, so the script launches even when PATH is
   // reduced to the stub dir (the missing-binary scenario).
   const result = Bun.spawnSync([process.execPath, SCRIPT, ...args], {
+    cwd,
     env: {
       ...process.env,
       PATH: path ?? `${binDir}:${process.env.PATH}`,
@@ -319,9 +347,13 @@ function run(args: string[], env: Record<string, string> = {}, path?: string) {
   const kept = /(?:output|stderr) kept at ([^)\n]+)/.exec(stderr)?.[1];
   if (kept) rmSync(dirname(kept), { recursive: true, force: true });
   let report: Report | null = null;
+  // Copy mode keeps its repository snapshot at <scratch>/repo only while the
+  // reviewer runs; read whether one survived before the sweep below.
+  let copyLeft = false;
   if (result.exitCode === 0 && stdout.startsWith("{")) {
     report = JSON.parse(stdout) as Report;
     expect(existsSync(report.capture)).toBe(true);
+    copyLeft = existsSync(join(dirname(report.capture), "repo"));
     rmSync(dirname(report.capture), { recursive: true, force: true });
   }
   return {
@@ -329,6 +361,7 @@ function run(args: string[], env: Record<string, string> = {}, path?: string) {
     stdout,
     stderr,
     promptCopy,
+    copyLeft,
     /** The parsed JSON report of a successful review, or a throw. */
     report(): Report {
       if (report === null) throw new Error(`no report on stdout: ${stdout}\n${stderr}`);
@@ -631,6 +664,201 @@ describe("run-review.mts", () => {
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("reviewer binary not found");
   });
+
+  /** A repository with one staged change and an untracked file, the shape a
+   * pre-commit review targets; `git status` must read the same after the run. */
+  function fixtureRepo(): string {
+    const repo = mkdtempSync(join(tmpdir(), "run-review-repo-"));
+    fixtureDirs.push(repo);
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+      expect(result.stderr.toString(), args.join(" ")).toBe("");
+      expect(result.exitCode, args.join(" ")).toBe(0);
+    };
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "one\n");
+    git("add", "a.txt");
+    git("commit", "-q", "-m", "init");
+    writeFileSync(join(repo, "a.txt"), "two\n");
+    git("add", "a.txt");
+    mkdirSync(join(repo, "sub"));
+    writeFileSync(join(repo, "sub", "note.txt"), "untracked\n");
+    return repo;
+  }
+
+  function porcelain(repo: string): string {
+    return Bun.spawnSync(["git", "status", "--porcelain", "-uall"], {
+      cwd: repo,
+      stdout: "pipe",
+    }).stdout.toString();
+  }
+
+  const BWRAP_LINE =
+    "codex sandbox unavailable (bwrap: Failed to make / slave: Permission denied): reviewing an unsandboxed snapshot copy at ";
+
+  test("codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy that dies with the review", () => {
+    const repo = fixtureRepo();
+    const before = porcelain(repo);
+    const cwdReport = join(binDir, "cwd-report-copy");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: cwdReport },
+      undefined,
+      join(repo, "sub"),
+    );
+    expect(r.code).toBe(0);
+    expect(r.report().sandbox).toBe("copy");
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
+    // The reviewer ran in the cwd's twin inside the copy, with the staged change intact.
+    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
+    expect(copyCwd).toMatch(/\/rubber-duck-[^/]+\/repo\/sub$/);
+    expect(top).toBe(dirname(copyCwd as string));
+    expect(staged).toEqual(["a.txt"]);
+    // Its write landed in the copy, the copy is gone, and the checkout reads as before.
+    expect(r.copyLeft).toBe(false);
+    expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
+    expect(porcelain(repo)).toBe(before);
+    expect(r.stderr).toContain(BWRAP_LINE);
+  });
+
+  test("copy mode drops GIT_DIR and GIT_WORK_TREE, so the reviewer's git reads the copy, not the checkout", () => {
+    const repo = fixtureRepo();
+    const cwdReport = join(binDir, "cwd-report-redirect");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_CWD_REPORT: cwdReport,
+        GIT_DIR: join(repo, ".git"),
+        GIT_WORK_TREE: repo,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
+    expect(top).toBe(copyCwd as string);
+    expect(top).not.toBe(repo);
+    expect(staged).toEqual(["a.txt"]);
+    expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
+  });
+
+  test("the sandbox probe passing keeps codex read-only: no copy, no fallback line", () => {
+    const repo = fixtureRepo();
+    const r = run(["codex", promptFile], {}, undefined, repo);
+    expect(r.code).toBe(0);
+    expect(r.report().sandbox).toBeUndefined();
+    expect(r.copyLeft).toBe(false);
+    expect(r.stderr).not.toContain("snapshot copy");
+  });
+
+  test("codex whose sandbox cannot start, outside a git repository, is a usage error: exit 2", () => {
+    const bare = mkdtempSync(join(tmpdir(), "run-review-norepo-"));
+    fixtureDirs.push(bare);
+    const r = run(["codex", promptFile], { STUB_SANDBOX: "bwrap" }, undefined, bare);
+    expectFailure(r, {
+      code: 2,
+      stderr: `codex sandbox unavailable (bwrap: Failed to make / slave: Permission denied) and ${bare} is not inside a git repository: nothing to snapshot`,
+    });
+  });
+
+  test("--background in copy mode: the launch record carries the sandbox and --extract reports it", () => {
+    const repo = fixtureRepo();
+    const launched = run(
+      ["codex", promptFile, "--background"],
+      { STUB_SANDBOX: "bwrap" },
+      undefined,
+      repo,
+    );
+    expect(launched.code).toBe(0);
+    const outputFile = backgroundOutputFile(launched.stdout);
+    expect(
+      JSON.parse(readFileSync(join(dirname(outputFile), "review.status"), "utf-8")),
+    ).toMatchObject({ tool: "codex", output: "review.jsonl", sandbox: "copy" });
+    expect(waitForStatus(outputFile)).toBe("0");
+    const extracted = run(["codex", "--extract", outputFile]);
+    expect(extracted.code).toBe(0);
+    expect(extracted.report().sandbox).toBe("copy");
+    expect(extracted.copyLeft).toBe(false);
+  });
+
+  test("a launch record naming an unknown sandbox is a usage error: exit 2", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-review-sandbox-"));
+    fixtureDirs.push(dir);
+    writeFileSync(join(dir, "review.jsonl"), COMPLETE_CODEX_STREAM);
+    writeFileSync(
+      join(dir, "review.status"),
+      JSON.stringify({ tool: "codex", output: "review.jsonl", sandbox: "none", status: "0" }),
+    );
+    expectFailure(run(["codex", "--extract", join(dir, "review.jsonl")]), {
+      code: 2,
+      stderr: "unknown sandbox",
+    });
+  });
+
+  test("a snapshot that fails midway leaves no partial copy in the retained capture dir", () => {
+    const repo = fixtureRepo();
+    const launched = run(
+      ["codex", promptFile, "--background"],
+      { STUB_SANDBOX: "bwrap", STUB_CP_FAIL: "1" },
+      undefined,
+      repo,
+    );
+    expect(launched.code).toBe(0);
+    const outputFile = backgroundOutputFile(launched.stdout);
+    expect(waitForStatus(outputFile)).toContain(
+      `spawn failed: Error: snapshot of ${repo} failed: cp: disk full`,
+    );
+    expect(existsSync(join(dirname(outputFile), "repo"))).toBe(false);
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  // Root removes a 0555 directory's contents regardless, so the refusal this
+  // case pins cannot happen there.
+  test.skipIf(process.getuid?.() === 0)(
+    "a copy its own modes refuse to remove is reported and left to the purge; the verdict still lands",
+    () => {
+      const repo = fixtureRepo();
+      mkdirSync(join(repo, "locked"));
+      writeFileSync(join(repo, "locked", "pinned.txt"), "x\n");
+      chmodSync(join(repo, "locked"), 0o555);
+      let copy: string | null = null;
+      try {
+        // Not run(): its sweep of the capture dir would hit the same refusal.
+        const result = Bun.spawnSync([process.execPath, SCRIPT, "codex", promptFile], {
+          cwd: repo,
+          env: {
+            ...process.env,
+            PATH: `${binDir}:${process.env.PATH}`,
+            STUB_VIOLATIONS: join(binDir, "violations-locked"),
+            STUB_SCHEMA: SCHEMA,
+            STUB_EXPECT_DELIVERY: "argv",
+            STUB_SANDBOX: "bwrap",
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        expect(result.exitCode).toBe(0);
+        const report = JSON.parse(result.stdout.toString()) as Report;
+        copy = join(dirname(report.capture), "repo");
+        expect(report.sandbox).toBe("copy");
+        expect(report.verdict).toEqual(CODEX_VERDICT);
+        expect(existsSync(join(copy, "locked", "pinned.txt"))).toBe(true);
+        expect(result.stderr.toString()).toContain(`not removed ${copy}: `);
+        // review.err outlives the run, so a detached monitor's warning survives too.
+        expect(readFileSync(join(dirname(copy), "review.err"), "utf-8")).toContain(
+          `not removed ${copy}: `,
+        );
+      } finally {
+        // Both trees carry the refusing mode; restore them whichever assertion failed.
+        chmodSync(join(repo, "locked"), 0o755);
+        if (copy !== null) {
+          chmodSync(join(copy, "locked"), 0o755);
+          rmSync(dirname(copy), { recursive: true, force: true });
+        }
+      }
+    },
+  );
 
   test("unknown reviewer or missing prompt file are usage errors: exit 2", () => {
     const cases = [

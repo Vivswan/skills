@@ -32,6 +32,7 @@ Use this skill when someone asks for:
   - The script enforces read-only flags: `--sandbox read-only` (codex) / `--permission-mode plan` (claude) / a read-only tool allow-list (copilot).
   - Read-only still lets the reviewer self-check: it can run read-only commands (grep, `git diff`, typecheck) but writes are blocked. copilot can only read and grep files. That self-checking makes findings concrete.
   - Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.
+  - Where codex's own sandbox cannot start, the script reviews an unsandboxed snapshot copy instead (step 4). That is an exception to this rule with no enforced filesystem confinement: the prompt's review-only instruction is the only guard, and the copy keeps a write it forbade out of the checkout under review by path alone.
 
 ### 2. Large change sets: fan out one review per section
 
@@ -105,6 +106,10 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 
 - Reviewer argument:
   - `codex`: runs `codex exec --json --sandbox read-only --output-schema <schema>`.
+    - The launch first probes the sandbox with `codex sandbox -- true`. codex runs every sandboxed command under bubblewrap, and a container whose AppArmor profile denies mount propagation refuses it at start: `bwrap: Failed to make / slave: Permission denied`.
+    - That refusal alone switches the launch. The script copies the repository (`cp -a` of the git toplevel, index included, so `git diff --cached` shows the same change) into the review's scratch dir and runs codex with `--sandbox danger-full-access` inside a snapshot copy, from the cwd's twin there.
+    - The copy is removed when the reviewer exits (a copy whose own modes refuse is reported on stderr as `not removed` and left to the 24 h purge), and the report and the launch record carry `sandbox: "copy"`. A stderr line names the refusal and the copy's path.
+    - Outside a git repository there is nothing to snapshot: exit 2. Any other probe failure (a codex too old for the subcommand) keeps the read-only launch.
   - `claude`: runs `claude -p --permission-mode plan --verbose --output-format stream-json --json-schema <schema>` (`--verbose` is required with `stream-json`).
   - `copilot`: runs `copilot -p <prompt> -s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps`. Last-resort fallback, so prefer codex/claude. Its limits:
     - The read-only tool allow-list lets it read and grep files, but it cannot shell out, write, reach MCP servers, or spawn subagents.
@@ -118,12 +123,12 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - `output-file` is the captured stream. A detached monitor records the reviewer's exit status beside it.
   - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 5).
   - Killing that PID cancels the review (the signal is forwarded to the reviewer).
-- Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line). Silence in between is normal. A real review can take a while.
+- Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line; the codex copy mode adds its notice first). Silence in between is normal. A real review can take a while.
 - Runtime: `bun`. `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
 - Exit codes:
   - 0: verdict extracted and printed to stdout as the JSON report, or a `--background` launch started (that run's verdict comes later, via `--extract`).
   - 1: `review FAILED - relaunch`.
-  - 2: usage error or reviewer binary not found.
+  - 2: usage error, reviewer binary not found, or codex's sandbox unavailable outside a git repository.
 - In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the reviewer invocations, the flags, the exit codes, the failure verdict) to `scripts/run-review.mts`. A rename on either side fails CI until doc and script move together.
 
 ### 5. Act on the printed verdict
