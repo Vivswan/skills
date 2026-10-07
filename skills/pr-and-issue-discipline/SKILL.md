@@ -45,7 +45,7 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 | Region | Budget |
 | --- | --- |
 | Part one prose (words outside fenced blocks) | 150 words, hard cap |
-| Flow blocks | One ASCII text block per state inside `## Before` and `## After`, or one block with both lines under a single opening section, ahead of the output. Fenced, so outside the prose count |
+| Flow blocks, where the flow moved | One ASCII text block per state inside `## Before` and `## After`, or one block with both lines under a single opening section, ahead of the output. Fenced, so outside the prose count |
 | `## How` | 3 to 6 bullets by default, one sentence each, about 15 words. Or one small table |
 | `## Proof` | 2 to 4 bullets by default, latest totals only |
 | `Technical details` | No length cap. One fact per line, one sentence each |
@@ -104,7 +104,7 @@ changed: api -> dependency closure {base, api} -> shards: [base, base+api]
 
 ### Existing behavior change or bug fix
 
-Open with `## Before` / `## After`. Each section is one state, shown in this order: the flow as it ran, then the real captured output. The flow is plain ASCII in a text block, arrows between steps, a branch on its own indented line. Never mermaid.
+Open with `## Before` / `## After`. Each section is one state, shown in this order where the change moved each: the flow as it ran, then the real captured output. The flow is plain ASCII in a text block, arrows between steps, a branch on its own indented line. Never mermaid.
 
 Each block is there only when the change moved it. A fix that moved a flow but left the output unchanged shows the flow alone; a fix to a message, a constant, or a typo in output shows the output alone. Never a block or a sentence saying nothing changed.
 
