@@ -350,6 +350,15 @@ function snapshotRepository(
     const detail = cp.error?.message ?? cp.stderr.toString().trim();
     return { ok: false as const, reason: `snapshot of ${launch.root} failed: ${detail}` };
   }
+  // A repository-level core.worktree names the live checkout by absolute path
+  // and travelled with the copied config; unset, git finds the copy. Only for
+  // a `.git` directory: in a linked worktree `--local` is the shared config.
+  if (lstatSync(join(copy, ".git")).isDirectory()) {
+    spawnSync("git", ["-C", copy, "config", "--local", "--unset-all", "core.worktree"], {
+      env: withoutGitEnv(process.env),
+      stdio: "ignore",
+    });
+  }
   return { ok: true as const, copy, cwd: join(copy, launch.subdir) };
 }
 

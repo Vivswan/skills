@@ -746,6 +746,33 @@ describe("run-review.mts", () => {
     expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
   });
 
+  test("a copied core.worktree is unset in the copy, so the reviewer's git finds the copy", () => {
+    const repo = fixtureRepo();
+    const configured = Bun.spawnSync(["git", "config", "--local", "core.worktree", repo], {
+      cwd: repo,
+    });
+    expect(configured.exitCode).toBe(0);
+    const cwdReport = join(binDir, "cwd-report-worktree");
+    // GIT_DIR would point the unset at the live config; the launcher must drop it there too.
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: cwdReport, GIT_DIR: join(repo, ".git") },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
+    expect(top).toBe(copyCwd as string);
+    expect(staged).toEqual(["a.txt"]);
+    expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
+    // The checkout's own config is untouched.
+    const kept = Bun.spawnSync(["git", "config", "--local", "core.worktree"], {
+      cwd: repo,
+      stdout: "pipe",
+    });
+    expect(kept.stdout.toString().trim()).toBe(repo);
+  });
+
   test("the sandbox probe passing keeps codex read-only: no copy, no fallback line", () => {
     const repo = fixtureRepo();
     const r = run(["codex", promptFile], {}, undefined, repo);
