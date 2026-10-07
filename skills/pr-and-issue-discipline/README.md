@@ -3,11 +3,12 @@
 `/pr-and-issue-discipline` fires when an agent opens a pull request, writes or changes its body or title, or writes an issue. It holds every PR and issue to the same discipline:
 
 - **Show, do not describe.** A fenced block is the text form of a picture.
-  - Real captured output where behavior is observable.
+  - The flow and the real captured output, each where the change moved it.
   - A diagram, table, or contract shape where nothing runs.
   - The reader skims it and gets the change.
 - **Shaped to the change.** What-this-adds, before/after (or what-this-changes for a pure refactor), or what-this-specifies.
-  - Then `## How`: short bullets, or one small diagram or table where that explains the mechanism faster.
+  - Flow first, then output, inside each of Before and After: the flow as ASCII (arrows between steps, a branch on its own indented line, never mermaid), then the captured output. Each is shown only when the change moved it.
+  - Then `## How`: short bullets, or one small table where that explains the mechanism faster.
   - Then `## Proof`: the tests and gates, latest totals only.
   - Secrets stripped and machine paths genericized before publishing.
 - **Two parts, the human part under a size budget.**
