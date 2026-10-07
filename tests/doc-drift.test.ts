@@ -221,7 +221,23 @@ const SURFACES: Record<string, Surface> = {
       {
         doc: "`codex`: runs `codex exec --json --sandbox read-only --output-schema <schema>`",
         script:
-          'codex: (prompt) => [\n    "exec",\n    "--json",\n    "--sandbox",\n    "read-only",\n    "--output-schema",\n    SCHEMA_FILE,\n    prompt,\n  ],',
+          'codex: (prompt, sandbox) => [\n    "exec",\n    "--json",\n    "--sandbox",\n    sandbox,\n    "--output-schema",\n    SCHEMA_FILE,\n    prompt,\n  ],',
+      },
+      {
+        doc: "`codex sandbox -- true`",
+        script: 'spawnSync("codex", ["sandbox", "--", "true"]',
+      },
+      {
+        doc: "`bwrap: Failed to make / slave: Permission denied`",
+        script: "const BWRAP_REFUSAL = /^bwrap: .*$/m;",
+      },
+      {
+        doc: "`--sandbox danger-full-access` inside a snapshot copy",
+        script: 'args = delivery.args("danger-full-access");',
+      },
+      {
+        doc: 'the report and the launch record carry `sandbox: "copy"`',
+        script: "...(sandbox === undefined ? {} : { sandbox }),",
       },
       {
         doc: "`claude`: runs `claude -p --permission-mode plan --verbose --output-format stream-json --json-schema <schema>`",
@@ -260,7 +276,7 @@ const SURFACES: Record<string, Surface> = {
           "`review FAILED - relaunch (${extraction.reason}${kept})\\n`);\n  process.exitCode = 1;",
       },
       {
-        doc: "2: usage error or reviewer binary not found.",
+        doc: "2: usage error, reviewer binary not found, or codex's sandbox unavailable outside a git repository.",
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
         script: "process.stderr.write(`${message}\\n${USAGE}\\n`);\n  process.exitCode = 2;",
       },
