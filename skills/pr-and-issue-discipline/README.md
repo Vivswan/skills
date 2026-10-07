@@ -7,7 +7,8 @@
   - A diagram, table, or contract shape where nothing runs.
   - The reader skims it and gets the change.
 - **Shaped to the change.** What-this-adds, before/after (or what-this-changes for a pure refactor), or what-this-specifies.
-  - Then `## How`: short bullets, or one small diagram or table where that explains the mechanism faster.
+  - Outputs and pipeline together: wherever the change altered a flow, an ASCII flow diagram (`before:` and `after:` lines, arrows between steps, never mermaid) sits directly under the opening block, or is the opening block itself when nothing observable changed. No flow change, no pipeline section.
+  - Then `## How`: short bullets, or one small table where that explains the mechanism faster.
   - Then `## Proof`: the tests and gates, latest totals only.
   - Secrets stripped and machine paths genericized before publishing.
 - **Two parts, the human part under a size budget.**
