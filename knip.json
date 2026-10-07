@@ -15,5 +15,5 @@
     "skills/*/scripts/**/*.{ts,mts}",
     "tests/**/*.{ts,mts}"
   ],
-  "ignoreBinaries": ["uvx"]
+  "ignoreBinaries": ["codex", "uvx"]
 }

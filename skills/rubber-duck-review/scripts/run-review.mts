@@ -19,6 +19,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { Dirent } from "node:fs";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   lstatSync,
@@ -142,10 +143,11 @@ function purgeStaleScratch(): void {
     const dir = join(tmpdir(), entry.name);
     try {
       if (lstatSync(dir).mtimeMs >= cutoff) continue;
-      rmSync(dir, { recursive: true, force: true });
     } catch (error) {
       process.stderr.write(`stale scratch purge skipped ${dir}: ${String(error)}\n`);
+      continue;
     }
+    removeTree(dir, (line) => process.stderr.write(`stale scratch purge skipped: ${line}\n`));
   }
 }
 
@@ -351,33 +353,45 @@ function snapshotRepository(
   return { ok: true as const, copy, cwd: join(copy, launch.subdir) };
 }
 
-/** `force` skips what is missing, not what a copy's own modes refuse (a
- * populated 0555 directory copied as-is): that leftover is reported through
- * `warn` and left to the 24 h purge, and must never take the verdict or the
+/** `force` skips what is missing, not what a tree's own modes refuse (a
+ * populated 0555 directory copied as-is), so a refusal gets one retry with
+ * every directory in the tree made writable by its owner first. What still
+ * refuses is reported through `warn` and must never take the verdict or the
  * failure with it. */
 function removeTree(path: string, warn: (line: string) => void): void {
   try {
+    rmSync(path, { recursive: true, force: true });
+    return;
+  } catch {
+    // retried below with the modes repaired
+  }
+  try {
+    makeDirectoriesWritable(path);
     rmSync(path, { recursive: true, force: true });
   } catch (error) {
     warn(`not removed ${path}: ${String(error)}`);
   }
 }
 
-/** `GIT_DIR` and its siblings name the real repository by absolute path, so
- * a reviewer inheriting them would read the live index from inside the copy.
- * Discovery from the copy's cwd is what the snapshot is for. */
-const GIT_REDIRECTS = [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_COMMON_DIR",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-];
+function makeDirectoriesWritable(path: string): void {
+  const stat = lstatSync(path);
+  if (!stat.isDirectory()) return;
+  chmodSync(path, stat.mode | 0o700);
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    if (entry.isDirectory()) makeDirectoriesWritable(join(path, entry.name));
+  }
+}
 
-function withoutGitRedirects(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const stripped = { ...env };
-  for (const name of GIT_REDIRECTS) delete stripped[name];
+/** `GIT_DIR` and its siblings name the real repository by absolute path, and
+ * `GIT_CONFIG_COUNT` with a `core.worktree` entry does the same by another
+ * route, so a reviewer inheriting any `GIT_*` variable could read the live
+ * index from inside the copy. Discovery from the copy's cwd is what the
+ * snapshot is for, so none of them travel. */
+function withoutGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const stripped: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (!name.toUpperCase().startsWith("GIT_")) stripped[name] = value;
+  }
   return stripped;
 }
 
@@ -732,7 +746,7 @@ function runReviewer(
     }
     copy = snapshot.copy;
     cwd = snapshot.cwd;
-    env = withoutGitRedirects(process.env);
+    env = withoutGitEnv(process.env);
     args = delivery.args("danger-full-access");
     hooks.onFallback?.(
       `codex sandbox unavailable (${launch.reason}): reviewing an unsandboxed snapshot copy at ${copy}`,

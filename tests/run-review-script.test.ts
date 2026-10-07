@@ -10,6 +10,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -721,7 +722,7 @@ describe("run-review.mts", () => {
     expect(r.stderr).toContain(BWRAP_LINE);
   });
 
-  test("copy mode drops GIT_DIR and GIT_WORK_TREE, so the reviewer's git reads the copy, not the checkout", () => {
+  test("copy mode drops every GIT_* variable, so the reviewer's git reads the copy, not the checkout", () => {
     const repo = fixtureRepo();
     const cwdReport = join(binDir, "cwd-report-redirect");
     const r = run(
@@ -729,8 +730,10 @@ describe("run-review.mts", () => {
       {
         STUB_SANDBOX: "bwrap",
         STUB_CWD_REPORT: cwdReport,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "core.worktree",
+        GIT_CONFIG_VALUE_0: repo,
         GIT_DIR: join(repo, ".git"),
-        GIT_WORK_TREE: repo,
       },
       undefined,
       repo,
@@ -816,46 +819,21 @@ describe("run-review.mts", () => {
   // Root removes a 0555 directory's contents regardless, so the refusal this
   // case pins cannot happen there.
   test.skipIf(process.getuid?.() === 0)(
-    "a copy its own modes refuse to remove is reported and left to the purge; the verdict still lands",
+    "a copy whose own directory modes refuse removal is made writable and removed; the checkout keeps its modes",
     () => {
       const repo = fixtureRepo();
       mkdirSync(join(repo, "locked"));
       writeFileSync(join(repo, "locked", "pinned.txt"), "x\n");
       chmodSync(join(repo, "locked"), 0o555);
-      let copy: string | null = null;
       try {
-        // Not run(): its sweep of the capture dir would hit the same refusal.
-        const result = Bun.spawnSync([process.execPath, SCRIPT, "codex", promptFile], {
-          cwd: repo,
-          env: {
-            ...process.env,
-            PATH: `${binDir}:${process.env.PATH}`,
-            STUB_VIOLATIONS: join(binDir, "violations-locked"),
-            STUB_SCHEMA: SCHEMA,
-            STUB_EXPECT_DELIVERY: "argv",
-            STUB_SANDBOX: "bwrap",
-          },
-          stdout: "pipe",
-          stderr: "pipe",
-        });
-        expect(result.exitCode).toBe(0);
-        const report = JSON.parse(result.stdout.toString()) as Report;
-        copy = join(dirname(report.capture), "repo");
-        expect(report.sandbox).toBe("copy");
-        expect(report.verdict).toEqual(CODEX_VERDICT);
-        expect(existsSync(join(copy, "locked", "pinned.txt"))).toBe(true);
-        expect(result.stderr.toString()).toContain(`not removed ${copy}: `);
-        // review.err outlives the run, so a detached monitor's warning survives too.
-        expect(readFileSync(join(dirname(copy), "review.err"), "utf-8")).toContain(
-          `not removed ${copy}: `,
-        );
+        const r = run(["codex", promptFile], { STUB_SANDBOX: "bwrap" }, undefined, repo);
+        expect(r.code).toBe(0);
+        expect(r.report().sandbox).toBe("copy");
+        expect(r.copyLeft).toBe(false);
+        expect(r.stderr).not.toContain("not removed");
+        expect(statSync(join(repo, "locked")).mode & 0o777).toBe(0o555);
       } finally {
-        // Both trees carry the refusing mode; restore them whichever assertion failed.
         chmodSync(join(repo, "locked"), 0o755);
-        if (copy !== null) {
-          chmodSync(join(copy, "locked"), 0o755);
-          rmSync(dirname(copy), { recursive: true, force: true });
-        }
       }
     },
   );
@@ -947,19 +925,20 @@ describe("run-review.mts", () => {
       expect(existsSync(fresh)).toBe(true);
       expect(existsSync(link)).toBe(true);
 
-      // A purge that cannot remove a dir is logged and the review still runs.
+      // A stale dir whose own modes refuse removal is made writable and removed, silently.
       if (process.getuid?.() !== 0) {
         const locked = makeDir("rubber-duck-locked", false);
+        writeFileSync(join(locked, "pinned"), "");
         chmodSync(locked, 0o555);
         utimesSync(locked, dayAgo, dayAgo);
         try {
           const r = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
           expect(r.code).toBe(0);
           expect(r.stdout).toStartWith(join(privateTmp, "rubber-duck-prompt-"));
-          expect(r.stderr).toContain("stale scratch purge");
-          expect(r.stderr).toContain(locked);
+          expect(r.stderr).toBe("");
+          expect(existsSync(locked)).toBe(false);
         } finally {
-          chmodSync(locked, 0o755);
+          if (existsSync(locked)) chmodSync(locked, 0o755);
         }
       }
     } finally {
