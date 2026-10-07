@@ -8,7 +8,7 @@ metadata:
 
 # PR and Issue Discipline
 
-> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change, and where a flow moved its Before/After outputs and pipeline sit together. The fewest words after, under a hard size budget, in the shape that fits the change. Anything written for a tool or another agent sits in one collapsed section at the bottom.
+> Show the change, do not describe it: a fenced block is the text form of a picture, so the reader skims it and gets the change, flow first, then output, each where it moved. The fewest words after, under a hard size budget, in the shape that fits the change. Anything written for a tool or another agent sits in one collapsed section at the bottom.
 
 These rules apply to any session that opens or updates a PR or writes an issue. "The author" below is whoever prepared the change, human or agent, alone or in a multi-agent session. What happens after the PR exists (draft flips, review rounds, the merge) is the `/pr-landing-discipline` skill's moment; someone else's thread (an issue reply, a review of their PR) is the `/reply-and-review-discipline` skill's.
 
@@ -22,7 +22,7 @@ Open every PR as a DRAFT; from there the `/pr-landing-discipline` skill owns it:
 
 ## PR Bodies: Show the Change, Shaped to It
 
-Show the change rather than describe it. A PR body is text, so its picture is a fenced block: real captured output wherever behavior is observable, a diagram, table, or the contract's own shape where nothing runs. The reader skims the blocks and gets the change without reading a paragraph. Shape the body to the change; never force every PR through one template.
+Show the change rather than describe it. A PR body is text, so its picture is a fenced block: the flow and the real captured output, each where the change moved it, and a diagram, table, or the contract's own shape where nothing runs. The reader skims the blocks and gets the change without reading a paragraph. Shape the body to the change; never force every PR through one template.
 
 **Two parts.** Part one is for a human skimming: the change shown (the opening block, in one of the shapes below), then the fewest words. Part two, at the BOTTOM, is a single collapsible section, collapsed by default, for anything written for another agent or tool rather than the human reader:
 
@@ -45,7 +45,7 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 | Region | Budget |
 | --- | --- |
 | Part one prose (words outside fenced blocks) | 150 words, hard cap |
-| `## Pipeline before and after` | One ASCII text block, a `before:` line over an `after:` line. A fenced block, so outside the prose count |
+| Flow blocks | One ASCII text block per state inside `## Before` and `## After`, or one block with both lines under a single opening section, ahead of the output. Fenced, so outside the prose count |
 | `## How` | 3 to 6 bullets by default, one sentence each, about 15 words. Or one small table |
 | `## Proof` | 2 to 4 bullets by default, latest totals only |
 | `Technical details` | No length cap. One fact per line, one sentence each |
@@ -73,22 +73,20 @@ Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: hon
 
 ### Additive feature
 
-Its detail fits in part one, so it has no part two. The addition changes how CI picks its shards, so the result block is followed directly by the pipeline, the same pairing as the Before/After shape below.
+Its detail fits in part one, so it has no part two. The addition changes how CI picks its shards, so the flow comes first, both lines in one block since there is no Before/After pair, then the output.
 
 ````markdown
 ## What this adds
 
 ```text
+before: push -> every context -> every shard built
+after:  push -> changed contexts -> dependency closure -> shards in the closure only
+```
+
+```text
 $ bun run shards --changed
 manifest build/image-sets.json v3: 5 contexts, files and dependencies validated against the checkout
 changed: api -> dependency closure {base, api} -> shards: [base, base+api]
-```
-
-## Pipeline before and after
-
-```text
-before: push -> every context -> every shard built
-after:  push -> changed contexts -> dependency closure -> shards in the closure only
 ```
 
 ## How
@@ -106,14 +104,18 @@ after:  push -> changed contexts -> dependency closure -> shards in the closure 
 
 ### Existing behavior change or bug fix
 
-Open with `## Before` / `## After` as real captured output. When the fix moved a flow (a step added, removed, reordered, or branched), `## Pipeline before and after` follows directly under them: the old flow on top, the new flow below. The outputs show what changed, the diagram shows where in the flow, and the three travel as one unit.
+Open with `## Before` / `## After`. Each section is one state, shown in this order: the flow as it ran, then the real captured output. The flow is plain ASCII in a text block, arrows between steps, a branch on its own indented line. Never mermaid.
 
-The diagram is plain ASCII in a text block: one `before:` line, one `after:` line, arrows between steps, a branch on its own indented line. Never mermaid. A fix that moved no flow (a message text, a constant, a typo in output) has no pipeline section and never mentions one.
+Each block is there only when the change moved it. A fix that moved a flow but left the output unchanged shows the flow alone; a fix to a message, a constant, or a typo in output shows the output alone. Never a block or a sentence saying nothing changed.
 
-When nothing observable changes (a pure refactor), open with `## What this changes` and the same `## How` and `## Proof`. A refactor that moved an internal flow puts the before/after pipeline there, as its opening block; one that moved none has no diagram.
+When neither moved (a pure refactor), open with `## What this changes` and the same `## How` and `## Proof`.
 
 ````markdown
 ## Before
+
+```text
+probe start -> fixed 120s -> timeout -> agent marked dead (mid-build)
+```
 
 ```text
 $ bun run check
@@ -123,16 +125,13 @@ scripts/sweep.mts: probe timed out after 120s; agent marked dead (it was mid-bui
 ## After
 
 ```text
-$ bun run check
-scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; agent alive
+probe start -> 120s up -> build lock held? -> yes: extend to 300s -> live verdict
+                                           -> no:  120s verdict
 ```
 
-## Pipeline before and after
-
 ```text
-before: probe start -> fixed 120s -> timeout -> agent marked dead (mid-build)
-after:  probe start -> 120s up -> build lock held? -> yes: extend to 300s -> live verdict
-                                                   -> no:  120s verdict
+$ bun run check
+scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; agent alive
 ```
 
 ## How
@@ -168,10 +167,16 @@ The block closing the details section is the commit-override rule below at work:
 
 ### Contract or documentation PR
 
-Use `## What this specifies` when the PR defines a contract rather than executable behavior. Nothing runs, so show the contract itself (its schema, table, or layout) in a block, not in prose. Where the contract changes a flow (here the build now fails on drift), the pipeline follows the block, the same pairing again.
+Use `## What this specifies` when the PR defines a contract rather than executable behavior. Nothing runs, so show the contract itself (its schema, table, or layout) in a block, not in prose. Where the contract changes a flow (here the build now fails on drift), the flow comes first, then the contract.
 
 ````markdown
 ## What this specifies
+
+```text
+before: build -> smoke test reads SKILL.md -> green
+after:  build -> smoke test reads the three files -> mirrored fields match? -> yes: green
+                                                                            -> no:  fails, field named
+```
 
 ```text
 SKILL.md                    disable-model-invocation: true
@@ -181,14 +186,6 @@ agents/openai.yaml          .codex-plugin/plugin.json
 interface.display_name      == interface.displayName
 interface.short_description == interface.shortDescription   (25-64 chars)
 interface.brand_color       == interface.brandColor
-```
-
-## Pipeline before and after
-
-```text
-before: build -> smoke test reads SKILL.md -> green
-after:  build -> smoke test reads the three files -> mirrored fields match? -> yes: green
-                                                                            -> no:  fails, field named
 ```
 
 ## How
@@ -212,10 +209,10 @@ after:  build -> smoke test reads the three files -> mirrored fields match? -> y
 
 For every form:
 
-- Blocks show, prose tells. Where behavior is observable, the opening block is an actual command and its actual output, complete enough to stand alone; never manufacture output or add it only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
-- Outputs and the pipeline travel together. Wherever the change altered a flow, `## Pipeline before and after` follows the opening block directly (after `## After` where the shape has two): one diagram, two panels, the old flow on top and the new flow below. Never the outputs alone, never the diagram alone, never prose between them. Where no flow changed, there is no pipeline section and no sentence saying so.
-- The one exception is a change with nothing observable to show (a pure refactor that moved an internal flow): there the pipeline is itself the opening block, under `## What this changes`, and no second pipeline section follows it.
-- The diagram is plain ASCII in a text block, never mermaid: a `before:` line and an `after:` line, arrows between steps. Its After panel is the flow as the code runs it now, held to the same truth as the After output.
+- Blocks show, prose tells. The opening blocks are the flow as it ran and an actual command with its actual output, complete enough to stand alone, each only when the change moved it; never manufacture output or add a block only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
+- Flow first, then output, inside each state. Under `## Before` and `## After` the flow block precedes the output block, no prose between them. Under one opening section (`## What this adds`, `## What this specifies`) a `before:` and an `after:` line share one block, ahead of the output or contract block.
+- Each block is there only when the change moved it: a flow change with unchanged output shows the flow alone, a changed output with no flow change shows the output alone. Never a block or a sentence saying nothing changed, and no `## Pipeline` section of its own.
+- The flow is plain ASCII in a text block, never mermaid: arrows between steps, a branch on its own indented line. The After flow is the flow as the code runs it now, held to the same truth as the After output.
 - `## How` is 3 to 6 bullets by default, more when the mechanism has more moving parts. One small table may replace them where it explains the mechanism faster, never a second copy of the flow. Each bullet is one sentence of about 15 words with a bold lead-in.
 - Never a `## How` paragraph per review round.
 - `## Proof` is 2 to 4 bullets by default, naming focused behavioral tests or stable checks, with the latest totals where numbers exist. Never one line per review round ("round 3: 20 passed", "round 4: 83 passed"): a new run overwrites the old number. Do not turn it into transient CI, approval, or review status.
@@ -298,8 +295,8 @@ EOF
 
 Over the cap means cut, not justify. Move detail down into part two, which has room for it, or drop what the diff already says. If the cut would lose something the reader must know, stop and ask the user with the count and the candidate lines. Publishing over the cap is the user's call. What usually drifts:
 
-- **Every claim still true.** The opening block is still accurate (its After side, or its only side, is what the code does now), the pipeline's After panel is the flow as it runs now, the Proof numbers are the final run's, and every file named as current still exists under that name.
-- **Outputs without the pipeline, or a pipeline without a flow change.** Captured output for a change that altered a flow with no two-panel pipeline diagram directly under it fails the re-read, as does a pipeline section for a change that moved no flow. Fix either before the flip.
+- **Every claim still true.** The opening blocks are still accurate (the After flow and the After output are what the code does now), the Proof numbers are the final run's, and every file named as current still exists under that name.
+- **A moved facet left out, or an unmoved one shown.** A state section without the flow when the change moved one, or without the output when it changed, fails the re-read; so does a block for a facet the change did not move. Fix either before the flip.
 - **Scope drift.** Work the review rounds added or removed is in the body, or its absence is deliberate.
 - **Sorting.** Part one holds what the reader needs about the change as it is now. Anything that became detail moved down; anything that became important (a review finding that changed the change, a line count that contradicts the purpose) moved up.
 - **Title.** Type and subject name what landed, not the opening plan; the type follows the behavior rule above (a visible type once anything observable moved, never `refactor`).
