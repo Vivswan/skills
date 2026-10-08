@@ -21,7 +21,9 @@ These rules apply to any session writing on a thread it does not own: an issue r
 
 ## Replies to Issue Reporters: Plain First
 
-An issue reply or a review comment to an outside contributor is read by someone skimming a thread who does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
+An issue reply to an outside contributor is read by someone skimming a thread who does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
+
+A staged review comment on someone else's PR follows the Each comment rules below and borrows only this section's voice.
 
 **The report decides the opening**: read the reporter's log before writing a word. A question is asked only when the report does not already answer it, so the two shapes open differently: cause visible, diagnosis and steps; cause unknown, questions. Defaulting to questions is the failure the specimens were written against.
 
@@ -82,14 +84,16 @@ The agent reviews under the user's account, so publishing is the user's act: the
 
 **Stage:** one JSON body, the head commit inside it, no `event` field. `commit_id` belongs in the file: with `--input`, a `-f` field goes to the URL query string. The heredoc is quoted, since comment bodies carry backticks an unquoted one would run as commands, so the SHA goes in afterwards. The file lives in a `mktemp` directory, removed in the same shell call like the `/pr-and-issue-discipline` skill's PR-body fallback.
 
+A finding that spans several lines is anchored on its whole range with `start_line` and `line` (`start_side` and `side` both `RIGHT`). A single-line anchor only when one line is the whole finding.
+
 ```bash
 review_dir=$(mktemp -d "${TMPDIR:-/tmp}/pr-review-XXXXXX"); trap 'rm -rf "$review_dir"' EXIT
 cat > "$review_dir/review.json" <<'EOF'
 {
   "commit_id": "HEAD_SHA",
   "comments": [
-    {"path": "src/metrics.ts", "line": 42, "side": "RIGHT", "body": "Review summary (copy into the summary box)\n\n**Works:** ...\n**Blocks:** ...\n**Can wait:** ..."},
-    {"path": "src/metrics.ts", "line": 88, "side": "RIGHT", "body": "When the model's answer can't be parsed, one metric counts it as a failure and the other skips it, so the two headline numbers disagree. Pick one rule and apply it to both."}
+    {"path": "src/metrics.ts", "line": 42, "side": "RIGHT", "body": "Review summary (copy into the summary box)\n\n[comment, not approve yet]\n\n**Works:** ...\n**Blocks:** ..."},
+    {"path": "src/metrics.ts", "start_line": 84, "start_side": "RIGHT", "line": 88, "side": "RIGHT", "body": "[blocking] The two headline metrics disagree on unparseable answers. Count them the same way in both."}
   ]
 }
 EOF
@@ -103,20 +107,22 @@ gh api -X POST repos/<owner>/<repo>/pulls/<n>/reviews --input "$review_dir/revie
 ```bash
 # --paginate: a PR with many reviews spreads them over pages, and the pending one is the newest
 gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.state == "PENDING") | .id'   # the id to delete
-gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews/<id>/comments --jq '.[] | {path, position, body}'   # the current text, web edits included; rebuild from this (this endpoint anchors by position, which the POST accepts too)
+gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews/<id>/comments --jq '.[] | {path, start_line, start_side, line, side, body}'   # the current text, web edits included, with each anchor's range; rebuild from this (position alone would collapse a ranged comment to one line)
 gh api -X DELETE repos/<owner>/<repo>/pulls/<n>/reviews/<id>
 gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.state == "PENDING") | .id' | wc -l   # must print 0 before the new POST
 ```
 
 **The verdict lives on the PR, never in a document.**
 
-- **The summary is a staged inline comment** on the first changed line, headed `Review summary (copy into the summary box)`: what works, what blocks, what can wait. The web "Finish your review" dialog drops a review body set through the API, so the user pastes it into the summary box when publishing.
+- **The summary is a staged inline comment** on the first changed line, headed `Review summary (copy into the summary box)`, then a bracketed recommendation (`[LGTM]`, `[comment, not approve yet]`, `[request changes]`), then `Works:` and `Blocks:` lines only. A nit that would need a third line is not staged at all. The web dialog drops an API-set review body, so the user pastes this one into the summary box.
 - **A verdict the user has decided and told the agent to post** goes out directly, with `event` (`APPROVE`, `REQUEST_CHANGES`, or `COMMENT`) and `body`, instead of staged. That instruction is the publication; without it, everything stays pending.
 - **The report to the user is one chat line** with the recommendation: no findings document, no copy-paste file, no dashboard row.
 
 **Each comment:**
 
-- **Plain human voice**, the Replies rules above. Rejected: "PARSING_ERROR maps to COULD_NOT_EXTRACT_ANSWER, which is trainable, so the rollout arrives as a CompletedRollout with reward 0". Accepted: "When the model's answer can't be parsed, one metric counts it as a failure and the other skips it, so the two headline numbers disagree."
-- **Symptom, then the one-line ask.** At most one code identifier per comment, one comparison, no chained numbers. Technical detail only when the author cannot act without it.
+- **One or two sentences, plain English, as short as possible.** Open with a bracketed hint for the publisher (`[blocking]`, `[small ask]`, `[question]`), then the exact change asked for. No background, no restating what the code does. Accepted: "[blocking] The linked comment has only headline and per-type tables, not the 100-task paired table the body promises. Please post it or link to it."
+- **Plain human voice:** the Replies section's words (plain language, no internal names), not its two-part layout or language pairing. Rejected: "PARSING_ERROR maps to COULD_NOT_EXTRACT_ANSWER, which is trainable, so the rollout arrives as a CompletedRollout with reward 0". At most one code identifier per comment, one comparison, no chained numbers. Technical detail only when the author cannot act without it.
+- **A re-review stages comments only for what is still open or partly open.** An item the author addressed gets no comment of its own; the summary may list the resolved ones in one line.
 - **Only what changes behavior, reliability, or the truth of a stated fact.** Test-coverage, YAGNI, and tidying nits are not staged: the user drops them at publish time, so staging them only costs their editing pass.
+- **Never a finding: anything that matters only on Windows** (newline translation, path separators, case-insensitive filesystems). The teams this serves run Linux and macOS only.
 - The redaction rule applies: a staged comment publishes under the user's name.
