@@ -23,7 +23,7 @@ These rules apply to any session writing on a thread it does not own: an issue r
 
 An issue reply to an outside contributor is read by someone skimming a thread who does not know the code. Write a plain-language part that stands alone. Add a technical part, collapsed so it costs nothing to skip, only when it carries information the plain part cannot: when everything fits in plain words, the plain part is the whole reply.
 
-A staged review comment on someone else's PR follows the Each comment rules below and borrows only this section's voice.
+A finding comment staged on someone else's PR follows the Each comment rules below and borrows only this section's voice; the staged summary has its own shape there.
 
 **The report decides the opening**: read the reporter's log before writing a word. A question is asked only when the report does not already answer it, so the two shapes open differently: cause visible, diagnosis and steps; cause unknown, questions. Defaulting to questions is the failure the specimens were written against.
 
@@ -84,7 +84,7 @@ The agent reviews under the user's account, so publishing is the user's act: the
 
 **Stage:** one JSON body, the head commit inside it, no `event` field. `commit_id` belongs in the file: with `--input`, a `-f` field goes to the URL query string. The heredoc is quoted, since comment bodies carry backticks an unquoted one would run as commands, so the SHA goes in afterwards. The file lives in a `mktemp` directory, removed in the same shell call like the `/pr-and-issue-discipline` skill's PR-body fallback.
 
-A finding that spans several lines is anchored on its whole range with `start_line` and `line` (`start_side` and `side` both `RIGHT`). A single-line anchor only when one line is the whole finding.
+A finding that spans several lines is anchored on its whole range with `start_line` and `line`; `start_side` and `side` name the diff side the lines are on, `RIGHT` for lines in the new file, `LEFT` for a removed range. A single-line anchor only when one line is the whole finding.
 
 ```bash
 review_dir=$(mktemp -d "${TMPDIR:-/tmp}/pr-review-XXXXXX"); trap 'rm -rf "$review_dir"' EXIT
@@ -93,7 +93,7 @@ cat > "$review_dir/review.json" <<'EOF'
   "commit_id": "HEAD_SHA",
   "comments": [
     {"path": "src/metrics.ts", "line": 42, "side": "RIGHT", "body": "Review summary (copy into the summary box)\n\n[comment, not approve yet]\n\n**Works:** ...\n**Blocks:** ..."},
-    {"path": "src/metrics.ts", "start_line": 84, "start_side": "RIGHT", "line": 88, "side": "RIGHT", "body": "[blocking] The two headline metrics disagree on unparseable answers. Count them the same way in both."}
+    {"path": "src/metrics.ts", "start_line": 84, "start_side": "RIGHT", "line": 88, "side": "RIGHT", "body": "[blocking] The two headline metrics disagree on answers that cannot be parsed. Count them the same way in both."}
   ]
 }
 EOF
