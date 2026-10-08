@@ -61,6 +61,7 @@ These rules bind PR bodies and the `/reply-and-review-discipline` skill's replie
 - **Paragraphs, bullets, tables, and fenced blocks mix.** Which device carries which content is the `/working-text` skill's rule set (pick the device from the content, a bullet is for a list, no gainless change, monotony as a signal to regroup, one carrier per point), applied to the PR body unchanged.
 - **The page shape is that skill's too.** Paragraph and sentence length, a bold lead-in opening each bullet, no nesting past one level, and headings that name the content rather than the reader's level ("In plain words" and "Non-technical summary" talk down) are the `/working-text` skill's shape rules, applied to the PR body unchanged. How many headings a body carries is this skill's, fixed by the shapes below.
 - **No semicolon chains.** A semicolon joining clauses means two sentences were forced into one. Split them.
+- **Three sentences a paragraph at most, one code span a sentence.** Prose with inline code woven through it is a wall of text in another form.
 - **The blocks carry the change, the words only what no block can.** The defaults above are what most changes need. Go past them when this change needs it, never because a round added something.
 - **`/unslop` runs last**, where installed, over the prose that remains: the AI tells go before the body is offered.
 
@@ -72,6 +73,33 @@ These rules bind PR bodies and the `/reply-and-review-discipline` skill's replie
 4. Carry the answer for the rest of the session, for every PR and every issue in it. Answer "the skill's shapes": use the shapes below throughout. Answer "the repository's templates": use the template whose purpose matches each artifact, without asking again; where the repository ships no template for that artifact (issue templates but no PR template, or the reverse), the shapes below fill the gap.
 
 Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: honor its rules on title conventions, required sections, and linked issues inside the body you write.
+
+**A repository's convention decides headings and tone only, never the shape.** A template, a "prose over templates" rule, a "maintainer voice" note: each sets the section names and the formality. Inside any of them the body stays skimmable under the Readability rules (a block or table first, bullets of one or two sentences, no paragraph past three sentences), and choosing the repository's templates never relaxes them.
+
+The specimen was an upstream issue's `Fix` section, written to the maintainers' prose rule as one paragraph the user could not read, then rewritten inside the same rule:
+
+````markdown
+Fix
+
+The parser accepts `foo` because `parseFoo` is called before `validateFoo` in `src/parse.ts`, and the check in `validateFoo` only runs when `strict` is set, which the `z.object` path never does, so moving the call into `parseFoo` and dropping the `strict` guard makes the two paths agree, and the test in `test/parse.test.ts` pins both; see the linked PR for the diff.
+````
+
+````markdown
+Fix
+
+Linked PR: #1234
+
+```text
+before: parseFoo -> z.object path -> validateFoo only under strict -> bad input accepted
+after:  parseFoo -> validateFoo always -> bad input rejected on both paths
+```
+
+- **The check moves** into the parse step.
+- **The strict-only guard goes.**
+- **Both paths now agree.**
+- **One test pins each path.**
+- **Nothing else in the module changes.**
+````
 
 ### The shapes
 

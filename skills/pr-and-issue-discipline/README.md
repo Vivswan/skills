@@ -32,7 +32,7 @@
 - **Someone else's thread is another skill's**: replies to issue reporters and reviews of someone else's PR follow [`/reply-and-review-discipline`](../reply-and-review-discipline/), which points back here for the Readability rules and the redaction rule
 - **Template check, once per session, at plan time.** When the target repository ships a PR or issue template, ask the user once whether to use it or the skill's shapes, then carry that answer for the whole session.
   - No template means the shapes apply directly.
-  - `CONTRIBUTING` guidance is honored either way.
+  - `CONTRIBUTING` guidance is honored either way. A repository's convention sets headings and tone only, never the shape: the body stays skimmable inside it.
 - **Re-read before the human reads.** Before the PR is offered ready, the body is checked against the final diff: every claim, the scope, the part-one sorting, the title, and the size. It is edited before the flip.
 - **Hands the PR over once it exists.** Opened as a draft, then [`/pr-landing-discipline`](../pr-landing-discipline/) owns the draft flips, the review rounds, who merges, and the gates before landing.
 
