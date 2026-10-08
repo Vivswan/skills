@@ -6,13 +6,13 @@
   - The flow and the real captured output, each where the change moved it.
   - A diagram, table, or contract shape where nothing runs.
   - The reader skims it and gets the change.
-- **Shaped to the change.** What-this-adds, before/after (or what-this-changes for a pure refactor), or what-this-specifies.
+- **Shaped to the change.** Four shapes, each a copy-ready PR template under `references/shape-*.md`: before/after (or what-this-changes for a pure refactor), what-this-adds, problem/fix/reasoning/results for a change whose effect is measured, and what-this-specifies. A repository can copy each file's template part into its GitHub pull request template folder.
   - Flow first, then output, inside each of Before and After: the flow as ASCII (arrows between steps, a branch on its own indented line, never mermaid), then the captured output. Each is shown only when the change moved it.
-  - Then `## How`: short bullets, or one small table where that explains the mechanism faster.
+  - Then `## How`: short bullets, or one small table where that explains the mechanism faster. The measured shape has `## Reasoning` bullets instead.
   - Then `## Proof`: the tests and gates, latest totals only.
   - Secrets stripped and machine paths genericized before publishing.
 - **Two parts, the human part under a size budget.**
-  - Part one is for a human skimming: at most 150 words of prose outside the blocks.
+  - Part one is for a human skimming: at most 150 words of prose outside the blocks, about 200 for the measured shape.
   - `## How` is 3 to 6 bullets by default, `## Proof` 2 to 4. More when the change needs it.
   - Part two is one collapsed `Technical details` section at the bottom, for anything written for a bot reviewer or another agent. No length cap, one fact per line.
   - A PR without such detail has no part two.
@@ -20,7 +20,7 @@
   - A mix of devices the reader can skim: short paragraphs, bullets for lists, tables, fenced blocks.
   - Short sentences, no semicolon chains, no nesting past one level, anywhere in the body.
 - **Review rounds replace, never append.**
-  - A fix edits the existing How or Proof bullet. A count is overwritten with the latest total.
+  - A fix edits the existing How (or Reasoning) or Proof bullet. A count is overwritten with the latest total.
   - No line says which round produced it.
   - The part-one word count is re-run after every round and before the flip.
   - An agent that believes the cap must break asks the user rather than deciding alone.

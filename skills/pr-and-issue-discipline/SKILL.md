@@ -44,13 +44,15 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 
 | Region | Budget |
 | --- | --- |
-| Part one prose (words outside fenced blocks) | 150 words, hard cap |
+| Part one prose (words outside fenced blocks) | 150 words, hard cap; about 200 for the measured shape |
 | Flow blocks, where the flow moved | One ASCII text block per state inside `## Before` and `## After`, or one block with both lines under a single opening section, ahead of the output. Fenced, so outside the prose count |
 | `## How` | 3 to 6 bullets by default, one sentence each, about 15 words. Or one small table |
 | `## Proof` | 2 to 4 bullets by default, latest totals only |
+| `## Reasoning` (measured shape) | 3 to 4 bullets, one sentence each, bold lead-in |
+| `## Results` (measured shape) | One before/after table of metrics and a one-line footer: judge, runs, aggregation |
 | `Technical details` | No length cap. One fact per line, one sentence each |
 
-When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` carries one more bullet: `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
+When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` carries one more bullet (in the measured shape, the last of `## Reasoning`'s 3 to 4): `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
 
 **Readability is an accessibility requirement.** Readers include people with dyslexia, and a wall of prose costs them the PR. The standard is the one the `/working-text` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
 
@@ -71,149 +73,31 @@ These rules bind PR bodies and the `/reply-and-review-discipline` skill's replie
 
 Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: honor its rules on title conventions, required sections, and linked issues inside the body you write.
 
-### Additive feature
+### The shapes
 
-Its detail fits in part one, so it has no part two. The addition changes how CI picks its shards, so the flow comes first, both lines in one block since there is no Before/After pair, then the output.
+Each shape is a file under `references/`, and each file is a PR template above a horizontal rule: the headings, the shape's rules as HTML comments that vanish when the body renders, placeholders. Under the rule, the filled specimen. Pick by what the change is:
 
-````markdown
-## What this adds
+| The change is | Shape |
+| --- | --- |
+| something that runs, and what it prints or the path it takes moved | [`references/shape-before-after.md`](references/shape-before-after.md) |
+| something that runs, and neither moved (a pure refactor) | the same file, opening with one `## What this changes` section |
+| something new, added beside what exists | [`references/shape-additive.md`](references/shape-additive.md) |
+| something read rather than run, whose effect is measured by an evaluation | [`references/shape-measured.md`](references/shape-measured.md) |
+| a contract or a document: nothing runs, nothing is measured | [`references/shape-contract.md`](references/shape-contract.md) |
 
-```text
-before: push -> every context -> every shard built
-after:  push -> changed contexts -> dependency closure -> shards in the closure only
-```
+When a change both runs and is measured, the measured shape wins: a run shows a string, the evaluation shows the behavior. Something new that also extends an existing flow is additive; before-after is for a change to what already existed.
 
-```text
-$ bun run shards --changed
-manifest build/image-sets.json v3: 5 contexts, files and dependencies validated against the checkout
-changed: api -> dependency closure {base, api} -> shards: [base, base+api]
-```
+The rows name situations, not kinds of file. When two still fit, ask the user, naming both; with no user to ask, pick by judgment and say which when the PR is offered.
 
-## How
-
-- **Validates the manifest** against the checkout before anything else runs.
-- **Dependencies are declared per context** in the manifest, and the closure is transitive over them.
-- **The matrix is one shard per closure entry,** in the manifest's own order.
-- **Library:** `ajv`, covers the manifest schema validation.
-
-## Proof
-
-- **Tests:** manifest validation and shard-resolution cases pass (2 new).
-- **Gate:** `bun run check` green.
-````
-
-### Existing behavior change or bug fix
-
-Open with `## Before` / `## After`. Each section is one state, shown in this order where the change moved each: the flow as it ran, then the real captured output. The flow is plain ASCII in a text block, arrows between steps, a branch on its own indented line. Never mermaid.
-
-Each block is there only when the change moved it. A fix that moved a flow but left the output unchanged shows the flow alone; a fix to a message, a constant, or a typo in output shows the output alone. Never a block or a sentence saying nothing changed.
-
-When neither moved (a pure refactor), open with `## What this changes` and the same `## How` and `## Proof`.
-
-````markdown
-## Before
-
-```text
-probe start -> fixed 120s -> timeout -> agent marked dead (mid-build)
-```
-
-```text
-$ bun run check
-scripts/sweep.mts: probe timed out after 120s; agent marked dead (it was mid-build)
-```
-
-## After
-
-```text
-probe start -> 120s up -> build lock held? -> yes: extend to 300s -> live verdict
-                                           -> no:  120s verdict
-```
-
-```text
-$ bun run check
-scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; agent alive
-```
-
-## How
-
-- **The lock read is one non-blocking `flock` probe,** so an unheld lock costs nothing.
-- **The verdict is written once,** after the extension decides, so a caller never sees dead then alive.
-- **Library:** the runtime's own one-call file lock, covers the build lock.
-
-## Proof
-
-- **Tests:** 34 green (2 new).
-- **Gate:** `bun run check` green.
-
-<details>
-<summary>Technical details</summary>
-
-- **Reviewer note (Copilot):** the 300s ceiling is a constant in `scripts/sweep.mts`, not a flag.
-- **Refused: `--probe-ceiling`.** No second caller exists.
-- **Proof detail:** one new test pins the extension while the lock is held, the other the plain 120s verdict without it.
-- **Files:** `scripts/sweep.mts` (the probe), `tests/sweep-script.test.ts` (the two cases).
-
-BEGIN_COMMIT_OVERRIDE
-fix(sweep)!: extend the probe while the build lock is held
-
-BREAKING CHANGE: `--probe-timeout` is removed; the probe extends itself while the build lock is held.
-The probe's dead verdict can arrive up to 300s after start instead of at 120s; callers that raced it must re-read.
-END_COMMIT_OVERRIDE
-
-</details>
-````
-
-The block closing the details section is the commit-override rule below at work: this specimen's merge carries two breaks, so one `BREAKING CHANGE` footer lists them on two lines.
-
-### Contract or documentation PR
-
-Use `## What this specifies` when the PR defines a contract rather than executable behavior. Nothing runs, so show the contract itself (its schema, table, or layout) in a block, not in prose. Where the contract changes a flow (here the build now fails on drift), the flow comes first, then the contract.
-
-````markdown
-## What this specifies
-
-```text
-before: build -> smoke test reads SKILL.md -> green
-after:  build -> smoke test reads the three files -> mirrored fields match? -> yes: green
-                                                                            -> no:  fails, field named
-```
-
-```text
-SKILL.md                    disable-model-invocation: true
-agents/openai.yaml          policy.allow_implicit_invocation: false   <- must pair with the line above
-
-agents/openai.yaml          .codex-plugin/plugin.json
-interface.display_name      == interface.displayName
-interface.short_description == interface.shortDescription   (25-64 chars)
-interface.brand_color       == interface.brandColor
-```
-
-## How
-
-- **The mirrored fields are one table** in the smoke test, so a new field is one row.
-- **The failure names the field and both values,** so the fix is one edit, not a search.
-- **The invocation pair is checked together,** so one flag without the other fails.
-
-## Proof
-
-- **Smoke test:** the mirrored-block and invocation-pairing cases pass.
-- **Gate:** `bun run check` green.
-
-<details>
-<summary>Technical details</summary>
-
-- **Accepted deviation:** `longDescription` is not mirrored, since the codex manifest carries the long form alone.
-
-</details>
-````
+A repository that wants GitHub to offer the shapes copies each file's part above the horizontal rule into `.github/PULL_REQUEST_TEMPLATE/`; below the rule sits the filled specimen, which no new PR should carry. The template check above then finds them, and `gh pr create --template <file>` picks one.
 
 For every form:
 
-- Blocks show, prose tells. The opening blocks are the flow as it ran and an actual command with its actual output, complete enough to stand alone, each only when the change moved it; never manufacture output or add a block only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
+- Blocks show, prose tells. The opening blocks are the flow as it ran and an actual command with its actual output, complete enough to stand alone, each only when the change moved it; never manufacture output or add a block only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself. The measured shape's `## Problem` is the one prose opening.
 - Flow first, then output, inside each state. Under `## Before` and `## After` the flow block precedes the output block, no prose between them. Under one opening section (`## What this adds`, `## What this specifies`) a `before:` and an `after:` line share one block, ahead of the output or contract block.
 - Each block is there only when the change moved it: a flow change with unchanged output shows the flow alone, a changed output with no flow change shows the output alone. Never a block or a sentence saying nothing changed, and no `## Pipeline` section of its own.
 - The flow is plain ASCII in a text block, never mermaid: arrows between steps, a branch on its own indented line. The After flow is the flow as the code runs it now, held to the same truth as the After output.
-- `## How` is 3 to 6 bullets by default, more when the mechanism has more moving parts. One small table may replace them where it explains the mechanism faster, never a second copy of the flow. Each bullet is one sentence of about 15 words with a bold lead-in.
+- `## How` is 3 to 6 bullets by default, more when the mechanism has more moving parts. One small table may replace them where it explains the mechanism faster, never a second copy of the flow. Each bullet is one sentence of about 15 words with a bold lead-in. `## Reasoning` follows the same bullet rules at 3 to 4.
 - Never a `## How` paragraph per review round.
 - `## Proof` is 2 to 4 bullets by default, naming focused behavioral tests or stable checks, with the latest totals where numbers exist. Never one line per review round ("round 3: 20 passed", "round 4: 83 passed"): a new run overwrites the old number. Do not turn it into transient CI, approval, or review status.
 - Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above.
@@ -268,7 +152,7 @@ The body is written when the PR opens and read when the PR is offered; the diff 
 
 **After every review round: edit in place, never append.** The specimen was a body that grew to 1,800 words because each of twelve rounds added its own `## How` paragraph and its own `## Proof` line. The rule:
 
-1. A fix to something the body already states edits that `## How` or `## Proof` bullet in place. It does not add a second bullet about the same thing.
+1. A fix to something the body already states edits that `## How` (or `## Reasoning`) or `## Proof` bullet in place. It does not add a second bullet about the same thing.
 2. A fact new to the change (a mechanism or proof the body never stated) gets one new line, in the region the reader test sends it to.
 3. A count (tests, gates, lines) is overwritten with the latest total. The old number goes.
 4. Nothing in the body says which round produced it.
@@ -277,30 +161,32 @@ The body is written when the PR opens and read when the PR is offered; the diff 
 **Before the offer** (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session. How hard to look depends on how far the PR moved: a one-commit PR gets a glance at the Proof numbers, a PR that went through eight review rounds gets every claim re-checked. Run the size check first, then the drift list:
 
 ```bash
-# Part-one prose: words outside fenced blocks and above the <details> tag. Cap: 150.
+# Part-one prose: words outside fenced blocks and HTML comments, above the <details> tag. Cap: 150, or 200 for the measured shape (set cap= below).
 # Pipe the CANDIDATE body in through a quoted heredoc: the text about to be published, every round and before the first publish.
 # `gh pr view "$n" --json body -q .body |` replaces the heredoc only for the final pre-offer read of what is already published.
 # Never point awk at a file name, and keep pipefail on: a missing file or a failed gh read must stop the gate, not count as 0.
 set -o pipefail
 awk '
+  h { if (!/-->/) next; sub(/^([^-]|-[^-]|--[^>])*-->/, ""); h = 0 }                              # inside an HTML comment: fence markers are comment text; prose after the first closer counts
   /^(```|~~~)/ { match($0, /^(`+|~+)/); d = substr($0, 1, 1)
                  if (!f)                                       { f = 1; c = d; n = RLENGTH; next }   # opening fence: remember its character and length
                  if (d == c && RLENGTH >= n && /^(`+|~+) *$/) { f = 0 }                              # closing fence: same character, at least as long, nothing else
                  next }
+  !f { gsub(/<!--([^-]|-[^-])*-->/, ""); if (/<!--/) { sub(/<!--.*/, ""); h = 1 } }                # HTML comments (template instructions) are not prose; the text around them is
   !f && /^<details>/ { exit }                                                                        # part two starts at a real tag, never one inside a fence
-  !f' <<'EOF' | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /[[:alnum:]]/) n++ } END { print n + 0; exit (n > 150) }'   # counts tokens with a letter or digit, so `##`, `-`, and `|` are not words; exits 1 over the cap
+  !f' <<'EOF' | awk -v cap=150 '{ for (i = 1; i <= NF; i++) if ($i ~ /[[:alnum:]]/) n++ } END { print n + 0; exit (n > cap) }'   # counts tokens with a letter or digit, so `##`, `-`, and `|` are not words; exits 1 over the cap
 <the candidate body>
 EOF
 ```
 
 Over the cap means cut, not justify. Move detail down into part two, which has room for it, or drop what the diff already says. If the cut would lose something the reader must know, stop and ask the user with the count and the candidate lines. Publishing over the cap is the user's call. What usually drifts:
 
-- **Every claim still true.** The opening blocks are still accurate (the After flow and the After output are what the code does now), the Proof numbers are the final run's, and every file named as current still exists under that name.
+- **Every claim still true.** The opening blocks are still accurate (the After flow and the After output are what the code does now), the Proof and Results numbers are the final run's, and every file named as current still exists under that name.
 - **A moved facet left out, or an unmoved one shown.** A state section without the flow when the change moved one, or without the output when it changed, fails the re-read; so does a block for a facet the change did not move. Fix either before the flip.
 - **Scope drift.** Work the review rounds added or removed is in the body, or its absence is deliberate.
 - **Sorting.** Part one holds what the reader needs about the change as it is now. Anything that became detail moved down; anything that became important (a review finding that changed the change, a line count that contradicts the purpose) moved up.
 - **Title.** Type and subject name what landed, not the opening plan; the type follows the behavior rule above (a visible type once anything observable moved, never `refactor`).
-- **Size.** Part one is under 150 words, and no semicolon joins two clauses. `## How` and `## Proof` sit at their defaults unless this change needs more.
+- **Size.** Part one is under its cap (150 words, about 200 for the measured shape), and no semicolon joins two clauses. `## How` (or `## Reasoning`) and `## Proof` sit at their defaults unless this change needs more.
 
 A body that no longer matches, or no longer fits, is edited before the flip, never after the reader finds it.
 
