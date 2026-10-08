@@ -20,7 +20,7 @@
   - A mix of devices the reader can skim: short paragraphs, bullets for lists, tables, fenced blocks.
   - Short sentences, no semicolon chains, no nesting past one level, anywhere in the body.
 - **Review rounds replace, never append.**
-  - A fix edits the existing How or Proof bullet. A count is overwritten with the latest total.
+  - A fix edits the existing How (or Reasoning) or Proof bullet. A count is overwritten with the latest total.
   - No line says which round produced it.
   - The part-one word count is re-run after every round and before the flip.
   - An agent that believes the cap must break asks the user rather than deciding alone.
