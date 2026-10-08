@@ -19,6 +19,7 @@ import {
   type PruneAction,
   type PruneOptions,
   pruneStaleSkills,
+  repoSkillSources,
   repoSourceIds,
 } from "../scripts/link-agents";
 import { expectCheckFailure } from "./helpers/check-failure";
@@ -156,7 +157,7 @@ function pruneFixture(): PruneFixture {
   const agentDir = join(root, "claude-skills");
   mkdirSync(agentDir);
   const options = (overrides: Partial<PruneOptions> = {}): PruneOptions => ({
-    repoSkillsDir: repoSkills,
+    repoSkillsDirs: [repoSkills, join(root, "repo", "xeno")],
     currentSkills: new Set(["demo-skill"]),
     agentsSkillsDir: agentsSkills,
     agentSkillDirs: [agentDir],
@@ -176,6 +177,23 @@ function installedCopy(dir: string, name: string): string {
 function entryExists(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
+
+describe("repoSkillSources", () => {
+  test("maps each name to its one directory, skills and xeno alike", () => {
+    const sources = repoSkillSources(["/repo/skills/a", "/repo/xeno/b"]);
+    expect([...sources.entries()]).toEqual([
+      ["a", "/repo/skills/a"],
+      ["b", "/repo/xeno/b"],
+    ]);
+  });
+
+  test("a name shipped from both skills/ and xeno/ fails instead of linking one and reporting the other", () => {
+    expectCheckFailure(
+      () => repoSkillSources(["/repo/skills/dup", "/repo/xeno/dup"]),
+      /skill "dup" has two sources/,
+    );
+  });
+});
 
 describe("pruneStaleSkills", () => {
   test("prunes a dangling symlink into this repo", () => {
@@ -301,6 +319,15 @@ describe("pruneStaleSkills", () => {
 
     expect(pruneStaleSkills(options())).toEqual([]);
     expect(entryExists(join(agentsSkills, ".DS_Store"))).toBe(true);
+  });
+
+  test("prunes a dangling symlink into this repo's xeno dir: vendored skills are ours too", () => {
+    const f = pruneFixture();
+    const gone = join(f.root, "repo", "xeno", "retired-vendored");
+    symlinkSync(gone, join(f.agentsSkills, "retired-vendored"), "dir");
+    const actions = pruneStaleSkills(f.options());
+    expect(actions.map((a) => a.kind)).toEqual(["pruned"]);
+    expect(entryExists(join(f.agentsSkills, "retired-vendored"))).toBe(false);
   });
 
   test("prunes a symlink dangling several levels below this repo's skills dir", () => {
