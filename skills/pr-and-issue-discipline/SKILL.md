@@ -73,7 +73,7 @@ These rules bind PR bodies and the `/reply-and-review-discipline` skill's replie
 
 Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: honor its rules on title conventions, required sections, and linked issues inside the body you write.
 
-**A repository's convention decides headings and tone only, never the shape.** A template, a "prose over templates" rule, a "maintainer voice" note: each sets the section names and the formality. The reader has not changed, so the Readability rules above still hold inside any of them; how much block and how much prose is a judgment per body, and a wall of text is never the answer.
+**A repository's convention decides headings and tone, never how the body reads.** A template, a "prose over templates" rule, a "maintainer voice" note: each sets the sections, their required fields, and the formality. The reader has not changed, so the Readability rules above still hold inside any of them; how much block and how much prose is a judgment per body, and a wall of text is never the answer.
 
 ### The shapes
 
