@@ -44,13 +44,15 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 
 | Region | Budget |
 | --- | --- |
-| Part one prose (words outside fenced blocks) | 150 words, hard cap |
+| Part one prose (words outside fenced blocks) | 150 words, hard cap; about 200 for the prompt-or-policy shape |
 | Flow blocks, where the flow moved | One ASCII text block per state inside `## Before` and `## After`, or one block with both lines under a single opening section, ahead of the output. Fenced, so outside the prose count |
 | `## How` | 3 to 6 bullets by default, one sentence each, about 15 words. Or one small table |
 | `## Proof` | 2 to 4 bullets by default, latest totals only |
+| `## Reasoning` (prompt-or-policy shape) | 3 to 4 bullets, one sentence each, bold lead-in |
+| `## Results` (prompt-or-policy shape) | One before/after table of metrics and a one-line footer: judge, runs, aggregation |
 | `Technical details` | No length cap. One fact per line, one sentence each |
 
-When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` carries one more bullet: `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
+When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` (`## Reasoning` in the prompt-or-policy shape) carries one more bullet: `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
 
 **Readability is an accessibility requirement.** Readers include people with dyslexia, and a wall of prose costs them the PR. The standard is the one the `/working-text` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
 
@@ -165,6 +167,60 @@ END_COMMIT_OVERRIDE
 
 The block closing the details section is the commit-override rule below at work: this specimen's merge carries two breaks, so one `BREAKING CHANGE` footer lists them on two lines.
 
+### Prompt or policy change
+
+When the diff is text a model reads (prompt wording, policy YAML, a rubric, a render flag), a Before/After of captured output is a shorter string nobody can act on. The reader needs the problem, the fix, the reasoning, and the measured result, in that order.
+
+Rule of choice: Before/After when the behavior is observable by running something, this shape when the change is text a model reads. When both hold (a render you can run, read by a model), this shape wins: the output is only the string, the behavior is the judge's.
+
+`## Problem` is the one opening that is prose: two or three sentences on what the model or judge got wrong. `## Fix` carries the flow before and after as one text block. `## Reasoning` says why this change should move the behavior, since the fix alone does not; the Library bullet, where the rule above applies, closes it.
+
+`## Results` is a measured before/after table with a one-line footer naming the judge, the runs, and the aggregation. A cell not yet measured says `not yet` and why.
+
+Part one for this shape runs to about 200 words, since four Reasoning bullets do not fit 150.
+
+````markdown
+## Problem
+
+The router prompt rendered the policy with its three worked examples, and the judge scored answers against the examples instead of the rules. Policy recall fell on prompts the examples did not cover.
+
+## Fix
+
+```text
+before: load policy.yaml -> render(policy + examples) -> router prompt
+after:  load policy.yaml -> render(policy)             -> router prompt    (examples only under --with-examples)
+```
+
+## Reasoning
+
+- **The examples were the longest text in the prompt,** so the judge weighted them over the rules they illustrated.
+- **Every example restated a rule written above it,** so the policy loses nothing without them.
+- **A flag keeps them for the eval that needs them,** so the training renders are unchanged.
+
+## Results
+
+| Metric | Before | After |
+| --- | --- | --- |
+| Policy recall | 0.71 | 0.84 |
+| Example leakage | 12 of 200 | 0 of 200 |
+| Latency p50 | not yet: the perf sweep runs nightly | not yet: same sweep |
+
+Judge: rubric v3, 200 prompts, 3 runs each, mean.
+
+## Proof
+
+- **Tests:** the render test pins examples absent by default and present under the flag (2 new).
+- **Gate:** `bun run check` green.
+
+<details>
+<summary>Technical details</summary>
+
+- **Reviewer note (Copilot):** the default lives in `render_policy`, not in the YAML, so a policy file cannot turn examples back on.
+- **Files:** `router/{render_policy.py,policy.yaml}`, `tests/test_render_policy.py`.
+
+</details>
+````
+
 ### Contract or documentation PR
 
 Use `## What this specifies` when the PR defines a contract rather than executable behavior. Nothing runs, so show the contract itself (its schema, table, or layout) in a block, not in prose. Where the contract changes a flow (here the build now fails on drift), the flow comes first, then the contract.
@@ -209,7 +265,7 @@ interface.brand_color       == interface.brandColor
 
 For every form:
 
-- Blocks show, prose tells. The opening blocks are the flow as it ran and an actual command with its actual output, complete enough to stand alone, each only when the change moved it; never manufacture output or add a block only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself.
+- Blocks show, prose tells. The opening blocks are the flow as it ran and an actual command with its actual output, complete enough to stand alone, each only when the change moved it; never manufacture output or add a block only to satisfy a format. Where nothing runs, the block is a diagram, a table, or the contract shape itself. The prompt-or-policy shape's `## Problem` is the one prose opening.
 - Flow first, then output, inside each state. Under `## Before` and `## After` the flow block precedes the output block, no prose between them. Under one opening section (`## What this adds`, `## What this specifies`) a `before:` and an `after:` line share one block, ahead of the output or contract block.
 - Each block is there only when the change moved it: a flow change with unchanged output shows the flow alone, a changed output with no flow change shows the output alone. Never a block or a sentence saying nothing changed, and no `## Pipeline` section of its own.
 - The flow is plain ASCII in a text block, never mermaid: arrows between steps, a branch on its own indented line. The After flow is the flow as the code runs it now, held to the same truth as the After output.
@@ -277,7 +333,7 @@ The body is written when the PR opens and read when the PR is offered; the diff 
 **Before the offer** (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session. How hard to look depends on how far the PR moved: a one-commit PR gets a glance at the Proof numbers, a PR that went through eight review rounds gets every claim re-checked. Run the size check first, then the drift list:
 
 ```bash
-# Part-one prose: words outside fenced blocks and above the <details> tag. Cap: 150.
+# Part-one prose: words outside fenced blocks and above the <details> tag. Cap: 150, or 200 for the prompt-or-policy shape (set cap= below).
 # Pipe the CANDIDATE body in through a quoted heredoc: the text about to be published, every round and before the first publish.
 # `gh pr view "$n" --json body -q .body |` replaces the heredoc only for the final pre-offer read of what is already published.
 # Never point awk at a file name, and keep pipefail on: a missing file or a failed gh read must stop the gate, not count as 0.
@@ -288,19 +344,19 @@ awk '
                  if (d == c && RLENGTH >= n && /^(`+|~+) *$/) { f = 0 }                              # closing fence: same character, at least as long, nothing else
                  next }
   !f && /^<details>/ { exit }                                                                        # part two starts at a real tag, never one inside a fence
-  !f' <<'EOF' | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /[[:alnum:]]/) n++ } END { print n + 0; exit (n > 150) }'   # counts tokens with a letter or digit, so `##`, `-`, and `|` are not words; exits 1 over the cap
+  !f' <<'EOF' | awk -v cap=150 '{ for (i = 1; i <= NF; i++) if ($i ~ /[[:alnum:]]/) n++ } END { print n + 0; exit (n > cap) }'   # counts tokens with a letter or digit, so `##`, `-`, and `|` are not words; exits 1 over the cap
 <the candidate body>
 EOF
 ```
 
 Over the cap means cut, not justify. Move detail down into part two, which has room for it, or drop what the diff already says. If the cut would lose something the reader must know, stop and ask the user with the count and the candidate lines. Publishing over the cap is the user's call. What usually drifts:
 
-- **Every claim still true.** The opening blocks are still accurate (the After flow and the After output are what the code does now), the Proof numbers are the final run's, and every file named as current still exists under that name.
+- **Every claim still true.** The opening blocks are still accurate (the After flow and the After output are what the code does now), the Proof and Results numbers are the final run's, and every file named as current still exists under that name.
 - **A moved facet left out, or an unmoved one shown.** A state section without the flow when the change moved one, or without the output when it changed, fails the re-read; so does a block for a facet the change did not move. Fix either before the flip.
 - **Scope drift.** Work the review rounds added or removed is in the body, or its absence is deliberate.
 - **Sorting.** Part one holds what the reader needs about the change as it is now. Anything that became detail moved down; anything that became important (a review finding that changed the change, a line count that contradicts the purpose) moved up.
 - **Title.** Type and subject name what landed, not the opening plan; the type follows the behavior rule above (a visible type once anything observable moved, never `refactor`).
-- **Size.** Part one is under 150 words, and no semicolon joins two clauses. `## How` and `## Proof` sit at their defaults unless this change needs more.
+- **Size.** Part one is under its cap (150 words, about 200 for the prompt-or-policy shape), and no semicolon joins two clauses. `## How` and `## Proof` sit at their defaults unless this change needs more.
 
 A body that no longer matches, or no longer fits, is edited before the flip, never after the reader finds it.
 
