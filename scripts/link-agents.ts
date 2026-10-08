@@ -1,6 +1,7 @@
 /**
- * Replace the installed copies of this repo's skills in ~/.agents/skills with symlinks into the
- * working tree, so an edit here is live in every agent without re-running `npx skills add .`.
+ * Replace the installed copies of this repo's skills (skills/ and the vendored xeno/) in
+ * ~/.agents/skills with symlinks into the working tree, so an edit or a xeno sync here is live in
+ * every agent without re-running `npx skills add .`.
  *
  * `npx skills add` copies the source into ~/.agents/skills/<name>, and the per-agent directories
  * (~/.claude/skills, ...) symlink to that copy, never to the source. Linking the source directly
@@ -37,6 +38,8 @@ import {
   runChecks,
   SKILLS_DIR,
   skillDirs,
+  XENO_DIR,
+  xenoSkillDirs,
 } from "./lib.ts";
 
 export interface LinkAction {
@@ -58,8 +61,8 @@ export interface PruneAction {
 export type LockVerdict = "ours" | "foreign" | "unknown";
 
 export interface PruneOptions {
-  /** This repo's skills/ directory; symlink targets under it are ours. */
-  readonly repoSkillsDir: string;
+  /** This repo's skill directories (skills/, xeno/); symlink targets under any of them are ours. */
+  readonly repoSkillsDirs: readonly string[];
   /** Basenames of the skills the repo currently ships. */
   readonly currentSkills: ReadonlySet<string>;
   /** The canonical install directory (~/.agents/skills). */
@@ -71,6 +74,26 @@ export interface PruneOptions {
   /** Called as each action happens, so removals are reported even if a later step throws. */
   readonly onAction?: (action: PruneAction) => void;
   readonly dryRun?: boolean;
+}
+
+/**
+ * The skill directories this repository ships, by installed name. One name
+ * can have only one source: a skill in both skills/ and xeno/ would link to
+ * whichever came last and report the other, so that state fails here.
+ */
+export function repoSkillSources(dirs: readonly string[]): Map<string, string> {
+  const sources = new Map<string, string>();
+  for (const dir of dirs) {
+    const name = basename(dir);
+    const other = sources.get(name);
+    if (other !== undefined) {
+      fail(
+        `skill "${name}" has two sources: ${rel(other)} and ${rel(dir)}; one name, one directory`,
+      );
+    }
+    sources.set(name, dir);
+  }
+  return sources;
 }
 
 /**
@@ -127,11 +150,11 @@ export function linkSkills(
  * dryRun is true (actions report "would-prune" instead of "pruned").
  */
 export function pruneStaleSkills(options: PruneOptions): PruneAction[] {
-  const { repoSkillsDir, currentSkills, agentsSkillsDir, agentSkillDirs, lockAttribution } =
+  const { repoSkillsDirs, currentSkills, agentsSkillsDir, agentSkillDirs, lockAttribution } =
     options;
   const dryRun = options.dryRun ?? false;
   const pruneKind = dryRun ? "would-prune" : "pruned";
-  const repoForms = pathForms(repoSkillsDir);
+  const repoForms = repoSkillsDirs.flatMap(pathForms);
   const agentsForms = pathForms(agentsSkillsDir);
 
   const actions: PruneAction[] = [];
@@ -365,6 +388,9 @@ if (import.meta.main) {
     const dryRun = args.includes("--dry-run");
     const withAdd = args.includes("--add");
     if (withAdd && dryRun) fail("--add and --dry-run cannot be combined");
+    // Settled before the installer runs: a refused source set must not leave
+    // installs it already rewired unlinked.
+    const sourceByName = repoSkillSources([...skillDirs(), ...xenoSkillDirs()]);
 
     if (withAdd) {
       const result = spawnSync("npx", ["skills", "add", ".", "--global"], {
@@ -378,12 +404,11 @@ if (import.meta.main) {
     }
 
     const agentsSkillsDir = join(homedir(), ".agents", "skills");
-    const repoSkillDirs = skillDirs();
-    const actions = linkSkills(repoSkillDirs, agentsSkillsDir, dryRun);
+    const actions = linkSkills([...sourceByName.values()], agentsSkillsDir, dryRun);
 
     const prefix = dryRun ? "[dry-run] " : "";
     for (const action of actions) {
-      const source = rel(join(SKILLS_DIR, action.skill));
+      const source = rel(sourceByName.get(action.skill) ?? join(SKILLS_DIR, action.skill));
       if (action.kind === "already-linked") {
         console.log(`${prefix}already linked: ${action.skill}`);
       } else {
@@ -405,8 +430,8 @@ if (import.meta.main) {
     }
     const lockfilePath = join(dirname(agentsSkillsDir), ".skill-lock.json");
     const pruneActions = pruneStaleSkills({
-      repoSkillsDir: SKILLS_DIR,
-      currentSkills: new Set(repoSkillDirs.map((dir) => basename(dir))),
+      repoSkillsDirs: [SKILLS_DIR, XENO_DIR],
+      currentSkills: new Set(sourceByName.keys()),
       agentsSkillsDir,
       agentSkillDirs: discoverAgentSkillDirs(homedir(), agentsSkillsDir),
       lockAttribution: loadLockAttribution(lockfilePath, repoSourceIds(repository)),
