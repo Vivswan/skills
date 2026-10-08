@@ -52,7 +52,7 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 | `## Results` (prompt-or-policy shape) | One before/after table of metrics and a one-line footer: judge, runs, aggregation |
 | `Technical details` | No length cap. One fact per line, one sentence each |
 
-When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` (`## Reasoning` in the prompt-or-policy shape) carries one more bullet: `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
+When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` carries one more bullet (in the prompt-or-policy shape, the last of `## Reasoning`'s 3 to 4): `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
 
 **Readability is an accessibility requirement.** Readers include people with dyslexia, and a wall of prose costs them the PR. The standard is the one the `/working-text` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
 
@@ -173,7 +173,7 @@ When the diff is text a model reads (prompt wording, policy YAML, a rubric, a re
 
 Rule of choice: Before/After when the behavior is observable by running something, this shape when the change is text a model reads. When both hold (a render you can run, read by a model), this shape wins: the output is only the string, the behavior is the judge's.
 
-`## Problem` is the one opening that is prose: two or three sentences on what the model or judge got wrong. `## Fix` carries the flow before and after as one text block. `## Reasoning` says why this change should move the behavior, since the fix alone does not; the Library bullet, where the rule above applies, closes it.
+`## Problem` is the one opening that is prose: two or three sentences on what the model or judge got wrong. `## Fix` carries the flow before and after as one text block. `## Reasoning` says why this change should move the behavior, since the fix alone does not; the Library bullet, where the rule above applies, is the last of its 3 to 4.
 
 `## Results` is a measured before/after table with a one-line footer naming the judge, the runs, and the aggregation. A cell not yet measured says `not yet` and why.
 
@@ -269,7 +269,7 @@ For every form:
 - Flow first, then output, inside each state. Under `## Before` and `## After` the flow block precedes the output block, no prose between them. Under one opening section (`## What this adds`, `## What this specifies`) a `before:` and an `after:` line share one block, ahead of the output or contract block.
 - Each block is there only when the change moved it: a flow change with unchanged output shows the flow alone, a changed output with no flow change shows the output alone. Never a block or a sentence saying nothing changed, and no `## Pipeline` section of its own.
 - The flow is plain ASCII in a text block, never mermaid: arrows between steps, a branch on its own indented line. The After flow is the flow as the code runs it now, held to the same truth as the After output.
-- `## How` is 3 to 6 bullets by default, more when the mechanism has more moving parts. One small table may replace them where it explains the mechanism faster, never a second copy of the flow. Each bullet is one sentence of about 15 words with a bold lead-in.
+- `## How` is 3 to 6 bullets by default, more when the mechanism has more moving parts. One small table may replace them where it explains the mechanism faster, never a second copy of the flow. Each bullet is one sentence of about 15 words with a bold lead-in. `## Reasoning` follows the same bullet rules at 3 to 4.
 - Never a `## How` paragraph per review round.
 - `## Proof` is 2 to 4 bullets by default, naming focused behavioral tests or stable checks, with the latest totals where numbers exist. Never one line per review round ("round 3: 20 passed", "round 4: 83 passed"): a new run overwrites the old number. Do not turn it into transient CI, approval, or review status.
 - Write programmer to programmer: what changed, how the flow changed, in the reader's technical vocabulary, under the Readability rules above.
@@ -324,7 +324,7 @@ The body is written when the PR opens and read when the PR is offered; the diff 
 
 **After every review round: edit in place, never append.** The specimen was a body that grew to 1,800 words because each of twelve rounds added its own `## How` paragraph and its own `## Proof` line. The rule:
 
-1. A fix to something the body already states edits that `## How` or `## Proof` bullet in place. It does not add a second bullet about the same thing.
+1. A fix to something the body already states edits that `## How` (or `## Reasoning`) or `## Proof` bullet in place. It does not add a second bullet about the same thing.
 2. A fact new to the change (a mechanism or proof the body never stated) gets one new line, in the region the reader test sends it to.
 3. A count (tests, gates, lines) is overwritten with the latest total. The old number goes.
 4. Nothing in the body says which round produced it.
@@ -356,7 +356,7 @@ Over the cap means cut, not justify. Move detail down into part two, which has r
 - **Scope drift.** Work the review rounds added or removed is in the body, or its absence is deliberate.
 - **Sorting.** Part one holds what the reader needs about the change as it is now. Anything that became detail moved down; anything that became important (a review finding that changed the change, a line count that contradicts the purpose) moved up.
 - **Title.** Type and subject name what landed, not the opening plan; the type follows the behavior rule above (a visible type once anything observable moved, never `refactor`).
-- **Size.** Part one is under its cap (150 words, about 200 for the prompt-or-policy shape), and no semicolon joins two clauses. `## How` and `## Proof` sit at their defaults unless this change needs more.
+- **Size.** Part one is under its cap (150 words, about 200 for the prompt-or-policy shape), and no semicolon joins two clauses. `## How` (or `## Reasoning`) and `## Proof` sit at their defaults unless this change needs more.
 
 A body that no longer matches, or no longer fits, is edited before the flip, never after the reader finds it.
 
