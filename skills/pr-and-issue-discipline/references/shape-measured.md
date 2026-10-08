@@ -1,5 +1,5 @@
 <!-- /pr-and-issue-discipline shape: measured change.
-Copy this file as is into .github/PULL_REQUEST_TEMPLATE/; the comments vanish when the body renders.
+Copy the part above the horizontal rule into .github/PULL_REQUEST_TEMPLATE/; the comments vanish when the body renders.
 Use it when the change is read rather than run and its effect is measured by an evaluation. A Before/After of one run's output
 would be a shorter string nobody can act on; the reader needs the problem, the fix, the reasoning, and the measured result.
 Part one runs to about 200 words. The filled example sits under the rule at the end. -->

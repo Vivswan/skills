@@ -75,7 +75,7 @@ Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: hon
 
 ### The shapes
 
-Each shape is a file under `references/`, and each file is a copy-ready PR template: the headings, the shape's rules as HTML comments that vanish when the body renders, and the filled specimen under a rule at the end. Pick by what the change is:
+Each shape is a file under `references/`, and each file is a PR template above a horizontal rule: the headings, the shape's rules as HTML comments that vanish when the body renders, placeholders. Under the rule, the filled specimen. Pick by what the change is:
 
 | The change is | Shape |
 | --- | --- |
@@ -89,7 +89,7 @@ When a change both runs and is measured, the measured shape wins: a run shows a 
 
 The rows name situations, not kinds of file. When two still fit, ask the user, naming both; with no user to ask, pick by judgment and say which when the PR is offered.
 
-A repository that wants GitHub to offer the shapes copies the files into `.github/PULL_REQUEST_TEMPLATE/` unchanged. The template check above then finds them, and `gh pr create --template <file>` picks one.
+A repository that wants GitHub to offer the shapes copies each file's part above the horizontal rule into `.github/PULL_REQUEST_TEMPLATE/`; below the rule sits the filled specimen, which no new PR should carry. The template check above then finds them, and `gh pr create --template <file>` picks one.
 
 For every form:
 
@@ -167,12 +167,12 @@ The body is written when the PR opens and read when the PR is offered; the diff 
 # Never point awk at a file name, and keep pipefail on: a missing file or a failed gh read must stop the gate, not count as 0.
 set -o pipefail
 awk '
-  h { if (/-->/) h = 0; next }                                                                       # inside an HTML comment everything is comment text, fence markers included
+  h { if (!/-->/) next; sub(/^([^-]|-[^-]|--[^>])*-->/, ""); h = 0 }                              # inside an HTML comment: fence markers are comment text; prose after the first closer counts
   /^(```|~~~)/ { match($0, /^(`+|~+)/); d = substr($0, 1, 1)
                  if (!f)                                       { f = 1; c = d; n = RLENGTH; next }   # opening fence: remember its character and length
                  if (d == c && RLENGTH >= n && /^(`+|~+) *$/) { f = 0 }                              # closing fence: same character, at least as long, nothing else
                  next }
-  !f && /<!--/ { if ($0 !~ /-->/) h = 1; next }                                                      # an HTML comment (template instructions) is not prose
+  !f { gsub(/<!--([^-]|-[^-])*-->/, ""); if (/<!--/) { sub(/<!--.*/, ""); h = 1 } }                # HTML comments (template instructions) are not prose; the text around them is
   !f && /^<details>/ { exit }                                                                        # part two starts at a real tag, never one inside a fence
   !f' <<'EOF' | awk -v cap=150 '{ for (i = 1; i <= NF; i++) if ($i ~ /[[:alnum:]]/) n++ } END { print n + 0; exit (n > cap) }'   # counts tokens with a letter or digit, so `##`, `-`, and `|` are not words; exits 1 over the cap
 <the candidate body>

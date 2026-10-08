@@ -1,5 +1,5 @@
 <!-- /pr-and-issue-discipline shape: additive feature.
-Copy this file as is into .github/PULL_REQUEST_TEMPLATE/; the comments vanish when the body renders.
+Copy the part above the horizontal rule into .github/PULL_REQUEST_TEMPLATE/; the comments vanish when the body renders.
 Use it for something new, added beside what exists; its flow may still show what happened without it. The filled example sits under the rule at the end. -->
 
 ## What this adds

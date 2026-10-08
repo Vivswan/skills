@@ -6,7 +6,7 @@
   - The flow and the real captured output, each where the change moved it.
   - A diagram, table, or contract shape where nothing runs.
   - The reader skims it and gets the change.
-- **Shaped to the change.** Four shapes, each a copy-ready PR template under `references/shape-*.md`: before/after (or what-this-changes for a pure refactor), what-this-adds, problem/fix/reasoning/results for a change whose effect is measured, and what-this-specifies. A repository can drop the files into its GitHub pull request template folder unchanged.
+- **Shaped to the change.** Four shapes, each a copy-ready PR template under `references/shape-*.md`: before/after (or what-this-changes for a pure refactor), what-this-adds, problem/fix/reasoning/results for a change whose effect is measured, and what-this-specifies. A repository can copy each file's template part into its GitHub pull request template folder.
   - Flow first, then output, inside each of Before and After: the flow as ASCII (arrows between steps, a branch on its own indented line, never mermaid), then the captured output. Each is shown only when the change moved it.
   - Then `## How`: short bullets, or one small table where that explains the mechanism faster. The measured shape has `## Reasoning` bullets instead.
   - Then `## Proof`: the tests and gates, latest totals only.

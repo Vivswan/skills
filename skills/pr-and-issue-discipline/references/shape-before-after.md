@@ -1,5 +1,5 @@
 <!-- /pr-and-issue-discipline shape: existing behavior change or bug fix.
-Copy this file as is into .github/PULL_REQUEST_TEMPLATE/; the comments vanish when the body renders.
+Copy the part above the horizontal rule into .github/PULL_REQUEST_TEMPLATE/; the comments vanish when the body renders.
 Use it when something runs and its output or its flow moved. The filled example sits under the rule at the end. -->
 
 ## Before

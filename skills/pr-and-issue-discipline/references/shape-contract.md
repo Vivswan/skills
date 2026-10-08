@@ -1,5 +1,5 @@
 <!-- /pr-and-issue-discipline shape: contract or documentation PR.
-Copy this file as is into .github/PULL_REQUEST_TEMPLATE/; the comments vanish when the body renders.
+Copy the part above the horizontal rule into .github/PULL_REQUEST_TEMPLATE/; the comments vanish when the body renders.
 Use it when the PR defines a contract rather than executable behavior: nothing runs, so the contract itself is the picture.
 The filled example sits under the rule at the end. -->
 
