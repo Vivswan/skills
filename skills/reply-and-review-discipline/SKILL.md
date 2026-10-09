@@ -53,6 +53,7 @@ Full specimens of both shapes, and the two-language layout: `references/issue-re
 - **The reporter's language first, then English.** When the reporter writes in another language, or their pasted text reveals one (a localized error message, a UI label), the reply carries both: the full reply in the reporter's language, then the full reply in English.
   - Each half is complete on its own, with its own details block when the reply has one. Neither half is a summary of the other.
   - The two halves sit in one comment, a rule between them; layout in `references/issue-replies.md`.
+- **The repository's convention sets headings and tone, never how the reply reads.** A maintainers' "prose over templates" rule drops the headings and softens the voice; the reply still carries the same content in the same order and stays skimmable, judged per reply, never a wall of text.
 - The Readability rules and the redaction rule apply unchanged, to both halves of a two-language reply.
 
 ## Reviewing Someone Else's PR: One Pending Review

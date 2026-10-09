@@ -59,7 +59,7 @@ When the diff adds, moves, touches, reuses, or depends on a library-shaped categ
 These rules bind PR bodies and the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
 
 - **Paragraphs, bullets, tables, and fenced blocks mix.** Which device carries which content is the `/working-text` skill's rule set (pick the device from the content, a bullet is for a list, no gainless change, monotony as a signal to regroup, one carrier per point), applied to the PR body unchanged.
-- **The page shape is that skill's too.** Paragraph and sentence length, a bold lead-in opening each bullet, no nesting past one level, and headings that name the content rather than the reader's level ("In plain words" and "Non-technical summary" talk down) are the `/working-text` skill's shape rules, applied to the PR body unchanged. How many headings a body carries is this skill's, fixed by the shapes below.
+- **The page shape is that skill's too.** Paragraph and sentence length, a bold lead-in opening each bullet, no nesting past one level, and headings that name the content rather than the reader's level are the `/working-text` skill's shape rules, applied to the PR body unchanged. How many headings a body carries is this skill's, fixed by the shapes below unless the repository's own convention says otherwise.
 - **No semicolon chains.** A semicolon joining clauses means two sentences were forced into one. Split them.
 - **The blocks carry the change, the words only what no block can.** The defaults above are what most changes need. Go past them when this change needs it, never because a round added something.
 - **`/unslop` runs last**, where installed, over the prose that remains: the AI tells go before the body is offered.
@@ -72,6 +72,8 @@ These rules bind PR bodies and the `/reply-and-review-discipline` skill's replie
 4. Carry the answer for the rest of the session, for every PR and every issue in it. Answer "the skill's shapes": use the shapes below throughout. Answer "the repository's templates": use the template whose purpose matches each artifact, without asking again; where the repository ships no template for that artifact (issue templates but no PR template, or the reverse), the shapes below fill the gap.
 
 Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: honor its rules on title conventions, required sections, and linked issues inside the body you write.
+
+**A repository's convention decides headings and tone, never how the body reads.** A template, a "prose over templates" rule, a "maintainer voice" note: each sets the sections, their required fields, and the formality. The reader has not changed, so the Readability rules above still hold inside any of them; how much block and how much prose is a judgment per body, and a wall of text is never the answer.
 
 ### The shapes
 
