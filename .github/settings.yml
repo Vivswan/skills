@@ -58,6 +58,9 @@ labels:
     - name: nightly-failure
       color: D93F0B
       description: Automated nightly CI failure
+    - name: parked
+      color: c2e0c6
+      description: Ready and mergeable, kept open by the owner on purpose; do not merge
     - name: repo-platform:sync
       color: "5319e7"
       description: Sync this pull request's branch from repo-platform (the workflow
