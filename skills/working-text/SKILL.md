@@ -18,10 +18,10 @@ Where `/unslop` is installed, it runs last over the prose that remains.
 
 ## The specimen
 
-One paragraph of a fleet guide ([all-green.md at 7cb9aa3f](https://github.com/Vivswan/repo-platform/blob/7cb9aa3f/docs/all-green.md)), 71 words carrying three rules and two exceptions:
+One paragraph of a CI guide, an example from one repository's page on its `merge-gate` check, 73 words carrying three rules and two exceptions:
 
 ```markdown
-The judgment, whole: every needed result must be `success`, or `skipped` for a job named in `allowed-skips`. Anything else (`failure`, `cancelled`, a skip the list does not name) fails the gate, and the step summary lists every job with its result. The managed skeleton names `checks` alone, so a schedule night passes on `ci` and an all-skipped run cannot pass; repo-platform's own ci.yml names nothing, since none of its gating jobs may skip.
+The judgment, whole: every needed result must be `success`, or `skipped` for a job named in `allowed-skips`. Anything else (`failure`, `cancelled`, a skip the list does not name) fails the gate, and the step summary lists every job with its result. The default workflow names `checks` alone, so a scheduled run passes on `ci` and an all-skipped run cannot pass; the release workflow names nothing, since none of its gating jobs may skip.
 ```
 
 The same facts, shown:
@@ -35,18 +35,18 @@ The judgment, whole:
 | `skipped`, for a job named in `allowed-skips` | passes |
 | anything else: `failure`, `cancelled`, a skip the list does not name | fails; the step summary lists every job with its result |
 
-- **Managed skeleton:** `allowed-skips` names `checks` alone, so a schedule night passes on `ci` and an all-skipped run cannot pass.
-- **repo-platform's own ci.yml:** names nothing, since none of its gating jobs may skip.
+- **Default workflow:** `allowed-skips` names `checks` alone, so a scheduled run passes on `ci` and an all-skipped run cannot pass.
+- **Release workflow:** names nothing, since none of its gating jobs may skip.
 ```
 
-The owner opened that page and called it a wall of text. The probe agrees and says where:
+A reader opened that page and called it a wall of text. The probe agrees and says where:
 
 ```text
-$ bun docs-probe.mts --shape-only docs/all-green.md
+$ bun docs-probe.mts --shape-only docs/merge-gate.md
 docs-probe: 19 finding(s)
-  docs/all-green.md:10: paragraph of 73 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps
-  docs/all-green.md:28: list item of 173 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps
-  docs/all-green.md:99: list item of 218 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps
+  docs/merge-gate.md:10: paragraph of 73 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps
+  docs/merge-gate.md:28: list item of 173 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps
+  docs/merge-gate.md:99: list item of 218 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps
 ```
 
 ## Pick the device from the content
@@ -87,21 +87,21 @@ Every reader of these pages skims, then reads one section closely. Both readers 
 Shape:
 
 - **The most important point opens each section.** A reader who stops after the first sentence leaves with the right fact.
-- **Headings tell the story on their own** ("What gates what", "When the pin moves"), never the reader's level ("Simple version"). Read in sequence, the headings are the page's outline. They appear only on a page above about 500 words.
+- **Headings tell the story on their own** ("What gates what", "When the version changes"), never the reader's level ("Simple version"). Read in sequence, the headings are the page's outline. They appear only on a page above about 500 words.
 - **One idea per paragraph,** 1 to 3 sentences, under 70 words. **Short sentences,** one idea each, about 20 words.
 - **No nesting past one level.** A list inside a list is content asking for a different device: a table, a tree, a subsection, whichever shows it.
 - **The page reads from beginning to end.** Sections follow the order a reader meets the subject. A fact is introduced before it is used.
 
 Words:
 
-- **Plain, direct, active.** "The sync moves the pin" rather than "the pin is moved by the sync". One term per thing, kept for the whole page. A name the reader has not met is defined where it first appears, in plain words before the mechanism name ("the check that judges every job" comes before `all-green`).
+- **Plain, direct, active.** "The build writes the lockfile" rather than "the lockfile is written by the build". One term per thing, kept for the whole page. A name the reader has not met is defined where it first appears, in plain words before the mechanism name ("the check that gates every merge" comes before its job name, `merge-gate`).
 - **Example first, then the rule.** The block or the row shows it. The sentence after says what it means.
 - **Show the artifact.** Log lines, error text, and tree output are quoted verbatim, never paraphrased.
 - **Programmer register.** Precise nouns, the repository's own names, no marketing. `/unslop`, where installed, removes the AI tells that survive.
 
 Facts:
 
-- **One owner per fact.** A fact lives on one page. Other pages link to it in the sentence that needs it (`the [undeclared-policy page](undeclared.md#the-knob) owns this knob`) and never restate it. A separate links or navigation section exists only when the page is an index.
+- **One owner per fact.** A fact lives on one page. Other pages link to it in the sentence that needs it (`the [retry page](retries.md#the-limit) owns this limit`) and never restate it. A separate links or navigation section exists only when the page is an index.
 - **Every internal link works.** The target exists and the anchor names a heading on it. The probe checks the targets, and the anchors are read.
 - **Mark what kind of fact it is.** A confirmed fact stands bare. An assumption, a claim supplied by someone else, a risk, a recommendation, or anything not independently verified is labeled as such where it appears ("a guess, to save a round trip" or "reported by the user, not reproduced").
 - **Cut only what the reader does not need.** Implementation detail, repetition, and filler go, while definitions, reasoning, limitations, and next steps stay. A cut is a content change the PR names, and a restructure (below) moves every fact and cuts none.
@@ -122,7 +122,7 @@ The artifact-specific facts:
 
 - **An action description** is a literal block (`|`).
 - **Input and output descriptions** are one sentence each.
-- **Never `${{` inside an action or workflow description.** GitHub evaluates it when the file loads, and it has broken a fleet's actions at load.
+- **Never `${{` inside an action or workflow description.** GitHub evaluates it when the file loads, and a stray `${{` fails the action as soon as it loads.
 
 ## The probe
 
@@ -133,10 +133,12 @@ Front matter, headings, fences, tables, comments, and generated regions are not 
 - a unit over the cap (`--max-words`, default 70), with the line it starts on
 - a repository path the prose names that does not exist: a backticked `<dir>/<file>.<ext>`, `./<file>`, `../<file>`, or `<dir>/`, or a relative link target
 
+Replace the angle-bracket placeholders with the repository's own paths.
+
 ```bash
 bun "<skill-dir>/scripts/docs-probe.mts" README.md docs/*.md               # exit 0: docs-probe: 4 page(s) clean (cap 70 words)
-bun "<skill-dir>/scripts/docs-probe.mts" --shape-only skills/*/SKILL.md     # a recipe page names files of the repository it describes
-bun "<skill-dir>/scripts/docs-probe.mts" --base files/base docs/*.md         # pages name files a shipped tree writes into other repositories
+bun "<skill-dir>/scripts/docs-probe.mts" --shape-only <skill pages>          # a recipe page names files of the repository it describes
+bun "<skill-dir>/scripts/docs-probe.mts" --base <template-dir> docs/*.md     # pages that name files a template or generator writes into other repositories
 ```
 
 | Exit | Meaning |
@@ -147,9 +149,9 @@ bun "<skill-dir>/scripts/docs-probe.mts" --base files/base docs/*.md         # p
 
 The path check leaves alone, on purpose: placeholders (`<skill-dir>/x`), globs, `owner/repo` slugs, absolute paths, and bare file names (`package.json`). It also leaves alone a path whose first segment exists nowhere between the page and the root, nor under a `--base` (a page describing another layout).
 
-A path resolves against the root, the page's directory, every directory between, and each `--base`. So a skill's reference page may name a script under its own `scripts/` folder, and a platform page may name a file by the path it will have in the repositories it is written into.
+A path resolves against the root, the page's directory, every directory between, and each `--base`. So a skill's reference page may name a script under its own `scripts/` folder, and a page describing a template may name a file by the path it will have in the repositories generated from it.
 
-Copy the script into the repository's scripts directory and run it in the check command. The cap is then a gate, not a taste. The same cap ships as a Vale rule in this skill's `vale/` folder; `docs/vale.md` of the skill's home repository shows the wiring.
+Copy the script into the repository's scripts directory and run it in the check command. The cap is then a gate, not a taste. The same cap ships as a Vale rule under `vale/`, for repositories that already run Vale. Otherwise wire the probe into the repository's own check command.
 
 ## Restructuring an existing page
 

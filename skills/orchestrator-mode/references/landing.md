@@ -22,7 +22,7 @@ Review-before-landing and the CI watcher after every push or merge stay in orche
    - The boundary must be RECORDED, not inferred: squash rewrites history (the same lesson as the PR gate's restack-before-retarget rule below).
 3. **Re-run the gates on the result and run the review pass.** Then land per the prep mode: a rebase or cherry-pick already leaves committed work, so fast-forward the mainline onto it and push. An applied patch is uncommitted, so commit it first, then push. Either way, what gets pushed is the MAINLINE, never the builder's branch.
 4. **Keep the mainline tree frozen while a review round is in flight**, and serialize resource-exclusive validation (fixed ports, shared stacks).
-5. **Reverting a red landing is itself a landing**, subject to the repo's commit-subject convention. `git revert` keeps the default subject `Revert "<subject>"`, which fails a Conventional Commits check. So revert with `git revert --no-edit <sha>` and then `git commit --amend -m "revert: <original subject>" -m "This reverts commit <sha>."` before pushing (`git revert -m` is the merge-parent selector, not a message flag).
+5. **Reverting a red landing is itself a landing**, subject to the repo's commit-subject convention. If the repository enforces one, reword the revert subject to match it: under Conventional Commits, `git revert --no-edit <sha>`, then `git commit --amend -m "revert: <original subject>" -m "This reverts commit <sha>."` before pushing. Otherwise keep git's default `Revert "<subject>"`. (`git revert -m` is the merge-parent selector, not a message flag.)
 
    Production: the revert of a red landing on main failed CI's commit-subject validator on the very next run and needed a lease-pinned amend of the mainline tip to repair.
 

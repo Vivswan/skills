@@ -43,7 +43,7 @@ Every test answers "what would drift silently without this?" in its name or firs
 
 | Answer | Example |
 |---|---|
-| An external fact the platform does not enforce for us | every PAT-reading job declares its `environment`; `secrets: inherit` sits on exactly the callers whose call reaches an environment job; an absent step output expands to the empty string, which a numeric comparison reads as `0` |
+| An external fact that nothing in the repository or its CI enforces | every PAT-reading job declares its `environment`; `secrets: inherit` sits on exactly the callers whose call reaches an environment job; an absent step output expands to the empty string, which a numeric comparison reads as `0` |
 | A cross-file consistency the source cannot express | the codex manifest's `shortDescription` equals the `interface.short_description` in `agents/openai.yaml` |
 | A regression with a named incident | the empty manifest that passed validation vacuously |
 
@@ -51,7 +51,7 @@ Every test answers "what would drift silently without this?" in its name or firs
 
 ### A check earns its place
 
-What fails loudly on its own gets no check, nor does what the toolchain fixes itself: bun fetching a missing tool is its feature, not a failure. A missing package, a stale lockfile, a wrong toolchain all show in the next build or gate and are fixed then; a pre-check for one is deleted.
+What fails loudly on its own gets no check, nor does what the toolchain fixes itself: a toolchain that fetches a missing tool on its own, as bun does, is doing its job, not failing. A missing package, a stale lockfile, a wrong toolchain all show in the next build or gate and are fixed then; a pre-check for one is deleted.
 
 What would fail silently gets a test, and it is never skipped as "it would fail anyway".
 
@@ -98,7 +98,7 @@ for (const lint of Object.keys(parseToml(read("files/rust/Cargo.toml")).workspac
 
 The KEEP test answers the drift question with an external fact: clippy renames and retires lints, and nothing in the repository enforces that the table names real ones. The DELETE test answers "the file says so".
 
-Specimen: a toolchain repository's Rust lint floor shipped with a test that parsed the starter `Cargo.toml` and asserted its lint list, then parsed the three shipped workflow blocks and asserted their cargo commands. The owner's words on deleting it: "if something is already the source of truth, we do not need to check that thing."
+Specimen: a toolchain repository's Rust lint floor shipped with a test that parsed the starter `Cargo.toml` and asserted its lint list, then parsed the three shipped workflow blocks and asserted their cargo commands. The reasoning given for deleting it: "if something is already the source of truth, we do not need to check that thing."
 
 Specimen: eleven PRs landed in one day on a repository of GitHub Actions workflows, and their builders shipped shape tests that restated the yaml. Two examples: a census asserting no workflow sets `cancel-in-progress: false`, and a pin that a job's `needs` equals the list in the file. Four pressures produced them, each with its answer:
 

@@ -66,7 +66,7 @@ The agent reviews under the user's account, so publishing is the user's act: the
 - **A repository they do not own:** that repository's conventions come first, and which house standards a colleague's PR is held to is the user's call. Recommend the correctness lenses and offer the rest.
 
 1. **Collect the candidates:** every installed skill declaring a `## Review Criteria` section, found the way the `/rubber-duck-review` skill's companion-skills step finds them; that skill itself, for a read-only cross-model pass over the PR's diff; and `/working-text` when the PR touches working text (a page, a comment, a description).
-2. **Read the memories first:** the memory index and this project's memories. A standing correction about this repository, a rule the user gave the last time a PR like this was reviewed, a library the user prefers over hand-rolling: each one adds a lens, drops one, or sharpens the recommendation.
+2. **Read the memories first:** the memories available to the session (the index, where the memory system keeps one, and this project's memories). A standing correction about this repository, a rule the user gave the last time a PR like this was reviewed, a library the user prefers over hand-rolling: each one adds a lens, drops one, or sharpens the recommendation.
 3. **Ask once, the recommendation first**, with the reason for each lens inside the dialog itself, since text outside a dialog is lost:
 
    ```text
@@ -124,6 +124,6 @@ gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.sta
 - **One or two sentences, plain English, as short as possible.** Open with a bracketed hint for the publisher (`[blocking]`, `[small ask]`, `[question]`), then the exact change asked for. No background, no restating what the code does. Accepted: "[blocking] The linked comment has only headline and per-type tables, not the 100-task paired table the body promises. Please post it or link to it."
 - **Plain human voice:** the Replies section's words (plain language, no internal names), not its two-part layout or language pairing. Rejected: "PARSING_ERROR maps to COULD_NOT_EXTRACT_ANSWER, which is trainable, so the rollout arrives as a CompletedRollout with reward 0". At most one code identifier per comment, one comparison, no chained numbers. Technical detail only when the author cannot act without it.
 - **A re-review stages comments only for what is still open or partly open.** An item the author addressed gets no comment of its own; the summary may list the resolved ones in one line.
-- **Only what changes behavior, reliability, or the truth of a stated fact.** Test-coverage, YAGNI, and tidying nits are not staged: the user drops them at publish time, so staging them only costs their editing pass.
-- **Never a finding: anything that matters only on Windows** (newline translation, path separators). The teams this serves run Linux and macOS only; a case-insensitive filesystem is a macOS default too, so that one stays a finding.
+- **Only what changes behavior, reliability, or the truth of a stated fact.** Test-coverage, YAGNI, and tidying nits are not staged unless the user asks for them: most publishers drop them, so staging them only costs an editing pass.
+- **A Windows-only issue** (newline translation, path separators) **is a finding only when the repository supports Windows**: its CI matrix, docs, or issues say so. A case-insensitive filesystem is a macOS default too, so that one stays a finding.
 - The redaction rule applies: a staged comment publishes under the user's name.

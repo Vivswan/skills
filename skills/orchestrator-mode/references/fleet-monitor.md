@@ -12,7 +12,7 @@ What remains is the judgment layer: what the readings mean, when to flag, and ho
 
 The measurement rules that are not monitor-specific live in the `/verify-with-controls` skill: evidence-or-error probes, positive and negative controls, suspecting the instrument, postconditions over logs, the look-then-send re-measure. This file keeps their monitor-specific instantiations and wiring.
 
-In this skill's home repository, `tests/doc-drift.test.ts` pins the flags, field names, and schema strings this file cites to the script sources. A rename on either side fails that repository's CI until doc and script move together. An installed copy inherits whatever the repository verified at release.
+The shipped scripts and this page are kept in sync upstream. Where they disagree, trust the script and report the drift.
 
 ## The Sweep
 
@@ -78,7 +78,7 @@ The row is data. These rules are what it means:
 
   The same trap at spawn: creating a worktree stamps EVERY checked-out file, so mtime-since-spawn cannot discriminate the agent writing from the checkout happening.
 - **Size a track base-to-HEAD** (its branch-point commit to its HEAD), never `diff origin/main..HEAD`. For a behind track the latter also reverses every sibling landing in the gap (observed seven-fold deletion inflation). Reserve comparisons against the sweep's selected base for the ahead/behind counts the sweep already carries.
-- The absence of a test runner's scratch directories does not mean no test is running, and an infra builder's work lives outside `src/`.
+- The absence of a test runner's scratch directories does not mean no test is running, and a builder's work may live outside the directories a probe watches (infrastructure, CI config, docs).
 - **Evidence is bound to a SHA and a moment.** Every amend or rebase expires every prior content claim about the commit. Re-verify on the new SHA rather than carrying counts forward (a track can cross four SHAs between first commit and landing).
 
   A working-tree capture is a DRAFT. A builder once rewrote a captured phrase before committing it, so any token handed onward is re-derived at commit time, never quoted from an uncommitted diff.
@@ -129,7 +129,7 @@ The judgment that stays with the operator:
 
 The lead writes the session's needle file once at session start, outside the repository, and the monitor's brief names its path. The file never enters a worktree or a commit.
 
-One fixed string per line: the owner's real identifiers, the provenance phrases a real-data fixture carries (`measured from`, `real logs`), and, when a track replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file. The `/pr-landing-discipline` skill's READY check shows the extraction.
+One fixed string per line: the real identifiers of the user and of anyone whose machine or accounts the session touches, the provenance phrases a real-data fixture carries (`measured from`, `real logs`), and, when a track replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file. The `/pr-landing-discipline` skill's READY check shows the extraction.
 
 On every sweep where a row's `headSha` differs from the previous sweep's (every commit, amend, and rebase), the monitor greps every commit the track added since its branch point. It reads each commit's message and each commit's own added lines, never the net diff, because a fixture added in one commit and deleted in the next is still published by the first.
 
@@ -212,11 +212,11 @@ Two disaster-shaped non-disasters:
 
 ## Priors at the Quiet Seams
 
-- **The signal seam:** a committed-clean-quiescent worker is MORE OFTEN mid-review or composing its signal than stranded: 27 quiescences across the lineage's shifts, zero confirmed strands. Raise the flag anyway (the one real strand is the one that matters), but frame it as a QUESTION with the benign explanations beside it, never an assertion: "no tree activity since X; you will know whether its signal arrived".
+- **The signal seam:** a committed-clean-quiescent worker is MORE OFTEN mid-review or composing its signal than stranded. In one long-running deployment, 27 quiescences across the lineage's shifts produced zero confirmed strands. Raise the flag anyway (the one real strand is the one that matters), but frame it as a QUESTION with the benign explanations beside it, never an assertion: "no tree activity since X; you will know whether its signal arrived".
 
   The lead holds the half the monitor cannot see (whether the agent's turn is open, whether a message landed). 26 of the 27 resolved by the worker visibly returning, and exactly ONE resolved only by lead escalation. That flag was load-bearing precisely because the monitor could not settle it alone.
 
-  Name the state before measuring it. UNCOMMITTED-AND-STATIC (never committed, owes no message, and ~14 minutes of stillness is lineage-normal) and the seam proper (committed, owes one) have different normals, and the wrong baseline measures against the wrong number.
+  Name the state before measuring it. UNCOMMITTED-AND-STATIC (never committed, owes no message, and in that deployment ~14 minutes of stillness was normal) and the seam proper (committed, owes one) have different normals, and the wrong baseline measures against the wrong number. Calibrate the stillness baseline against the fleet's own observed normals.
 - **The read-first prior:** a builder whose brief says read-the-landed-code-first is silent with nothing written for its first one or two sweeps, then produces substantial output in one go. Reading leaves no trace in trees or processes. Its silence is not evidence of anything, the same blind spot as composing a message.
 - **The output-composition twin:** the read-first prior's symmetric blind class. A worker composing a large edit batch or prompt shows no tree trace, no process trace, and no message trace: FIFTY minutes of total silence measured mid-generation on a healthy worker, identical to a corpse from the monitor's side.
 

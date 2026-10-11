@@ -23,8 +23,8 @@ Never a comment: what the code does, its types, its control flow, its history, t
 - **Combine as the spot needs.** A blank comment line separates groups when there are more than a tell and its block. One carrier per point: rows followed by prose re-explaining them mean the rows failed.
 - **Uniform shape is the wall.** A paragraph fails, and so does every fact as its own line with nothing shown, however true each line is. The tell is one or two sentences, and past that a fact is shown or cut.
 - **A paragraph that has grown** holds narration (delete it) or a workaround defense (fix the code, not the comment).
-- **No limits here:** length and width caps are the fleet's file-size check.
-- **Never pack prose to fit a cap.** A wall under the cap is worse than the original, and a marker on a packed block is the worst of both. Cut honestly, and a block still over the cap after that is reported to the lead.
+- **No limits here:** length and width caps, where a repository has them, belong to its own lint or file-size check, not to this rule.
+- **Never pack prose to fit a cap.** A wall under the cap is worse than the original, and a marker on a packed block is the worst of both. Cut honestly, and a block still over the cap after that is reported to the user, or to the lead agent when one briefed you.
 
 ## Combinations
 
@@ -141,7 +141,7 @@ Two lines described what other functions do. Their own comments carry that. Thre
 // (nothing: the comment is removed; the function signature and body carry all of it)
 ```
 
-**A wrapped paragraph, to tell then rows.** From this repository's test launcher.
+**A wrapped paragraph, to tell then rows.** From one repository's test launcher.
 
 ```ts
 // A run of zero tests must fail HOWEVER it was reached: bun exits 1 when no
@@ -191,5 +191,5 @@ Comments describe purpose and constraints, not where the code came from. Commit 
 - **Shape every comment you keep:** tell, then show only when a block is faster.
 - **Redesign around a defended hack.** Treat any multi-line comment defending a hack, special case, or fragile assumption as a signal to redesign that code until the comment becomes unnecessary.
 - **Run these checks explicitly** in every pre-commit review pass (see the `/rubber-duck-review` skill).
-- **Hand a subagent that writes or sweeps comments this file** and the SKILL.md section by path, and tell it to read both first. Never a paraphrase: a lead's paraphrase is where the rule inverts. One lead's version read "prefer one dense paragraph over bullets", and six agents produced packed walls of text with markers on top.
+- **Hand a subagent that writes or sweeps comments this file** and the SKILL.md section by path, and tell it to read both first. Never a paraphrase: a briefing agent's paraphrase is where the rule inverts. One such paraphrase read "prefer one dense paragraph over bullets", and six agents produced packed walls of text with markers on top.
 - **When sweeping a whole repo,** skip generated files and symlinked files.

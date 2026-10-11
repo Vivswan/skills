@@ -46,7 +46,7 @@ Full detail: `references/design.md`.
 
 ### Prefer a library over hand-rolling
 
-Never hand-roll what a good library already does: the hand-rolled version is maintained for as long as the code lives, the library by its authors. A large library, or a fit that is unclear, is a question to the owner before the work. Otherwise the library wins.
+Never hand-roll what a good library already does: the hand-rolled version is maintained for as long as the code lives, the library by its authors. A large library, or a fit that is unclear, is a question to the user or repository owner before the work. Otherwise the library wins.
 
 The search happens before the first line and is written down: the brief, then the PR body or the landing report, names the library used, or the search and why nothing fits. A tool already in the repository counts as the library. The rule covers code a change adds, moves, touches, reuses, or depends on, not only code it adds.
 
@@ -60,10 +60,10 @@ A floor every test clears, not a recipe for which tests to write. Fuzzing, prope
 
 Agents drift toward many small weak tests. The fix is tests that each pin a whole outcome, which leaves fewer of them as a side effect, not a goal.
 
-- **The drift question.** Every test answers "what would drift silently without this?" in its name or first line. Three answers count: an external fact the platform does not enforce for us, a cross-file consistency the source cannot express, or a regression with a named incident. "The source says so" means no test.
+- **The drift question.** Every test answers "what would drift silently without this?" in its name or first line. Three answers count: an external fact that nothing in the repository or its CI enforces, a cross-file consistency the source cannot express, or a regression with a named incident. "The source says so" means no test.
 - **A constant is the source.** A test of a single constant restates the source and grows with it. So does a test of a variable that is itself the source of its value (a default, a key name, an argv literal, a path).
 - **A shipped file is the source.** A test that parses a file the repository ships (a lint table, a workflow fragment, a settings layer) and asserts its contents back is the same restatement. A data file is not external because it is not code.
-- **A check earns its place.** What fails loudly on its own gets no check, nor does what the toolchain fixes itself (bun fetching a missing tool is its feature, not a failure): a missing package, a stale lockfile, a wrong toolchain all show in the next build and are fixed then. What would fail silently gets a test, never skipped as "it would fail anyway".
+- **A check earns its place.** What fails loudly on its own gets no check, nor does what the toolchain fixes itself (a toolchain that fetches a missing tool itself, as bun does, is working, not failing): a missing package, a stale lockfile, a wrong toolchain all show in the next build and are fixed then. What would fail silently gets a test, never skipped as "it would fail anyway".
 - **Pin the value where it leaves the program** (the bytes written to a file, the line printed, the request sent), and only when that boundary is an external contract.
 - **Shape-only tests go.** Delete tests that only assert a shape, a type, or that something exists. If that fact matters, assert it inside a test that also checks the value.
 - **Parametrize one axis.** When hand-written cases differ only along one input axis, replace them with one parametrized case list.
@@ -98,7 +98,7 @@ A comment is read by humans and agents, the human first. The code is the single 
 - **Never a comment:** what the code does, its types, its control flow, its history, the alternatives. History and alternatives go in the commit message.
 - **Tell first, then show.** One or two sentences say what the code cannot show. A block follows only when it shows the fact faster: an arrow flow for a sequence, aligned rows for facts that share a shape.
 - **Uniform shape is the wall:** a paragraph, or every fact as its own line with nothing shown. Past the two sentences, a fact is shown or cut.
-- **No limits here.** Length and width caps are the fleet's file-size check. Never pack prose to fit a cap: cut honestly.
+- **No limits here.** Length and width caps, where a repository has them, belong to its own lint or file-size check, not to this rule. Never pack prose to fit a cap: cut honestly.
 - **Test, before writing or keeping one:** "What does this say that the code does not?" and "Could a tired human read it in one pass?" Fail either: rewrite or delete.
 
 Specimen, a stack of eight one-fact sentences rewritten as tell, then rows:
@@ -120,7 +120,7 @@ Full detail, the before/after specimens, and the TODO ban: `references/comments.
 
 Malformed input or state with one unambiguous repair is repaired at the boundary, reported where a user would want to know, and the program continues. Input with no repair, or with several candidate repairs, is refused at that same boundary. Nothing malformed passes through to fail later.
 
-Ownership follows the direction of data. What the tool only reads (a user's settings file, CLI arguments, a caller's payload) is never its own: a malformation there is refused, naming the key and the fix. What it outputs, directly or through something it drives (applied state, rendered config, caches, generated files), may be its own and is healed toward what the user declared. Unclear direction: ask the owner.
+Ownership follows the direction of data. What the tool only reads (a user's settings file, CLI arguments, a caller's payload) is never its own: a malformation there is refused, naming the key and the fix. What it outputs, directly or through something it drives (applied state, rendered config, caches, generated files), may be its own and is healed toward what the user declared. Unclear direction: ask the repository owner.
 
 A tool's own section inside a user-authored file splits the same way. A malformation the user typed there is reported, never healed, and the bad slot reads as absent where that is safe. A schema migration may rewrite that section once, since the tool moves its own data between its own shapes. Nothing outside the section is touched.
 

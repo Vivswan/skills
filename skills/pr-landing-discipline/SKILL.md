@@ -93,7 +93,9 @@ An open PR is live work until it merges. Bot reviewers (e.g. Copilot code review
 **Bot comments are advisory.** A non-human reviewer (Copilot code review, any review bot) follows a repository's review instructions inconsistently, and many repositories have none. So the author runs each bot comment through the filter those instructions would have applied: comment only on a defect you can demonstrate.
 
 - **Earns a fix:** the comment names a concrete input or state and the wrong output, crash, or data loss it produces in this diff. Fixed in the round.
-- **Speculative hardening:** a hostile caller who cannot reach the code, "consider validating", "for robustness", a race in a single-user tool, a check for an input the code never receives. Declined in one sentence and recorded, not built (the `/rubber-duck-review` skill's step 6 carries the exception for repositories over 100 stars). A comment that names the input and the damage is the first bullet, whatever its wording.
+- **Speculative hardening:** a hostile caller who cannot reach the code, "consider validating", "for robustness", a race in a single-user tool, a check for an input the code never receives. Declined in one sentence and recorded, not built (the `/rubber-duck-review` skill's step 6 carries the exception for a repository with outside users or a hostile-input surface, where the user sets the bar).
+
+  A comment that names the input and the damage is the first bullet, whatever its wording.
 - **Hand-rolls what a library does:** a comment naming the library or a tool already in the repository, and what it covers, earns the replacement, per the `/code-standards` skill. Code the change adds, moves, touches, reuses, or depends on counts. A large library or an unclear fit goes to the owner and holds the PR. Dependency weight never keeps it. A comment naming no library is the next bullet.
 - **Style, naming, or structure opinions** the repository's linter and formatter do not enforce, and rewording that says the same thing: declined in one sentence. An opinion the linter already reports is resolved without a reply, since the red check carries it.
 - **Restating the diff, praise, a summary:** resolved, no reply.
@@ -134,10 +136,10 @@ Production shape of one round:
 - **After every push, a background CI watcher.** Where installed, the `/watch-ci-after-push` skill defines it. A MERGE is watched the same way, on the mainline tip's SHA (fetch the mainline from the remote the PR merged into and watch `FETCH_HEAD`). After `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
 - **Before anything lands, an independent review that can block the landing.** It is scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.
 - **The gate reads the body for the library line.** A diff that adds, moves, touches, reuses, or depends on a library-shaped category (the list the `/code-standards` skill's `references/design.md` owns) is refused unless `## How` (`## Reasoning` in the measured shape; the landing report with no PR) carries the `**Library:**` bullet in a shape the `/pr-and-issue-discipline` skill names: a library plus what it covers, or the search plus why nothing fits.
-- **A confirmed library the gate or a reviewer names becomes a swap task** on the board, never a recorded-not-built line. A large library or an unclear fit is the owner's question first, and the task follows their answer.
-- **Local runs before a push are targeted.** Typecheck plus the tests the change and its proof touch, with an explicit timeout on a long run, and a process stopped by the PID you spawned, never by pattern. The full suite and the lint-plus-build sweep are the CI watcher's to judge, never run locally when CI runs them anyway.
+- **A confirmed library the gate or a reviewer names becomes a follow-up task** (an issue or the session's task list) or is done in the PR, never a recorded-not-built line. A large library or an unclear fit is the owner's question first, and the task follows their answer.
+- **Local runs before a push are targeted.** The typecheck, where the language has one, plus the tests the change and its proof touch, with an explicit timeout on a long run, and a process stopped by the PID you spawned, never by pattern. The full suite and the lint-plus-build sweep are the CI watcher's to judge, never run locally when CI runs them anyway.
 - **The pre-commit hook is a check-only gate:** what it may and may not do is the `/code-standards` skill's "Hooks check, never commit" standard.
-- **A personal private repository meters CI minutes**, so there the full check runs locally before the push instead. Not sure which kind it is, ask the user, or the lead when one briefed you.
+- **Where CI minutes are metered or scarce** (for example a private repository on a metered plan), the full check runs locally once before the push instead. Not sure which kind it is, ask the user, or the lead when one briefed you.
 
 ## Line Accounting Before Landing
 
@@ -201,9 +203,9 @@ Where a merge queue owns the ordering, the author's prepared action is enqueuein
 - **A trivial mechanical fix.** A change of a few lines that alters no behavior, flow, or procedure (a type narrowing, a typo, a rename with no semantic edge) merges directly once its gates are green. The human gate is reserved for changes worth human attention. When in doubt about "trivial", it is not trivial.
 - **A pipeline blocked on a merge.** When a converged PR gates queued work and the human is not acting, merge it and say so in the next report. Waiting idle on a merge the author could perform is the defect, and the notification preserves the human's oversight.
 
-**The `merge-when-green` label is the owner's standing approval on one PR, for that PR's whole life.** The repository owner applies it, never an agent, and no later push or force-push voids it. A PR without the label follows the rules above.
+**A standing-approval label the repository defines (for example `merge-when-green`) is standing approval on one PR, for that PR's whole life.** The approver, someone the repository authorises to give it (the owner, or the maintainers it names), applies the label, never an agent, and no later push or force-push voids it. A PR without the label, or a repository without one, follows the rules above.
 
-The label hands the operator the MERGE, not a verdict on the content. The owner agreed with the PR's idea and shape, at craft time or before, and may not have read the code. So the operator stands in for the owner on the exact head that lands:
+The label hands the operator the MERGE, not a verdict on the content. The approver agreed with the PR's idea and shape, at craft time or before, and may not have read the code. So the operator stands in for the approver on the exact head that lands:
 
 - the head is converged as defined above
 - its line accounting is read against the purpose (above)
@@ -213,31 +215,34 @@ The label hands the operator the MERGE, not a verdict on the content. The owner 
 Those checks are the same on every PR. The depth of reading is not: a typo fix gets a glance at the diff, and a rewrite of the release script gets the diff read end to end. The gates in this skill are the toolbox for that judgment, not a checklist the label unlocks. Two confirmations precede the merge:
 
 ```bash
+label='<approval label>'   # the label the repository defines, e.g. merge-when-green
 head="$(gh pr view <n> --json headRefOid --jq .headRefOid)"   # first: a push after this fails the merge below
-gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
-  | select((.event == "labeled" or .event == "unlabeled") and .label.name == "merge-when-green")
-  | "\(.created_at) \(.event) \(.actor.login)"'
+label="$label" gh api --paginate "repos/<owner>/<repo>/issues/<n>/timeline" --jq '.[]
+  | select((.event == "labeled" or .event == "unlabeled") and .label.name == env.label)
+  | "\(.created_at) \(.event) \(.actor.login)"'   # jq reads the label from the environment, so any label name is safe
 ```
 
 ```text
-1. the LAST line is a labeled event by the repository owner
-   -> labeled by anyone else: remove the label, report who set it, the owner re-applies it
+1. the LAST line is a labeled event by an authorised approver
+   -> labeled by anyone else: remove the label, report who set it, an approver re-applies it
    -> unlabeled, or no line at all: no approval; the rules above apply
 2. the operator's gate review ran on THIS head and its findings are triaged
    -> the head moved since the review: re-read head, re-review the head with the delta named, then merge
 ```
 
-**Folding PRs and the label.** The approval covers the idea and shape the owner agreed to on THAT PR. Folding another PR into a labeled one brings in content the owner never agreed to.
+**Folding PRs and the label.** The approval covers the idea and shape the approver agreed to on THAT PR. Folding another PR into a labeled one brings in content the approver never agreed to.
 
-So a label that predates the fold stays only when every PR folded in passes check 1 on its own timeline (an owner-set label, not merely a label). Otherwise the operator removes it, says so, and the owner re-applies after reading the folded content.
+So a label that predates the fold stays only when every PR folded in passes check 1 on its own timeline (an approver-set label, not merely a label). Otherwise the operator removes it, says so, and the approver re-applies after reading the folded content.
 
-A label the owner set after the fold is that approval, whatever the folded PRs carried. A fresh combined PR starts unlabeled like any PR.
+A label the approver set after the fold is that approval, whatever the folded PRs carried. A fresh combined PR starts unlabeled like any PR.
 
 The PR's own review rounds (new commits on the same branch) are not a fold, so they keep the label. Prefer stacking or a fresh PR over folding into a labeled PR.
 
-The operator removes the label in exactly two cases: set by someone other than the owner, or a fold that brought in unapproved content. A red check, an open thread, a gate finding, or a moved head never removes it. They hold the merge, not the approval.
+The operator removes the label in exactly two cases: set by someone other than an authorised approver, or a fold that brought in unapproved content. A red check, an open thread, a gate finding, or a moved head never removes it. They hold the merge, not the approval.
 
-Both confirmations hold and the head is converged: merge with `gh pr merge <n> --squash --match-head-commit "$head"`, so a push racing the merge fails it instead of landing, and report. Check 1 fails: the label comes off and the rules above apply. Check 2 or convergence fails: the finding is triaged under Draft Discipline (a commit-requiring finding flips the PR back to draft), the label stays, and the report says why.
+Both confirmations hold and the head is converged: merge with the repository's merge method (`--squash`, `--merge`, or `--rebase`) and `--match-head-commit "$head"`, so a push racing the merge fails it instead of landing, and report.
+
+Check 1 fails: the label comes off and the rules above apply. Check 2 or convergence fails: the finding is triaged under Draft Discipline (a commit-requiring finding flips the PR back to draft), the label stays, and the report says why.
 
 **The landing action is exit-conditioned, never chained**, for a PR merge and a direct push alike. Read the gate's own verdict and STOP, landing in a separate command only after the gate itself reports green. Green means the gate's exit code AND its verdict, and a review gate is green only when its findings are triaged, not merely when its process exits 0.
 
