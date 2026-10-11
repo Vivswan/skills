@@ -302,8 +302,13 @@ const SURFACES: Record<string, Surface> = {
           "every workflow that registered a run on the commit is judged, and at least one must have",
       },
       {
-        doc: "Registration then waits until two consecutive reads agree on the registered names",
-        script: "names === previousNames",
+        doc: "Registration then waits until two consecutive reads agree on the registered workflows",
+        script: "keys === previousKeys",
+      },
+      {
+        doc: "A set still changing after five reads is judged as last read, after a notice on stderr",
+        script:
+          "reads; judging what registered (a later run is still picked up while any run is pending)",
       },
       {
         doc: 'bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1',

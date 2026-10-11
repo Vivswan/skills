@@ -12,7 +12,8 @@ import { ROOT } from "../scripts/lib";
 //   green fleet                                                                     -> 0
 //   an --expect-workflow name absent                                                -> 2 with evidence, never a vacuous pass
 //   no --expect-workflow: every registered run judged, none registered              -> 0 on any green names, 2 on none
-//   no --expect-workflow: registration ends on two reads agreeing on the names      -> a late-registering red run still exits 1
+//   no --expect-workflow: registration ends on two reads agreeing on workflow ids   -> a late-registering red run still exits 1
+//   no --expect-workflow: the set still changing after 5 reads                      -> a stderr notice, then the last read's verdict
 //   red run plus a completed run with no conclusion, or an absent expected workflow -> 1, red outranks both
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.mts");
@@ -256,6 +257,58 @@ describe("watch-ci.mts exit matrix", () => {
     expect(r.stdout).toBe("FAIL(failure): Deploy (2)\nlog excerpt for 2\npass: Build (1)\n");
     expect(r.snapshots).toBe(3);
     expect(r.sleeps).toEqual(["3", "3"]);
+  });
+
+  test("registration settles on workflow ids, not names: a second workflow sharing a name is a change", () => {
+    // Read 2 adds a second workflow file also named Build (a different
+    // workflow id). Keyed by name, reads 1 and 2 would look identical, so
+    // registration would end at read 2 and the Deploy failure that registers
+    // on read 3 would never be judged: exit 0. Keyed by id, read 4 is the
+    // first to agree with its predecessor.
+    const r = run(
+      {
+        GH_RUNS: "1",
+        GH_RUNS2: "1 2",
+        GH_RUNS3: "1 2 3",
+        GH_NAME_1: "Build",
+        GH_NAME_2: "Build",
+        GH_NAME_3: "Deploy",
+        GH_CONCLUSION_3: "failure",
+      },
+      [],
+    );
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe(
+      "FAIL(failure): Deploy (3)\nlog excerpt for 3\npass: Build (2)\npass: Build (1)\n",
+    );
+    expect(r.snapshots).toBe(4);
+    expect(r.sleeps).toEqual(["3", "3", "3"]);
+  });
+
+  test("a set still changing after the 5-read window is judged as last read, with a notice, never exit 2", () => {
+    // Runs exist, so exit 2 would report a busy commit as tooling trouble.
+    // The verdict is the fifth read's, with its red run, and the notice names
+    // the unsettled window.
+    const r = run(
+      {
+        GH_RUNS: "1",
+        GH_RUNS2: "1 2",
+        GH_RUNS3: "1 2 3",
+        GH_RUNS4: "1 2 3 4",
+        GH_RUNS5: "1 2 3 4 5",
+        GH_CONCLUSION_5: "failure",
+      },
+      [],
+    );
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(
+      "registration still changing after 5 reads; judging what registered (a later run is still picked up while any run is pending)",
+    );
+    expect(r.stdout).toBe(
+      "FAIL(failure): CI-5 (5)\nlog excerpt for 5\npass: CI-4 (4)\npass: CI-3 (3)\npass: CI-2 (2)\npass: CI-1 (1)\n",
+    );
+    expect(r.snapshots).toBe(5);
+    expect(r.sleeps).toEqual(["3", "3", "3", "3"]);
   });
 
   test("all green exits 0 with a pass line per run; external suites are not runs", () => {
