@@ -5,6 +5,9 @@
 // are a secondary rate bucket that parallel watchers lock for longer than a run lasts, while
 // GraphQL keeps answering.
 //
+// The expected workflows are the --expect-workflow names. Without the flag, the expectation is every
+// workflow that registered a run on the commit, and at least one.
+//
 // Exit codes:
 //   0  the latest run of every workflow passed or was skipped, and every expected workflow registered a run
 //   1  some workflow's latest run ended with a non-success, non-skipped conclusion
@@ -14,8 +17,9 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-const USAGE = "usage: watch-ci.mts [--expect-workflow <name>]... [<full-sha>]";
-const DEFAULT_EXPECTED_WORKFLOW = "CI";
+const USAGE =
+  "usage: watch-ci.mts [--expect-workflow <name>]... [<full-sha>]" +
+  " (without --expect-workflow, every workflow that registered a run on the commit is judged, and at least one must have)";
 // gh run watch's 3 s default refresh across parallel watchers drained the REST bucket and blinded
 // every verdict until it refilled.
 const POLL_INTERVAL_SECONDS = 60;
@@ -87,9 +91,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type CommandLine = { expected: string[]; sha: string };
 
 // The gate workflow can silently fail to register on a push, leaving only green bystanders on the
-// SHA, so exit 0 requires every expected name among the discovered runs. The names are matched
-// exactly, and the list is split on commas, so an empty entry or a newline would shrink the
-// expectation set and silently disable the gate.
+// SHA, so exit 0 requires every expected name among the discovered runs. An empty list means no
+// name is required beyond the runs themselves (main() still demands at least one). The names are
+// matched exactly, and the list is split on commas, so an empty entry or a newline would shrink
+// the expectation set and silently disable the gate.
 function parseCommandLine(argv: string[]): CommandLine {
   const parsed = parseFlags(argv);
   const expected: string[] = [];
@@ -108,10 +113,7 @@ function parseCommandLine(argv: string[]): CommandLine {
   if (trailing.length > 0) {
     usageError(`unexpected argument(s) after the SHA: ${trailing.join(" ")}`);
   }
-  return {
-    expected: expected.length > 0 ? expected : [DEFAULT_EXPECTED_WORKFLOW],
-    sha: shaToken?.value ?? gitHead(),
-  };
+  return { expected, sha: shaToken?.value ?? gitHead() };
 }
 
 function parseFlags(argv: string[]) {
@@ -394,8 +396,8 @@ function main(argv: string[]): number {
     const found = [...new Set(runs.map((run) => run.name))].sort().join(", ") || "nothing";
     printErr(
       `expected workflow(s) not found for ${sha}: ${missing.join(", ")}; discovered only: ${found}.` +
-        " The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch>" +
-        " (or override the expectation with --expect-workflow <name>)",
+        " The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run <gate workflow file> --ref <branch>" +
+        " (or correct the --expect-workflow name: names match exactly)",
     );
   }
 

@@ -42,15 +42,21 @@ Still empty after ~15s? That usually means no workflow triggers on this ref. Say
 
 ### 2. Watch in the background
 
-Preferred: spawn a **background subagent** with this brief, then keep working while it runs the script in the foreground of its own turn. Never sleep or poll waiting for it. Act on its report when the completion notification arrives:
+Preferred: spawn a **background subagent** with this brief, then keep working while it runs the script in the foreground of its own turn. Never sleep or poll waiting for it. Act on its report when the completion notification arrives.
+
+Before spawning, fill in the gate workflow names:
+
+- **Read them from the repository:** the `name:` of each workflow file under `.github/workflows/` that gates a PR. A required check in branch protection is a job name, so map it to the `name:` of the workflow whose job it is.
+- **Pass them through** as `--expect-workflow <gate workflow name(s)>` in the brief below.
+- **None known?** Drop the flag. The watcher then judges every run it finds on the SHA.
 
 ```text
 Your ENTIRE value is one report to whoever spawned you: the CI
 verdict for commit <full-sha> on <repo>, as the script's full output
 and its exit code, in every branch (green, red, or tooling trouble).
 A stop without that report is total failure. Procedure: run
-bun "<skill-dir>/scripts/watch-ci.mts" <full-sha> from the repo root
-as a FOREGROUND shell command inside your own turn, with the longest
+bun "<skill-dir>/scripts/watch-ci.mts" --expect-workflow <gate workflow name(s)> <full-sha>
+from the repo root as a FOREGROUND shell command inside your own turn, with the longest
 timeout your harness allows for a foreground command (Claude Code
 defaults to a 10-minute cap). If the script is still running when that
 cap hits, run it again: it is idempotent and re-reads the runs.
@@ -59,9 +65,9 @@ until the script has exited. Then report. Exit 0: all green (skipped
 runs count as pass). Say so in one line. Exit 1: some workflow's
 latest run ended with any non-success, non-skipped conclusion (e.g.
 failure/cancelled/timed_out). Include the FAIL lines and the log
-excerpts. Exit 2: discovery or gh itself failed, or the expected
-workflow (default: the one named "CI") never registered a run on
-the SHA. Report that as tooling trouble, NEVER as a red pipeline.
+excerpts. Exit 2: discovery or gh itself failed, no run registered
+on the SHA at all, or a workflow named in --expect-workflow never
+registered a run. Report that as tooling trouble, NEVER as a red pipeline.
 Report even on success; never go silent. You watch and report ONLY:
 never fix, commit, or push from this role.
 ```
@@ -80,15 +86,15 @@ bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.o
 # gh failed, or the expected workflow never registered a run
 ```
 
-The script refuses a vacuous green: the expected workflow (by default the one named `CI`) must be among the discovered runs, or it exits 2 naming what it did find.
+The script refuses a vacuous green. With `--expect-workflow`, every named workflow must be among the discovered runs, or it exits 2 naming what it did find. Without it, every workflow that registered a run on the commit is judged, and at least one must have registered, or it exits 2.
 
-A repo whose gate workflow has a different name passes `--expect-workflow <name>` (repeatable or comma-separated) before the SHA. Names match exactly and case-sensitively, so a comma or newline can never be part of an expected name, and a name that starts with a dash is passed as `--expect-workflow=<name>`. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`.
+Pass the gate's name with `--expect-workflow <name>` (repeatable or comma-separated) before the SHA. Names match exactly and case-sensitively, so a comma or newline can never be part of an expected name, and a name that starts with a dash is passed as `--expect-workflow=<name>`. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run <gate workflow file> --ref <branch>`.
 
 Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything. Only a persistent failure exits 2.
 
 The exit codes are ranked, not independent: a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2). A missing gate workflow plus a red bystander therefore exits 1, with the missing-workflow message still printed. Clear the red run, then watch again for the gate.
 
-In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the invocation shape, the GraphQL discovery, the exit semantics, the expected-workflow gate, the superseded/FAIL/skip lines) to `scripts/watch-ci.mts`. A rename on either side fails CI until doc and script move together.
+The shipped scripts and this page are kept in sync upstream. Where they disagree, trust the script and report the drift.
 
 ### 3. Report
 
@@ -160,7 +166,7 @@ bun "<skill-dir>/scripts/wait-for-pr-event.mts" 123 --until comment,review --tim
 #   exit 3 -> no activity this hour; re-arm the waiter or escalate to the user
 ```
 
-The drift test also pins this waiter's invocation, its `--until` set, and all four exit codes to `scripts/wait-for-pr-event.mts`.
+The upstream-sync note above covers this waiter's script too.
 
 ## Fallback Without gh
 

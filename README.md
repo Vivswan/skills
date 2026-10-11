@@ -16,8 +16,8 @@ The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) 
 
 The agent applies these on its own when the task matches:
 
-- [/code-standards](./skills/code-standards/SKILL.md) - House standards for maintainable code, folded into reviews
-- [/codex-browser-fix](./skills/codex-browser-fix/SKILL.md) - Codex only: keeps the bundled Chrome plugin driving Brave and other Chromium browsers through app updates and custom model providers
+- [/code-standards](./skills/code-standards/SKILL.md) - Maintainability standards for code changes, folded into reviews
+- [/codex-browser-fix](./skills/codex-browser-fix/SKILL.md) - Codex only: keeps the bundled Chrome plugin driving any Chromium browser (Chrome, Edge, Brave, Vivaldi, Opera) through app updates and custom model providers
 - [/craft-skills-and-memories](./skills/craft-skills-and-memories/SKILL.md) - Create and repair skills and memories at their canonical source
 - [/never-twice](./skills/never-twice/SKILL.md) - Climb every repeated failure to the most durable fix reachable
 - [/no-invalid-states](./skills/no-invalid-states/SKILL.md) - Invariants in the type system instead of runtime checks

@@ -293,8 +293,13 @@ const SURFACES: Record<string, Surface> = {
     scriptPath: join(WATCH_CI, "scripts", "watch-ci.mts"),
     tokens: [
       {
-        doc: 'bun "<skill-dir>/scripts/watch-ci.mts" <full-sha>',
-        script: "sha: shaToken?.value ?? gitHead(),",
+        doc: 'bun "<skill-dir>/scripts/watch-ci.mts" --expect-workflow <gate workflow name(s)> <full-sha>',
+        script: "sha: shaToken?.value ?? gitHead() };",
+      },
+      {
+        doc: "Without it, every workflow that registered a run on the commit is judged, and at least one must have registered",
+        script:
+          "every workflow that registered a run on the commit is judged, and at least one must have",
       },
       {
         doc: 'bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1',
@@ -375,8 +380,9 @@ const SURFACES: Record<string, Surface> = {
           '`expected workflow(s) not found for ${sha}: ${missing.join(", ")}; discovered only: ${found}.`',
       },
       {
-        doc: "dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`",
-        script: "dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch>",
+        doc: "dispatch the missing workflow by hand, e.g. `gh workflow run <gate workflow file> --ref <branch>`",
+        script:
+          "dispatch the missing workflow by hand, e.g. gh workflow run <gate workflow file> --ref <branch>",
       },
       {
         doc: "Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything",

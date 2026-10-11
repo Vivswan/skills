@@ -79,24 +79,25 @@ Both checks stop the function before anything is forwarded. A path that is alrea
 
 ```bash
 h() { ssh -o ClearAllForwardings=yes box-b "$@"; }   # helper commands drop config forwards that would collide with the tunnel's
-h 'cat ~/.claude/sessions/*.json'      # pick a live one; note its messagingSocketPath, e.g. /tmp/cc-socks-1000/2002.sock
+h 'cat ~/.claude/sessions/*.json'      # pick a live one; note its messagingSocketPath
+remote_sock=/tmp/cc-socks-1000/2002.sock   # that messagingSocketPath, e.g. this shape (uid dir, pid file)
 
 bridge() {
   unset bridge_pid                                      # the cleanup below acts only on a forward this call started
-  mkdir -p -m 700 /tmp/cc-socks-1000                    # their socket dir, needed here when the uids differ
-  test ! -e /tmp/cc-socks-1000/2002.sock || { echo "a local session owns that path; stop"; return 1; }
+  mkdir -p -m 700 "${remote_sock%/*}"                   # their socket dir, needed here when the uids differ
+  test ! -e "$remote_sock" || { echo "a local session owns that path; stop"; return 1; }
   h "mkdir -p -m 700 '${CLAUDE_CODE_MESSAGING_SOCKET%/*}' && test -w '${CLAUDE_CODE_MESSAGING_SOCKET%/*}' && test ! -e '$CLAUDE_CODE_MESSAGING_SOCKET'" \
     || { echo "our path on box-b is taken or its directory is not writable, or ssh failed; stop"; return 1; }
   ssh -o ControlPath=none -o ExitOnForwardFailure=yes -N \
-         -L /tmp/cc-socks-1000/2002.sock:/tmp/cc-socks-1000/2002.sock \
+         -L "$remote_sock:$remote_sock" \
          -R "$CLAUDE_CODE_MESSAGING_SOCKET:$CLAUDE_CODE_MESSAGING_SOCKET" box-b &   # no connection sharing: the forwards must die with this pid
   bridge_pid=$!
 }
 bridge && sleep 2 && kill -0 "$bridge_pid" && h "test -S '$CLAUDE_CODE_MESSAGING_SOCKET'" && echo "bridge up"   # a refused forward makes ssh exit; replies need the -R socket on box-b
-# SendMessage to = uds:/tmp/cc-socks-1000/2002.sock
+# SendMessage to = uds:<the remote_sock value>
 
 # afterwards; bridge_pid is set only by a bridge() call that started the forward
-[ -n "$bridge_pid" ] && { kill "$bridge_pid"; rm /tmp/cc-socks-1000/2002.sock; unset bridge_pid; h "rm -f '$CLAUDE_CODE_MESSAGING_SOCKET'" || echo "remove $CLAUDE_CODE_MESSAGING_SOCKET on box-b by hand"; }
+[ -n "$bridge_pid" ] && { kill "$bridge_pid"; rm "$remote_sock"; unset bridge_pid; h "rm -f '$CLAUDE_CODE_MESSAGING_SOCKET'" || echo "remove $CLAUDE_CODE_MESSAGING_SOCKET on box-b by hand"; }
 ```
 
 ## What the bridge does not do

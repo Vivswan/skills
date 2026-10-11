@@ -10,7 +10,8 @@ import { ROOT } from "../scripts/lib";
 //   red run                                                                         -> 1
 //   gh operational failure                                                          -> 2, never 1
 //   green fleet                                                                     -> 0
-//   expected workflow absent (default "CI", or --expect-workflow)                   -> 2 with evidence, never a vacuous pass
+//   an --expect-workflow name absent                                                -> 2 with evidence, never a vacuous pass
+//   no --expect-workflow: every registered run judged, none registered              -> 0 on any green names, 2 on none
 //   red run plus a completed run with no conclusion, or an absent expected workflow -> 1, red outranks both
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.mts");
@@ -156,16 +157,9 @@ function runArgv(env: Record<string, string>, argv: string[], opts: { unhandled?
   };
 }
 
-// The default expectation pins the fixture's default workflow name so each
-// scenario keeps testing its own branch, not the expected-workflow gate
-// (which has dedicated tests below).
-const DEFAULT_ARGS = ["--expect-workflow", "CI-1"];
-
-function run(
-  env: Record<string, string>,
-  args: string[] = DEFAULT_ARGS,
-  opts: { unhandled?: boolean } = {},
-) {
+// Scenarios run without --expect-workflow unless they test the gate itself, so
+// each one exercises the default expectation: every run the fixture registers.
+function run(env: Record<string, string>, args: string[] = [], opts: { unhandled?: boolean } = {}) {
   return runArgv(env, [...args, "deadbeef"], opts);
 }
 
@@ -205,7 +199,9 @@ describe("watch-ci.mts exit matrix", () => {
     expect(r.snapshots).toBe(0);
   });
 
-  test("no runs registered exits 2 with no verdict", () => {
+  test("no --expect-workflow and no runs at all exits 2: an empty commit is never a vacuous green", () => {
+    // Without a named gate, "judge every run found" would pass trivially on
+    // zero runs if the at-least-one floor were lost.
     const r = run({ GH_RUNS: "" });
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("no workflow runs registered");
@@ -220,6 +216,17 @@ describe("watch-ci.mts exit matrix", () => {
     // Two registration sleeps, then the completed snapshot is judged at once.
     expect(r.snapshots).toBe(3);
     expect(r.sleeps).toEqual(["3", "3"]);
+  });
+
+  test("no --expect-workflow judges every registered run, whatever its name: green exits 0", () => {
+    // A hardcoded default gate name would turn every green watch in a
+    // repository whose workflows are named differently into exit 2.
+    const r = run({ GH_RUNS: "1 2", GH_NAME_1: "Build", GH_NAME_2: "Deploy" });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("pass: Deploy (2)\npass: Build (1)\n");
+    expect(r.stderr).toBe("");
+    expect(r.snapshots).toBe(1);
+    expect(r.sleeps).toEqual([]);
   });
 
   test("all green exits 0 with a pass line per run; external suites are not runs", () => {
@@ -448,7 +455,7 @@ describe("watch-ci.mts exit matrix", () => {
     chmodSync(join(failDir, "sleep"), 0o755);
     const r = run(
       { GH_RUNS: "1@in_progress", PATH: `${failDir}:${binDir}:${process.env.PATH ?? ""}` },
-      DEFAULT_ARGS,
+      [],
       { unhandled: true },
     );
     expect(r.code).toBe(2);
@@ -515,8 +522,6 @@ describe("watch-ci.mts exit matrix", () => {
     // 2, same workflow) appears queued while the script waits and run 1 is
     // cancelled by the concurrency group. The poll must wait for run 2 and
     // demote run 1 to superseded instead of reporting its cancellation.
-    // No --expect-workflow here: the runs are named "CI", so this scenario
-    // also pins the script's default expectation.
     const r = run(
       {
         GH_RUNS: "1@in_progress",
@@ -580,13 +585,13 @@ describe("watch-ci.mts exit matrix", () => {
   test("green bystanders with the expected workflow absent exit 2, never 0", () => {
     // THE hole this gate closes: the push's event fails to register the CI
     // run, discovery finds only other workflows on the SHA, and all of them
-    // pass. No flag, so the default expectation "CI" applies; the runs are
-    // named CI-1 and CI-2, which must NOT satisfy it.
-    const r = run({ GH_RUNS: "1 2" }, []);
+    // pass. The runs are named CI-1 and CI-2, which must NOT satisfy an
+    // expectation of "CI": names match exactly, never by prefix.
+    const r = run({ GH_RUNS: "1 2" }, ["--expect-workflow", "CI"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("expected workflow(s) not found for deadbeef: CI;");
     expect(r.stderr).toContain("discovered only: CI-1, CI-2");
-    expect(r.stderr).toContain("gh workflow run ci.yml --ref <branch>");
+    expect(r.stderr).toContain("gh workflow run <gate workflow file> --ref <branch>");
     expect(r.stdout).toBe("pass: CI-2 (2)\npass: CI-1 (1)\n");
     // The registration burst keeps polling for the gate through its window.
     expect(r.snapshots).toBe(5);
@@ -594,13 +599,13 @@ describe("watch-ci.mts exit matrix", () => {
   });
 
   test("a red run outranks a missing expected workflow: exits 1, message still printed", () => {
-    const r = run({ GH_RUNS: "1", GH_CONCLUSION_1: "failure" }, []);
+    const r = run({ GH_RUNS: "1", GH_CONCLUSION_1: "failure" }, ["--expect-workflow", "CI"]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("FAIL(failure): CI-1 (1)\nlog excerpt for 1\n");
     expect(r.stderr).toContain("expected workflow(s) not found");
   });
 
-  test("--expect-workflow overrides the default expectation", () => {
+  test("--expect-workflow naming a discovered workflow exits 0", () => {
     const r = run({ GH_RUNS: "1", GH_NAME_1: "Build" }, ["--expect-workflow", "Build"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("pass: Build (1)\n");
@@ -700,7 +705,10 @@ describe("watch-ci.mts exit matrix", () => {
     // workflow registers on the third poll. The registration-lag loop must
     // keep polling within its bounded window instead of reporting the
     // merely-late gate as missing.
-    const r = run({ GH_RUNS: "2", GH_RUNS3: "2 1", GH_NAME_1: "CI", GH_NAME_2: "Bystander" }, []);
+    const r = run({ GH_RUNS: "2", GH_RUNS3: "2 1", GH_NAME_1: "CI", GH_NAME_2: "Bystander" }, [
+      "--expect-workflow",
+      "CI",
+    ]);
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("pass: Bystander (2)\npass: CI (1)\n");
     expect(r.stderr).toBe("");
@@ -714,7 +722,7 @@ describe("watch-ci.mts exit matrix", () => {
     // final snapshot, so the late gate is judged, not reported missing.
     const r = run(
       { GH_RUNS: "2@in_progress", GH_RUNS6: "2 1", GH_NAME_1: "CI", GH_NAME_2: "Bystander" },
-      [],
+      ["--expect-workflow", "CI"],
     );
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("pass: Bystander (2)\npass: CI (1)\n");

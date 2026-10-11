@@ -20,10 +20,10 @@
     "capabilities": ["Read", "Execute"],
     "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/codex-browser-fix",
     "defaultPrompt": [
-      "Use $codex-browser-fix and open my Brave profile to finish this form.",
+      "Use $codex-browser-fix and open my work browser profile to finish this form.",
       "The browser says Codex auth token is unavailable; fix it.",
       "Check the Chrome plugin setup after the app update."
     ],
-    "brandColor": "#FB542B"
+    "brandColor": "#2563EB"
   }
 }

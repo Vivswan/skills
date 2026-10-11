@@ -28,7 +28,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-ci-after
 ## Layout
 
 - [`SKILL.md`](./SKILL.md): the watch workflow
-- [`scripts/watch-ci.mts`](./scripts/watch-ci.mts): discovery + watch + report in one command, run with bun. Exit 0 green, 1 failures, 2 no runs, gh failure, or a missing expected workflow. The expected workflow defaults to "CI" and is overridden with `--expect-workflow <name>`
+- [`scripts/watch-ci.mts`](./scripts/watch-ci.mts): discovery + watch + report in one command, run with bun. Exit 0 green, 1 failures, 2 no runs, gh failure, or a missing expected workflow. The gate workflow names come from the repository and are passed with `--expect-workflow <name>`. Without the flag, every workflow that registered a run on the commit is judged, and at least one must have
 
 ## Plugin-Ready Layout
 

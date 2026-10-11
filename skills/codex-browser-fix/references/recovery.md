@@ -37,7 +37,7 @@ The desktop app updates in place, and the plugin cache under `~/.codex` does not
 
 Replaced cache contents move to `<home>/plugin-rollbacks/`. They are repair backups, never alternate runtimes.
 
-A missing bundle, `config.toml`, or executable is an error. The preflight never reports a pass over one (the authoring repository's `tests/browser-plugin-preflight.test.ts` pins this).
+A missing bundle, `config.toml`, or executable is an error. The preflight never reports a pass over one.
 
 ## Extension or tab failures
 
