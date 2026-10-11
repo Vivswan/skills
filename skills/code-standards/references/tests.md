@@ -166,6 +166,22 @@ Specimens, both caught this way:
 - A floor test asserting `harmless >= 40` passed under `Balanced` allocation too, which gives ~100, so it did not discriminate the rule it was written for. The fix was asserting a band (`40 <= harmless <= 60`) that fails under both `Proportional` and `Balanced`.
 - A propagation test asserted that a flag reached a loader, but the test passed the flag in itself. It would have passed with the propagation removed.
 
+## Tiers
+
+The drift answer says why a test exists; the tier says when it runs. Three tiers, fixed names, fixed triggers:
+
+| Tier | Runs on | Holds |
+| --- | --- | --- |
+| `pr` | every PR and every push to main | unit, conformance, end-to-end through the built artifact, docs and bench gates |
+| `release-gate` | the release PR, manual dispatch, and the nightly schedule | what is slow, environment-heavy, or network-bound yet qualifies the release: a hermetic container tier, deep property or fuzz runs, chaos, vendor-docs drift, upstream parity |
+| `nightly` | the schedule only | trends and probes of the previously published package; never a gate |
+
+- **A test that fits both `pr` and `release-gate` is `release-gate`.** `pr` holds only what finishes fast enough to run on every merge. The `nightly` row is disjoint by subject: it probes the package already published, which no release waits on.
+- **The first line of every test file names its tier** (`// tier: release-gate`, or the language's comment), before the drift answer. A move cannot change a tier silently, and a census reads one line per file.
+- **A census test pins that every file under `tests/` names a tier a workflow actually runs.** A tier the workflows never run is a test that never runs.
+- **One definition per gate job,** in a repo-owned reusable workflow (`workflow_call`) that the nightly schedule and the release-PR path both call. Two definitions drift; the schedule then passes what the gate would fail.
+- **The release PR's required gate includes `release-gate`.** Ordinary PRs skip it and stay green. A regression the nightly would catch the next morning shows on the release PR instead.
+
 ## Boundaries
 
 - **Distinct scenarios are not duplicates.** Five tests that look alike but cover five different short-circuit paths stay five tests, because folding them behind a setup callable hides what each one covers. Fold on *shared shape with a varying value*, not on superficial resemblance.

@@ -24,6 +24,8 @@ Review-before-landing and the CI watcher after every push or merge stay in orche
 4. **Keep the mainline tree frozen while a review round is in flight**, and serialize resource-exclusive validation (fixed ports, shared stacks).
 5. **Reverting a red landing is itself a landing**, subject to the repo's commit-subject convention. `git revert` keeps the default subject `Revert "<subject>"`, which fails a Conventional Commits check. So revert with `git revert --no-edit <sha>` and then `git commit --amend -m "revert: <original subject>" -m "This reverts commit <sha>."` before pushing (`git revert -m` is the merge-parent selector, not a message flag).
 
+   Work that belongs to the `release-gate` test tier (the `/code-standards` skill's tiers) goes to that gate on the release PR, never into per-PR CI.
+
    Production: the revert of a red landing on main failed CI's commit-subject validator on the very next run and needed a lease-pinned amend of the mainline tip to repair.
 
 ## PRs
