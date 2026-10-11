@@ -9,7 +9,7 @@
 - **Reviewing someone else's PR**: every comment staged in one pending review under the user's account; publishing is the user's act, done by them or on their explicit instruction
   - The verdict is an inline summary comment for the user to paste into the summary box: a bracketed recommendation, then Works and Blocks
   - Each comment is one or two plain sentences opening with a bracketed hint for the publisher, anchored on the finding's whole range
-  - Only what changes behavior, reliability, or the truth of a stated fact; nothing Windows-only; a re-review comments only on what is still open
+  - Only what changes behavior, reliability, or the truth of a stated fact; nothing Windows-only unless the repository supports Windows; a re-review comments only on what is still open
 - **Shared rules**: the Readability rules and the redaction rule of [`/pr-and-issue-discipline`](../pr-and-issue-discipline/) apply to every reply and every staged comment unchanged; a repository's own convention sets headings and tone, never how the reply reads
 
 Full specimens of both reply shapes and the two-language layout: [`references/issue-replies.md`](./references/issue-replies.md).

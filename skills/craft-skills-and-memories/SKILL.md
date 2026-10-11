@@ -15,7 +15,7 @@ A broken skill or a stale memory is a bug. Working around it and moving on re-br
 Scope:
 
 - **Skills are general-purpose.** Nothing in a skill should be project-specific. A fact that only holds for one project belongs in that project's own docs or memories, not in the skill.
-- **Memories may be project-specific or common.** Create and fix a memory at the scope it belongs to: a project memory in that project's store, a common memory in the shared store.
+- **Memories may be project-specific or common.** Create and fix a memory at the scope the agent's memory system offers (project, user, or global), matching where the fact holds.
 
 ## When to Apply
 
@@ -47,7 +47,7 @@ Fixing:
   - Skimmable throughout: short front-loaded paragraphs, no text blobs (the example-led rule above governs content order). Readability for the reader outranks style rules, and accuracy rules always bind. The prose of a skill page or a memory body follows the `/working-text` skill; the frontmatter description stays a trigger under this skill.
   - Form follows the change in any section: no mandated format beyond this bar, never a visual plus prose re-explaining it, programmer register. The `/natural-writing` bullet below states when that skill applies to prose.
   - No backwards compatibility, folders included: splits, merges, and retirements are normal changes, with every deletion audited per the `/never-twice` skill (Deleting a Guard). A compatibility contract the hosting repo declares (such as published install paths) still binds folder moves there.
-- **Memories** hold one fact per file, record the why, convert relative dates to absolute, and link related memories. A wrong memory gets deleted, not patched around.
+- **Memories** record the why, convert relative dates to absolute, and link related memories. One fact per memory, whatever the store holds (a file, a record, an entry), so a wrong one can be deleted without taking a right one with it. A wrong memory gets deleted, not patched around.
 - When rewriting prose, apply the `/natural-writing` skill if it is present and invocable. If your harness lets only the user invoke it, suggest they run `/natural-writing` rather than silently skipping the step.
 
 ## Creating
@@ -58,7 +58,7 @@ Fixing:
    - Personal or project fact, policy, or preference: memory, at the right scope.
    - A skill that encodes a personal workflow rather than an auto-detectable task should be explicit-invocation-only. That means `disable-model-invocation: true` in the frontmatter, and `policy.allow_implicit_invocation: false` in `agents/openai.yaml` for Codex.
 3. **Write it to the quality bar above**, with the triggering incident as the specimen.
-4. **Wire it in**: a skill follows its repository's authoring checklist (manifests, catalog, checks). A memory gets its index line.
+4. **Wire it in**: a skill follows its repository's authoring checklist (manifests, catalog, checks). Where the memory system keeps an index, a memory gets its entry added in the same edit.
 5. **Run the gates** where they exist (repo checks, review). For a memory, re-read it asking "will a cold session act correctly from this?"
 
 ## Fixing
@@ -75,7 +75,7 @@ Work around the broken step to complete what the user actually asked for. The fi
 
 - Skill in its authoring repository: edit the affected sources directly (`SKILL.md`, `references/`, `scripts/`).
 - Installed or vendored skill copy you are authorized to edit (e.g. a personal skills directory): edit that copy. Tell the user the upstream source still carries the defect if one exists.
-- Memory: edit the memory file where it lives and keep its index line in sync. A memory that is wrong, as opposed to merely stale, gets deleted, not patched around.
+- Memory: edit the memory where it lives. Where the memory system keeps an index, update its entry in the same edit. A memory that is wrong, as opposed to merely stale, gets deleted, not patched around.
 - Not authorized to write: report the defect and your proposed fix to the user instead.
 
 ### 4. Fold the fix in, don't append a note
@@ -93,7 +93,7 @@ A one-off warning bolted to the end leaves the broken instructions in place. A r
 
 Why code first: a trap folded into a tested script cannot re-fire. A trap folded into prose regrows the catalog: each incident adds a warning paragraph, the file swells, and a future session hand-rolls the broken step anyway.
 
-Worked case: a fleet-monitoring skill accumulated shell-probe trap prose (word-splitting, self-matching greps, a missing `timeout` binary) until the probes moved into tested scripts and the prose shrank to the judgment layer.
+Worked case: a monitoring skill accumulated shell-probe trap prose (word-splitting, self-matching greps, a missing `timeout` binary) until the probes moved into tested scripts and the prose shrank to the judgment layer.
 
 ### 5. Put the edit through the normal gates
 
@@ -104,7 +104,7 @@ A skill or memory edit is a change like any other: run whatever checks and revie
 **A creation.** The user corrects the agent twice for hard-wrapping commit messages at 72 columns.
 
 - That is a memory, not a skill: personal policy, applies across repos, nothing installable.
-- Write `commit-message-rules.md` in the common store with the correction as the specimen and the why, then add its index line.
+- Save it as a user-level memory, `commit-message-rules`, with the correction as the specimen and the why (and update the index, if the memory system has one).
 - Example-led, not quote-led: it records the rule and a concrete before/after, not the user's exact words.
 
 **A skill defect.** While following a review skill, `claude -p --output-format stream-json` exits with an error and an empty output file.
@@ -119,7 +119,7 @@ A skill or memory edit is a change like any other: run whatever checks and revie
 
 1. Verify against the current repo: the memory is stale, not the build.
 2. Finish the deploy with the real target.
-3. Update the memory file in that project's store (and its index line) to name `make publish`, keeping the rename as the concrete example.
+3. Update the project-scoped memory (and its index entry, if the memory system has one) to name `make publish`, keeping the rename as the concrete example.
 
 **Not a defect.** The same command fails once with a backend overload error and succeeds on retry. That is transient. Finish the task and leave the skill alone.
 

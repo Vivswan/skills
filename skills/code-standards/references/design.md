@@ -67,7 +67,7 @@ How to apply:
 
 ## Prefer a Library Over Hand-Rolling
 
-Never hand-roll what a good library already does. The owner's words: "do not hand-roll something a good library already does; if the library is large or the fit is unclear, ask; otherwise prefer the library, because the hand-rolled version has to be maintained over the long run."
+Never hand-roll what a good library already does. If the library is large or the fit is unclear, ask. Otherwise prefer the library, because the hand-rolled version has to be maintained over the long run.
 
 Specimen: an audit of one repository's CI scripts found five whose whole job existing tooling already did. Each had grown its own parsing, caching, and error handling that someone else maintains for everyone.
 
@@ -82,8 +82,8 @@ How to apply:
 - The search is recorded where the change is described (the brief, then the PR body or the landing report): the library used, or what was searched and why nothing fits.
 - A tool already present in the repository counts as the library: a lint rule engine's restricted-syntax rule in place of a hand-written AST scanner, a linter already in the job in place of a second checker, a framework's built-in search in place of a custom one.
 - The rule covers code a change adds, moves, touches, reuses, or depends on, not only code it adds. A moved or reused helper is reviewed as if new. A change routed through a hand-rolled loop asks whether the loop should exist.
-- A confirmed library candidate becomes a swap task on the board; it is never filed as "recorded, not built". A large library or an unclear fit asks the owner first, next bullet, and the task follows their answer.
-- A large library, or a fit that is unclear (it does most of the job, or it does the job a different way), is a question to the owner before the work, with the library named. The owner decides, never the lead or builder. Dependency weight is not a reason to keep hand-rolled code.
+- A confirmed library candidate is done in the change or filed as a follow-up task (an issue, ticket, or task list). It is never filed as "recorded, not built". A large library or an unclear fit asks the owner first, next bullet, and the task follows their answer.
+- A large library, or a fit that is unclear (it does most of the job, or it does the job a different way), is a question to the user or repository owner before the work, with the library named. The user or repository owner decides, never an agent. Dependency weight is not a reason to keep hand-rolled code.
 - The one exception: a library that needs a runtime or API the repository has dropped is not a fit, however good. Specimen: a dependency graph tool that requires the TypeScript compiler API is not a fit for a repository pinned to a TypeScript that no longer ships one. The hand-rolled parser walk stays, and the reason is recorded where the walk lives.
 - At review, a reviewer treats hand-rolled code whose whole job a good library does as a finding that names the library. A finding that names no library is a style opinion.
 

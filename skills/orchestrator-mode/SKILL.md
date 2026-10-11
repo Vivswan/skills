@@ -90,8 +90,8 @@ Confirm what the repo itself answers instead of asking open-ended: branch protec
 
   The two loops are defense in depth, not repetition. Each catches failures the other is blind to, and skipping a gate requires naming which remaining gate covers its failure class. "The other one passed" is not an answer. Where the `/rubber-duck-review` skill is installed, use it for both loops: a cross-model, read-only reviewer.
 - **Local test runs are targeted, at every loop.** Builders, gates, and the lead run only the tests the change and its proof touch. The full suite and the lint-plus-build sweep are CI's, on the push or the PR, never run locally when CI runs them anyway. Item 3 of `references/spawn-briefs.md` carries the rule every brief states.
-  - About three gates run at once, and every long run carries an explicit timeout.
-  - A personal private repository meters CI minutes, so there the full check runs locally before the push instead. A lead who is not sure which kind the repository is asks the user.
+  - Run only as many gates at once as the machine and the reviewer backend handle without stalling (about three is a safe start), and every long run carries an explicit timeout.
+  - Where CI minutes are metered or scarce (for example a private repository on a metered plan), the full check runs locally once before the push instead. A lead who is not sure which kind the repository is asks the user.
 - **Route review fixes back to the owning agent** to amend in place. The lead never takes over a builder's review loop. When a builder strands "waiting" on a reviewer, the fix is a nudge telling it to read its reviewer's completed output, or to spawn a fresh reviewer itself, never a lead-run replacement review.
 - **When a gate catches the same failure class twice**, the next gate's prompt carries the generalization question explicitly ("if a new member of this class appears tomorrow, does the fix hold, or does it silently pass the same way?"), and a silent pass is a blocking finding.
 
@@ -118,7 +118,7 @@ A landing is two independent choices:
 
 The per-mode procedures, including the stacked-chain loop and the worktree rules around it, live in `references/landing.md`. What stays constant under either gate:
 
-- **Who merges (the human by default), the two standing exceptions and the owner's `merge-when-green` label, and the exit-conditioned landing** are defined in the `/pr-landing-discipline` skill, and show-the-change PR bodies with redaction in the `/pr-and-issue-discipline` skill. In the PR gate all of them apply. In direct mode there is no PR body or merging hand, so what carries over is the exit-conditioned landing.
+- **Who merges (the human by default), the two standing exceptions and any standing-approval label the repository defines, and the exit-conditioned landing** are defined in the `/pr-landing-discipline` skill, and show-the-change PR bodies with redaction in the `/pr-and-issue-discipline` skill. In the PR gate all of them apply. In direct mode there is no PR body or merging hand, so what carries over is the exit-conditioned landing.
 - **Review before landing, never after**: findings must be able to block the landing. The review scopes to the exact content being landed, frozen until it lands: the branch or PR diff (`base...HEAD`) once the work is committed, the staged diff when landing a still-uncommitted patch. Never just "the working tree", whose clean state at merge time would make the review vacuous.
 
   Where installed, the `/rubber-duck-review` skill defines the review and its convergence. Nothing lands until it has converged.
@@ -126,9 +126,11 @@ The per-mode procedures, including the stacked-chain loop and the worktree rules
 
   In direct mode the read is the landing-gate variant in `references/fleet-monitor.md`, PII on Every HEAD Move: every commit's message and added lines since the branch point plus the whole replacement fixture from the frozen tree. For a patch still uncommitted, it is the staged fixture, the staged diff's added lines, and the proposed message.
 
-  The needle file carries the owner's real identifiers and, when the change replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file.
+  The needle file carries the real identifiers of the user and of anyone whose machine or accounts the session touches and, when the change replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file.
 
-  A hit routes back to the owning builder per Review Loops (4). A fixture with a provenance comment naming real data, or a quoted real configuration or log, is a finding whose fix is a hand-written substitute. The rule itself (nothing published tells a reader who the owner is, how they work, or how their machine is set up) and the substitutes are the `/pr-and-issue-discipline` skill's.
+  A hit routes back to the owning builder per Review Loops (4). A fixture with a provenance comment naming real data, or a quoted real configuration or log, is a finding whose fix is a hand-written substitute.
+
+  The rule itself (nothing published tells a reader who the user is, or anyone whose machine or accounts the session touches, how they work, or how their machine is set up) and the substitutes are the `/pr-and-issue-discipline` skill's.
 - **Line accounting before every landing** is defined in the `/pr-landing-discipline` skill: the per-kind read of the frozen diff against the stated purpose, the purpose-to-shape table, the sums placed in the PR body by whether they fit the purpose.
 
   The lead runs it at the landing gate alongside the review, in direct mode too (the sums go in the landing report instead of a PR body). A mismatch routes back to the owning builder per Review Loops (4) for the trim or the reason. A good change that grew still lands, with the reason where the user sees it.

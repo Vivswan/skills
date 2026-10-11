@@ -5,7 +5,7 @@
 - **Creating** skills and memories to a shared quality bar: example-led, trigger-form descriptions, right scope.
 - **Repairing** them at their canonical source when they fail in practice.
 
-Skills stay general-purpose. Memories are created and fixed at their own scope, project-specific or common.
+Skills stay general-purpose. Memories are created and fixed at the scope the agent's memory system offers (project, user, or global), matching where the fact holds.
 
 ## Install
 

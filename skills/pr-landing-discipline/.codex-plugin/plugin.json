@@ -1,6 +1,6 @@
 {
   "name": "pr-landing-discipline",
-  "description": "Carries a pull request from opened to landed: draft state that tracks convergence, same-cycle review-comment triage, line accounting against the stated purpose, and a human hand on the merge by default (an owner-applied merge-when-green label is the standing approval).",
+  "description": "Carries a pull request from opened to landed: draft state that tracks convergence, same-cycle review-comment triage, line accounting against the stated purpose, and a human hand on the merge by default (a standing-approval label applied by an authorised approver, where the repository uses one, hands over the merge).",
   "author": {
     "name": "Vivswan Shah",
     "email": "58091053+Vivswan@users.noreply.github.com",

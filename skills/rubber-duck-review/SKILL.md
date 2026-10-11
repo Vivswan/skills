@@ -37,7 +37,7 @@ Use this skill when someone asks for:
 ### 2. Large change sets: fan out one review per section
 
 - A single broad review of a big diff is shallower than several focused ones. Split the change into logical **sections** (each new command/module, each script, the CI/release config, a parity pair). Run one review per section in parallel, each scoped to its files.
-- **Run at most about three at a time.** Many simultaneous `codex exec` processes can saturate the backend and hang. A stalled batch gets smaller, never larger.
+- **Run only as many at once as the machine and the reviewer backend handle without stalling.** About three is a safe start. Many simultaneous `codex exec` processes can saturate the backend and hang. A stalled batch gets smaller, never larger.
 - **Detect & recover from hangs.** With JSON streaming, compare each review's event count over ~30-60s. If one is flat while its siblings climb, it's hung. Stop it (the task runner's stop, or `kill <the pid the launch printed>`, never a kill by pattern) and relaunch just that one.
 
 ### 3. Craft the prompt
@@ -63,7 +63,7 @@ Use this skill when someone asks for:
     The template carries the wording. The `/pr-and-issue-discipline` skill owns the rule and its substitutes. Paste the PR title, body, and comments into the prompt, since a sandboxed reviewer may not reach GitHub.
   - Speculative hardening (hostile callers that cannot reach the code, races in single-user tools, deadlines already bounded by an outer timeout, defensive checks for inputs the code never receives) is listed under a `Recorded, not built` heading, never as a finding. It stays unbuilt unless the user asks for it.
 
-    In a repository with more than 100 GitHub stars it is instead surfaced to the user and built only after they confirm (step 6). A small, obvious hardening that rides along in the change under review (an exit-code check beside a version check) is fine to keep. The reviewer must not propose a wider one to replace it.
+    In a repository with outside users or a hostile-input surface (a published package, a public service), or when the user asks, it is instead surfaced to the user and built only after they confirm (step 6). A small, obvious hardening that rides along in the change under review (an exit-code check beside a version check) is fine to keep. The reviewer must not propose a wider one to replace it.
 - Fold in criteria from **companion skills**: for EVERY installed skill that declares a `## Review Criteria` section in its SKILL.md, expand that section into the reviewer prompt. Triage the resulting findings with that skill's own workflow. One exception: on someone else's PR, the `/reply-and-review-discipline` skill's lens choice names which sections are expanded.
   - There is no registry. Declaring the section is what makes a skill part of the review. In this collection, `/no-invalid-states`, `/code-standards`, `/never-twice`, and `/verify-with-controls` declare it.
   - Enumerate participants by grepping installed skills, e.g. `grep -rlE '^## Review Criteria' ~/.claude/skills/*/SKILL.md .claude/skills/*/SKILL.md 2>/dev/null` (adjust the paths to wherever your harness installs skills).
@@ -91,14 +91,14 @@ Write the step-3 prompt to a tmp file and pass the reviewer name plus that file.
 - `prepare <section>` creates a private directory with `mkdtemp` (atomic, so two callers can never receive the same one), leaves its marker there, and prints the section's prompt file inside it.
 - A launch refuses any prompt file outside such a directory, and any symlink or hard link inside one. The marker is the proof, not the location, so the two shells need not share `TMPDIR`.
 
-Inside an agent worktree the sandbox can refuse a Bash heredoc whose text contains git commands (it cannot verify the command stays inside the worktree). Write the prompt file with the harness's Write tool there:
+Where the harness sandbox refuses a Bash heredoc whose text contains git commands (some agent-worktree setups do, unable to verify the command stays inside the worktree), write the prompt file with the harness's file-writing tool:
 
 ```bash
 # 1. Mint the prompt path, one call per review section. Shell state does not survive
 #    between tool calls, so copy the printed path by hand:
 bun "<skill-dir>/scripts/run-review.mts" prepare api-gateway   # prints e.g. /tmp/rubber-duck-prompt-Kq3mZp/api-gateway.md
-# 2. Write the step-3 prompt to that path with your Write tool (a heredoc with a quoted
-#    delimiter works only outside an agent worktree).
+# 2. Write the step-3 prompt to that path with the harness's file-writing tool (a heredoc
+#    with a quoted delimiter serves where the sandbox allows it).
 # 3. Then, in one shell call:
 prompt_file="/tmp/rubber-duck-prompt-Kq3mZp/api-gateway.md"
 bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|copilot per step 1
@@ -129,7 +129,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - 0: verdict extracted and printed to stdout as the JSON report, or a `--background` launch started (that run's verdict comes later, via `--extract`).
   - 1: `review FAILED - relaunch`.
   - 2: usage error, reviewer binary not found, or codex's sandbox unavailable outside a git repository.
-- In this skill's home repository, a drift test (`tests/doc-drift.test.ts`) pins these citations (the reviewer invocations, the flags, the exit codes, the failure verdict) to `scripts/run-review.mts`. A rename on either side fails CI until doc and script move together.
+- The shipped script and these citations (the reviewer invocations, the flags, the exit codes, the failure verdict) are kept in sync upstream. Where they disagree, trust the script and report the drift.
 
 ### 5. Act on the printed verdict
 
@@ -168,18 +168,18 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - Treat valid "non-blocking" feedback as real work when it is a correctness or maintainability finding with a demonstrated effect in this change.
   - A small, obvious hardening that rides along in the same change is fine (an exit-code check beside a version check, a bound where a bound is one argument).
   - The stop sign is the cascade: when each review round finds one more hypothetical bypass of the last hardening, the target is widening. Keep the first round's minimal form and record the rest under `Recorded, not built`. A demonstrable defect found in a later round is still work under the first bullet.
-  - Items under `Recorded, not built` are not work: leave them in the report and open no task or PR for them, unless the user asks. The other exception is a repository with more than 100 GitHub stars: surface those items to the user with the concrete risk, and build only the ones they confirm.
+  - Items under `Recorded, not built` are not work: leave them in the report and open no task or PR for them, unless the user asks. The other exception is a repository with outside users or a hostile-input surface (a published package, a public service): surface those items to the user with the concrete risk, and build only the ones they confirm.
 - Fix valid non-blocking findings as well as the blocking ones, including fixes that improve maintainability (clearer naming, removed duplication, simpler structure).
   - A `blocking` entry whose claim begins `Ask the owner:` is a question, not a finding: put it to the user with the library named, and build nothing on it until they answer. It holds the change like any blocking finding.
   - Skip a valid finding only when the fix would conflict with the design, reach outside the change under review, or go against an explicit user decision. Record why.
-  - A confirmed library finding on code the change depends on is never skipped as outside the change: it becomes a swap task on the board (the `/code-standards` skill's rule). A large library or an unclear fit waits on the owner's answer first.
+  - A confirmed library finding on code the change depends on is never skipped as outside the change: it becomes a follow-up task, an issue or the session's task list (the `/code-standards` skill's rule). A large library or an unclear fit waits on the owner's answer first.
   - A finding you judge incorrect or inapplicable is not skipped but rejected, per the next bullet.
 - Do not blindly accept every finding. If you disagree, explain why, and watch for fixes that would conflict with the design (e.g. a suggested guard that breaks a legitimate path).
 - An "add a test" finding that names no fact the test would pin beyond what the source says is rejected with that reason, whichever reviewer raised it. A deletion with no behavior of its own is proved by the census in the PR body or landing report, not a test.
 - If a finding conflicts with an explicit user decision, follow the user and record that the issue was intentionally skipped.
-- Re-validate after each batch of fixes before re-reviewing: typecheck plus the tests the change and its proof touch, never the full suite CI runs anyway. A long run carries an explicit timeout, and a process is stopped by the PID you spawned, never by pattern.
+- Re-validate after each batch of fixes before re-reviewing: the typecheck, where the language has one, plus the tests the change and its proof touch, never the full suite CI runs anyway. A long run carries an explicit timeout, and a process is stopped by the PID you spawned, never by pattern.
 
-  A personal private repository meters CI minutes, so there the full check runs locally once before the push. If you are not sure which kind it is, ask the user, or the lead when one briefed you.
+  Where CI minutes are metered or scarce (for example a private repository on a metered plan), the full check runs locally once before the push instead. If you are not sure which kind it is, ask the user, or the lead when one briefed you.
 
 ### 7. Re-review until it converges
 

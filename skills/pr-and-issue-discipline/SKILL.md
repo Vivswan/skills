@@ -118,7 +118,7 @@ For every form:
 
 **The title's type names the behavior change, never the diff's shape.** If anything observable changed for a user or an integrator, the type is a visible one (`fix`, `feat`, `perf`, `revert`), even when the work began as a refactor or is mostly a move. `refactor` means every existing expectation still holds (tests may be restructured, never re-expected) and nothing observable moved.
 
-Release-please lists those types in the changelog and hides `refactor`, so a fix labelled refactor vanishes from the release notes.
+Changelog tools such as release-please list those types and hide `refactor`, so in such a repository a fix labelled refactor vanishes from the release notes.
 
 **Release-please reads the body.** In a repository released by release-please, Conventional Commit footers (`BREAKING CHANGE`, `Release-As`) travel in the PR body as a commit-override block, the last element inside the Technical details section. Release-please parses that block in place of the squash message.
 
@@ -141,7 +141,7 @@ When the sandbox refuses the heredoc (an agent worktree can reject one whose tex
 ```bash
 # 1. Mint the directory; a harness that starts a fresh shell per tool call loses $body_dir, so copy the printed path by hand:
 mktemp -d "${TMPDIR:-/tmp}/pr-body-XXXXXX"   # prints e.g. /tmp/pr-body-Kq3mZp
-# 2. Write the body to <that path>/body.md with your Write tool.
+# 2. Write the body to <that path>/body.md with the harness's file-writing tool.
 # 3. Then, in one shell call, publish and remove the directory on every exit, success or failure:
 body_dir="/tmp/pr-body-Kq3mZp"
 trap 'rm -rf "$body_dir"' EXIT
@@ -202,7 +202,7 @@ The session's template answer, resolved at plan time above, covers issues too: f
 ## What breaks
 
 ```text
-$ npx skills add Vivswan/skills --skill some-skill
+$ npx skills add example-org/skills --skill some-skill
 installed: SKILL.md, README.md          (metadata.json silently missing)
 ```
 

@@ -4,7 +4,7 @@ The page kind with the most to rot: one layering declaration, two readers, one p
 
 ## The specimen
 
-`architecture.yml` at the repository root (excerpt from Vivswan/github-settings-as-code):
+`architecture.yml` at the repository root. An example, from one repository's page (Vivswan/github-settings-as-code):
 
 ```yaml
 layers:
@@ -26,7 +26,7 @@ edges:
   schema: [sections, types]
 ```
 
-One concept diagram from that repository's architecture page, with the fact it cannot show and its demonstration line:
+One concept diagram from that same example page, with the fact it cannot show and its demonstration line. The `Demonstrated by:` links are that repository's own tests:
 
 ````markdown
 ## The mode ladder
@@ -51,12 +51,14 @@ The page header says what the checks prove: existence only. A caption-only box (
 
 ## The recipe
 
-The three scripts ship with the `/working-text` skill. Copy them into the repository's scripts directory so its check command runs without the skill installed. They import only each other, bun, and the `oxc-parser` package.
+The three scripts ship with the `/working-text` skill. Copy them into `<scripts-dir>/`, wherever the repository keeps its scripts, so its check command runs without the skill installed. They import only each other, bun, and the `oxc-parser` package.
 
 ```bash
-cp "<skill-dir>/scripts/"{arch-lint,render-architecture-map,check-architecture-page}.mts .github/scripts/
+cp "<skill-dir>/scripts/"{arch-lint,render-architecture-map,check-architecture-page}.mts <scripts-dir>/
 bun add -d oxc-parser
 ```
+
+The commands below use `<docs>/architecture.md` for the page. Put it wherever the repository keeps its pages.
 
 Without the parser every script exits 2 with `working-text scripts need oxc-parser: bun add -d oxc-parser`.
 
@@ -69,7 +71,7 @@ Without the parser every script exits 2 with `working-text scripts need oxc-pars
 - Run the lint and fix until it prints the match line:
 
 ```bash
-bun .github/scripts/arch-lint.mts --root .            # exit 0: arch-lint: imports under src match architecture.yml
+bun <scripts-dir>/arch-lint.mts --root .            # exit 0: arch-lint: imports under src match architecture.yml
 ```
 
 | Message | What to do |
@@ -93,8 +95,8 @@ Each node is one layer, labelled with the paths it owns; an arrow means the laye
 ```
 
 ```bash
-bun .github/scripts/render-architecture-map.mts --page docs/reference/architecture.md          # writes the fence
-bun .github/scripts/render-architecture-map.mts --page docs/reference/architecture.md --check  # exit 1 on drift, for CI
+bun <scripts-dir>/render-architecture-map.mts --page <docs>/architecture.md          # writes the fence
+bun <scripts-dir>/render-architecture-map.mts --page <docs>/architecture.md --check  # exit 1 on drift, for CI
 ```
 
 ### 3. Author the concept diagrams, box by box, against real symbols
@@ -112,12 +114,12 @@ One hand-authored mermaid flowchart per concept, above the module map. Rules per
 
 ### 4. Add the page test
 
-Run the check with the diagram count pinned. The count changes only when a diagram is added or removed on purpose:
+Run the check with the diagram count pinned, where `<n>` is the number of concept diagrams on the page. The count changes only when a diagram is added or removed on purpose:
 
 ```bash
-bun .github/scripts/check-architecture-page.mts --page docs/reference/architecture.md \
-  --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams 7
-# exit 0: check-architecture-page: docs/reference/architecture.md names real code (concept diagrams: 7)
+bun <scripts-dir>/check-architecture-page.mts --page <docs>/architecture.md \
+  --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams <n>
+# exit 0: check-architecture-page: <docs>/architecture.md names real code (concept diagrams: <n>)
 ```
 
 | Message | What to do |
@@ -126,25 +128,26 @@ bun .github/scripts/check-architecture-page.mts --page docs/reference/architectu
 | `"<label>": src/engine/layers.ts exports no foldAll` | The symbol was renamed or never exported. Fix the box, not the file |
 | `"<label>": "srcc/engine/x.ts" looks like code but reads as a caption` | The first path segment is not a top-level directory. Fix the typo |
 | `line 41: the diagram has no "Demonstrated by:" line before the next heading` | Add the line with a link to the covering test |
-| `expected 7 concept diagrams, found 6` | A diagram vanished, or you added one: update `--expect-diagrams` in the same change |
+| `expected <n> concept diagrams, found <n-1>` | A diagram vanished, or you added one: update `--expect-diagrams` in the same change |
 
 Repositories that already have a bun test suite can import the same functions instead: `diagramProblems`, `conceptCounts`, `lintArchitecture`, `renderArchitectureMermaid` are exported by the scripts.
 
 ### 5. Wire the gates
 
-Both readers and the page check run inside the repository's check command, and the page is a required page of the docs site:
+Both readers and the page check run inside the repository's check command and, where the repository publishes a docs site, the page is part of it. The entries, shown for a `package.json`:
 
 ```json
 {
   "scripts": {
-    "lint:arch": "bun .github/scripts/arch-lint.mts --root .",
-    "build:docs": "bun .github/scripts/render-architecture-map.mts --page docs/reference/architecture.md",
-    "build:check": "bun .github/scripts/render-architecture-map.mts --page docs/reference/architecture.md --check",
-    "test:docs": "bun .github/scripts/check-architecture-page.mts --page docs/reference/architecture.md --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams 7",
-    "check": "bun run lint && bun run lint:arch && bun run typecheck && bun run test && bun run test:docs && bun run build:check"
+    "lint:arch": "bun <scripts-dir>/arch-lint.mts --root .",
+    "build:docs": "bun <scripts-dir>/render-architecture-map.mts --page <docs>/architecture.md",
+    "build:check": "bun <scripts-dir>/render-architecture-map.mts --page <docs>/architecture.md --check",
+    "test:docs": "bun <scripts-dir>/check-architecture-page.mts --page <docs>/architecture.md --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams <n>"
   }
 }
 ```
+
+Add `lint:arch`, `test:docs`, and `build:check` to the repository's existing check command, whatever its toolchain.
 
 ## Maintaining the page after a change
 
