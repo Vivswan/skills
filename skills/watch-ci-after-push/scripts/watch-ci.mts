@@ -6,7 +6,8 @@
 // GraphQL keeps answering.
 //
 // The expected workflows are the --expect-workflow names. Without the flag, the expectation is every
-// workflow that registered a run on the commit, and at least one.
+// workflow that registered a run on the commit, and at least one. Registration then ends once two
+// consecutive reads agree on the registered workflow names, within the same bounded window.
 //
 // Exit codes:
 //   0  the latest run of every workflow passed or was skipped, and every expected workflow registered a run
@@ -297,8 +298,12 @@ function selectLatest(runs: Run[]): Selection {
   return selection;
 }
 
+function workflowNames(runs: Run[]): string[] {
+  return [...new Set(runs.map((run) => run.name))].sort();
+}
+
 function missingWorkflows(expected: string[], runs: Run[]): string[] {
-  const discovered = new Set(runs.map((run) => run.name));
+  const discovered = new Set(workflowNames(runs));
   return expected.filter((name) => !discovered.has(name));
 }
 
@@ -339,10 +344,17 @@ function main(argv: string[]): number {
 
   // A fast bystander (an auto-assign workflow) can register seconds before the gate workflow, so
   // registration keeps polling while an expected workflow is still absent, within the same window.
+  // With no expected names, one read cannot tell a complete set from a partial one, so registration
+  // ends when two consecutive reads agree on the registered names. A failed read is an empty one.
   let runs: Run[] = [];
+  let previousNames = "";
   for (let attempt = 1; attempt <= REGISTRATION_ATTEMPTS; attempt += 1) {
     runs = discover(repo, sha) ?? [];
-    if (runs.length > 0 && missingWorkflows(expected, runs).length === 0) break;
+    const names = JSON.stringify(workflowNames(runs));
+    const settled =
+      expected.length > 0 ? missingWorkflows(expected, runs).length === 0 : names === previousNames;
+    previousNames = names;
+    if (runs.length > 0 && settled) break;
     if (attempt < REGISTRATION_ATTEMPTS) sleep(REGISTRATION_RETRY_SECONDS);
   }
   if (runs.length === 0) {
@@ -393,7 +405,7 @@ function main(argv: string[]): number {
   // Computed against the final snapshot, so a gate that registered mid-watch heals here.
   const missing = missingWorkflows(expected, runs);
   if (missing.length > 0) {
-    const found = [...new Set(runs.map((run) => run.name))].sort().join(", ") || "nothing";
+    const found = workflowNames(runs).join(", ") || "nothing";
     printErr(
       `expected workflow(s) not found for ${sha}: ${missing.join(", ")}; discovered only: ${found}.` +
         " The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run <gate workflow file> --ref <branch>" +

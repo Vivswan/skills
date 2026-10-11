@@ -157,7 +157,7 @@ The Wikipedia page flags overuse. LLM text uses em dashes (—) more often than 
 
 The rate varies by model era: a July 2026 study found that of contemporary models only Claude used em dashes more than professional writers, and ChatGPT used them less. In September 2026 the page itself noted the sign is rarer in current output and may move to its historical list.
 
-This skill is stricter than the source: no dash as a sentence-level connector, unless the destination's style guide calls for em dashes. That means no em dash, and no substituting the same construction with an en dash (–) or a spaced hyphen ( - ), since swapping the character keeps the tell.
+This skill is stricter than the source: no dash as a sentence-level connector, unless the destination's style guide calls for that dash form. That means no em dash, and no substituting the same construction with an en dash (–) or a spaced hyphen ( - ), since swapping the character keeps the tell.
 
 Rewrite with a comma, a colon, parentheses, or two sentences. Hyphens remain for compound words, and en dashes for numeric ranges where the destination's style guide wants them.
 

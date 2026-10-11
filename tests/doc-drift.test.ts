@@ -302,6 +302,10 @@ const SURFACES: Record<string, Surface> = {
           "every workflow that registered a run on the commit is judged, and at least one must have",
       },
       {
+        doc: "Registration then waits until two consecutive reads agree on the registered names",
+        script: "names === previousNames",
+      },
+      {
         doc: 'bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1',
         script: 'spawnSync("git", ["rev-parse", "HEAD"]',
       },

@@ -70,7 +70,7 @@ turn0, oaicite, oai_citation, contentReference, attributableIndex, attached_file
 
 ## Punctuation and formatting (this skill's rules)
 
-- Em dash (—): never, unless the destination's style guide calls for em dashes. This skill is stricter than the source. En dash (–) or spaced hyphen ( - ) used as the same connector: never. Rewrite the sentence.
+- Em dash (—), en dash (–), or spaced hyphen ( - ) as a sentence-level connector: never, unless the destination's style guide calls for that dash form. This skill is stricter than the source. Rewrite the sentence instead.
 - Curly quotes and apostrophes (“ ” ‘ ’): only where house style requires. Never in code, wikis, or plain text, and never mixed with straight quotes.
 - Emoji in headings or lists: no.
 - Bold-label bullets (**Term**: text): no.

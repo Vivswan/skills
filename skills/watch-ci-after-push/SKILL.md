@@ -86,7 +86,9 @@ bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.o
 # gh failed, or the expected workflow never registered a run
 ```
 
-The script refuses a vacuous green. With `--expect-workflow`, every named workflow must be among the discovered runs, or it exits 2 naming what it did find. Without it, every workflow that registered a run on the commit is judged, and at least one must have registered, or it exits 2.
+The script refuses a vacuous green. With `--expect-workflow`, every named workflow must be among the discovered runs, or it exits 2 naming what it did find.
+
+Without it, every workflow that registered a run on the commit is judged, and at least one must have registered, or it exits 2. Registration then waits until two consecutive reads agree on the registered names, so a workflow registering a few seconds late is still judged.
 
 Pass the gate's name with `--expect-workflow <name>` (repeatable or comma-separated) before the SHA. Names match exactly and case-sensitively, so a comma or newline can never be part of an expected name, and a name that starts with a dash is passed as `--expect-workflow=<name>`. When the push event dropped the run, dispatch the missing workflow by hand, e.g. `gh workflow run <gate workflow file> --ref <branch>`.
 

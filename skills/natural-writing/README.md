@@ -17,7 +17,7 @@ This skill is explicit-invocation-only: agents load it when you invoke it (e.g. 
 - The Wikipedia page changes as models and community observations change. The workflow prefers the live page when online and falls back to the snapshot offline.
 - `SKILL.md` records the pinned revision and documents how to update the snapshot when the page moves on.
 
-This skill is stricter than the source: no dash as punctuation (no em dashes, and no en-dash or spaced-hyphen substitutes), unless the destination's style guide calls for em dashes.
+This skill is stricter than the source: no dash as punctuation (no em dashes, and no en-dash or spaced-hyphen substitutes), unless the destination's style guide calls for that dash form.
 
 ## Install
 
