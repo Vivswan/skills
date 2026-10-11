@@ -177,7 +177,7 @@ The drift answer says why a test exists; the tier says when it runs. Three tiers
 | `nightly` | the schedule only | trends and probes of the previously published package; never a gate |
 
 - **A test that fits both `pr` and `release-gate` is `release-gate`.** `pr` holds only what finishes fast enough to run on every merge. The `nightly` row is disjoint by subject: it probes the package already published, which no release waits on.
-- **The first line of every test file names its tier** (`// tier: release-gate`, or the language's comment), before the drift answer. A move cannot change a tier silently, and a census reads one line per file.
+- **With more than one tier, the first line of every test file names its tier** (`// tier: release-gate`, or the language's comment), before the drift answer. A move cannot change a tier silently, and a census reads one line per file. A repository whose every test is `pr` has nothing to mark; the markers and the census arrive with its first `release-gate` test.
 - **A census test pins that every file under `tests/` names a tier a workflow actually runs.** A tier the workflows never run is a test that never runs.
 - **One definition per gate job,** in a repo-owned reusable workflow (`workflow_call`) that the nightly schedule and the release-PR path both call. Two definitions drift; the schedule then passes what the gate would fail.
 - **The release PR's required gate includes `release-gate`.** Ordinary PRs skip it and stay green. A regression the nightly would catch the next morning shows on the release PR instead.
