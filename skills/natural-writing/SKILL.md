@@ -15,14 +15,14 @@ One pattern alone can be fine. The goal is prose where the patterns don't cluste
 
 Scope: this skill is a guideline, not law. Skimmability for the reader outranks any style rule in it (short front-loaded paragraphs, no text blobs, examples first). Accuracy and reference-integrity rules always bind.
 
-Under that house standard, bold-label bullets and sparing keyword bolds are sanctioned formatting. The bold and bullet cautions in this skill apply to prose written for external readers, not to this repo's own skill docs.
+Where the destination repository's own documentation standard sanctions bold-label bullets, follow it. The bold and bullet cautions here apply to prose for external readers.
 
 ## When to apply
 
 - "humanize this text" / "make this sound less like AI" / "remove the AI tells"
 - "does this read as AI-generated?"
 - Drafting or rewriting prose for readers outside the repository: articles, blog posts, reports, emails, announcements, PR descriptions
-- Not repository documentation (READMEs, guides, reference pages): those are programmer-register pages of the `/working-text` skill
+- Not repository documentation (READMEs, guides, reference pages): those are programmer-register pages for a documentation skill such as `/working-text`, where installed
 - Any writing task where the user cares about tone, voice, or naturalness
 
 ## Source of truth
@@ -36,7 +36,7 @@ Snapshot last synced: 2026-10-03, from page revision 1378298730 (2026-10-03T21:4
 
 [references/words-to-avoid.md](references/words-to-avoid.md) lists the words and phrases the page flags, organized for scanning, plus ready-made grep commands for the mechanical checks.
 
-The lists also ship as Vale rules in this skill's `vale/` folder (vocabulary, significance, formula phrases, trailing participles); `docs/vale.md` of the skill's home repository shows the wiring.
+The lists also ship as Vale rules in this skill's `vale/` folder (vocabulary, significance, formula phrases, trailing participles); the upstream catalog's docs/vale.md (https://github.com/Vivswan/skills/blob/main/docs/vale.md) shows the wiring.
 
 ## Workflow
 
@@ -60,20 +60,20 @@ Apply the full catalog. The highest-value rules:
 4. **Avoid AI-vocabulary clusters**: delve, crucial, pivotal, tapestry, landscape (abstract), showcase, underscore, intricate, fostering, garner, meticulous, vibrant, robust, boasts, align with, testament. One may be fine, but clusters are the tell. See the word list.
 5. **Break the templates.** No "not just X, but Y" or "It's not X, it's Y" parallelisms, and no rule-of-three triads everywhere. No "Despite these challenges…" conclusions, no "In summary / In conclusion / Overall" wrap-ups, and no "It's important to note".
 6. **Attribute precisely or not at all.** No "experts argue", "observers have noted", "industry reports suggest". Name the source or drop the claim, and never imply many sources when there is one.
-7. **Never use a dash as punctuation.** No em dashes (—), and no sneaking the same construction back in with an en dash (–) or a spaced hyphen ( - ), which swaps the character while keeping the tell. Restructure instead: a comma, a colon, parentheses, or two sentences. Hyphens stay only inside compound words, and en dashes only in numeric ranges.
+7. **No dash as punctuation.** No em dashes (—), and no sneaking the same construction back in with an en dash (–) or a spaced hyphen ( - ), which swaps the character while keeping the tell. Restructure instead: a comma, a colon, parentheses, or two sentences. Hyphens stay only inside compound words, and en dashes only in numeric ranges.
 8. **Format like a human.** Prose first, and lists only when the content is genuinely enumerable. Sentence case headings, and bold almost nothing. No bullet lists where every item is a bold label plus a colon, no emoji decoration, no needless small tables, no horizontal rules before headings, no skipped heading levels.
 9. **No chat artifacts.** No "I hope this helps", "Certainly!", "Would you like…", "Here is a…" framing, no knowledge-cutoff disclaimers, and no advice on how to weigh a source ("should be treated as X rather than Y"). No speculation dressed as fact ("details are not widely documented, but likely…"). No unfilled placeholders like `[Your Name]` or `2025-XX-XX`.
 10. **Use the target medium's markup**, never Markdown headed for a non-Markdown destination. Never invent citations, links, DOIs, ISBNs, or page numbers. Verify every reference you emit, and strip tool residue (`utm_source=`, `turn0search0`, `oaicite`, `[cite: 1]`).
 11. **Vary rhythm, and repeat words when natural.** Reusing the same noun beats cycling synonyms. Mix sentence lengths. Commit to definite statements ("was the first") and use plain verbs (wrote, used, moved, tried, died).
 
-The dash rule (7) is a house rule. It is stricter than the Wikipedia page, which only flags overuse.
+The dash rule (7) is this skill's own rule, stricter than the Wikipedia page, which only flags overuse. It yields to the destination's style guide.
 
 ### 4. Self-review pass
 
 Before delivering, reread the output against the checklist above. Scan it against the term lists in `references/words-to-avoid.md` (they are written for reading, not for `grep -f`). Two checks are mechanical, so run them on the draft file:
 
 ```bash
-# Dash punctuation and machine artifacts: any hit outside quoted material is a bug.
+# Dash punctuation and machine artifacts: any hit outside quoted material is a bug, unless the destination's style guide calls for that dash.
 # (Unspaced en dashes in numeric ranges like 2024–2025 are allowed and not flagged.)
 grep -nE '—| – | - |turn0|oaicite|oai_citation|contentReference|attributableIndex|attached_file|grok[_-]|(start|end)_span|ppl-ai-file-upload|【|\[cite:|\[web:[0-9]|:::writing|utm_source=(chatgpt\.com|openai|copilot\.com)|referrer=grok\.com|↩|XX-XX|INSERT_|PASTE_' draft.md
 

@@ -1,6 +1,6 @@
 ---
 name: code-standards
-description: Use when writing code changes, sweeping or shortening comments (including file-size or comment-cap findings), or asked to apply house code standards.
+description: Use when writing code changes, sweeping or shortening comments (including file-size or comment-cap findings), or asked to apply the code standards.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -8,7 +8,7 @@ metadata:
 
 # Code Standards
 
-House standards for code and the artifacts around it. Apply them while writing. Check them while reviewing.
+Standards for code and the artifacts around it. Apply them while writing. Check them while reviewing.
 
 Where a standard has a canonical case (the specimen that set the rule), it is stated inline or in the standard's `references/` file. The concrete case recalls better than the rule. The `references/` file named under each standard carries the full detail: the why, the how-to-apply list, and the boundaries and exceptions.
 

@@ -151,15 +151,15 @@ The signature format: a bullet or number, a **Bold Label**, a colon, then descri
 
 Instead: Prose paragraphs. Use a list only when items are genuinely parallel and enumerable, and even then, plain items without bolded labels usually read better.
 
-### 3.4 Dashes as punctuation (house rule: never)
+### 3.4 Dashes as punctuation (this skill: never)
 
 The Wikipedia page flags overuse. LLM text uses em dashes (—) more often than comparable human text, in places humans use commas, parentheses, or colons. It uses them in punchy sales rhythm ("we do seem to have different interpretations — and that's the problem"), and usually spaced, contrary to typographic practice.
 
 The rate varies by model era: a July 2026 study found that of contemporary models only Claude used em dashes more than professional writers, and ChatGPT used them less. In September 2026 the page itself noted the sign is rarer in current output and may move to its historical list.
 
-This skill goes further: never use a dash as a sentence-level connector. That means no em dash, and no substituting the same construction with an en dash (–) or a spaced hyphen ( - ), since swapping the character keeps the tell.
+This skill is stricter than the source: no dash as a sentence-level connector, unless the destination's style guide calls for that dash form. That means no em dash, and no substituting the same construction with an en dash (–) or a spaced hyphen ( - ), since swapping the character keeps the tell.
 
-Rewrite with a comma, a colon, parentheses, or two sentences. Hyphens remain for compound words, and en dashes for numeric ranges where house style wants them.
+Rewrite with a comma, a colon, parentheses, or two sentences. Hyphens remain for compound words, and en dashes for numeric ranges where the destination's style guide wants them.
 
 ### 3.5 Emoji as formatting
 

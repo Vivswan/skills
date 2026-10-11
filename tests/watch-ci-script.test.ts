@@ -10,7 +10,10 @@ import { ROOT } from "../scripts/lib";
 //   red run                                                                         -> 1
 //   gh operational failure                                                          -> 2, never 1
 //   green fleet                                                                     -> 0
-//   expected workflow absent (default "CI", or --expect-workflow)                   -> 2 with evidence, never a vacuous pass
+//   an --expect-workflow name absent                                                -> 2 with evidence, never a vacuous pass
+//   no --expect-workflow: every registered run judged, none registered              -> 0 on any green names, 2 on none
+//   no --expect-workflow: registration ends on two reads agreeing on workflow ids   -> a late-registering red run still exits 1
+//   no --expect-workflow: the set still changing after 5 reads                      -> a stderr notice, then the last read's verdict
 //   red run plus a completed run with no conclusion, or an absent expected workflow -> 1, red outranks both
 
 const SCRIPT = join(ROOT, "skills", "watch-ci-after-push", "scripts", "watch-ci.mts");
@@ -156,9 +159,9 @@ function runArgv(env: Record<string, string>, argv: string[], opts: { unhandled?
   };
 }
 
-// The default expectation pins the fixture's default workflow name so each
-// scenario keeps testing its own branch, not the expected-workflow gate
-// (which has dedicated tests below).
+// A named gate ends registration at the first read that carries it, so each
+// scenario's snapshot and sleep counts are about its own branch. The default
+// expectation (no flag) has dedicated tests below.
 const DEFAULT_ARGS = ["--expect-workflow", "CI-1"];
 
 function run(
@@ -205,8 +208,10 @@ describe("watch-ci.mts exit matrix", () => {
     expect(r.snapshots).toBe(0);
   });
 
-  test("no runs registered exits 2 with no verdict", () => {
-    const r = run({ GH_RUNS: "" });
+  test("no --expect-workflow and no runs at all exits 2: an empty commit is never a vacuous green", () => {
+    // Without a named gate, "judge every run found" would pass trivially on
+    // zero runs if the at-least-one floor were lost.
+    const r = run({ GH_RUNS: "" }, []);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("no workflow runs registered");
     expect(r.stdout).toBe("");
@@ -220,6 +225,90 @@ describe("watch-ci.mts exit matrix", () => {
     // Two registration sleeps, then the completed snapshot is judged at once.
     expect(r.snapshots).toBe(3);
     expect(r.sleeps).toEqual(["3", "3"]);
+  });
+
+  test("no --expect-workflow judges every registered run, whatever its name: green exits 0", () => {
+    // A hardcoded default gate name would turn every green watch in a
+    // repository whose workflows are named differently into exit 2.
+    // Registration ends on the second read agreeing with the first.
+    const r = run({ GH_RUNS: "1 2", GH_NAME_1: "Build", GH_NAME_2: "Deploy" }, []);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("pass: Deploy (2)\npass: Build (1)\n");
+    expect(r.stderr).toBe("");
+    expect(r.snapshots).toBe(2);
+    expect(r.sleeps).toEqual(["3"]);
+  });
+
+  test("no --expect-workflow waits for the registered set to settle: a workflow registering one read later is judged", () => {
+    // Ending registration at the first read that has any run would judge the
+    // green Build alone and exit 0 over the Deploy failure that registers on
+    // read 2. Read 3 agrees with read 2, so the set is settled there.
+    const r = run(
+      {
+        GH_RUNS: "1",
+        GH_RUNS2: "1 2",
+        GH_NAME_1: "Build",
+        GH_NAME_2: "Deploy",
+        GH_CONCLUSION_2: "failure",
+      },
+      [],
+    );
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("FAIL(failure): Deploy (2)\nlog excerpt for 2\npass: Build (1)\n");
+    expect(r.snapshots).toBe(3);
+    expect(r.sleeps).toEqual(["3", "3"]);
+  });
+
+  test("registration settles on workflow ids, not names: a second workflow sharing a name is a change", () => {
+    // Read 2 adds a second workflow file also named Build (a different
+    // workflow id). Keyed by name, reads 1 and 2 would look identical, so
+    // registration would end at read 2 and the Deploy failure that registers
+    // on read 3 would never be judged: exit 0. Keyed by id, read 4 is the
+    // first to agree with its predecessor.
+    const r = run(
+      {
+        GH_RUNS: "1",
+        GH_RUNS2: "1 2",
+        GH_RUNS3: "1 2 3",
+        GH_NAME_1: "Build",
+        GH_NAME_2: "Build",
+        GH_NAME_3: "Deploy",
+        GH_CONCLUSION_3: "failure",
+      },
+      [],
+    );
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe(
+      "FAIL(failure): Deploy (3)\nlog excerpt for 3\npass: Build (2)\npass: Build (1)\n",
+    );
+    expect(r.snapshots).toBe(4);
+    expect(r.sleeps).toEqual(["3", "3", "3"]);
+  });
+
+  test("a set still changing after the 5-read window is judged as last read, with a notice, never exit 2", () => {
+    // Runs exist, so exit 2 would report a busy commit as tooling trouble.
+    // The verdict is the fifth read's, with its red run, and the notice names
+    // the unsettled window.
+    const r = run(
+      {
+        GH_RUNS: "1",
+        GH_RUNS2: "1 2",
+        GH_RUNS3: "1 2 3",
+        GH_RUNS4: "1 2 3 4",
+        GH_RUNS5: "1 2 3 4 5",
+        GH_CONCLUSION_5: "failure",
+      },
+      [],
+    );
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(
+      "registration still changing after 5 reads; judging what registered (a later run is still picked up while any run is pending)",
+    );
+    expect(r.stdout).toBe(
+      "FAIL(failure): CI-5 (5)\nlog excerpt for 5\npass: CI-4 (4)\npass: CI-3 (3)\npass: CI-2 (2)\npass: CI-1 (1)\n",
+    );
+    expect(r.snapshots).toBe(5);
+    expect(r.sleeps).toEqual(["3", "3", "3", "3"]);
   });
 
   test("all green exits 0 with a pass line per run; external suites are not runs", () => {
@@ -473,7 +562,10 @@ describe("watch-ci.mts exit matrix", () => {
   test("an older superseded run still running never delays judgment", () => {
     // Only the latest run per workflow is waited on: the snapshot with run 2
     // completed is judged at once, although run 1 is still in progress.
-    const r = run({ GH_RUNS: "2 1@in_progress", ...sameWorkflow(["1", "2"]) }, []);
+    const r = run({ GH_RUNS: "2 1@in_progress", ...sameWorkflow(["1", "2"]) }, [
+      "--expect-workflow",
+      "CI",
+    ]);
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("superseded: CI (1)\npass: CI (2)\n");
     expect(r.snapshots).toBe(1);
@@ -515,8 +607,6 @@ describe("watch-ci.mts exit matrix", () => {
     // 2, same workflow) appears queued while the script waits and run 1 is
     // cancelled by the concurrency group. The poll must wait for run 2 and
     // demote run 1 to superseded instead of reporting its cancellation.
-    // No --expect-workflow here: the runs are named "CI", so this scenario
-    // also pins the script's default expectation.
     const r = run(
       {
         GH_RUNS: "1@in_progress",
@@ -525,7 +615,7 @@ describe("watch-ci.mts exit matrix", () => {
         ...sameWorkflow(["1", "2"]),
         GH_CONCLUSION_1: "cancelled",
       },
-      [],
+      ["--expect-workflow", "CI"],
     );
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("superseded: CI (1)\npass: CI (2)\n");
@@ -547,7 +637,7 @@ describe("watch-ci.mts exit matrix", () => {
         GH_CONCLUSION_1: "cancelled",
         GH_CONCLUSION_2: "cancelled",
       },
-      [],
+      ["--expect-workflow", "CI"],
     );
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("superseded: CI (2)\nsuperseded: CI (1)\npass: CI (3)\n");
@@ -580,13 +670,13 @@ describe("watch-ci.mts exit matrix", () => {
   test("green bystanders with the expected workflow absent exit 2, never 0", () => {
     // THE hole this gate closes: the push's event fails to register the CI
     // run, discovery finds only other workflows on the SHA, and all of them
-    // pass. No flag, so the default expectation "CI" applies; the runs are
-    // named CI-1 and CI-2, which must NOT satisfy it.
-    const r = run({ GH_RUNS: "1 2" }, []);
+    // pass. The runs are named CI-1 and CI-2, which must NOT satisfy an
+    // expectation of "CI": names match exactly, never by prefix.
+    const r = run({ GH_RUNS: "1 2" }, ["--expect-workflow", "CI"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("expected workflow(s) not found for deadbeef: CI;");
     expect(r.stderr).toContain("discovered only: CI-1, CI-2");
-    expect(r.stderr).toContain("gh workflow run ci.yml --ref <branch>");
+    expect(r.stderr).toContain("gh workflow run <gate workflow file> --ref <branch>");
     expect(r.stdout).toBe("pass: CI-2 (2)\npass: CI-1 (1)\n");
     // The registration burst keeps polling for the gate through its window.
     expect(r.snapshots).toBe(5);
@@ -594,13 +684,13 @@ describe("watch-ci.mts exit matrix", () => {
   });
 
   test("a red run outranks a missing expected workflow: exits 1, message still printed", () => {
-    const r = run({ GH_RUNS: "1", GH_CONCLUSION_1: "failure" }, []);
+    const r = run({ GH_RUNS: "1", GH_CONCLUSION_1: "failure" }, ["--expect-workflow", "CI"]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("FAIL(failure): CI-1 (1)\nlog excerpt for 1\n");
     expect(r.stderr).toContain("expected workflow(s) not found");
   });
 
-  test("--expect-workflow overrides the default expectation", () => {
+  test("--expect-workflow naming a discovered workflow exits 0", () => {
     const r = run({ GH_RUNS: "1", GH_NAME_1: "Build" }, ["--expect-workflow", "Build"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("pass: Build (1)\n");
@@ -700,7 +790,10 @@ describe("watch-ci.mts exit matrix", () => {
     // workflow registers on the third poll. The registration-lag loop must
     // keep polling within its bounded window instead of reporting the
     // merely-late gate as missing.
-    const r = run({ GH_RUNS: "2", GH_RUNS3: "2 1", GH_NAME_1: "CI", GH_NAME_2: "Bystander" }, []);
+    const r = run({ GH_RUNS: "2", GH_RUNS3: "2 1", GH_NAME_1: "CI", GH_NAME_2: "Bystander" }, [
+      "--expect-workflow",
+      "CI",
+    ]);
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("pass: Bystander (2)\npass: CI (1)\n");
     expect(r.stderr).toBe("");
@@ -714,7 +807,7 @@ describe("watch-ci.mts exit matrix", () => {
     // final snapshot, so the late gate is judged, not reported missing.
     const r = run(
       { GH_RUNS: "2@in_progress", GH_RUNS6: "2 1", GH_NAME_1: "CI", GH_NAME_2: "Bystander" },
-      [],
+      ["--expect-workflow", "CI"],
     );
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("pass: Bystander (2)\npass: CI (1)\n");

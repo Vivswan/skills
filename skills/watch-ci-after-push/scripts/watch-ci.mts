@@ -5,6 +5,11 @@
 // are a secondary rate bucket that parallel watchers lock for longer than a run lasts, while
 // GraphQL keeps answering.
 //
+// The expected workflows are the --expect-workflow names. Without the flag, the expectation is every
+// workflow that registered a run on the commit, and at least one. Registration then ends once two
+// consecutive reads agree on the registered workflows (by id), within the same bounded window. A set
+// still changing when the window ends is judged as last read, after a notice on stderr.
+//
 // Exit codes:
 //   0  the latest run of every workflow passed or was skipped, and every expected workflow registered a run
 //   1  some workflow's latest run ended with a non-success, non-skipped conclusion
@@ -14,8 +19,9 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-const USAGE = "usage: watch-ci.mts [--expect-workflow <name>]... [<full-sha>]";
-const DEFAULT_EXPECTED_WORKFLOW = "CI";
+const USAGE =
+  "usage: watch-ci.mts [--expect-workflow <name>]... [<full-sha>]" +
+  " (without --expect-workflow, every workflow that registered a run on the commit is judged, and at least one must have)";
 // gh run watch's 3 s default refresh across parallel watchers drained the REST bucket and blinded
 // every verdict until it refilled.
 const POLL_INTERVAL_SECONDS = 60;
@@ -87,9 +93,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type CommandLine = { expected: string[]; sha: string };
 
 // The gate workflow can silently fail to register on a push, leaving only green bystanders on the
-// SHA, so exit 0 requires every expected name among the discovered runs. The names are matched
-// exactly, and the list is split on commas, so an empty entry or a newline would shrink the
-// expectation set and silently disable the gate.
+// SHA, so exit 0 requires every expected name among the discovered runs. An empty list means no
+// name is required beyond the runs themselves (main() still demands at least one). The names are
+// matched exactly, and the list is split on commas, so an empty entry or a newline would shrink
+// the expectation set and silently disable the gate.
 function parseCommandLine(argv: string[]): CommandLine {
   const parsed = parseFlags(argv);
   const expected: string[] = [];
@@ -108,10 +115,7 @@ function parseCommandLine(argv: string[]): CommandLine {
   if (trailing.length > 0) {
     usageError(`unexpected argument(s) after the SHA: ${trailing.join(" ")}`);
   }
-  return {
-    expected: expected.length > 0 ? expected : [DEFAULT_EXPECTED_WORKFLOW],
-    sha: shaToken?.value ?? gitHead(),
-  };
+  return { expected, sha: shaToken?.value ?? gitHead() };
 }
 
 function parseFlags(argv: string[]) {
@@ -295,8 +299,21 @@ function selectLatest(runs: Run[]): Selection {
   return selection;
 }
 
+function workflowNames(runs: Run[]): string[] {
+  return [...new Set(runs.map((run) => run.name))].sort();
+}
+
+// The registered set for the stability comparison, keyed like selectLatest: the workflow id, or the
+// run id for a run without one. Two workflow files can share one name.
+function workflowKeys(runs: Run[]): string {
+  const keys = runs.map((run) =>
+    run.workflowId === null ? `run:${run.id}` : `wf:${run.workflowId}`,
+  );
+  return JSON.stringify([...new Set(keys)].sort());
+}
+
 function missingWorkflows(expected: string[], runs: Run[]): string[] {
-  const discovered = new Set(runs.map((run) => run.name));
+  const discovered = new Set(workflowNames(runs));
   return expected.filter((name) => !discovered.has(name));
 }
 
@@ -337,15 +354,30 @@ function main(argv: string[]): number {
 
   // A fast bystander (an auto-assign workflow) can register seconds before the gate workflow, so
   // registration keeps polling while an expected workflow is still absent, within the same window.
+  // With no expected names, one read cannot tell a complete set from a partial one, so registration
+  // ends when two consecutive reads agree on the registered workflows. A failed read is an empty one.
   let runs: Run[] = [];
+  let previousKeys = "";
+  let settled = false;
   for (let attempt = 1; attempt <= REGISTRATION_ATTEMPTS; attempt += 1) {
     runs = discover(repo, sha) ?? [];
-    if (runs.length > 0 && missingWorkflows(expected, runs).length === 0) break;
+    const keys = workflowKeys(runs);
+    settled =
+      expected.length > 0 ? missingWorkflows(expected, runs).length === 0 : keys === previousKeys;
+    previousKeys = keys;
+    if (runs.length > 0 && settled) break;
     if (attempt < REGISTRATION_ATTEMPTS) sleep(REGISTRATION_RETRY_SECONDS);
   }
   if (runs.length === 0) {
     toolingError(
       `no workflow runs registered for ${sha} after ~15s (or gh failed; check stderr above, gh auth status, and the remote)`,
+    );
+  }
+  // Runs exist, so an unsettled window is not tooling trouble. The poll loop below re-reads the
+  // commit every 60 s while any run is pending, so a late run is still picked up there.
+  if (expected.length === 0 && !settled) {
+    printErr(
+      `registration still changing after ${REGISTRATION_ATTEMPTS} reads; judging what registered (a later run is still picked up while any run is pending)`,
     );
   }
 
@@ -391,11 +423,11 @@ function main(argv: string[]): number {
   // Computed against the final snapshot, so a gate that registered mid-watch heals here.
   const missing = missingWorkflows(expected, runs);
   if (missing.length > 0) {
-    const found = [...new Set(runs.map((run) => run.name))].sort().join(", ") || "nothing";
+    const found = workflowNames(runs).join(", ") || "nothing";
     printErr(
       `expected workflow(s) not found for ${sha}: ${missing.join(", ")}; discovered only: ${found}.` +
-        " The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch>" +
-        " (or override the expectation with --expect-workflow <name>)",
+        " The push event can fail to register the run; dispatch the missing workflow by hand, e.g. gh workflow run <gate workflow file> --ref <branch>" +
+        " (or correct the --expect-workflow name: names match exactly)",
     );
   }
 

@@ -62,8 +62,8 @@ The agent reviews under the user's account, so publishing is the user's act: the
 
 **Pick the lenses before reading, once per PR.** Who owns the repository sets the recommendation, not who wrote the PR:
 
-- **The user's repository, or one in an organization they own:** the full house standards, as on their own PR, where the `/rubber-duck-review` skill folds every installed `## Review Criteria` section in without asking. Recommend the whole set.
-- **A repository they do not own:** that repository's conventions come first, and which house standards a colleague's PR is held to is the user's call. Recommend the correctness lenses and offer the rest.
+- **The user's repository, or one in an organization they own:** the full set of these skills' standards, as on their own PR, where the `/rubber-duck-review` skill folds every installed `## Review Criteria` section in without asking. Recommend the whole set.
+- **A repository they do not own:** that repository's conventions come first, and which of these standards a colleague's PR is held to is the user's call. Recommend the correctness lenses and offer the rest.
 
 1. **Collect the candidates:** every installed skill declaring a `## Review Criteria` section, found the way the `/rubber-duck-review` skill's companion-skills step finds them; that skill itself, for a read-only cross-model pass over the PR's diff; and `/working-text` when the PR touches working text (a page, a comment, a description).
 2. **Read the memories first:** the memories available to the session (the index, where the memory system keeps one, and this project's memories). A standing correction about this repository, a rule the user gave the last time a PR like this was reviewed, a library the user prefers over hand-rolling: each one adds a lens, drops one, or sharpens the recommendation.

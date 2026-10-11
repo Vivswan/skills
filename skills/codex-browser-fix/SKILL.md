@@ -14,7 +14,7 @@ Codex only. The desktop app bundles a Chrome plugin that drives any Chromium bro
 | --- | --- | --- |
 | `Codex auth token is unavailable` after the extension was discovered | `config.toml` sets a custom `model_provider`; the browser helper launches `codex app-server` and inherits it, so the ChatGPT sign-in is invisible | Preflight installs a launcher that overrides the provider for that one subprocess |
 | Extension found yesterday, missing or erroring today | The desktop app updated; `~/.codex/plugins/cache/openai-bundled/chrome` still points at the old bundle | Preflight re-syncs the cache and the trust hashes to the installed app |
-| User asked for Brave (or Vivaldi, Opera) and the agent picked Chrome | The vendor skill only names `chrome` and `edge`; other families need a `list()` match | Select by `family` (below) |
+| User asked for a Chromium browser other than Chrome or Edge (Brave, Vivaldi, Opera) and the agent picked Chrome | The vendor skill only names `chrome` and `edge`; other families need a `list()` match | Select by `family` (below) |
 
 The installed Chrome plugin's own skill (`skills/control-chrome/SKILL.md` inside the app bundle) stays the authority for browser APIs. This skill owns local setup, recovery, and browser-family selection.
 
@@ -74,7 +74,7 @@ async function selectExtension(family, profileName) {
   }
   return agent.browsers.get(candidates[0].id);
 }
-let browser = await selectExtension("brave", undefined); // or ("brave", "Work") once known
+let browser = await selectExtension("<family>", undefined); // the family the user asked for; ("<family>", "Work") once the profile is known
 nodeRepl.write(await browser.documentation());
 ```
 
@@ -110,4 +110,4 @@ Live browser work resumes only in a desktop Codex session with the Chrome plugin
 
 - `references/recovery.md`: the auth incident specimen, what the preflight synchronizes, and the extension-versus-tab failure split
 - `scripts/browser-plugin-preflight.mts`: the sole setup implementation (sync and `--check`)
-- `scripts/browser-auth-launcher.mts`: the launcher generator and the `config.toml` edit, unit-tested in the authoring repository
+- `scripts/browser-auth-launcher.mts`: the launcher generator and the `config.toml` edit, unit-tested upstream (https://github.com/Vivswan/skills, tests/browser-auth-launcher.test.ts)

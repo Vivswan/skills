@@ -293,8 +293,22 @@ const SURFACES: Record<string, Surface> = {
     scriptPath: join(WATCH_CI, "scripts", "watch-ci.mts"),
     tokens: [
       {
-        doc: 'bun "<skill-dir>/scripts/watch-ci.mts" <full-sha>',
-        script: "sha: shaToken?.value ?? gitHead(),",
+        doc: 'bun "<skill-dir>/scripts/watch-ci.mts" --expect-workflow <gate workflow name(s)> <full-sha>',
+        script: "sha: shaToken?.value ?? gitHead() };",
+      },
+      {
+        doc: "Without it, every workflow that registered a run on the commit is judged, and at least one must have registered",
+        script:
+          "every workflow that registered a run on the commit is judged, and at least one must have",
+      },
+      {
+        doc: "Registration then waits until two consecutive reads agree on the registered workflows",
+        script: "keys === previousKeys",
+      },
+      {
+        doc: "A set still changing after five reads is judged as last read, after a notice on stderr",
+        script:
+          "reads; judging what registered (a later run is still picked up while any run is pending)",
       },
       {
         doc: 'bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1',
@@ -375,8 +389,9 @@ const SURFACES: Record<string, Surface> = {
           '`expected workflow(s) not found for ${sha}: ${missing.join(", ")}; discovered only: ${found}.`',
       },
       {
-        doc: "dispatch the missing workflow by hand, e.g. `gh workflow run ci.yml --ref <branch>`",
-        script: "dispatch the missing workflow by hand, e.g. gh workflow run ci.yml --ref <branch>",
+        doc: "dispatch the missing workflow by hand, e.g. `gh workflow run <gate workflow file> --ref <branch>`",
+        script:
+          "dispatch the missing workflow by hand, e.g. gh workflow run <gate workflow file> --ref <branch>",
       },
       {
         doc: "Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything",

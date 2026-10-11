@@ -132,7 +132,7 @@ For those, the postcondition is the content itself at `FETCH_HEAD`: the changed 
 State changes race your report. Two bars with different jobs:
 
 - Two observations across an interval decide whether to LOOK: a single still reading is not stillness.
-- A fresh re-measure immediately before sending decides whether to SEND. Every near-false-alarm in production died at that final re-measure, never at the first reading.
+- A fresh re-measure immediately before sending decides whether to SEND. In the incidents behind this rule, every near-false-alarm died at the final re-measure, never at the first reading.
 
 ```text
 reading 1                  no change      -> keep watching, not a flag yet

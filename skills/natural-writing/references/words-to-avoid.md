@@ -68,9 +68,9 @@ ensured that ... adheres to, refined, enhanced, enriched, streamlined, in compli
 
 turn0, oaicite, oai_citation, contentReference, attributableIndex, attached_file, grok_card, grok_render_citation_card_json, 【, [cite:, [web:, start_span, end_span, ppl-ai-file-upload, :::writing, utm_source=chatgpt.com, utm_source=openai, utm_source=copilot.com, referrer=grok.com, ↩
 
-## Punctuation and formatting (house rules)
+## Punctuation and formatting (this skill's rules)
 
-- Em dash (—): never. En dash (–) or spaced hyphen ( - ) used as the same connector: never. Rewrite the sentence.
+- Em dash (—), en dash (–), or spaced hyphen ( - ) as a sentence-level connector: never, unless the destination's style guide calls for that dash form. This skill is stricter than the source. Rewrite the sentence instead.
 - Curly quotes and apostrophes (“ ” ‘ ’): only where house style requires. Never in code, wikis, or plain text, and never mixed with straight quotes.
 - Emoji in headings or lists: no.
 - Bold-label bullets (**Term**: text): no.

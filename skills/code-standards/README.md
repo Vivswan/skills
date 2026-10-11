@@ -1,6 +1,6 @@
 # Code Standards
 
-`/code-standards` packages house standards for maintainable code and the artifacts around it, each with a concrete specimen:
+`/code-standards` packages standards for maintainable code and the artifacts around it, each with a concrete specimen:
 
 - systemic fixes over instance patches
 - guard tests for recurring problems
