@@ -124,6 +124,9 @@ interface StatusReply {
   state: State;
 }
 
+/** A settled verdict: its event, and every workflow it covered, found on the head or asked for. */
+type Settled = { event: PrEvent; judged: string[] };
+
 type Reply =
   | { ok: true; events?: number; subscribers?: number; status?: StatusReply }
   | { ok: false; error: string };
@@ -849,10 +852,15 @@ async function runDaemon(
     targets: Subscription[],
     grace: { missingPolls: number },
     emitted: PrEvent[],
-  ): PrEvent | null => {
+  ): Settled | null => {
     const runs = discoverRuns(repo, sha);
     const verdict = judgeRuns(runs, expected);
     const base = { repo, pr: subject.pr, sha, url: subject.url };
+    const settle = (text: string): Settled => {
+      const event = emit({ ...base, kind: "ci", text }, targets);
+      emitted.push(event);
+      return { event, judged: union([expected, selectLatest(runs).map((run) => run.name)]) };
+    };
     // No run at all is a registration that has not happened yet, or a ref nothing triggers on;
     // the grace below decides which, as it does for a named gate.
     const kind = verdict.kind === "pending" && runs.length === 0 ? "missing" : verdict.kind;
@@ -860,17 +868,10 @@ async function runDaemon(
       case "pending":
         grace.missingPolls = 0;
         return null;
-      case "green": {
-        const event = emit({ ...base, kind: "ci", text: describeGreen(sha, runs) }, targets);
-        emitted.push(event);
-        return event;
-      }
-      case "red": {
-        const text = describeRed(repo, sha, runs, verdict.lines);
-        const event = emit({ ...base, kind: "ci", text }, targets);
-        emitted.push(event);
-        return event;
-      }
+      case "green":
+        return settle(describeGreen(sha, runs));
+      case "red":
+        return settle(describeRed(repo, sha, runs, verdict.lines));
       case "missing":
       case "trouble":
         // Noticed once, at the grace; the sha stays judged, so a run that registers late still
@@ -997,7 +998,7 @@ async function runDaemon(
     }
     state.rows[key] = row;
     if (row.ci.pending) {
-      const verdict = judgeCi(
+      const settled = judgeCi(
         ref.repo,
         current.headRefOid,
         expected,
@@ -1006,11 +1007,9 @@ async function runDaemon(
         row.ci,
         emitted,
       );
-      if (verdict) {
-        row.ci = {
-          pending: false,
-          verdict: { eventId: verdict.id, text: verdict.text, expected },
-        };
+      if (settled) {
+        const { event, judged } = settled;
+        row.ci = { pending: false, verdict: { eventId: event.id, text: event.text, judged } };
       }
     }
   };
@@ -1022,7 +1021,7 @@ async function runDaemon(
     const expected = union(
       targets.map((sub) => (sub.commits[key] as { expected: string[] }).expected),
     );
-    const verdict = judgeCi(
+    const settled = judgeCi(
       pending.repo,
       pending.sha,
       expected,
@@ -1031,7 +1030,7 @@ async function runDaemon(
       pending,
       emitted,
     );
-    if (verdict === null) return;
+    if (settled === null) return;
     for (const sub of targets) delete sub.commits[key];
     delete state.pendingCommits[key];
   };
@@ -1212,7 +1211,7 @@ async function runDaemon(
       const row = state.rows[key];
       if (row && !row.ci.pending) {
         const { verdict } = row.ci;
-        if (expected.some((name) => !verdict.expected.includes(name))) {
+        if (expected.some((name) => !verdict.judged.includes(name))) {
           // A gate the settled verdict never judged.
           row.ci = { pending: true, missingPolls: 0 };
         } else if (!handedVerdict(sink.address, row, verdict.eventId)) {
