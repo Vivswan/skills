@@ -179,6 +179,14 @@ case "\${STUB_MODE:-ok}" in
     echo '${CODEX_VERDICT_LINE}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
     ;;
+  failedturnthenverdict)
+    echo '{"type":"turn.started"}'
+    echo '{"type":"turn.failed","message":"turn failed before any answer"}'
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
   errorafter)
     echo '{"type":"turn.started"}'
     echo '${CODEX_TOOL_LINE}'
@@ -654,6 +662,12 @@ describe("run-review.mts", () => {
     expect(r.code).toBe(0);
     expect(r.report().verdict).toEqual(CODEX_VERDICT);
     expect(r.report().trajectory.map((row) => row.event)).toContain("error");
+  });
+
+  test("a failed turn is never cleared by a later turn's verdict", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "failedturnthenverdict" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("turn failed before any answer");
   });
 
   test("an error event after the last verdict still fails the capture", () => {

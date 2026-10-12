@@ -503,6 +503,8 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
   const trajectory: TrajectoryRow[] = [];
   let verdict: Verdict | string | null = null;
   let errorEvent: string | null = null;
+  // A failed turn is final; a later verdict never clears it, unlike a reconnect error.
+  let turnFailed: string | null = null;
   // Tool calls seen so far in the current turn; the count at the moment the
   // winning message lands is what proves the reviewer read something first.
   let toolCallsThisTurn = 0;
@@ -529,6 +531,7 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
     if (!isRecord(event)) continue;
     if (event.type === "error" || event.type === "turn.failed") {
       errorEvent = typeof event.message === "string" ? event.message : trimmed;
+      if (event.type === "turn.failed") turnFailed = errorEvent;
       trajectory.push({ event: String(event.type), text: excerpt(errorEvent) });
     }
     if (tool === "codex") {
@@ -553,7 +556,7 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
           awaitingTurnEnd = true;
           // A stream reconnect ("stream disconnected ... retrying") is an error event the
           // reviewer recovered from; a message landing after it is the verdict. An error with
-          // no message after it, or a turn.failed, still fails the capture.
+          // no message after it still fails the capture, and a turn.failed always does.
           errorEvent = null;
         }
       }
@@ -602,6 +605,7 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
       }
     }
   }
+  if (turnFailed !== null) return { ok: false, reason: `error event: ${turnFailed}` };
   if (errorEvent !== null) return { ok: false, reason: `error event: ${errorEvent}` };
   if (lastLineMalformed) {
     return { ok: false, reason: "malformed trailing line (stream truncated mid-write)" };
