@@ -302,16 +302,16 @@ const SURFACES: Record<string, Surface> = {
     tokens: [
       {
         doc: "pr-events.mts daemon [--interval <s>] [--id <name>] [--pid <pid>]",
-        script: '"  daemon [--interval <s>] [--id <name>] [--pid <pid>]"',
+        script: '"daemon [--interval <s>] [--id <name>] [--pid <pid>]"',
       },
       {
         doc: "pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]",
         script:
-          '"  watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]"',
+          '"watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]"',
       },
       {
         doc: "pr-events.mts watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]",
-        script: '"  watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]"',
+        script: '"watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]"',
       },
       {
         doc: { text: "--expect-workflow", occurrences: ">=1" },

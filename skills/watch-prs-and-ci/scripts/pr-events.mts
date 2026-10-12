@@ -15,7 +15,9 @@ import {
   deliver,
   envelope,
   FROM_NAME,
+  fenceQuoted,
   type InboxFrame,
+  inboxToken,
   isProcessAlive,
   pidOf,
   processStart,
@@ -78,18 +80,31 @@ const AUTH_ERROR =
   /\b401\b|bad credentials|requires authentication|authentication token|gh auth login|personal access token|token is invalid|invalid token|token (?:has )?expired|GH_TOKEN|GITHUB_TOKEN/i;
 const QUOTED = /'[^']*'|"[^"]*"/g;
 
+// A usage error ends with the failing command's own line: the whole block's last line is the
+// interval floor, which a reader of the tail took for the reason.
+const COMMAND_USAGE: Record<string, string> = {
+  daemon: "daemon [--interval <s>] [--id <name>] [--pid <pid>]",
+  watch:
+    "watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]",
+  "watch-commit": "watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]",
+  unwatch: "unwatch <owner/repo>#<n> | --all          [--id <name>]",
+  wait: "wait [--since <id>] [--timeout <s>] [--id <name>]",
+  poll: "poll | status | stop                     [--id <name>]",
+};
+COMMAND_USAGE.status = COMMAND_USAGE.poll as string;
+COMMAND_USAGE.stop = COMMAND_USAGE.poll as string;
 const USAGE = [
   "usage: pr-events.mts <command> [options]",
-  "  daemon [--interval <s>] [--id <name>] [--pid <pid>]",
-  "  watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]",
-  "  watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]",
-  "  unwatch <owner/repo>#<n> | --all          [--id <name>]",
-  "  wait [--since <id>] [--timeout <s>] [--id <name>]",
-  "  poll | status | stop                     [--id <name>]",
+  ...[...new Set(Object.values(COMMAND_USAGE))].map((line) => `  ${line}`),
   "the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET and exits with it;",
   "--id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;",
   `--interval has a floor of ${MIN_INTERVAL_SECONDS} s`,
 ].join("\n");
+
+function usageFor(command: string | undefined): string {
+  if (command === undefined || !Object.hasOwn(COMMAND_USAGE, command)) return USAGE;
+  return `usage: pr-events.mts ${COMMAND_USAGE[command]}`;
+}
 
 class UsageError extends Error {}
 class ToolingError extends Error {}
@@ -641,17 +656,16 @@ function describeActivities(
   ]) {
     const body = clip(flatten(activity.body));
     if (body === "") continue;
+    // The path is the author's too (a file name can hold a newline), and a row must stay one line.
     const where =
       activity.path !== undefined
-        ? `${activity.path}${typeof activity.line === "number" ? `:${activity.line}` : ""}`
-        : activity.author;
+        ? `${flatten(activity.path)}${typeof activity.line === "number" ? `:${activity.line}` : ""}`
+        : flatten(activity.author);
     rows.push([where, body]);
   }
   const width = Math.max(0, ...rows.map(([where]) => where.length));
-  const lines = [
-    summary.join(", "),
-    ...rows.map(([where, body]) => `  ${where.padEnd(width)}  ${body}`),
-  ];
+  const quoted = rows.map(([where, body]) => `  ${where.padEnd(width)}  ${body}`);
+  const lines = [summary.join(", "), ...(quoted.length > 0 ? fenceQuoted(quoted) : [])];
   return { kind: reviews.length > 0 ? "review" : "comment", text: lines.join("\n") };
 }
 
@@ -736,7 +750,12 @@ async function runDaemon(
     console.log(`another pr-events daemon already serves ${describeOwner(owner)}; exiting`);
     return 0;
   }
-  const start = owner.pid === null ? null : processStart(owner.pid);
+  // The owner's start token: the process start from /proc, else its inbox socket's identity; a
+  // file-sink owner has neither, and its saved targets are its own.
+  const start =
+    owner.pid === null
+      ? null
+      : (processStart(owner.pid) ?? (owner.inbox === null ? null : inboxToken(owner.inbox)));
   const incarnation = owner.pid !== null && start !== null ? { pid: owner.pid, start } : null;
   const { state, unlogged, newestEventAt, staleOwner } = loadState(files, incarnation);
   if (staleOwner) {
@@ -1401,7 +1420,7 @@ async function main(argv: string[]): Promise<number> {
     }
   } catch (error) {
     if (error instanceof UsageError) {
-      console.error(`${error.message}\n${USAGE}`);
+      console.error(`${error.message}\n${usageFor(command)}`);
       return 2;
     }
     if (error instanceof ToolingError || error instanceof RuntimeDirError) {
