@@ -236,6 +236,10 @@ const SURFACES: Record<string, Surface> = {
         script: 'args = delivery.args("danger-full-access");',
       },
       {
+        doc: "The reviewer runs under a scratch `CODEX_HOME`",
+        script: "CODEX_HOME: codexHome",
+      },
+      {
         doc: 'the report and the launch record carry `sandbox: "copy"`',
         script: "...(sandbox === undefined ? {} : { sandbox }),",
       },

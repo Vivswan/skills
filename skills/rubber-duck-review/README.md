@@ -20,7 +20,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/rubber-duck-re
 
 - Launches a review-only pass with another model, tool, or CLI
 - Ships `scripts/run-review.mts`, which spawns the reviewer safely (no shell, stdin closed or fed from the prompt file, stream captured to a tmp dir kept for 24 hours) and prints the extracted verdict
-- Keeps the reviewer read-only. Where codex's bubblewrap sandbox cannot start (a container whose AppArmor profile denies mount propagation), it reviews an unsandboxed snapshot copy of the repository, removed when the review ends, and the report says so
+- Keeps the reviewer read-only. Where codex's bubblewrap sandbox cannot start (a container whose AppArmor profile denies mount propagation), it reviews an unsandboxed snapshot copy of the repository under a scratch codex home, both removed when the review ends, and the report says so
 - Focuses findings on demonstrable defects and design quality. Speculative hardening is recorded, not built, unless the user asks or, in a repository with outside users or a hostile-input surface (a published package, a public service), confirms it after being shown the risk
 - Encourages re-review after fixes
 
