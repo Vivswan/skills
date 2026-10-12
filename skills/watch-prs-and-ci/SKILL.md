@@ -142,7 +142,7 @@ The runtime directory, tried in this order. Each must be creatable as a private 
 | --- | --- |
 | `daemon.sock` | the control socket, also the daemon's `from` address, where a session reports a held or refused delivery |
 | `events.jsonl` | the write-ahead log, one line per event, appended before any delivery |
-| `state.json` | subscriptions, last-seen rows with the activity ids already reported, and each subscriber's last delivery, written tmp-then-rename after every poll |
+| `state.json` | subscriptions, last-seen rows with the activity ids already seen, and each subscriber's last delivery, written tmp-then-rename after every poll |
 | `daemon.log` | the daemon's stderr; the first place to read on exit 2 |
 
 A `gh` call is a fresh process each time, so tokens refresh under gh's control, and the daemon never exits on gh trouble: three consecutive failed polls raise one `trouble` event per subscriber, and a recovery event follows.
@@ -204,7 +204,7 @@ Three rules follow, and the daemon embodies them:
 The reads of one poll, in order:
 
 1. one aliased batch read over every subscribed PR; GitHub prices a request by its node count, so a batch of PRs costs about what one does
-2. one detail read per PR whose row moved, paged back only to the last activity already reported
+2. one detail read per PR whose row moved, paged back only to the last activity already seen
 3. check suites by commit, for each head or commit whose verdict is pending
 4. the failed-run log excerpts, when a verdict is red
 
