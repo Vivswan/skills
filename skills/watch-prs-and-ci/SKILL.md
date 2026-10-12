@@ -82,7 +82,7 @@ Each message holds one poll's events, each with the PR's URL, and the closing li
 | `head` | `PR octocat/repo#12: head moved to 1a2b3c4d5e6f by octocat` | a head you did not record with `--head`: someone else pushed, or your own push without a fresh `watch --head`; pull before touching the branch |
 | `merged` | `PR octocat/repo#12: merged at 2026-10-12T14:03:20Z; mainline commit 9f8e7d6c5b4a is now watched for CI`; the log line's `sha` is the whole merge commit | stop babysitting; the `ci` event for the merge commit follows |
 | `closed` | `PR octocat/repo#12: closed without merging` | stop babysitting |
-| `trouble` | `polling failed 3 times in a row (...); not a verdict`, `CI run not registered on 1a2b3c4d5e6f after 2 polls; not a verdict` with `no run registered for checks` under it, `issue comments: more than 10 pages since the last one reported; the older ones are not reported; read the PR`, or `merged at ...; no merge commit reported after 5 polls, so its mainline CI is not watched` | tooling trouble, never a red or green pipeline; Gotchas below |
+| `trouble` | `polling failed 3 times in a row (...); not a verdict. Polling retries on the next interval`, or, when the error names authentication, `...; not a verdict. The error names authentication: run stop, then start the daemon again so gh hands it a fresh token; its log is <log>`; `CI run not registered on 1a2b3c4d5e6f after 2 polls; not a verdict` with `no run registered for checks` under it; `issue comments: more than 10 pages since the last one reported; the older ones are not reported; read the PR`; or `merged at ...; no merge commit reported after 5 polls, so its mainline CI is not watched` | tooling trouble, never a red or green pipeline; Gotchas below |
 
 The texts above are the shape, and the specimen is the exact text. The shipped script and this page are kept in sync upstream, and where they disagree, trust the script and report the drift.
 
@@ -221,13 +221,13 @@ When a workflow's runs share a `concurrency` group key, GitHub keeps at most one
 | held delivery notices in the session instead of the event text | the daemon runs detached (`nohup`, `setsid`, a shell that exited), so it is a cross-session sender | `stop`, then start it again as a background task of this session |
 | `watch` exits 3 naming a socket and a command | no daemon for this session | run the printed command as a background task, then `watch` again |
 | `watch` exits 2: `CLAUDE_CODE_MESSAGING_SOCKET` is unset | not a Claude Code session, or one without an inbox | a file-sink daemon with `--id`, and `wait` (above) |
-| auth errors in the daemon's log after a `gh auth` change | the session that started the daemon handed it a `GH_TOKEN` that has gone stale | `stop`, then start the daemon again |
+| a `trouble` event: polling failed, the error names authentication | the session that started the daemon handed it a `GH_TOKEN` that has gone stale, or `gh auth` changed under it | `stop`, then start the daemon again |
 | a `trouble` event: the gate workflow never registered | the named `--expect-workflow` has no run on the head two full polls after its CI went pending (a head move or a rollup change); bystanders may be green or still running | check the name against `.github/workflows/*.yml`, then `watch` again with the right set, or dispatch it by hand with `gh workflow run <gate workflow file> --ref <branch>`; never read the rollup as green |
-| a `trouble` event: polling failed, not a verdict | three consecutive polls failed (gh, network, or GitHub); the daemon keeps polling | wait for the recovery event; read the log if it does not come |
+| a `trouble` event: polling failed, polling retries | three consecutive polls failed (gh, network, or GitHub); the daemon keeps polling | wait for the recovery event; read the log if it does not come |
 | a `trouble` event: no merge commit reported | GitHub reported no merge commit for the merged PR within 5 polls | read the merge commit from the PR page and `watch-commit` it |
 
 ## Fallback Without gh
 
 - `gh` missing: `daemon` exits 2. Report the push and give the commit's checks URL, `https://github.com/<owner>/<repo>/commit/<sha>/checks`, and the PR URL. Never silently skip the watch.
-- `gh` unauthenticated or its token stale: the daemon keeps polling and raises a `trouble` event after three failed polls, with the auth errors in its log. Fix the auth, then `stop` and start the daemon again.
+- `gh` unauthenticated or its token stale: the daemon keeps polling and raises a `trouble` event after three failed polls that says the error names authentication. Fix the auth, then `stop` and start the daemon again.
 - Non-GitHub CI: use that system's own notification or watch command. The rule is the same: one poller, events delivered, never an inline wait.

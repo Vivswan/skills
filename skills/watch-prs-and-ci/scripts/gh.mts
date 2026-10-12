@@ -29,10 +29,13 @@ export class GhError extends Error {
   /** gh exits 1 on a GraphQL reply that carries an `errors` entry, with the reply still on stdout;
    * a reader that can use the partial `data` (pr-rows.mts) finds it here. */
   readonly stdout: string | undefined;
+  /** What gh itself printed on a nonzero exit; absent on an error this module raised about the reply. */
+  readonly stderr: string | undefined;
 
-  constructor(message: string, stdout?: string) {
+  constructor(message: string, stdout?: string, stderr?: string) {
     super(message);
     this.stdout = stdout;
+    this.stderr = stderr;
   }
 }
 
@@ -54,9 +57,11 @@ export function gh(args: string[], timeoutMs: number = DEFAULT_TIMEOUT_MS): stri
     throw new GhError(`${call}: ${result.error.message}`);
   }
   if (result.status !== 0) {
+    const stderr = result.stderr.trim();
     throw new GhError(
-      `${call} exited ${result.status ?? "on a signal"}: ${result.stderr.trim()}`,
+      `${call} exited ${result.status ?? "on a signal"}: ${stderr}`,
       result.stdout,
+      stderr,
     );
   }
   return result.stdout;

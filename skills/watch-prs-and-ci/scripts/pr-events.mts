@@ -61,6 +61,13 @@ const OWNER_CHECK_MS = 1000;
 // `watch` right after another waits this long before its message goes out.
 const MIN_DELIVERY_GAP_MS = 1100;
 const STOPPING_ERROR = "daemon stopping; retry";
+// A poll failure gh's own text puts down to authentication: its token went stale, and only a daemon
+// started afresh by the session gets a new one. Any other failure is retried by the next poll as it
+// is. gh's phrasings, each with a space or a status code no repository slug can carry, and what gh
+// quotes is dropped first: it echoes the input, and a repository can be called authentication.
+const AUTH_ERROR =
+  /\b401\b|bad credentials|requires authentication|authentication token|gh auth login|personal access token|token is invalid|invalid token|token (?:has )?expired|GH_TOKEN|GITHUB_TOKEN/i;
+const QUOTED = /'[^']*'|"[^"]*"/g;
 
 const USAGE = [
   "usage: pr-events.mts <command> [options]",
@@ -947,16 +954,29 @@ async function runDaemon(
     appendEvents(files, emitted);
   };
 
+  // The classification reads what gh itself printed: the target's label and the daemon's own
+  // messages can carry a repository or branch named auth or token.
+  type PollError = { where: string; message: string; ghText: string };
+  const troubleText = ({ where, message, ghText }: PollError): string => {
+    const head = `polling failed ${MAX_CONSECUTIVE_POLL_FAILURES} times in a row (${where}: ${message}); not a verdict.`;
+    return AUTH_ERROR.test(ghText.replace(QUOTED, ""))
+      ? `${head} The error names authentication: run stop, then start the daemon again so gh hands it a fresh token; its log is ${files.log}`
+      : `${head} Polling retries on the next interval`;
+  };
+
   // A scoped poll, the one a `watch` triggers, judges CI for its target alone: judged on it, the
   // other targets' registration grace would be two reads seconds apart instead of two polls a
   // minute apart, and a gate registering in that minute would never be read.
   const poll = async (scope: Scope): Promise<number> => {
     const emitted: PrEvent[] = [];
-    let lastError: string | null = null;
+    let lastError: PollError | null = null;
+    const noteError = (where: string, message: string, ghText = ""): void => {
+      lastError = { where, message, ghText };
+      log(`poll: ${where}: ${message}`);
+    };
     const noteGhError = (where: string, error: unknown): void => {
       if (!(error instanceof GhError)) throw error;
-      lastError = `${where}: ${error.message}`;
-      log(`poll: ${lastError}`);
+      noteError(where, error.message, error.stderr ?? "");
     };
     // A read refused because the session is gone ends the poll where it stands; the owner timer
     // does the shutdown.
@@ -968,8 +988,7 @@ async function runDaemon(
           for (const ref of refs) {
             const current = rows.get(prKey(ref));
             if (current === undefined) {
-              lastError = `${prKey(ref)}: not in the rows read (deleted, or no access?)`;
-              log(`poll: ${lastError}`);
+              noteError(prKey(ref), "not in the rows read (deleted, or no access?)");
               continue;
             }
             try {
@@ -1003,12 +1022,7 @@ async function runDaemon(
         failures += 1;
         if (failures === MAX_CONSECUTIVE_POLL_FAILURES) {
           troubled = true;
-          emitted.push(
-            emit({
-              ...daemonWide,
-              text: `polling failed ${failures} times in a row (${lastError}); not a verdict. Auth errors in ${files.log}: run stop, then start the daemon again`,
-            }),
-          );
+          emitted.push(emit({ ...daemonWide, text: troubleText(lastError) }));
         }
       } else {
         failures = 0;

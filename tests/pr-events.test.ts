@@ -1790,26 +1790,115 @@ describe("pr-events.mts", () => {
     expect(s.run(["wait", "--since", "3", "--timeout", "1", ...id]).code).toBe(3);
   }, 40000);
 
-  test("three failed polls in a row are one trouble notice, then one recovery, and the daemon stays up", async () => {
-    const s = new Scenario("trouble");
-    const box = await s.inbox("a");
-    s.fixtures({
-      "rows-1": rows({ rollup: "PENDING" }),
-      "suites-1": suites([["ci", "queued", null]]),
+  test("three failed polls in a row are one trouble notice, then one recovery, and the daemon stays up; only an error naming authentication asks for a restart", async () => {
+    // A 504 or a network failure is retried by the next poll as it is; a stale token is not, and
+    // only a daemon the session starts afresh gets a new one. The error is classified on gh's own
+    // authentication phrasings: the target's label and the daemon's own messages (a repository
+    // named authentication) and what gh quotes (a repository named 401) are not a hit.
+    const repo = "octo/authentication";
+    const restart =
+      "The error names authentication: run stop, then start the daemon again so gh hands it a fresh token; its log is ";
+    const retries = "Polling retries on the next interval";
+    const ghFails = (error: string) => ({
+      fail: (s: Scenario) => writeFileSync(join(s.stubDir, "fail-suites"), error),
+      recover: (s: Scenario) => unlinkSync(join(s.stubDir, "fail-suites")),
+      failure: `${repo}@${HEAD_A}: gh api graphql exited 1: gh: ${error}`,
     });
+    const cases: Array<{
+      name: string;
+      watch: string[];
+      fail: (s: Scenario) => void;
+      recover: (s: Scenario) => void;
+      failure: string;
+      advice: string;
+    }> = [
+      {
+        name: "gateway",
+        watch: ["watch-commit", repo, HEAD_A, ...GATE_CI],
+        ...ghFails("HTTP 504: Gateway Timeout"),
+        advice: retries,
+      },
+      {
+        name: "unresolved",
+        watch: ["watch-commit", repo, HEAD_A, ...GATE_CI],
+        ...ghFails("Could not resolve to a Repository with the name 'octo/401'."),
+        advice: retries,
+      },
+      {
+        name: "credentials",
+        watch: ["watch-commit", repo, HEAD_A, ...GATE_CI],
+        ...ghFails("HTTP 401: Bad credentials (https://api.github.com/graphql)"),
+        advice: restart,
+      },
+      {
+        name: "login",
+        watch: ["watch-commit", repo, HEAD_A, ...GATE_CI],
+        ...ghFails("To get started with GitHub CLI, please run:  gh auth login"),
+        advice: restart,
+      },
+      {
+        name: "absent",
+        watch: ["watch", `${repo}#7`],
+        fail: (s) => s.fixtures({ "rows-2": JSON.stringify({ data: { r0: { p7: null } } }) }),
+        recover: (s) => s.fixtures({ "rows-2": rows({ rollup: "PENDING" }) }),
+        failure: `rows: GraphQL response has no pullRequest for ${repo}#7`,
+        advice: retries,
+      },
+    ];
+    for (const { name, watch, fail, recover, failure, advice } of cases) {
+      const s = new Scenario(`trouble-${name}`);
+      const box = await s.inbox("a");
+      s.fixtures({
+        "rows-1": rows({ rollup: "PENDING" }),
+        "suites-1": suites([["ci", "queued", null]]),
+      });
+      await s.start({ inbox: box.path });
+      expect(s.run(watch, { inbox: box.path }).code).toBe(0);
+      fail(s);
+      for (const expected of ["0 event(s)", "0 event(s)", "1 event(s)", "0 event(s)"]) {
+        expect(s.run(["poll"], { inbox: box.path }).stdout).toContain(expected);
+      }
+      recover(s);
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+      expect(headlines(await box.frames(2))).toEqual([
+        `pr-events: polling failed 3 times in a row (${failure}); not a verdict. ${advice}${advice === restart ? s.file("log") : ""}`,
+        "pr-events: polling recovered",
+      ]);
+      expect(s.run(["status"], { inbox: box.path }).stdout).toContain("daemon: running");
+      s.stop({ inbox: box.path });
+    }
+  }, 40000);
+
+  test("a watch of a healthy target while another target's reads fail is not a recovery: the notice waits for a full poll that reads the failing target again", async () => {
+    // The scoped poll read B alone and succeeded, so it reset the failure count and announced
+    // "polling recovered" while A's read was still failing on every full poll.
+    const s = new Scenario("scoped-recovery");
+    const box = await s.inbox("a");
+    s.fixtures({ "suites-1": suites([["ci", "queued", null]]) });
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
-    writeFileSync(join(s.stubDir, "fail-rows"), "");
-    for (const expected of ["0 event(s)", "0 event(s)", "1 event(s)", "0 event(s)"]) {
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    writeFileSync(join(s.stubDir, `fail-suites-${HEAD_A}`), "");
+    for (const expected of ["0 event(s)", "0 event(s)", "1 event(s)"]) {
       expect(s.run(["poll"], { inbox: box.path }).stdout).toContain(expected);
     }
-    unlinkSync(join(s.stubDir, "fail-rows"));
-    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
-    expect(headlines(await box.frames(2))).toEqual([
-      `pr-events: polling failed 3 times in a row (rows: gh api graphql exited 1: gh: graphql boom); not a verdict. Auth errors in ${s.file("log")}: run stop, then start the daemon again`,
-      "pr-events: polling recovered",
+    s.fixtures({ "suites-2": suites([["ci", "completed", "success"]]) });
+    expect(s.run(["watch-commit", REPO, HEAD_B, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.events().map((e) => [e.kind, e.text.split("\n")[0]])).toEqual([
+      ["trouble", expect.stringContaining("polling failed 3 times in a row")],
+      ["ci", `CI green on ${HEAD_B.slice(0, 12)}: ci`],
     ]);
-    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("daemon: running");
+    unlinkSync(join(s.stubDir, `fail-suites-${HEAD_A}`));
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("2 event(s)");
+    expect(
+      s
+        .events()
+        .slice(2)
+        .map((e) => [e.kind, e.text.split("\n")[0]]),
+    ).toEqual([
+      ["ci", GREEN_A.replace(`PR ${PR7}: `, "")],
+      ["trouble", "polling recovered"],
+    ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
