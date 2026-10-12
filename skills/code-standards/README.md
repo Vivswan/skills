@@ -6,6 +6,7 @@
 - guard tests for recurring problems
 - a minimum strength standard every test clears
 - general-purpose over special-case
+- build only what the change needs (YAGNI): no option, abstraction, or hardening for a need nothing has yet
 - maintainability over effort
 - a library over hand-rolling, the reviewer naming the library
 - comments that carry only what the code cannot show: tell first, then show

@@ -32,6 +32,19 @@ Specimen: a safety classifier whose rulebook kept changing was built as a classi
 
 Full detail, including the one-pipeline-per-concept rule (the page that grew three visibly diverging error-band renderers) and where DRY stops: `references/design.md`.
 
+### Build only what the change needs
+
+Build what this change needs now, nothing for a need no caller has yet (YAGNI). Generality belongs to the axis that already varies, the standard above, never to an imagined one.
+
+- **No option, flag, parameter, hook, or abstraction** without a second real caller or a need inside this change.
+- **No speculative hardening:** a hostile caller that cannot reach the code, a race in a single-user tool, a bound an outer timeout already sets. Record it where the change is described; build it only when asked (the `/rubber-duck-review` skill's recorded-not-built list).
+- **No "while I am here" extensions.** A change does what its title says; the next need gets its own change.
+- **The test is the second consumer:** if nothing in the repository uses the generality today, it is a guess, and a guess is debt.
+
+Specimen: a CI watcher gained a flag for the one axis that varied across repositories (the gate workflow's name) and no retry policy for an outage nobody had seen.
+
+Full detail, including where this meets general-purpose: `references/design.md`.
+
 ### Maintainability over effort
 
 Code quality outweighs diff size and effort spent. A big refactor is always better than a fix done the wrong way: wrong-shaped fixes compound into tech debt.
@@ -214,6 +227,7 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - A test manufactured for a deletion with no behavior of its own in place of a census in the PR body or landing report.
 - A fixture recorded from real data, a provenance comment saying so, or a tool that measures real data with a default output path or one inside the repository.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
+- Code built for a need no current caller has: an option, flag, hook, or abstraction with one caller, no second in the change, and no variation the change already needs; or hardening for a path nothing reaches (recorded, not built).
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Hand-rolled code, added, moved, touched, reused, or depended on, whose whole job a good library or a tool already in the repository does; the finding names the library and what it covers. A change in a library-shaped category whose record (the brief, then the PR body or the landing report) names no library and no search.
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
@@ -231,7 +245,7 @@ Triage findings against the standards above. Each criterion maps to one.
 
 ## References
 
-- `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort
+- `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries, build only what the change needs), maintainability over effort
 - `references/tests.md`: the minimum standard for tests, what counts as weak, the drift question every test answers, proving a guard test with a negative control, the census rule for deletions, hand-authored fixtures and the output-path rule for tools that measure real data
 - `references/comments.md`: what a good comment carries, tell then show, the two-question test, the specimens, the TODO ban, planning references
 - `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging, the pure-move PR and the target layout for a reorganisation
