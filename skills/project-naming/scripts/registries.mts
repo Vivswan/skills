@@ -471,14 +471,18 @@ type WikiReading = { languages: string[]; flags: string[] };
 async function wiktionaryPage(io: Io, title: string): Promise<WikiReading | Cell> {
   // redirects=1 resolves a redirect page (an alternative spelling) to the entry it points at.
   const url = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=wikitext&redirects=1&format=json&formatversion=2`;
-  let body: WikitextReply;
+  let parsed: unknown;
   try {
     const response = await get(io, url);
     if (response.status !== 200) return unknown(`wiktionary HTTP ${response.status}`);
-    body = (await response.json()) as WikitextReply;
+    parsed = await response.json();
   } catch (error) {
     return unknown(`wiktionary ${String(error)}`);
   }
+  if (typeof parsed !== "object" || parsed === null) {
+    return unknown("wiktionary reply malformed: not an object");
+  }
+  const body = parsed as WikitextReply;
   if (body.error?.code === "missingtitle") return { languages: [], flags: [] };
   if (body.error) return unknown(`wiktionary api error ${body.error.code ?? ""}`.trim());
   const wikitext = body.parse?.wikitext;

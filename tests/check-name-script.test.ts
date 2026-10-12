@@ -681,6 +681,18 @@ describe("check-name.mts cells", () => {
     });
   });
 
+  test("a 200 whose JSON body is null is a malformed Wiktionary reply: the cell is unknown and the row still carries every other column", async () => {
+    const io = fakeIo((url) =>
+      url.hostname === "en.wiktionary.org" ? { status: 200, body: null } : undefined,
+    );
+    const row = await checkName(io, OPTIONS, "tarn");
+    expect(cell(row.cells, "wiktionary")).toEqual({
+      status: "unknown",
+      detail: "wiktionary reply malformed: not an object",
+    });
+    expect(cell(row.cells, "pypi")).toEqual({ status: "free" });
+  });
+
   test("Wiktionary is asked for the spelling as given, the lowercase and the capitalised page, and told to follow redirects", async () => {
     const asGiven = fakeIo((url) => {
       if (url.hostname !== "en.wiktionary.org") return undefined;
