@@ -66,7 +66,7 @@ Each message is one event for one PR, with the PR's URL and the closing line `au
 | --- | --- | --- |
 | `comment` | `PR octocat/repo#12: 1 new comment by octocat`, then the body, with `path:line` for a review-thread reply | triage it as a review round: reply, fix, or resolve |
 | `review` | `PR octocat/repo#12: new review by octocat (CHANGES_REQUESTED), 2 review comments`, then each comment with its `path:line` | the same, per the `/pr-landing-discipline` skill |
-| `ci` | `PR octocat/repo#12: CI green on 1a2b3c4 (checks, lint)`, or `CI red on 1a2b3c4` with the workflow, the job, and the failed-job log tail | green: carry on; red: fix from the excerpt, push, and the next verdict arrives on its own |
+| `ci` | one line, `CI green on 1a2b3c4d5e6f: checks, lint`, or `CI red on 1a2b3c4` with the workflow, the job, and the failed-job log tail | green: carry on; red: fix from the excerpt, push, and the next verdict arrives on its own |
 | `head` | `PR octocat/repo#12: head moved by octocat to 1a2b3c4; CI pending` | a head no subscriber recorded with `--head`: someone else pushed, or your own push without a fresh `watch --head`; pull before touching the branch |
 | `merged` | `PR octocat/repo#12: merged as 9f8e7d6; watching its mainline CI` | stop babysitting; the `ci` event for the merge commit follows |
 | `closed` | `PR octocat/repo#12: closed without merging` | stop babysitting |
@@ -171,15 +171,15 @@ bun "<skill-dir>/scripts/pr-events.mts" wait --id codex-12 --since 0 --timeout 3
 
 Run `wait` as a background command and read the file when it exits. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 3 is the timeout with nothing new: re-arm, or escalate to the user.
 
-`--id` names the file-sink subscription the reader holds, and each `wait` renews its 24 h lease; a file subscriber whose lease lapsed is pruned. `--pid <pid>` at `watch` time prunes on that process's death instead.
+`--id` names the file-sink subscription the reader holds: `wait` selects the lines whose `to` field names it, and each `wait` renews its 24 h lease. A file subscriber whose lease lapsed is pruned, and `--pid <pid>` at `watch` time prunes on that process's death instead.
 
 Every event line has the same shape, whichever sink delivers it:
 
 ```json
-{"id":17,"at":"2026-10-12T14:03:20Z","repo":"octocat/repo","pr":12,"kind":"review","text":"...","url":"https://github.com/octocat/repo/pull/12"}
+{"id":17,"at":"2026-10-12T14:03:20Z","repo":"octocat/repo","pr":12,"kind":"review","text":"...","url":"https://github.com/octocat/repo/pull/12","to":["codex-12"]}
 ```
 
-`kind` is one of `comment`, `review`, `ci`, `head`, `merged`, `closed`, `trouble`. A held or dropped socket delivery leaves the line in the log, so nothing is lost to a session that was away.
+`kind` is one of `comment`, `review`, `ci`, `head`, `merged`, `closed`, `trouble`. `to` lists the sink addresses the line was delivered to: file-sink names and inbox socket paths. A held or dropped socket delivery leaves the line in the log, so nothing is lost to a session that was away.
 
 ## Polling Budget
 
