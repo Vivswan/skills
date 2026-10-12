@@ -1120,9 +1120,10 @@ describe("pr-events.mts", () => {
     s.stop();
   }, 30000);
 
-  test("a subscriber arriving after the verdict settled is handed it on a line of its own; a repeat watch is not", async () => {
+  test("a subscriber arriving after the verdict settled is handed it on a line of its own, even naming the gate it judged; a repeat watch is not", async () => {
     // The row's CI is settled and the only verdict line is addressed to the first subscriber, so
-    // without the replay the second never learns it, not even through `wait --id`.
+    // without the replay the second never learns it, not even through `wait --id`. The gate the
+    // second names is one the verdict already judged, so it is no reason to judge again.
     const s = new Scenario("late");
     const a = await s.inbox("a");
     const b = await s.inbox("b");
@@ -1130,9 +1131,10 @@ describe("pr-events.mts", () => {
       "rows-1": rows({ rollup: "SUCCESS" }),
       "suites-1": suites([["ci", "completed", "success"]]),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: a.path }).code).toBe(0);
-    expect(s.run(["watch", PR7, "--mode", "prompting"], { inbox: b.path }).code).toBe(0);
-    expect(s.run(["watch", PR7, "--mode", "prompting"], { inbox: b.path }).code).toBe(0);
+    const gate = ["--expect-workflow", "ci"];
+    expect(s.run(["watch", PR7, "--mode", "bypass", ...gate], { inbox: a.path }).code).toBe(0);
+    expect(s.run(["watch", PR7, "--mode", "prompting", ...gate], { inbox: b.path }).code).toBe(0);
+    expect(s.run(["watch", PR7, "--mode", "prompting", ...gate], { inbox: b.path }).code).toBe(0);
     expect(headlines(await a.frames(1))).toEqual([GREEN_A]);
     const frames = await b.frames(1);
     expect(headlines(frames)).toEqual([GREEN_A]);

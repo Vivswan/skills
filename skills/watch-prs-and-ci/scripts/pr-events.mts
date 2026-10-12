@@ -1006,8 +1006,12 @@ async function runDaemon(
         row.ci,
         emitted,
       );
-      if (verdict)
-        row.ci = { pending: false, verdict: { eventId: verdict.id, text: verdict.text } };
+      if (verdict) {
+        row.ci = {
+          pending: false,
+          verdict: { eventId: verdict.id, text: verdict.text, expected },
+        };
+      }
     }
   };
 
@@ -1206,17 +1210,16 @@ async function runDaemon(
       const expected = union([previous?.expected ?? [], target.expected]);
       sub.prs[key] = { head: target.head, expected };
       const row = state.rows[key];
-      if (row && expected.length > (previous?.expected.length ?? 0)) {
-        // A gate named now was not judged by a verdict already settled on this head.
-        row.ci = { pending: true, missingPolls: 0 };
-      } else if (
-        row &&
-        !row.ci.pending &&
-        !handedVerdict(sink.address, row, row.ci.verdict.eventId)
-      ) {
-        // The verdict settled before this subscriber arrived: it is handed over, to them alone.
-        const base = { repo: row.repo, pr: row.number, sha: row.headRefOid, url: row.url };
-        replayed.push(emit({ ...base, kind: "ci", text: row.ci.verdict.text }, [sub]));
+      if (row && !row.ci.pending) {
+        const { verdict } = row.ci;
+        if (expected.some((name) => !verdict.expected.includes(name))) {
+          // A gate the settled verdict never judged.
+          row.ci = { pending: true, missingPolls: 0 };
+        } else if (!handedVerdict(sink.address, row, verdict.eventId)) {
+          // The verdict settled before this subscriber arrived: it is handed over, to them alone.
+          const base = { repo: row.repo, pr: row.number, sha: row.headRefOid, url: row.url };
+          replayed.push(emit({ ...base, kind: "ci", text: verdict.text }, [sub]));
+        }
       }
     } else {
       const key = commitKey(target.repo, target.sha);

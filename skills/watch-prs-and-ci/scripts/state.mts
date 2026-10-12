@@ -72,7 +72,8 @@ export interface Subscription {
 export type RowCi =
   /** `missingPolls`: polls in a row on which no run had registered; the grace before a trouble event. */
   | { pending: true; missingPolls: number }
-  | { pending: false; verdict: { eventId: number; text: string } };
+  /** `expected`: the gate workflows the verdict judged; a gate outside them re-judges the head. */
+  | { pending: false; verdict: { eventId: number; text: string; expected: string[] } };
 
 export interface SavedRow extends Row {
   ci: RowCi;
