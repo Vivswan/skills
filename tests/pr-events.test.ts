@@ -1487,6 +1487,39 @@ describe("pr-events.mts", () => {
     }
   }, 60000);
 
+  test("a red verdict the watch did not subscribe to settles without fetching the failed-run logs", async () => {
+    // The excerpt is rendered for the owner; with ci left out there is no owner for it, and the
+    // three log fetches it can take would spend the Actions bucket and stall the poll for nothing.
+    const s = new Scenario("unsubscribed-red");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "FAILURE" }),
+      "suites-1": suites([["ci", "completed", "failure", 700]]),
+      "log-700.txt": "boom",
+    });
+    await s.start({ inbox: box.path });
+    const r = s.run(["watch", PR7, "--events", "comment", ...GATE_CI], { inbox: box.path });
+    expect(r.code).toBe(0);
+    expect(s.ghCalls().filter((call) => call.includes("--log-failed"))).toEqual([]);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("ci=settled");
+    expect(s.events()).toEqual([]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a stop ends the daemon while a client holds a connection it never wrote to", async () => {
+    // server.close() refuses new connections and leaves accepted ones open, so a silent client's
+    // pending first-line read kept the process alive after "daemon stopped" was printed.
+    const s = new Scenario("silent-client");
+    const box = await s.inbox("a");
+    const daemon = await s.start({ inbox: box.path });
+    const held = connect(s.socketPath());
+    await new Promise<void>((resolve) => held.once("connect", () => resolve()));
+    s.stop({ inbox: box.path });
+    const exited = await Promise.race([daemon.exited, Bun.sleep(3000).then(() => "still alive")]);
+    expect(exited).toBe(0);
+    held.destroy();
+  }, 30000);
+
   test("a PR number past the safe-integer range is a usage error, not a rounded number", () => {
     const s = new Scenario("big-number");
     const r = s.run(["watch", `${REPO}#9007199254740993`, ...GATE_CI], { inbox: s.socketPath() });

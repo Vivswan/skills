@@ -40,7 +40,6 @@ import {
   nextEvent,
   type Owner,
   type OwnerFiles,
-  outcomeOfVerdict,
   ownerFiles,
   type PrEvent,
   pendingCi,
@@ -68,6 +67,9 @@ const WAIT_TICK_MS = 1000;
 // The owner's end is noticed between polls, so a finished session does not leave a poller behind
 // for the rest of the interval.
 const OWNER_CHECK_MS = 1000;
+// How long a stopping daemon waits for a connection accepted before the stop to say what it wants
+// (it is refused), before the connection is cut so the process can end.
+const SILENT_CLIENT_GRACE_MS = 1000;
 // The receiver drops a second frame from one sender within the same second; a poll triggered by
 // `watch` right after another waits this long before its message goes out.
 const MIN_DELIVERY_GAP_MS = 1100;
@@ -797,6 +799,8 @@ async function runDaemon(
   let troubled = false;
   let viewer: string | null = null;
   let stopping = false;
+  // Connections accepted whose first line has not arrived; one that has is answered and closes.
+  const silent = new Set<Socket>();
   let finish: (code: number) => void = () => {};
   const done = new Promise<number>((resolve) => {
     finish = resolve;
@@ -852,11 +856,13 @@ async function runDaemon(
     ]
       .map(String)
       .sort();
-    const settle = (text: string): CiJudgment => {
-      const outcome = outcomeOfVerdict(text);
-      if (priorRuns === fingerprint || !subscribed)
+    // A verdict nobody hears, the same runs already delivered or a kind the watch left out, is
+    // settled without rendering: a red's text fetches failed-run logs, three REST reads at most.
+    const settle = (outcome: CiOutcome, render: () => string): CiJudgment => {
+      if (priorRuns === fingerprint || !subscribed) {
         return { outcome, runs: fingerprint, event: null };
-      const event = emit({ ...base, kind: "ci", text, runs: fingerprint });
+      }
+      const event = emit({ ...base, kind: "ci", text: render(), runs: fingerprint });
       emitted.push(event);
       return { outcome, runs: fingerprint, event };
     };
@@ -874,15 +880,15 @@ async function runDaemon(
         // Registration settles before a green is terminal: every named gate is present (a missing
         // one ranks above green), or two full polls in a row saw the same workflow set, so a
         // workflow still registering when the first all-green read happened gets its say.
-        if (expected.length > 0) return settle(describeGreen(sha, runs));
+        if (expected.length > 0) return settle("green", () => describeGreen(sha, runs));
         if (!settling) return null;
         grace.missingPolls = 0;
         const confirmed = sameSet(grace.registered, registered);
         grace.registered = registered;
-        return confirmed ? settle(describeGreen(sha, runs)) : null;
+        return confirmed ? settle("green", () => describeGreen(sha, runs)) : null;
       }
       case "red":
-        return settle(describeRed(repo, sha, runs, verdict.lines));
+        return settle("red", () => describeRed(repo, sha, runs, verdict.lines));
       case "missing":
       case "trouble":
         // Noticed once, at the grace; the sha stays judged, so a run that registers late still
@@ -1240,7 +1246,10 @@ async function runDaemon(
     clearInterval(ownerTimer);
     if (polling) await polling.catch(() => {});
     saveState(files, state);
+    // close() refuses new connections and leaves accepted ones open; a client that connected and
+    // never wrote would hold the process up past "daemon stopped" through its pending read.
     server.close();
+    for (const client of silent) client.setTimeout(SILENT_CLIENT_GRACE_MS, () => client.destroy());
     try {
       unlinkSync(files.socket);
     } catch (error) {
@@ -1366,8 +1375,13 @@ async function runDaemon(
   };
 
   server.on("connection", (socket) => {
+    silent.add(socket);
+    socket.once("close", () => silent.delete(socket));
     firstLine(socket, "closed before a line").then(
-      (line) => handleLine(line, socket),
+      (line) => {
+        silent.delete(socket);
+        return handleLine(line, socket);
+      },
       (error) => log(`control connection: ${errorText(error)}`),
     );
   });
