@@ -162,9 +162,11 @@ export function missingWorkflows(latest: Run[], expected: string[]): string[] {
 
 // Run outcome and gh health are judged apart so tooling trouble is never reported as a red
 // pipeline. A cancelled LATEST run is a failure: with no newer run to supersede it, the pipeline
-// never delivered a verdict. The kinds rank: red, then pending, then missing, then trouble. A
-// missing expected workflow can still register while another run is pending, so pending outranks
-// it; and a commit with no runs at all is pending, never a vacuous green.
+// never delivered a verdict. The kinds rank: red, then missing, then pending, then trouble. A
+// missing expected workflow outranks a pending bystander: ranked below it, a gate that never
+// registers would be waited on for as long as anything else ran, and the caller's grace for a
+// late registration sits on top of this judgment. A commit with no runs at all is pending, never
+// a vacuous green.
 export function judgeRuns(runs: Run[], expected: string[]): Verdict {
   const { latest, superseded } = partitionRuns(runs);
   const lines = superseded.map((run) => `superseded: ${run.name} (${run.id})`);
@@ -195,8 +197,8 @@ export function judgeRuns(runs: Run[], expected: string[]): Verdict {
     return { kind: "pending", lines: [...lines, "no workflow runs registered"] };
   }
   if (red) return { kind: "red", lines };
-  if (pending) return { kind: "pending", lines };
   if (missing.length > 0) return { kind: "missing", lines };
+  if (pending) return { kind: "pending", lines };
   if (trouble) return { kind: "trouble", lines };
   return { kind: "green", lines };
 }

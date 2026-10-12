@@ -1,19 +1,18 @@
-// The subscriber side of a Claude Code inbox: one connection per message carrying one JSON line,
-// the liveness rule for a socket named by its session's pid, and the text an event becomes.
+// The sending side of a Claude Code inbox: one connection per message carrying one JSON line, the
+// pid a session's inbox is named by, and the text a poll's events become. The daemon is a child of
+// the session it serves, so its frames render as plain text with no envelope and no permission hold.
 
 import { once } from "node:events";
-import { lstatSync } from "node:fs";
 import { connect } from "node:net";
 import { basename } from "node:path";
 import { finished } from "node:stream/promises";
-import type { Mode, PrEvent } from "./state.mts";
+import type { PrEvent } from "./state.mts";
 
 export interface InboxFrame {
   type: "user";
   message: { role: "user"; content: string };
   from: string;
   from_name: string;
-  from_mode: Mode;
   msg_id: string;
 }
 
@@ -42,28 +41,13 @@ export async function deliver(socketPath: string, frame: InboxFrame): Promise<vo
   }
 }
 
-/**
- * A Claude Code inbox is live when the pid in its file name answers a signal 0 (EPERM counts: the
- * process exists) and the path is still a socket. Stale socket files are the norm, so the pid check
- * is what prunes.
- */
-export function isLiveSubscriber(
-  socketPath: string,
-  pid: number | null = pidOf(socketPath),
-): boolean {
-  if (pid !== null && !isProcessAlive(pid)) return false;
-  try {
-    return lstatSync(socketPath).isSocket();
-  } catch {
-    return false;
-  }
-}
-
+/** A Claude Code inbox is `<pid>.sock`, named by the session that listens on it. */
 export function pidOf(socketPath: string): number | null {
   const match = /^(\d+)\.sock$/.exec(basename(socketPath));
   return match ? Number(match[1]) : null;
 }
 
+/** A signal 0 answered with EPERM is a process that exists. */
 export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -82,6 +66,14 @@ export function renderEvent(event: PrEvent): string {
         : "pr-events";
   const lines = [`${subject}: ${event.text}`];
   if (event.url !== "") lines.push(event.url);
-  lines.push(CLOSING_LINE);
   return lines.join("\n");
+}
+
+/**
+ * One poll's events as one message: the receiver drops a second frame from the same sender within
+ * the same second, so a poll never sends two. Events are separated by a blank line, each keeping
+ * its own text and URL, and the closing line comes once.
+ */
+export function renderDigest(events: PrEvent[]): string {
+  return `${events.map(renderEvent).join("\n\n")}\n${CLOSING_LINE}`;
 }

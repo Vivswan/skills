@@ -1,25 +1,16 @@
 #!/usr/bin/env bun
-// One poller per user for every PR and commit the user's sessions care about. Events (comments,
-// reviews, head moves, CI verdicts, merge, close) are appended to a write-ahead log first and then
-// delivered to each subscriber: a Claude Code inbox socket, or a file-sink reader blocking in `wait`.
+// One daemon per Claude Code session, started by that session as a background task, polling GitHub
+// for the PRs and commits the session watches. Events are appended to a write-ahead log first and
+// then delivered to the session's inbox, one message per poll. A non-Claude agent names a file-sink
+// daemon with --id and reads the log with `wait`.
 //
-// Exit codes: 0 ok; 2 usage, gh missing, no runtime directory, or the daemon unreachable after a
-// spawn (stderr names the log); `wait` exits 3 at its timeout.
+// Exit codes: 0 ok; 2 usage, gh missing, or no runtime directory; 3 no daemon answers for this
+// session (stderr names the command that starts one); `wait` exits 4 at its timeout.
 
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import {
-  appendFileSync,
-  chmodSync,
-  closeSync,
-  mkdirSync,
-  openSync,
-  rmSync,
-  statSync,
-  unlinkSync,
-} from "node:fs";
+import { appendFileSync, chmodSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
-import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
 import { discoverRuns, failedJobLog, judgeRuns, type Run, selectLatest } from "./check-suites.mts";
@@ -28,64 +19,64 @@ import {
   deliver,
   FROM_NAME,
   type InboxFrame,
-  isLiveSubscriber,
   isProcessAlive,
   pidOf,
-  renderEvent,
+  renderDigest,
 } from "./inbox.mts";
 import { type Activity, newActivity, readPrDetail, viewerLogin } from "./pr-detail.mts";
 import { type PrKey, type PrRef, prKey, type Row, readRows, rowChanged } from "./pr-rows.mts";
 import {
   appendEvent,
-  CONTROL_SOCKET,
   type CommitKey,
   commitKey,
-  dropUnheldTargets,
   type EventInput,
-  type Liveness,
-  LOG_FILE,
+  freshGrace,
+  type Grace,
   loadState,
-  type Mode,
+  type Owner,
+  type OwnerFiles,
+  ownerFiles,
   type PrEvent,
   RuntimeDirError,
   readEventsSince,
   runtimeDir,
   type SavedRow,
-  type Sink,
   type State,
-  type Subscription,
   saveState,
 } from "./state.mts";
 
 // The Polling Budget floor: faster polling only spends the shared rate bucket.
 const MIN_INTERVAL_SECONDS = 60;
-const DEFAULT_IDLE_SECONDS = 600;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 1800;
-const LEASE_MS = 24 * 60 * 60 * 1000;
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 // A workflow run can register a few seconds after the push; two polls before calling it missing.
 const MISSING_GRACE_POLLS = 2;
+// GitHub reports a merged PR's merge commit a poll or two after mergedAt; after this many it is
+// given up as unwatchable.
+const MERGE_COMMIT_GRACE_POLLS = 5;
 const MAX_LOG_EXCERPTS = 3;
 const MAX_BODY_CHARS = 2000;
-const START_RETRY_MS = 100;
-const START_TIMEOUT_MS = 5000;
 const WAIT_TICK_MS = 1000;
+// The owner's end is noticed between polls, so a finished session does not leave a poller behind
+// for the rest of the interval.
+const OWNER_CHECK_MS = 1000;
 
 const USAGE = [
   "usage: pr-events.mts <command> [options]",
-  "  watch <owner/repo>#<n> --mode bypass|prompting [--head <sha>] [--expect-workflow <name>]... [sink options]",
-  "  watch-commit <owner/repo> <sha> --mode bypass|prompting [--expect-workflow <name>]... [sink options]",
-  "  unwatch <owner/repo>#<n> | --all          [sink options]",
+  "  daemon [--interval <s>] [--id <name>] [--pid <pid>]",
+  "  watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--id <name>]",
+  "  watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]",
+  "  unwatch <owner/repo>#<n> | --all          [--id <name>]",
   "  wait [--since <id>] [--timeout <s>] [--id <name>]",
-  "  poll | status | stop",
-  `  daemon [--interval <s>, at least ${MIN_INTERVAL_SECONDS}] [--idle-seconds <s>, default ${DEFAULT_IDLE_SECONDS}]`,
-  "sink options: [--sink socket|file] [--id <name>] [--pid <pid>]",
-  "  socket (default when CLAUDE_CODE_MESSAGING_SOCKET is set): events arrive as messages in that inbox",
-  "  file (needs --id): events are read back with `wait`, which renews a 24 h lease; --pid <pid> prunes on that pid's death instead",
+  "  poll | status | stop                     [--id <name>]",
+  "the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET and exits with it;",
+  "--id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;",
+  `--interval has a floor of ${MIN_INTERVAL_SECONDS} s`,
 ].join("\n");
 
 class UsageError extends Error {}
 class ToolingError extends Error {}
+class NoDaemonError extends Error {}
 
 function usage(message: string): never {
   throw new UsageError(message);
@@ -99,22 +90,67 @@ function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException).code;
 }
 
+// --- the owner --------------------------------------------------------------------
+
+const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+function parsePositiveInt(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) {
+    usage(`${flag} must be a positive whole number, got: ${value}`);
+  }
+  return Number(value);
+}
+
+/**
+ * The CLI and the daemon resolve the same owner from the same environment, so they name the same
+ * socket: the session whose inbox CLAUDE_CODE_MESSAGING_SOCKET names, or the `--id` of a file sink.
+ */
+function resolveOwner(
+  values: { id?: string; pid?: string },
+  env: NodeJS.ProcessEnv = process.env,
+): Owner {
+  const pid = parsePositiveInt(values.pid, "--pid") ?? null;
+  if (values.id !== undefined) {
+    // Ids key plain objects that come back from JSON, so a name an object inherits cannot be one.
+    if (!ID_PATTERN.test(values.id) || values.id in Object.prototype) {
+      usage(`--id must be a name of letters, digits, . _ or -, not ${values.id}`);
+    }
+    return { key: values.id, inbox: null, pid };
+  }
+  const inbox = env.CLAUDE_CODE_MESSAGING_SOCKET;
+  if (!inbox) {
+    usage(
+      "CLAUDE_CODE_MESSAGING_SOCKET is unset: not a Claude Code session; pass --id <name> to name a file-sink daemon instead",
+    );
+  }
+  if (pid !== null) usage("--pid applies to --id; a session's daemon ends with the session");
+  const sessionPid = parsePositiveInt(env.CLAUDE_PID, "CLAUDE_PID") ?? pidOf(inbox);
+  if (sessionPid === null) {
+    usage(
+      `cannot tell the session's pid: CLAUDE_PID is unset and the inbox is not <pid>.sock: ${inbox}`,
+    );
+  }
+  return { key: String(sessionPid), inbox, pid: sessionPid };
+}
+
+function describeOwner(owner: Owner): string {
+  return owner.inbox === null ? `file sink ${owner.key}` : `session ${owner.key}`;
+}
+
+function startCommand(owner: Owner): string {
+  return `bun "${import.meta.path}" daemon${owner.inbox === null ? ` --id ${owner.key}` : ""}`;
+}
+
 // --- control protocol --------------------------------------------------------
 
 type WatchTarget =
   | { kind: "pr"; repo: string; number: number; head: string | null; expected: string[] }
   | { kind: "commit"; repo: string; sha: string; expected: string[] };
 
-interface SinkChoice {
-  sink: Sink;
-  address: string;
-  pid: number | null;
-}
-
 type Command =
-  | { cmd: "watch"; sink: SinkChoice; mode: Mode; target: WatchTarget }
-  | { cmd: "unwatch"; address: string; pr: PrRef | null }
-  | { cmd: "renew"; address: string }
+  | { cmd: "watch"; target: WatchTarget }
+  | { cmd: "unwatch"; pr: PrRef | null }
   | { cmd: "poll" }
   | { cmd: "status" }
   | { cmd: "stop" };
@@ -124,25 +160,9 @@ interface StatusReply {
   state: State;
 }
 
-/** A settled verdict: its event, and every workflow it covered, found on the head or asked for. */
-type Settled = { event: PrEvent; judged: string[] };
-
 type Reply =
-  | { ok: true; events?: number; subscribers?: number; status?: StatusReply }
+  | { ok: true; events?: number; watched?: number; status?: StatusReply }
   | { ok: false; error: string };
-
-// A daemon that has begun its shutdown (idle, `stop`, or a signal) still answers connections it
-// had accepted; it refuses work it could no longer poll or save, and the CLI retries against
-// whatever listens next, starting a daemon if nothing does.
-const STOPPING_ERROR = "daemon stopping; retry";
-
-function isStopping(reply: Reply): boolean {
-  return !reply.ok && reply.error === STOPPING_ERROR;
-}
-
-function controlSocketPath(dir: string): string {
-  return join(dir, CONTROL_SOCKET);
-}
 
 async function connectOnce(path: string): Promise<Socket> {
   const socket = connect(path);
@@ -173,72 +193,33 @@ function exchange(socket: Socket, command: Command): Promise<Reply> {
   });
 }
 
-function spawnDaemon(dir: string): void {
-  const logFd = openSync(join(dir, LOG_FILE), "a", 0o600);
-  try {
-    // The daemon's cwd is the runtime dir itself, so the dir travels resolved, never relative.
-    const child = Bun.spawn([process.execPath, import.meta.path, "daemon"], {
-      cwd: dir,
-      env: { ...process.env, PR_EVENTS_DIR: dir },
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-    });
-    child.unref();
-  } finally {
-    closeSync(logFd);
-  }
-}
-
 function isNobodyListening(error: unknown): boolean {
   const code = errorCode(error);
   return code === "ENOENT" || code === "ECONNREFUSED";
 }
 
-async function findOrStart(dir: string): Promise<Socket> {
-  const path = controlSocketPath(dir);
+/** The reply of the owner's daemon, or null when none answers on its socket. */
+async function requestIfRunning(files: OwnerFiles, command: Command): Promise<Reply | null> {
+  let socket: Socket;
   try {
-    return await connectOnce(path);
+    socket = await connectOnce(files.socket);
   } catch (error) {
-    if (!isNobodyListening(error)) throw error;
+    if (isNobodyListening(error)) return null;
+    throw error;
   }
-  spawnDaemon(dir);
-  const deadline = Date.now() + START_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(START_RETRY_MS);
-    try {
-      return await connectOnce(path);
-    } catch (error) {
-      if (!isNobodyListening(error)) throw error;
-    }
-  }
-  throw new ToolingError(
-    `the daemon did not answer on ${path} within ${START_TIMEOUT_MS / 1000} s; see ${join(dir, LOG_FILE)}`,
-  );
+  return exchange(socket, command);
 }
 
-async function requestStarting(dir: string, command: Command): Promise<Reply> {
-  const deadline = Date.now() + START_TIMEOUT_MS;
-  for (;;) {
-    const reply = await exchange(await findOrStart(dir), command);
-    if (!isStopping(reply) || Date.now() > deadline) return reply;
-    await sleep(START_RETRY_MS);
+// The CLI never starts the daemon: a child of the CLI would outlive it detached, and a detached
+// process is a cross-session sender whose frames the session holds for approval.
+async function request(owner: Owner, files: OwnerFiles, command: Command): Promise<Reply> {
+  const reply = await requestIfRunning(files, command);
+  if (reply === null) {
+    throw new NoDaemonError(
+      `no pr-events daemon answers for ${describeOwner(owner)} on ${files.socket}; start one as a background task of this session:\n  ${startCommand(owner)}`,
+    );
   }
-}
-
-async function requestRunning(dir: string, command: Command): Promise<Reply | null> {
-  const deadline = Date.now() + START_TIMEOUT_MS;
-  for (;;) {
-    let socket: Socket;
-    try {
-      socket = await connectOnce(controlSocketPath(dir));
-    } catch (error) {
-      if (isNobodyListening(error)) return null;
-      throw error;
-    }
-    const reply = await exchange(socket, command);
-    if (!isStopping(reply) || Date.now() > deadline) return reply;
-    await sleep(START_RETRY_MS);
-  }
+  return reply;
 }
 
 function unwrap(reply: Reply): Reply & { ok: true } {
@@ -251,7 +232,8 @@ function unwrap(reply: Reply): Reply & { ok: true } {
 const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const TARGET_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
-const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+const OWNER_OPTIONS = { id: { type: "string" } } as const;
 
 function parseTarget(target: string | undefined): PrRef {
   if (target === undefined) usage("missing <owner/repo>#<n>");
@@ -260,65 +242,13 @@ function parseTarget(target: string | undefined): PrRef {
   return { repo: match[1] as string, number: Number(match[2]) };
 }
 
-function parsePositiveInt(value: string | undefined, flag: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) {
-    usage(`${flag} must be a positive whole number, got: ${value}`);
-  }
-  return Number(value);
-}
-
-function parseMode(value: string | undefined): Mode {
-  if (value === "bypass" || value === "prompting") return value;
-  if (value === undefined) {
-    usage(
-      "--mode is required: bypass when this session runs without permission prompts, prompting otherwise",
-    );
-  }
-  usage(`--mode must be bypass or prompting, got: ${value}`);
-}
-
-// A workflow name is matched exactly, commas and all; one flag carries one name.
+// A workflow name is matched exactly, commas and all; one flag carries one name, and the flags of
+// one call are the complete gate set.
 function parseExpected(values: string[] | undefined): string[] {
   const names = values ?? [];
   if (names.some((name) => name.trim() === "")) usage("--expect-workflow needs a workflow name");
   return [...new Set(names)].sort();
 }
-
-function parseSink(values: { sink?: string; id?: string; pid?: string }): SinkChoice {
-  const inbox = process.env.CLAUDE_CODE_MESSAGING_SOCKET;
-  const sink = values.sink ?? (inbox ? "socket" : "file");
-  if (sink !== "socket" && sink !== "file") usage(`--sink must be socket or file, got: ${sink}`);
-  const pid = parsePositiveInt(values.pid, "--pid") ?? null;
-  if (sink === "socket") {
-    if (!inbox) {
-      usage(
-        "the socket sink needs CLAUDE_CODE_MESSAGING_SOCKET (a Claude Code session's inbox); outside one, pass --sink file --id <name>",
-      );
-    }
-    if (pid !== null)
-      usage("--pid applies to the file sink; an inbox is named by its session's pid");
-    return { sink, address: inbox, pid: pidOf(inbox) };
-  }
-  if (!values.id) usage("the file sink needs --id <name>, the name `wait --id` reads back with");
-  // Ids key plain objects that come back from JSON, so a name an object inherits cannot be one.
-  if (!ID_PATTERN.test(values.id) || values.id in Object.prototype) {
-    usage(`--id must be a name of letters, digits, . _ or -, not ${values.id}`);
-  }
-  return { sink, address: values.id, pid };
-}
-
-function requireGh(): void {
-  if (Bun.which("gh") === null) {
-    throw new ToolingError("gh not found on PATH; install and authenticate the GitHub CLI");
-  }
-}
-
-const SINK_OPTIONS = {
-  sink: { type: "string" },
-  id: { type: "string" },
-  pid: { type: "string" },
-} as const;
 
 function parse<T extends ParseArgsOptionsConfig>(args: string[], options: T, positionals: number) {
   try {
@@ -333,6 +263,12 @@ function parse<T extends ParseArgsOptionsConfig>(args: string[], options: T, pos
   }
 }
 
+function requireGh(): void {
+  if (Bun.which("gh") === null) {
+    throw new ToolingError("gh not found on PATH; install and authenticate the GitHub CLI");
+  }
+}
+
 // --- CLI commands -------------------------------------------------------------
 
 function describeTarget(target: WatchTarget): string {
@@ -341,16 +277,10 @@ function describeTarget(target: WatchTarget): string {
     : `${target.repo}@${target.sha.slice(0, 12)}`;
 }
 
-async function watch(
-  dir: string,
-  sink: SinkChoice,
-  mode: Mode,
-  target: WatchTarget,
-): Promise<number> {
-  requireGh();
-  const reply = unwrap(await requestStarting(dir, { cmd: "watch", sink, mode, target }));
+async function watch(dir: string, owner: Owner, target: WatchTarget): Promise<number> {
+  const reply = unwrap(await request(owner, ownerFiles(dir, owner), { cmd: "watch", target }));
   console.log(
-    `watching ${describeTarget(target)} for ${sink.sink} ${sink.address} (mode ${mode}); ${reply.subscribers} subscriber(s)`,
+    `watching ${describeTarget(target)} for ${describeOwner(owner)}; ${reply.watched} target(s)`,
   );
   return 0;
 }
@@ -359,19 +289,17 @@ async function cmdWatch(dir: string, args: string[]): Promise<number> {
   const { values, positionals } = parse(
     args,
     {
-      ...SINK_OPTIONS,
-      mode: { type: "string" },
+      ...OWNER_OPTIONS,
       head: { type: "string" },
       "expect-workflow": { type: "string", multiple: true },
     },
     1,
   );
   const ref = parseTarget(positionals[0]);
-  const mode = parseMode(values.mode);
   if (values.head !== undefined && !SHA_PATTERN.test(values.head)) {
     usage(`--head must be a full 40-character lowercase sha, got: ${values.head}`);
   }
-  return watch(dir, parseSink(values), mode, {
+  return watch(dir, resolveOwner(values), {
     kind: "pr",
     ...ref,
     head: values.head ?? null,
@@ -382,11 +310,7 @@ async function cmdWatch(dir: string, args: string[]): Promise<number> {
 async function cmdWatchCommit(dir: string, args: string[]): Promise<number> {
   const { values, positionals } = parse(
     args,
-    {
-      ...SINK_OPTIONS,
-      mode: { type: "string" },
-      "expect-workflow": { type: "string", multiple: true },
-    },
+    { ...OWNER_OPTIONS, "expect-workflow": { type: "string", multiple: true } },
     2,
   );
   const [repo, sha] = positionals;
@@ -396,8 +320,7 @@ async function cmdWatchCommit(dir: string, args: string[]): Promise<number> {
   if (sha === undefined || !SHA_PATTERN.test(sha)) {
     usage(`watch-commit needs a full 40-character lowercase sha, got: ${sha ?? "nothing"}`);
   }
-  const mode = parseMode(values.mode);
-  return watch(dir, parseSink(values), mode, {
+  return watch(dir, resolveOwner(values), {
     kind: "commit",
     repo,
     sha,
@@ -405,44 +328,34 @@ async function cmdWatchCommit(dir: string, args: string[]): Promise<number> {
   });
 }
 
-/** The daemon owns state.json while it runs; with none running the CLI edits it in place. */
-function unwatchOffline(dir: string, address: string, pr: PrRef | null): void {
-  const state = loadState(dir);
-  const sub = state.subscriptions[address];
-  if (!sub) return;
-  if (pr === null) delete state.subscriptions[address];
-  else delete sub.prs[prKey(pr)];
-  dropUnheldTargets(state);
-  saveState(dir, state);
-}
-
 async function cmdUnwatch(dir: string, args: string[]): Promise<number> {
-  const { values, positionals } = parse(args, { ...SINK_OPTIONS, all: { type: "boolean" } }, 1);
+  const { values, positionals } = parse(args, { ...OWNER_OPTIONS, all: { type: "boolean" } }, 1);
   if (values.all === true && positionals.length > 0) usage("--all takes no target");
   const pr = values.all === true ? null : parseTarget(positionals[0]);
-  const { address } = parseSink(values);
-  const reply = await requestRunning(dir, { cmd: "unwatch", address, pr });
-  if (reply === null) unwatchOffline(dir, address, pr);
-  else unwrap(reply);
+  const owner = resolveOwner(values);
+  unwrap(await request(owner, ownerFiles(dir, owner), { cmd: "unwatch", pr }));
   console.log(
     pr === null
-      ? `unwatched everything for ${address}`
-      : `unwatched ${pr.repo}#${pr.number} for ${address}`,
+      ? `unwatched everything for ${describeOwner(owner)}`
+      : `unwatched ${pr.repo}#${pr.number} for ${describeOwner(owner)}`,
   );
   return 0;
 }
 
-async function cmdPoll(dir: string): Promise<number> {
-  requireGh();
-  const reply = unwrap(await requestStarting(dir, { cmd: "poll" }));
+async function cmdPoll(dir: string, args: string[]): Promise<number> {
+  const { values } = parse(args, OWNER_OPTIONS, 0);
+  const owner = resolveOwner(values);
+  const reply = unwrap(await request(owner, ownerFiles(dir, owner), { cmd: "poll" }));
   console.log(`polled; ${reply.events} event(s)`);
   return 0;
 }
 
-async function cmdStop(dir: string): Promise<number> {
-  const reply = await requestRunning(dir, { cmd: "stop" });
+async function cmdStop(dir: string, args: string[]): Promise<number> {
+  const { values } = parse(args, OWNER_OPTIONS, 0);
+  const owner = resolveOwner(values);
+  const reply = await requestIfRunning(ownerFiles(dir, owner), { cmd: "stop" });
   if (reply === null) {
-    console.log("no daemon running");
+    console.log(`no daemon running for ${describeOwner(owner)}`);
     return 0;
   }
   unwrap(reply);
@@ -450,19 +363,10 @@ async function cmdStop(dir: string): Promise<number> {
   return 0;
 }
 
-function describeLiveness(liveness: Liveness): string {
-  switch (liveness.kind) {
-    case "inbox":
-      return `pid=${liveness.pid ?? "-"}`;
-    case "pid":
-      return `pid=${liveness.pid}`;
-    case "lease":
-      return `lease=${liveness.until}`;
-  }
-}
-
-function describeDelivery(delivery: State["deliveries"][string] | undefined): string {
-  return delivery ? `${delivery.outcome} (#${delivery.eventId} at ${delivery.at})` : "none";
+function describeDelivery(delivery: State["delivery"]): string {
+  return delivery
+    ? `${delivery.outcome} (#${delivery.eventIds.join(",#")} at ${delivery.at})`
+    : "none";
 }
 
 function subjectOf(event: Pick<PrEvent, "repo" | "pr" | "sha">): string {
@@ -471,49 +375,42 @@ function subjectOf(event: Pick<PrEvent, "repo" | "pr" | "sha">): string {
   return "daemon";
 }
 
-async function cmdStatus(dir: string): Promise<number> {
-  const reply = await requestRunning(dir, { cmd: "status" });
-  const status = reply === null ? null : unwrap(reply).status;
-  const state = status?.state ?? loadState(dir);
+function gates(expected: string[]): string {
+  return expected.join(",") || "-";
+}
+
+async function cmdStatus(dir: string, args: string[]): Promise<number> {
+  const { values } = parse(args, OWNER_OPTIONS, 0);
+  const owner = resolveOwner(values);
+  const files = ownerFiles(dir, owner);
+  const status = unwrap(await request(owner, files, { cmd: "status" })).status as StatusReply;
+  const { state } = status;
   const lines = [
-    status ? `daemon: running (pid ${status.pid})` : "daemon: not running",
-    `dir: ${dir}`,
-    `log: ${join(dir, LOG_FILE)}`,
+    `daemon: running (pid ${status.pid}) for ${describeOwner(owner)}`,
+    `socket: ${files.socket}`,
+    `log: ${files.log}`,
+    `events: ${files.events}`,
+    `delivery: ${describeDelivery(state.delivery)}`,
   ];
-  const subscriptions = Object.values(state.subscriptions);
-  lines.push(`subscribers: ${subscriptions.length}`);
-  for (const sub of subscriptions) {
-    const prs = Object.keys(sub.prs).join(",") || "-";
-    const commits =
-      Object.values(sub.commits)
-        .map((commit) => `${commit.repo}@${commit.sha.slice(0, 12)}`)
-        .join(",") || "-";
+  const prs = Object.entries(state.prs);
+  lines.push(`prs: ${prs.length}`);
+  for (const [key, pr] of prs) {
+    const row = state.rows[key];
+    const seen = row
+      ? `head=${row.headRefOid.slice(0, 12)} state=${row.state} ci=${row.ci.pending ? "pending" : "settled"} updated=${row.updatedAt}`
+      : "not polled yet";
     lines.push(
-      `  ${sub.sink} ${sub.address} mode=${sub.mode} ${describeLiveness(sub.liveness)} prs=${prs} commits=${commits} delivery=${describeDelivery(state.deliveries[sub.address])}`,
+      `  ${key} ${seen} gates=${gates(pr.expected)} recorded-head=${pr.head?.slice(0, 12) ?? "-"}`,
     );
   }
-  const pruned = Object.entries(state.pruned);
-  if (pruned.length > 0) {
-    lines.push(`former subscribers: ${pruned.length}`);
-    for (const [address, { reason, at }] of pruned) {
-      lines.push(
-        `  ${address} pruned=${reason} at ${at} delivery=${describeDelivery(state.deliveries[address])}`,
-      );
-    }
-  }
-  const rows = Object.entries(state.rows);
-  lines.push(`prs: ${rows.length}`);
-  for (const [key, row] of rows) {
-    lines.push(
-      `  ${key} head=${row.headRefOid.slice(0, 12)} state=${row.state} ci=${row.ci.pending ? "pending" : "settled"} updated=${row.updatedAt}`,
-    );
-  }
-  const commits = Object.values(state.pendingCommits);
-  lines.push(`pending commits: ${commits.length}`);
+  const commits = Object.values(state.commits);
+  lines.push(`commits: ${commits.length}`);
   for (const commit of commits) {
-    lines.push(`  ${commit.repo}@${commit.sha.slice(0, 12)} since ${commit.firstSeenAt}`);
+    lines.push(
+      `  ${commit.repo}@${commit.sha.slice(0, 12)} since ${commit.firstSeenAt} gates=${gates(commit.expected)}`,
+    );
   }
-  const last = readEventsSince(dir, state.lastEventId - 1).at(-1);
+  const last = readEventsSince(files, state.lastEventId - 1).at(-1);
   lines.push(
     last
       ? `last event: #${last.id} at ${last.at} ${last.kind} ${subjectOf(last)}: ${last.text.split("\n")[0]}`
@@ -526,12 +423,16 @@ async function cmdStatus(dir: string): Promise<number> {
 async function cmdWait(dir: string, args: string[]): Promise<number> {
   const { values } = parse(
     args,
-    { since: { type: "string" }, timeout: { type: "string" }, id: { type: "string" } },
+    { ...OWNER_OPTIONS, since: { type: "string" }, timeout: { type: "string" } },
     0,
   );
+  const owner = resolveOwner(values);
+  const files = ownerFiles(dir, owner);
+  // A wait with no daemon would block for its whole timeout on a log nothing appends to.
+  const status = unwrap(await request(owner, files, { cmd: "status" })).status as StatusReply;
   let since: number;
   if (values.since === undefined) {
-    since = loadState(dir).lastEventId;
+    since = status.state.lastEventId;
   } else {
     if (!/^\d+$/.test(values.since) || !Number.isSafeInteger(Number(values.since))) {
       usage(`--since must be a whole number, got: ${values.since}`);
@@ -540,12 +441,9 @@ async function cmdWait(dir: string, args: string[]): Promise<number> {
   }
   const timeoutSeconds =
     parsePositiveInt(values.timeout, "--timeout") ?? DEFAULT_WAIT_TIMEOUT_SECONDS;
-  const id = values.id;
-  const matches = (event: PrEvent): boolean => id === undefined || event.to.includes(id);
-  if (id !== undefined) await requestRunning(dir, { cmd: "renew", address: id });
   const deadline = Date.now() + timeoutSeconds * 1000;
   for (;;) {
-    const events = readEventsSince(dir, since).filter(matches);
+    const events = readEventsSince(files, since);
     if (events.length > 0) {
       for (const event of events) console.log(JSON.stringify(event));
       console.log(`cursor: ${(events.at(-1) as PrEvent).id}`);
@@ -555,7 +453,7 @@ async function cmdWait(dir: string, args: string[]): Promise<number> {
     if (remaining <= 0) {
       console.log(`no event after ${timeoutSeconds}s`);
       console.log(`cursor: ${since}`);
-      return 3;
+      return 4;
     }
     await sleep(Math.min(WAIT_TICK_MS, remaining));
   }
@@ -563,57 +461,34 @@ async function cmdWait(dir: string, args: string[]): Promise<number> {
 
 // --- daemon -------------------------------------------------------------------
 
-const BIND_LOCK_WAIT_MS = 5000;
-// A lock older than this was left by a daemon that died inside the critical section.
-const BIND_LOCK_STALE_MS = 10_000;
-
 /**
- * Binding the control socket is the single-instance lock. Replacing a stale socket file is a
- * probe, an unlink, and a bind, which two daemons starting at once would interleave (the second
- * unlinks the first's live socket), so that sequence runs under a directory lock: mkdir is atomic.
+ * Binding the control socket is the single-instance rule for a session: a bind refused by a daemon
+ * that answers means this one is the second, and it leaves; a socket file nobody answers on was
+ * left by a daemon that died and is replaced.
  */
 async function bindControlSocket(
   path: string,
   log: (line: string) => void,
 ): Promise<Server | null> {
-  const lock = `${path}.lock`;
-  const deadline = Date.now() + BIND_LOCK_WAIT_MS;
   for (;;) {
+    const server = createServer();
     try {
-      mkdirSync(lock);
-      break;
+      server.listen(path);
+      await once(server, "listening");
+      chmodSync(path, 0o600);
+      return server;
     } catch (error) {
-      if (errorCode(error) !== "EEXIST") throw error;
-      const held = statSync(lock, { throwIfNoEntry: false });
-      if (held && Date.now() - held.mtimeMs > BIND_LOCK_STALE_MS) {
-        log(`removing the stale bind lock ${lock}`);
-        rmSync(lock, { recursive: true, force: true });
-        continue;
-      }
-      if (Date.now() > deadline) throw new Error(`${lock} held for over ${BIND_LOCK_WAIT_MS} ms`);
-      await sleep(50);
+      if (errorCode(error) !== "EADDRINUSE") throw error;
     }
-  }
-  try {
     try {
       (await connectOnce(path)).destroy();
       log(`another daemon answers on ${path}; exiting`);
       return null;
     } catch (error) {
-      const code = errorCode(error);
-      if (code !== "ECONNREFUSED" && code !== "ENOENT") throw error;
-      if (code === "ECONNREFUSED") {
-        log(`replacing the stale control socket ${path}`);
-        unlinkSync(path);
-      }
+      if (errorCode(error) !== "ECONNREFUSED") throw error;
+      log(`replacing the stale control socket ${path}`);
+      unlinkSync(path);
     }
-    const server = createServer();
-    server.listen(path);
-    await once(server, "listening");
-    chmodSync(path, 0o600);
-    return server;
-  } finally {
-    rmSync(lock, { recursive: true, force: true });
   }
 }
 
@@ -694,9 +569,12 @@ function indent(lines: string[]): string[] {
   return lines.map((line) => `  ${line}`);
 }
 
+function workflowNames(runs: Run[]): string[] {
+  return [...new Set(selectLatest(runs).map((run) => run.name))].sort();
+}
+
 function describeGreen(sha: string, runs: Run[]): string {
-  const names = [...new Set(selectLatest(runs).map((run) => run.name))].sort();
-  return `CI green on ${sha.slice(0, 12)}: ${names.join(", ")}`;
+  return `CI green on ${sha.slice(0, 12)}: ${workflowNames(runs).join(", ")}`;
 }
 
 function describeRed(repo: string, sha: string, runs: Run[], verdictLines: string[]): string {
@@ -720,51 +598,28 @@ function commitUrl(repo: string, sha: string): string {
   return `https://github.com/${repo}/commit/${sha}/checks`;
 }
 
-function union(lists: string[][]): string[] {
-  return [...new Set(lists.flat())].sort();
-}
-
-function leaseFrom(now: number): string {
-  return new Date(now + LEASE_MS).toISOString();
-}
-
-function livenessOf(sink: SinkChoice, now: number): Liveness {
-  if (sink.sink === "socket") return { kind: "inbox", pid: sink.pid };
-  if (sink.pid !== null) return { kind: "pid", pid: sink.pid };
-  return { kind: "lease", until: leaseFrom(now) };
-}
-
-function prunedReason(sub: Subscription, now: number): string | null {
-  const { liveness } = sub;
-  switch (liveness.kind) {
-    case "inbox":
-      return isLiveSubscriber(sub.address, liveness.pid)
-        ? null
-        : "inbox gone or its session exited";
-    case "pid":
-      return isProcessAlive(liveness.pid) ? null : `pid ${liveness.pid} exited`;
-    case "lease":
-      return Date.parse(liveness.until) > now ? null : "lease lapsed without a wait";
-  }
+function sameSet(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((name, i) => name === b[i]);
 }
 
 async function runDaemon(
-  dir: string,
+  owner: Owner,
+  files: OwnerFiles,
   intervalSeconds: number,
-  idleSeconds: number,
 ): Promise<number> {
-  const logPath = join(dir, LOG_FILE);
-  const log = (line: string) => appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
-  const socketPath = controlSocketPath(dir);
-  const state = loadState(dir);
-  const server = await bindControlSocket(socketPath, log);
-  if (server === null) return 0;
-  log(`daemon ${process.pid} listening on ${socketPath}; poll every ${intervalSeconds} s`);
+  const log = (line: string) => appendFileSync(files.log, `${new Date().toISOString()} ${line}\n`);
+  const state = loadState(files);
+  const server = await bindControlSocket(files.socket, log);
+  if (server === null) {
+    console.log(`another pr-events daemon already serves ${describeOwner(owner)}; exiting`);
+    return 0;
+  }
+  const banner = `pr-events daemon ${process.pid} for ${describeOwner(owner)}; socket ${files.socket}; log ${files.log}; poll every ${intervalSeconds} s`;
+  console.log(banner);
+  log(banner);
 
   let polling: Promise<number> | null = null;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
-  let idleSince: number | null = null;
   let failures = 0;
   let troubled = false;
   let viewer: string | null = null;
@@ -779,87 +634,32 @@ async function runDaemon(
     return viewer;
   };
 
-  const subscribers = (): Subscription[] => Object.values(state.subscriptions);
-  const subscribersOfPr = (key: PrKey): Subscription[] =>
-    subscribers().filter((sub) => key in sub.prs);
-  const subscribersOfCommit = (key: CommitKey): Subscription[] =>
-    subscribers().filter((sub) => key in sub.commits);
+  const watchedCount = (): number =>
+    Object.keys(state.prs).length + Object.keys(state.commits).length;
 
-  const emit = (input: Omit<EventInput, "to">, targets: Subscription[]): PrEvent => {
-    const event = appendEvent(dir, state, { ...input, to: targets.map((sub) => sub.address) });
+  const emit = (input: EventInput): PrEvent => {
+    const event = appendEvent(files, state, input);
     log(`event #${event.id} ${event.kind} ${subjectOf(event)}: ${event.text.split("\n")[0]}`);
     return event;
   };
 
-  const checkIdle = (): void => {
-    if (stopping) return;
-    if (subscribers().length > 0) {
-      idleSince = null;
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = null;
-      return;
-    }
-    if (idleSince === null) idleSince = Date.now();
-    if (idleTimer) return;
-    const remaining = idleSince + idleSeconds * 1000 - Date.now();
-    idleTimer = setTimeout(
-      () => {
-        idleTimer = null;
-        if (subscribers().length === 0) {
-          log(`no subscribers for ${idleSeconds} s; exiting`);
-          shutdown();
-        }
-      },
-      Math.max(0, remaining),
-    );
-  };
-
-  const dropSubscription = (sub: Subscription, reason: string): void => {
-    delete state.subscriptions[sub.address];
-    dropUnheldTargets(state);
-    state.pruned[sub.address] = { at: new Date().toISOString(), reason };
-    log(`pruned ${sub.sink} ${sub.address}: ${reason}`);
-  };
-
-  const dropEmptySubscriptions = (): void => {
-    for (const sub of subscribers()) {
-      if (Object.keys(sub.prs).length === 0 && Object.keys(sub.commits).length === 0) {
-        dropSubscription(sub, "nothing left to watch");
-      }
-    }
-  };
-
-  const prune = (): void => {
-    const now = Date.now();
-    dropEmptySubscriptions();
-    for (const sub of subscribers()) {
-      const reason = prunedReason(sub, now);
-      if (reason !== null) dropSubscription(sub, reason);
-    }
-    for (const [address, { at }] of Object.entries(state.pruned)) {
-      if (Date.parse(at) + LEASE_MS <= now) {
-        delete state.pruned[address];
-        delete state.deliveries[address];
-      }
-    }
-  };
-
+  /** A settled verdict's event; null while the head is still being judged. */
   const judgeCi = (
     repo: string,
     sha: string,
     expected: string[],
     subject: { pr: number | null; url: string },
-    targets: Subscription[],
-    grace: { missingPolls: number },
+    grace: Grace,
     emitted: PrEvent[],
-  ): Settled | null => {
+  ): PrEvent | null => {
     const runs = discoverRuns(repo, sha);
     const verdict = judgeRuns(runs, expected);
     const base = { repo, pr: subject.pr, sha, url: subject.url };
-    const settle = (text: string): Settled => {
-      const event = emit({ ...base, kind: "ci", text }, targets);
+    const registered = workflowNames(runs);
+    const settle = (text: string): PrEvent => {
+      const event = emit({ ...base, kind: "ci", text });
       emitted.push(event);
-      return { event, judged: union([expected, selectLatest(runs).map((run) => run.name)]) };
+      return event;
     };
     // No run at all is a registration that has not happened yet, or a ref nothing triggers on;
     // the grace below decides which, as it does for a named gate.
@@ -867,9 +667,17 @@ async function runDaemon(
     switch (kind) {
       case "pending":
         grace.missingPolls = 0;
+        grace.registered = registered;
         return null;
-      case "green":
-        return settle(describeGreen(sha, runs));
+      case "green": {
+        grace.missingPolls = 0;
+        // Registration settles before a green is terminal: every named gate is present (a missing
+        // one ranks above green), or two reads in a row saw the same workflow set, so a workflow
+        // still registering when the first all-green read happened gets its say.
+        const confirmed = expected.length > 0 || sameSet(grace.registered, registered);
+        grace.registered = registered;
+        return confirmed ? settle(describeGreen(sha, runs)) : null;
+      }
       case "red":
         return settle(describeRed(repo, sha, runs, verdict.lines));
       case "missing":
@@ -877,57 +685,42 @@ async function runDaemon(
         // Noticed once, at the grace; the sha stays judged, so a run that registers late still
         // gets its verdict.
         grace.missingPolls += 1;
+        grace.registered = registered;
         if (grace.missingPolls !== MISSING_GRACE_POLLS) return null;
         emitted.push(
-          emit(
-            {
-              ...base,
-              kind: "trouble",
-              text: [
-                `CI ${kind === "missing" ? "run not registered" : "read gave no verdict"} on ${sha.slice(0, 12)} after ${grace.missingPolls} polls; not a verdict`,
-                ...indent(verdict.lines),
-              ].join("\n"),
-            },
-            targets,
-          ),
+          emit({
+            ...base,
+            kind: "trouble",
+            text: [
+              `CI ${kind === "missing" ? "run not registered" : "read gave no verdict"} on ${sha.slice(0, 12)} after ${grace.missingPolls} polls; not a verdict`,
+              ...indent(verdict.lines),
+            ].join("\n"),
+          }),
         );
         return null;
     }
   };
 
   const dropPr = (key: PrKey): void => {
-    for (const sub of subscribersOfPr(key)) delete sub.prs[key];
+    delete state.prs[key];
     delete state.rows[key];
-  };
-
-  const addPendingCommit = (repo: string, sha: string): void => {
-    state.pendingCommits[commitKey(repo, sha)] ??= {
-      repo,
-      sha,
-      firstSeenAt: new Date().toISOString(),
-      missingPolls: 0,
-    };
   };
 
   // The row is saved as soon as its own events are out, before the CI read: a CI read that fails
   // must not replay the comment or head event on the next poll.
   const processRow = (ref: PrRef, current: Row, emitted: PrEvent[]): void => {
     const key = prKey(ref);
+    const watch = state.prs[key];
+    if (watch === undefined) return;
     const saved = state.rows[key];
-    const targets = subscribersOfPr(key);
-    const expected = union(targets.map((sub) => (sub.prs[key] as { expected: string[] }).expected));
-    const recordedHeads = new Set(
-      targets
-        .map((sub) => (sub.prs[key] as { head: string | null }).head)
-        .filter((h) => h !== null),
-    );
     const base = { repo: ref.repo, pr: ref.number, sha: current.headRefOid, url: current.url };
     const row: SavedRow = {
       ...current,
-      ci: saved?.ci ?? { pending: true, missingPolls: 0 },
+      ci: saved?.ci ?? { pending: true, grace: freshGrace() },
       seenActivity: saved?.seenActivity ?? [],
+      mergeCommitPolls: saved?.mergeCommitPolls ?? 0,
     };
-    const headMoved = saved ? current.headRefOid !== saved.headRefOid : recordedHeads.size > 0;
+    const headMoved = saved ? current.headRefOid !== saved.headRefOid : watch.head !== null;
     const changes = rowChanged(saved, current);
     let detail: ReturnType<typeof readPrDetail> | null = null;
     // A first sighting reads the detail too: what is on the PR now is the baseline, by id.
@@ -937,144 +730,130 @@ async function runDaemon(
       const activities = seen ? newActivity(detail, seen, viewerLoginCached()) : [];
       row.seenActivity = [...row.seenActivity.slice(-1), detail.fetchedIds];
       const described = describeActivities(activities);
-      if (described !== null) emitted.push(emit({ ...base, ...described }, targets));
+      if (described !== null) emitted.push(emit({ ...base, ...described }));
       for (const gap of detail.gaps) {
-        emitted.push(emit({ ...base, kind: "trouble", text: `${gap}; read the PR` }, targets));
+        emitted.push(emit({ ...base, kind: "trouble", text: `${gap}; read the PR` }));
       }
     }
-    if (headMoved && !recordedHeads.has(current.headRefOid)) {
+    if (headMoved && watch.head !== current.headRefOid) {
       detail ??= readPrDetail(ref, null);
       emitted.push(
-        emit(
-          {
-            ...base,
-            kind: "head",
-            text: `head moved to ${current.headRefOid.slice(0, 12)} by ${detail.lastCommitAuthor ?? "an unknown author"}`,
-          },
-          targets,
-        ),
+        emit({
+          ...base,
+          kind: "head",
+          text: `head moved to ${current.headRefOid.slice(0, 12)} by ${detail.lastCommitAuthor ?? "an unknown author"}`,
+        }),
       );
     }
     if (saved && (changes.head || changes.rollup)) {
       // A rollup move on the same head keeps the grace already spent waiting for its gate.
-      const missingPolls = !changes.head && saved.ci.pending ? saved.ci.missingPolls : 0;
-      row.ci = { pending: true, missingPolls };
+      const grace = !changes.head && saved.ci.pending ? saved.ci.grace : freshGrace();
+      row.ci = { pending: true, grace };
     }
     if (current.state === "MERGED") {
       const oid = current.mergeCommitOid;
-      emitted.push(
-        emit(
-          {
-            ...base,
-            kind: "merged",
-            text: oid
-              ? `merged at ${current.mergedAt ?? "an unknown time"}; mainline commit ${oid.slice(0, 12)} is now watched for CI`
-              : `merged at ${current.mergedAt ?? "an unknown time"}; no merge commit reported`,
-          },
-          targets,
-        ),
-      );
-      if (oid) {
-        for (const sub of targets) {
-          const previous = sub.commits[commitKey(ref.repo, oid)];
-          sub.commits[commitKey(ref.repo, oid)] = {
-            repo: ref.repo,
-            sha: oid,
-            expected: union([
-              previous?.expected ?? [],
-              (sub.prs[key] as { expected: string[] }).expected,
-            ]),
-          };
+      const mergedAt = current.mergedAt ?? "an unknown time";
+      if (oid === null) {
+        // The merge commit can lag mergedAt by a poll; the target stays until it is reported.
+        row.mergeCommitPolls += 1;
+        if (row.mergeCommitPolls < MERGE_COMMIT_GRACE_POLLS) {
+          state.rows[key] = row;
+          return;
         }
-        addPendingCommit(ref.repo, oid);
+        emitted.push(
+          emit({
+            ...base,
+            kind: "trouble",
+            text: `merged at ${mergedAt}; no merge commit reported after ${row.mergeCommitPolls} polls, so its mainline CI is not watched`,
+          }),
+        );
+        dropPr(key);
+        return;
       }
+      emitted.push(
+        emit({
+          ...base,
+          kind: "merged",
+          text: `merged at ${mergedAt}; mainline commit ${oid.slice(0, 12)} is now watched for CI`,
+        }),
+      );
+      // A watch-commit that already named its own gates for this commit keeps them.
+      state.commits[commitKey(ref.repo, oid)] ??= {
+        repo: ref.repo,
+        sha: oid,
+        expected: watch.expected,
+        firstSeenAt: new Date().toISOString(),
+        grace: freshGrace(),
+      };
       dropPr(key);
       return;
     }
     if (current.state === "CLOSED") {
-      emitted.push(emit({ ...base, kind: "closed", text: "closed without merging" }, targets));
+      emitted.push(emit({ ...base, kind: "closed", text: "closed without merging" }));
       dropPr(key);
       return;
     }
     state.rows[key] = row;
     if (row.ci.pending) {
-      const settled = judgeCi(
+      const verdict = judgeCi(
         ref.repo,
         current.headRefOid,
-        expected,
+        watch.expected,
         { pr: ref.number, url: current.url },
-        targets,
-        row.ci,
+        row.ci.grace,
         emitted,
       );
-      if (settled) {
-        const { event, judged } = settled;
-        row.ci = { pending: false, verdict: { eventId: event.id, text: event.text, judged } };
-      }
+      if (verdict)
+        row.ci = { pending: false, verdict: { eventId: verdict.id, text: verdict.text } };
     }
   };
 
   const processCommit = (key: CommitKey, emitted: PrEvent[]): void => {
-    const pending = state.pendingCommits[key];
-    if (!pending) return;
-    const targets = subscribersOfCommit(key);
-    const expected = union(
-      targets.map((sub) => (sub.commits[key] as { expected: string[] }).expected),
-    );
-    const settled = judgeCi(
-      pending.repo,
-      pending.sha,
-      expected,
-      { pr: null, url: commitUrl(pending.repo, pending.sha) },
-      targets,
-      pending,
+    const watch = state.commits[key];
+    if (!watch) return;
+    const verdict = judgeCi(
+      watch.repo,
+      watch.sha,
+      watch.expected,
+      { pr: null, url: commitUrl(watch.repo, watch.sha) },
+      watch.grace,
       emitted,
     );
-    if (settled === null) return;
-    for (const sub of targets) delete sub.commits[key];
-    delete state.pendingCommits[key];
+    if (verdict !== null) delete state.commits[key];
   };
 
-  const deliverAll = async (emitted: PrEvent[]): Promise<void> => {
-    for (const event of emitted) {
-      for (const address of event.to) {
-        const sub = state.subscriptions[address];
-        if (sub?.sink !== "socket") continue;
-        const frame: InboxFrame = {
-          type: "user",
-          message: { role: "user", content: renderEvent(event) },
-          from: `uds:${socketPath}`,
-          from_name: FROM_NAME,
-          from_mode: sub.mode,
-          msg_id: `pr-events-${event.id}-${randomUUID()}`,
-        };
-        const delivery = { eventId: event.id, at: new Date().toISOString(), msgId: frame.msg_id };
-        try {
-          await deliver(address, frame);
-          state.deliveries[address] = { ...delivery, outcome: "sent" };
-        } catch (error) {
-          const code = errorCode(error) ?? errorText(error);
-          state.deliveries[address] = { ...delivery, outcome: `failed: ${code}` };
-          log(`delivery of #${event.id} to ${address} failed: ${code}`);
-          if (isNobodyListening(error)) dropSubscription(sub, `inbox refused (${code})`);
-        }
-      }
+  // One message per poll: the receiver drops a second frame from one sender within a second.
+  const deliverDigest = async (emitted: PrEvent[]): Promise<void> => {
+    if (owner.inbox === null || emitted.length === 0) return;
+    const frame: InboxFrame = {
+      type: "user",
+      message: { role: "user", content: renderDigest(emitted) },
+      from: `uds:${files.socket}`,
+      from_name: FROM_NAME,
+      msg_id: `pr-events-${(emitted[0] as PrEvent).id}-${randomUUID()}`,
+    };
+    const delivery = {
+      eventIds: emitted.map((event) => event.id),
+      at: new Date().toISOString(),
+      msgId: frame.msg_id,
+    };
+    try {
+      await deliver(owner.inbox, frame);
+      state.delivery = { ...delivery, outcome: "sent" };
+    } catch (error) {
+      const code = errorCode(error) ?? errorText(error);
+      state.delivery = { ...delivery, outcome: `failed: ${code}` };
+      log(`delivery of #${delivery.eventIds.join(",#")} to ${owner.inbox} failed: ${code}`);
     }
   };
 
-  const subscribedRefs = (): PrRef[] => {
-    const refs = new Map<PrKey, PrRef>();
-    for (const sub of subscribers()) {
-      for (const key of Object.keys(sub.prs)) {
-        const [repo, number] = key.split("#") as [string, string];
-        refs.set(key, { repo, number: Number(number) });
-      }
-    }
-    return [...refs.values()];
-  };
+  const watchedRefs = (): PrRef[] =>
+    Object.keys(state.prs).map((key) => {
+      const [repo, number] = key.split("#") as [string, string];
+      return { repo, number: Number(number) };
+    });
 
   const poll = async (): Promise<number> => {
-    prune();
     const emitted: PrEvent[] = [];
     let lastError: string | null = null;
     const noteGhError = (where: string, error: unknown): void => {
@@ -1082,7 +861,7 @@ async function runDaemon(
       lastError = `${where}: ${error.message}`;
       log(`poll: ${lastError}`);
     };
-    const refs = subscribedRefs();
+    const refs = watchedRefs();
     try {
       if (refs.length > 0) {
         const rows = readRows(refs);
@@ -1103,40 +882,34 @@ async function runDaemon(
     } catch (error) {
       noteGhError("rows", error);
     }
-    for (const key of Object.keys(state.pendingCommits)) {
+    for (const key of Object.keys(state.commits)) {
       try {
         processCommit(key, emitted);
       } catch (error) {
         noteGhError(key, error);
       }
     }
-    const everyone = subscribers();
     const daemonWide = { repo: "", pr: null, sha: null, url: "", kind: "trouble" as const };
     if (lastError !== null) {
       failures += 1;
       if (failures === MAX_CONSECUTIVE_POLL_FAILURES) {
         troubled = true;
         emitted.push(
-          emit(
-            {
-              ...daemonWide,
-              text: `polling failed ${failures} times in a row (${lastError}); not a verdict. Auth errors in ${logPath}: run stop, then watch again`,
-            },
-            everyone,
-          ),
+          emit({
+            ...daemonWide,
+            text: `polling failed ${failures} times in a row (${lastError}); not a verdict. Auth errors in ${files.log}: run stop, then start the daemon again`,
+          }),
         );
       }
     } else {
       failures = 0;
       if (troubled) {
         troubled = false;
-        emitted.push(emit({ ...daemonWide, text: "polling recovered" }, everyone));
+        emitted.push(emit({ ...daemonWide, text: "polling recovered" }));
       }
     }
-    await deliverAll(emitted);
-    dropEmptySubscriptions();
-    saveState(dir, state);
-    checkIdle();
+    await deliverDigest(emitted);
+    saveState(files, state);
     return emitted.length;
   };
 
@@ -1161,121 +934,79 @@ async function runDaemon(
 
   // Synchronous on purpose: the socket is gone and the state saved before anyone is answered. A
   // delivery still in flight finishes on its own and the process exits with it.
-  const shutdown = (): void => {
+  const shutdown = (reason: string): void => {
     if (stopping) return;
     stopping = true;
     if (pollTimer) clearTimeout(pollTimer);
-    if (idleTimer) clearTimeout(idleTimer);
-    saveState(dir, state);
+    clearInterval(ownerTimer);
+    saveState(files, state);
     server.close();
     try {
-      unlinkSync(socketPath);
+      unlinkSync(files.socket);
     } catch (error) {
-      if (errorCode(error) !== "ENOENT") log(`could not remove ${socketPath}: ${errorText(error)}`);
+      if (errorCode(error) !== "ENOENT")
+        log(`could not remove ${files.socket}: ${errorText(error)}`);
     }
-    log(`daemon ${process.pid} stopped`);
+    log(`daemon ${process.pid} stopped: ${reason}`);
     finish(0);
   };
 
-  // Whether the verdict settled on this row's head was addressed to the subscriber, on the
-  // verdict's own line or on a replay of it.
-  const handedVerdict = (address: string, row: SavedRow, eventId: number): boolean =>
-    readEventsSince(dir, eventId - 1).some(
-      (event) =>
-        event.kind === "ci" &&
-        event.repo === row.repo &&
-        event.pr === row.number &&
-        event.sha === row.headRefOid &&
-        event.to.includes(address),
-    );
+  const ownerTimer = setInterval(() => {
+    if (owner.pid !== null && !isProcessAlive(owner.pid)) {
+      shutdown(`${describeOwner(owner)} exited`);
+    }
+  }, OWNER_CHECK_MS);
 
-  const subscribe = async (sink: SinkChoice, mode: Mode, target: WatchTarget): Promise<number> => {
-    const now = Date.now();
-    const sub: Subscription = state.subscriptions[sink.address] ?? {
-      sink: sink.sink,
-      address: sink.address,
-      mode,
-      liveness: livenessOf(sink, now),
-      prs: {},
-      commits: {},
-    };
-    sub.mode = mode;
-    sub.liveness = livenessOf(sink, now);
-    state.subscriptions[sink.address] = sub;
-    const replayed: PrEvent[] = [];
+  const subscribe = async (target: WatchTarget): Promise<number> => {
     if (target.kind === "pr") {
       const key = prKey(target);
-      const previous = sub.prs[key];
-      const expected = union([previous?.expected ?? [], target.expected]);
-      sub.prs[key] = { head: target.head, expected };
+      const previous = state.prs[key];
+      state.prs[key] = { head: target.head, expected: target.expected };
+      // The flags of this call are the complete gate set; a changed set restarts the judgment,
+      // grace included, so a corrected gate name gets its verdict.
       const row = state.rows[key];
-      if (row && !row.ci.pending) {
-        const { verdict } = row.ci;
-        if (expected.some((name) => !verdict.judged.includes(name))) {
-          // A gate the settled verdict never judged.
-          row.ci = { pending: true, missingPolls: 0 };
-        } else if (!handedVerdict(sink.address, row, verdict.eventId)) {
-          // The verdict settled before this subscriber arrived: it is handed over, to them alone.
-          const base = { repo: row.repo, pr: row.number, sha: row.headRefOid, url: row.url };
-          replayed.push(emit({ ...base, kind: "ci", text: verdict.text }, [sub]));
-        }
+      if (row && previous && !sameSet(previous.expected, target.expected)) {
+        row.ci = { pending: true, grace: freshGrace() };
       }
     } else {
       const key = commitKey(target.repo, target.sha);
-      const previous = sub.commits[key];
-      sub.commits[key] = {
+      const previous = state.commits[key];
+      const unchanged = previous !== undefined && sameSet(previous.expected, target.expected);
+      state.commits[key] = {
         repo: target.repo,
         sha: target.sha,
-        expected: union([previous?.expected ?? [], target.expected]),
+        expected: target.expected,
+        firstSeenAt: previous?.firstSeenAt ?? new Date().toISOString(),
+        grace: unchanged ? previous.grace : freshGrace(),
       };
-      addPendingCommit(target.repo, target.sha);
     }
-    delete state.pruned[sink.address];
-    saveState(dir, state);
-    checkIdle();
-    log(`watch ${sink.sink} ${sink.address} (${mode}): ${describeTarget(target)}`);
-    await deliverAll(replayed);
+    saveState(files, state);
+    log(`watch ${describeTarget(target)} gates=${gates(target.expected)}`);
     if (polling) await polling;
     await runPoll();
-    return subscribers().length;
+    return watchedCount();
   };
 
   const dispatch = async (command: Command): Promise<Reply> => {
-    if (stopping && command.cmd !== "status" && command.cmd !== "stop") {
-      return { ok: false, error: STOPPING_ERROR };
-    }
     switch (command.cmd) {
       case "watch":
-        return {
-          ok: true,
-          subscribers: await subscribe(command.sink, command.mode, command.target),
-        };
+        return { ok: true, watched: await subscribe(command.target) };
       case "unwatch": {
-        const sub = state.subscriptions[command.address];
-        if (sub) {
-          if (command.pr === null) delete state.subscriptions[command.address];
-          else delete sub.prs[prKey(command.pr)];
-          dropUnheldTargets(state);
-          prune();
-          saveState(dir, state);
-          checkIdle();
+        if (command.pr === null) {
+          for (const key of Object.keys(state.prs)) dropPr(key);
+          for (const key of Object.keys(state.commits)) delete state.commits[key];
+        } else {
+          dropPr(prKey(command.pr));
         }
-        return { ok: true, subscribers: subscribers().length };
-      }
-      case "renew": {
-        const sub = state.subscriptions[command.address];
-        if (sub?.liveness.kind === "lease") {
-          sub.liveness = { kind: "lease", until: leaseFrom(Date.now()) };
-          saveState(dir, state);
-        }
-        return { ok: true };
+        saveState(files, state);
+        return { ok: true, watched: watchedCount() };
       }
       case "poll":
         return { ok: true, events: await runPoll() };
       case "status":
         return { ok: true, status: { pid: process.pid, state } };
       case "stop":
-        shutdown();
+        shutdown("stop command");
         return { ok: true };
     }
   };
@@ -1287,17 +1018,13 @@ async function runDaemon(
       log("control: ignored a peer_message_status frame without orig_msg_id and state");
       return;
     }
-    const entry = Object.entries(state.deliveries).find(
-      ([, delivery]) => delivery.msgId === frame.orig_msg_id,
-    );
-    if (entry === undefined) {
+    if (state.delivery === null || state.delivery.msgId !== frame.orig_msg_id) {
       log(`control: peer_message_status for an unknown delivery ${frame.orig_msg_id}; ignored`);
       return;
     }
-    const [address, delivery] = entry;
-    delivery.outcome = frame.state;
-    saveState(dir, state);
-    log(`delivery of #${delivery.eventId} to ${address}: ${frame.state}`);
+    state.delivery.outcome = frame.state;
+    saveState(files, state);
+    log(`delivery of #${state.delivery.eventIds.join(",#")}: ${frame.state}`);
   };
 
   const handleLine = async (line: string, socket: Socket): Promise<void> => {
@@ -1345,26 +1072,30 @@ async function runDaemon(
     });
   });
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
-  checkIdle();
-  schedulePoll();
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  // A restart with saved targets polls at once: what moved while the daemon was down is news.
+  if (watchedCount() > 0) {
+    runPoll().catch((error: unknown) => log(`poll crashed: ${errorText(error)}`));
+  } else {
+    schedulePoll();
+  }
   return done;
 }
 
 async function cmdDaemon(dir: string, args: string[]): Promise<number> {
   const { values } = parse(
     args,
-    { interval: { type: "string" }, "idle-seconds": { type: "string" } },
+    { ...OWNER_OPTIONS, pid: { type: "string" }, interval: { type: "string" } },
     0,
   );
+  const owner = resolveOwner(values);
   const interval = parsePositiveInt(values.interval, "--interval") ?? MIN_INTERVAL_SECONDS;
   if (interval < MIN_INTERVAL_SECONDS) {
     usage(`--interval must be at least ${MIN_INTERVAL_SECONDS} seconds, got: ${interval}`);
   }
-  const idle = parsePositiveInt(values["idle-seconds"], "--idle-seconds") ?? DEFAULT_IDLE_SECONDS;
   requireGh();
-  return runDaemon(dir, interval, idle);
+  return runDaemon(owner, ownerFiles(dir, owner), interval);
 }
 
 // --- entry ---------------------------------------------------------------------
@@ -1380,6 +1111,8 @@ async function main(argv: string[]): Promise<number> {
     if (command === undefined) usage("missing <command>");
     const dir = runtimeDir();
     switch (command) {
+      case "daemon":
+        return await cmdDaemon(dir, rest);
       case "watch":
         return await cmdWatch(dir, rest);
       case "watch-commit":
@@ -1389,13 +1122,11 @@ async function main(argv: string[]): Promise<number> {
       case "wait":
         return await cmdWait(dir, rest);
       case "poll":
-        return await cmdPoll(dir);
+        return await cmdPoll(dir, rest);
       case "status":
-        return await cmdStatus(dir);
+        return await cmdStatus(dir, rest);
       case "stop":
-        return await cmdStop(dir);
-      case "daemon":
-        return await cmdDaemon(dir, rest);
+        return await cmdStop(dir, rest);
       default:
         usage(`unknown command: ${command}`);
     }
@@ -1407,6 +1138,10 @@ async function main(argv: string[]): Promise<number> {
     if (error instanceof ToolingError || error instanceof RuntimeDirError) {
       console.error(error.message);
       return 2;
+    }
+    if (error instanceof NoDaemonError) {
+      console.error(error.message);
+      return 3;
     }
     throw error;
   }

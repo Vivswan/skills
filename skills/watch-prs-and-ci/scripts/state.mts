@@ -15,10 +15,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { PrKey, Row } from "./pr-rows.mts";
 
-export type Sink = "socket" | "file";
-export type Mode = "bypass" | "prompting";
 export type EventKind = "comment" | "review" | "ci" | "head" | "merged" | "closed" | "trouble";
 
+/** One line of the write-ahead log; every line is addressed to the daemon's one owner. */
 export interface PrEvent {
   id: number;
   at: string;
@@ -28,13 +27,12 @@ export interface PrEvent {
   kind: EventKind;
   text: string;
   url: string;
-  /** The sink addresses the event was for; a file-sink reader selects its lines by this. */
-  to: string[];
 }
 
 export type EventInput = Omit<PrEvent, "id" | "at">;
 
-export interface PrSubscription {
+/** What the owner asked for on a PR: the head they pushed, and the complete gate set. */
+export interface PrWatch {
   head: string | null;
   expected: string[];
 }
@@ -46,50 +44,43 @@ export function commitKey(repo: string, sha: string): CommitKey {
   return `${repo}@${sha}`;
 }
 
-export interface CommitSubscription {
+/**
+ * What a head still being judged carries between polls: the polls in a row on which no run had
+ * registered (the grace before a trouble event), and the workflow set the last read saw (a green
+ * with no gate named is terminal only once two reads agree on that set).
+ */
+export interface Grace {
+  missingPolls: number;
+  registered: string[];
+}
+
+export function freshGrace(): Grace {
+  return { missingPolls: 0, registered: [] };
+}
+
+export interface CommitWatch {
   repo: string;
   sha: string;
   expected: string[];
+  firstSeenAt: string;
+  grace: Grace;
 }
 
-/** What keeps a subscription alive: its inbox's session, a named pid, or a lease `wait` renews. */
-export type Liveness =
-  | { kind: "inbox"; pid: number | null }
-  | { kind: "pid"; pid: number }
-  | { kind: "lease"; until: string };
-
-export interface Subscription {
-  sink: Sink;
-  /** The inbox socket path for a socket sink, the `--id` for a file sink; the key in `subscriptions`. */
-  address: string;
-  mode: Mode;
-  liveness: Liveness;
-  prs: Record<PrKey, PrSubscription>;
-  commits: Record<CommitKey, CommitSubscription>;
-}
-
-/** A head's CI: still being judged, or settled by the verdict event a later subscriber is handed. */
+/** A head's CI: still being judged, or settled by a verdict event. */
 export type RowCi =
-  /** `missingPolls`: polls in a row on which no run had registered; the grace before a trouble event. */
-  | { pending: true; missingPolls: number }
-  /** `judged`: the workflows the verdict covered, found or asked for; a gate outside them re-judges the head. */
-  | { pending: false; verdict: { eventId: number; text: string; judged: string[] } };
+  | { pending: true; grace: Grace }
+  | { pending: false; verdict: { eventId: number; text: string } };
 
 export interface SavedRow extends Row {
   ci: RowCi;
   /** The activity ids the last two detail reads returned, oldest read first; what is in neither is news. */
   seenActivity: string[][];
-}
-
-export interface PendingCommit {
-  repo: string;
-  sha: string;
-  firstSeenAt: string;
-  missingPolls: number;
+  /** Polls spent on a merged row whose merge commit GitHub has not reported yet. */
+  mergeCommitPolls: number;
 }
 
 export interface Delivery {
-  eventId: number;
+  eventIds: number[];
   at: string;
   /** The frame's msg_id; the receiver's status report names it. */
   msgId: string;
@@ -97,44 +88,58 @@ export interface Delivery {
   outcome: string;
 }
 
-export interface Pruned {
-  at: string;
-  reason: string;
-}
-
 export interface State {
-  subscriptions: Record<string, Subscription>;
+  prs: Record<PrKey, PrWatch>;
+  commits: Record<CommitKey, CommitWatch>;
   rows: Record<PrKey, SavedRow>;
-  pendingCommits: Record<CommitKey, PendingCommit>;
-  /** Last delivery per sink address, kept after a prune so `status` can show how the last one went. */
-  deliveries: Record<string, Delivery>;
-  /** Why a former subscriber was dropped, beside its last delivery. */
-  pruned: Record<string, Pruned>;
+  /** The last delivery to the owner's inbox, so `status` can show how it went. */
+  delivery: Delivery | null;
   lastEventId: number;
 }
 
 export function emptyState(): State {
-  return {
-    subscriptions: {},
-    rows: {},
-    pendingCommits: {},
-    deliveries: {},
-    pruned: {},
-    lastEventId: 0,
-  };
+  return { prs: {}, commits: {}, rows: {}, delivery: null, lastEventId: 0 };
 }
 
-export const STATE_FILE = "state.json";
-export const EVENTS_FILE = "events.jsonl";
-export const CONTROL_SOCKET = "daemon.sock";
-export const LOG_FILE = "daemon.log";
+/**
+ * The daemon's one owner: the Claude Code session whose inbox it delivers to and whose pid ends it,
+ * or a named file-sink reader (a non-Claude agent) that reads the log with `wait`.
+ */
+export interface Owner {
+  /** The session pid, or the `--id` name: the stem of every file the daemon owns. */
+  key: string;
+  inbox: string | null;
+  pid: number | null;
+}
+
+export const SOCKET_SUFFIX = ".sock";
+export const EVENTS_SUFFIX = ".events.jsonl";
+export const STATE_SUFFIX = ".state.json";
+export const LOG_SUFFIX = ".log";
+
+export interface OwnerFiles {
+  socket: string;
+  events: string;
+  state: string;
+  log: string;
+}
+
+export function ownerFiles(dir: string, owner: Owner): OwnerFiles {
+  const stem = join(dir, owner.key);
+  return {
+    socket: `${stem}${SOCKET_SUFFIX}`,
+    events: `${stem}${EVENTS_SUFFIX}`,
+    state: `${stem}${STATE_SUFFIX}`,
+    log: `${stem}${LOG_SUFFIX}`,
+  };
+}
 
 export class RuntimeDirError extends Error {}
 
 /**
  * One private directory per user, the ladder Claude Code uses for its own sockets. A candidate that
- * exists but belongs to someone else is skipped, never shared: the socket inside it is an open inbox.
- * The override is made absolute because the daemon runs with another cwd than the CLI that spawned it.
+ * exists but belongs to someone else is skipped, never shared: the sockets inside it are open inboxes.
+ * The override is made absolute so the daemon and the CLI name the same directory from any cwd.
  */
 export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   const uid = process.getuid?.() ?? 0;
@@ -164,23 +169,13 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   );
 }
 
-export function dropUnheldTargets(state: State): void {
-  const subs = Object.values(state.subscriptions);
-  for (const key of Object.keys(state.rows)) {
-    if (!subs.some((sub) => key in sub.prs)) delete state.rows[key];
-  }
-  for (const key of Object.keys(state.pendingCommits)) {
-    if (!subs.some((sub) => key in sub.commits)) delete state.pendingCommits[key];
-  }
-}
-
-export function loadState(dir: string): State {
+export function loadState(files: OwnerFiles): State {
   let text: string;
   try {
-    text = readFileSync(join(dir, STATE_FILE), "utf-8");
+    text = readFileSync(files.state, "utf-8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { ...emptyState(), lastEventId: lastLoggedEventId(dir) };
+      return { ...emptyState(), lastEventId: lastLoggedEventId(files) };
     }
     throw error;
   }
@@ -188,32 +183,30 @@ export function loadState(dir: string): State {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error(`${join(dir, STATE_FILE)} is not JSON; move it aside to start fresh`);
+    throw new Error(`${files.state} is not JSON; move it aside to start fresh`);
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`${join(dir, STATE_FILE)} is not an object; move it aside to start fresh`);
+    throw new Error(`${files.state} is not an object; move it aside to start fresh`);
   }
   const state = { ...emptyState(), ...(parsed as Partial<State>) };
   // The log is appended before the state is saved, so after a crash the log may be ahead of it.
-  state.lastEventId = Math.max(state.lastEventId, lastLoggedEventId(dir));
+  state.lastEventId = Math.max(state.lastEventId, lastLoggedEventId(files));
   return state;
 }
 
-export function saveState(dir: string, state: State): void {
-  const target = join(dir, STATE_FILE);
-  const tmp = `${target}.${process.pid}.tmp`;
+export function saveState(files: OwnerFiles, state: State): void {
+  const tmp = `${files.state}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, target);
+  renameSync(tmp, files.state);
 }
 
 /** Appends the event to the log and returns it with its id; the state's counter is the id's owner. */
-export function appendEvent(dir: string, state: State, input: EventInput): PrEvent {
+export function appendEvent(files: OwnerFiles, state: State, input: EventInput): PrEvent {
   state.lastEventId += 1;
   const event: PrEvent = { id: state.lastEventId, at: new Date().toISOString(), ...input };
-  const path = join(dir, EVENTS_FILE);
   // A crash mid-append leaves a line without its newline; the next line must not glue onto it.
-  const prefix = endsWithoutNewline(path) ? "\n" : "";
-  appendFileSync(path, `${prefix}${JSON.stringify(event)}\n`, { mode: 0o600 });
+  const prefix = endsWithoutNewline(files.events) ? "\n" : "";
+  appendFileSync(files.events, `${prefix}${JSON.stringify(event)}\n`, { mode: 0o600 });
   return event;
 }
 
@@ -231,10 +224,10 @@ function endsWithoutNewline(path: string): boolean {
 }
 
 /** Every logged event with an id above `sinceId`, oldest first. A line cut short by a crash is skipped. */
-export function readEventsSince(dir: string, sinceId: number): PrEvent[] {
+export function readEventsSince(files: OwnerFiles, sinceId: number): PrEvent[] {
   let text: string;
   try {
-    text = readFileSync(join(dir, EVENTS_FILE), "utf-8");
+    text = readFileSync(files.events, "utf-8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
@@ -260,7 +253,7 @@ export function readEventsSince(dir: string, sinceId: number): PrEvent[] {
   return events;
 }
 
-function lastLoggedEventId(dir: string): number {
-  const events = readEventsSince(dir, 0);
+function lastLoggedEventId(files: OwnerFiles): number {
+  const events = readEventsSince(files, 0);
   return events.length === 0 ? 0 : (events.at(-1) as PrEvent).id;
 }

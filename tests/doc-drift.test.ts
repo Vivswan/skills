@@ -301,39 +301,44 @@ const SURFACES: Record<string, Surface> = {
     scriptPath: join(WATCH_PRS, "scripts", "pr-events.mts"),
     tokens: [
       {
-        doc: "pr-events.mts watch <owner/repo>#<n> --mode bypass|prompting [--head <sha>] [--expect-workflow <name>]... [--sink socket|file] [--id <name>] [--pid <pid>]",
-        script:
-          '"  watch <owner/repo>#<n> --mode bypass|prompting [--head <sha>] [--expect-workflow <name>]... [sink options]"',
+        doc: "pr-events.mts daemon [--interval <s>] [--id <name>] [--pid <pid>]",
+        script: '"  daemon [--interval <s>] [--id <name>] [--pid <pid>]"',
       },
       {
-        doc: "pr-events.mts watch-commit <owner/repo> <sha> --mode ... [--expect-workflow ...]",
+        doc: "pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--id <name>]",
         script:
-          '"  watch-commit <owner/repo> <sha> --mode bypass|prompting [--expect-workflow <name>]... [sink options]"',
+          '"  watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--id <name>]"',
+      },
+      {
+        doc: "pr-events.mts watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]",
+        script: '"  watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]"',
       },
       {
         doc: { text: "--expect-workflow", occurrences: ">=1" },
         script: 'usage("--expect-workflow needs a workflow name")',
       },
       {
-        doc: "pr-events.mts daemon [--interval <s>] [--idle-seconds <s>]",
-        script: '"idle-seconds": { type: "string" }',
+        doc: { text: "--id codex-12", occurrences: ">=1" },
+        script: 'const OWNER_OPTIONS = { id: { type: "string" } } as const;',
       },
       {
-        doc: { text: "--sink file --id", occurrences: ">=1" },
-        script: '"sink options: [--sink socket|file] [--id <name>] [--pid <pid>]"',
+        doc: { text: "`CLAUDE_CODE_MESSAGING_SOCKET`", occurrences: ">=1" },
+        script: "const inbox = env.CLAUDE_CODE_MESSAGING_SOCKET;",
       },
-      { doc: 'from-mode="bypass"', script: "from_mode: sub.mode" },
-      { doc: "`PR_EVENTS_DIR`", script: "PR_EVENTS_DIR: dir" },
     ],
   },
   "watch-prs-and-ci/SKILL.md <-> state.mts": {
     docPath: join(WATCH_PRS, "SKILL.md"),
     scriptPath: join(WATCH_PRS, "scripts", "state.mts"),
     tokens: [
-      { doc: "`events.jsonl`", script: 'EVENTS_FILE = "events.jsonl"' },
+      { doc: "`<session-pid>.events.jsonl`", script: 'EVENTS_SUFFIX = ".events.jsonl"' },
       {
-        doc: { text: "`daemon.sock`", occurrences: ">=1" },
-        script: 'CONTROL_SOCKET = "daemon.sock"',
+        doc: { text: "`<session-pid>.sock`", occurrences: ">=1" },
+        script: 'SOCKET_SUFFIX = ".sock"',
+      },
+      {
+        doc: { text: "`PR_EVENTS_DIR`", occurrences: ">=1" },
+        script: "if (env.PR_EVENTS_DIR) candidates.push(resolve(env.PR_EVENTS_DIR));",
       },
     ],
   },

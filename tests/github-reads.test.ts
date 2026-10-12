@@ -566,7 +566,7 @@ describe("discoverRuns", () => {
 });
 
 describe("judgeRuns", () => {
-  // The verdict kinds rank red > pending > missing > trouble > green; every row below would
+  // The verdict kinds rank red > missing > pending > trouble > green; every row below would
   // read differently under another order or under per-run (not per-workflow) judgment.
   const sameWorkflow = { wf: 77, name: "CI" };
   const cases: {
@@ -611,11 +611,11 @@ describe("judgeRuns", () => {
       },
     },
     {
-      id: "pending outranks missing: the gate can still register while a run is in progress",
+      id: "missing outranks pending: a gate absent while a bystander runs is reported, not waited on for as long as anything runs",
       runs: [run({ id: 1, status: "in_progress" }), run({ id: 2 })],
       expected: ["Gate"],
       verdict: {
-        kind: "pending",
+        kind: "missing",
         lines: ["pass: CI-2 (2)", "pending(in_progress): CI-1 (1)", "no run registered for Gate"],
       },
     },

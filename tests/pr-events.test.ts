@@ -1,14 +1,5 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { once } from "node:events";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
@@ -18,10 +9,11 @@ import { tempDirs } from "./helpers/temp-dirs";
 // substring only that query class carries and serves hand-written fixture N for call N of the
 // class (the last fixture repeats once the sequence runs out). A PR's first sighting reads its
 // detail as the baseline, so every scenario starts with an empty `detail-1` and a scenario's own
-// detail fixtures begin at 2. Each subscriber is a fake Claude Code inbox: a Unix socket named by
-// this live pid, collecting every connection's bytes. Polls are driven with `poll`, so no timer
-// fires and the fixture order is the poll order. Every test ends with `stop` and the control
-// socket gone, so no daemon outlives its test.
+// detail fixtures begin at 2. The daemon is started by the test the way a session starts it, as a
+// child, owned by a fake Claude Code inbox: a Unix socket named by this live pid, collecting every
+// connection's bytes. Polls are driven with `poll`, so no timer fires and the fixture order is the
+// poll order. Every daemon a test starts is recorded; the test's end kills what `stop` did not,
+// and the file's end asserts none is left alive.
 
 const SCRIPT = join(ROOT, "skills", "watch-prs-and-ci", "scripts", "pr-events.mts");
 const temp = tempDirs();
@@ -293,7 +285,7 @@ function sendLine(socketPath: string, frame: unknown): Promise<void> {
 }
 
 /**
- * A fake Claude Code inbox at <dir>/<this pid>.sock: a live pid, so the liveness rule keeps it.
+ * A fake Claude Code inbox at <dir>/<this pid>.sock: the owner it names is this live process.
  * With `reportState`, every frame received is answered to its `from` with a peer_message_status
  * frame in that state, as a session does for a held or refused delivery.
  */
@@ -355,6 +347,15 @@ function deadSocketFile(path: string): void {
   }
 }
 
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 interface RunResult {
   code: number | null;
   stdout: string;
@@ -362,17 +363,28 @@ interface RunResult {
 }
 
 interface RunOptions {
+  /** The owner's inbox, handed to the process as CLAUDE_CODE_MESSAGING_SOCKET. */
   inbox?: string;
-  cwd?: string;
   env?: Record<string, string>;
 }
 
+interface StartOptions extends RunOptions {
+  /** A file-sink daemon's name; without it and without an inbox the daemon exits 2. */
+  id?: string;
+  args?: string[];
+}
+
+type Daemon = ReturnType<typeof Bun.spawn>;
+
 const scenarios: Scenario[] = [];
+/** Every daemon any test started; the file's end asserts each is gone. */
+const started: Daemon[] = [];
 
 class Scenario {
   readonly dir: string;
   readonly stubDir: string;
   private readonly inboxes: Inbox[] = [];
+  private readonly daemons: Daemon[] = [];
 
   constructor(name: string) {
     this.dir = temp.dir(`pr-events-${name}-`);
@@ -398,15 +410,15 @@ class Scenario {
       PR_EVENTS_DIR: this.dir,
       ...options.env,
     };
-    // The test process may itself run inside a Claude Code session; the inbox is the test's choice.
+    // The test process may itself run inside a Claude Code session; the owner is the test's choice.
     delete env.CLAUDE_CODE_MESSAGING_SOCKET;
+    delete env.CLAUDE_PID;
     if (options.inbox !== undefined) env.CLAUDE_CODE_MESSAGING_SOCKET = options.inbox;
     return env;
   }
 
   run(args: string[], options: RunOptions = {}): RunResult {
     const result = Bun.spawnSync([process.execPath, SCRIPT, ...args], {
-      cwd: options.cwd,
       env: this.env(options),
       stdout: "pipe",
       stderr: "pipe",
@@ -418,12 +430,41 @@ class Scenario {
     };
   }
 
+  /** Starts a daemon as a session would, as a child, and waits for its socket (or its exit). */
+  async start(options: StartOptions = {}): Promise<Daemon> {
+    const args = ["daemon", ...(options.id === undefined ? [] : ["--id", options.id])];
+    const daemon = Bun.spawn([process.execPath, SCRIPT, ...args, ...(options.args ?? [])], {
+      env: this.env(options),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    this.daemons.push(daemon);
+    started.push(daemon);
+    // A stale socket file can pre-exist, so the banner in the log, not the socket, says it is up.
+    const key = options.id ?? /(\d+)\.sock$/.exec(options.inbox ?? "")?.[1] ?? String(process.pid);
+    const banner = `pr-events daemon ${daemon.pid} for `;
+    const deadline = Date.now() + 5000;
+    while (!this.log(key).includes(banner) && daemon.exitCode === null && Date.now() < deadline) {
+      await Bun.sleep(20);
+    }
+    return daemon;
+  }
+
   async inbox(name: string, reportState?: string): Promise<Inbox> {
     const dir = join(this.dir, name);
     mkdirSync(dir);
-    const box = await inbox(dir, join(this.dir, "events.jsonl"), reportState);
+    const box = await inbox(dir, this.file("events.jsonl"), reportState);
     this.inboxes.push(box);
     return box;
+  }
+
+  /** `<dir>/<owner key>.<suffix>`; the key defaults to this process, the fake inboxes' owner. */
+  file(suffix: string, key: string = String(process.pid)): string {
+    return join(this.dir, `${key}.${suffix}`);
+  }
+
+  socketPath(key: string = String(process.pid)): string {
+    return this.file("sock", key);
   }
 
   ghCalls(): string[] {
@@ -436,43 +477,53 @@ class Scenario {
     return readOr(() => readFileSync(join(this.stubDir, "violations.log"), "utf-8"), "");
   }
 
-  events(): Array<{
+  events(key?: string): Array<{
     id: number;
     kind: string;
     text: string;
     repo: string;
     pr: number | null;
     sha: string | null;
-    to: string[];
   }> {
-    return readOr(() => readFileSync(join(this.dir, "events.jsonl"), "utf-8"), "")
+    return readOr(() => readFileSync(this.file("events.jsonl", key), "utf-8"), "")
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
   }
 
-  log(): string {
-    return readOr(() => readFileSync(join(this.dir, "daemon.log"), "utf-8"), "");
+  log(key?: string): string {
+    return readOr(() => readFileSync(this.file("log", key), "utf-8"), "");
   }
 
-  socketPath(): string {
-    return join(this.dir, "daemon.sock");
-  }
-
-  stop(): void {
-    const result = this.run(["stop"]);
+  stop(options: RunOptions & { id?: string } = {}): void {
+    const args = ["stop", ...(options.id === undefined ? [] : ["--id", options.id])];
+    const result = this.run(args, options);
     expect(result.code).toBe(0);
-    expect(existsSync(this.socketPath())).toBe(false);
+    expect(result.stdout).toContain("daemon stopped");
+    expect(existsSync(this.socketPath(options.id))).toBe(false);
   }
 
-  cleanup(): void {
-    this.run(["stop"]);
+  /** Every daemon this scenario started is gone: SIGTERM, then SIGKILL for one that ignores it. */
+  async cleanup(): Promise<void> {
+    for (const daemon of this.daemons.splice(0)) {
+      if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill("SIGTERM");
+      const exited = await Promise.race([daemon.exited, Bun.sleep(3000).then(() => null)]);
+      if (exited === null) {
+        daemon.kill("SIGKILL");
+        await daemon.exited;
+      }
+    }
     for (const box of this.inboxes.splice(0)) box.close();
   }
 }
 
+afterEach(async () => {
+  for (const scenario of scenarios.splice(0)) await scenario.cleanup();
+});
+
 afterAll(() => {
-  for (const scenario of scenarios) scenario.cleanup();
+  const alive = started.filter((daemon) => isAlive(daemon.pid)).map((daemon) => daemon.pid);
+  expect(alive).toEqual([]);
 });
 
 function parseFrame(
@@ -488,27 +539,27 @@ function headlines(frames: string[]): string[] {
   return frames.map((frame) => parseFrame(frame).message.content.split("\n")[0] as string);
 }
 
-function listeningPid(log: string): string {
-  const match = /daemon (\d+) listening on/.exec(log);
-  if (!match) throw new Error("no listening line in the daemon log");
-  return match[1] as string;
-}
-
 const PR7 = `${REPO}#7`;
+const GATE_CI = ["--expect-workflow", "ci"];
 const GREEN_A = `PR ${PR7}: CI green on ${SHORT_A}: ci`;
+const CLOSING = "automated notice from pr-events; no reply needed";
 
 // --- tests ------------------------------------------------------------------------
 
 describe("pr-events.mts", () => {
-  test("the frame on the wire: one connection, one line, the asserted from_mode, from = the control socket", async () => {
+  test("the frame on the wire: one connection, one line of raw text, from = the control socket, no mode; the WAL line names no recipients", async () => {
+    // A child of the session is rendered as plain text, so an envelope or a from_mode would be
+    // read literally; the receiver's own fields are what it keys on.
     const s = new Scenario("frame");
     const box = await s.inbox("a");
     s.fixtures({
       "rows-1": rows({ rollup: "SUCCESS" }),
       "suites-1": suites([["ci", "completed", "success"]]),
     });
-    const r = s.run(["watch", PR7, "--mode", "prompting"], { inbox: box.path });
+    await s.start({ inbox: box.path });
+    const r = s.run(["watch", PR7, ...GATE_CI], { inbox: box.path });
     expect(r.code).toBe(0);
+    expect(r.stdout).toContain("1 target(s)");
     const frames = await box.frames(1);
     expect(frames).toHaveLength(1);
     const frame = parseFrame(frames[0] as string);
@@ -517,71 +568,77 @@ describe("pr-events.mts", () => {
     expect(frame.message.content.split("\n")).toEqual([
       GREEN_A,
       `https://github.com/${REPO}/pull/7`,
-      "automated notice from pr-events; no reply needed",
+      CLOSING,
     ]);
     expect(frame.from).toBe(`uds:${s.socketPath()}`);
     expect(frame.from_name).toBe("pr-events");
-    expect(frame.from_mode).toBe("prompting");
+    expect(Object.keys(frame).sort()).toEqual(["from", "from_name", "message", "msg_id", "type"]);
     expect(typeof frame.msg_id).toBe("string");
-    expect(s.events().map((e) => [e.id, e.kind, e.to])).toEqual([[1, "ci", [box.path]]]);
-    s.stop();
+    const [event] = s.events();
+    expect(event).toMatchObject({ id: 1, kind: "ci", sha: HEAD_A });
+    expect(Object.keys(event as object)).not.toContain("to");
+    s.stop({ inbox: box.path });
   }, 30000);
 
-  test("watch without --mode, or with --pid on an inbox, exits 2 before any daemon, gh call, or frame", async () => {
-    const s = new Scenario("nomode");
+  test("outside a session without --id, with a bad --id, or with --pid on a session, every command exits 2 before any socket, gh call, or frame", async () => {
+    const s = new Scenario("usage");
     const box = await s.inbox("a");
-    const r = s.run(["watch", PR7], { inbox: box.path });
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("--mode is required");
-    const pinned = s.run(["watch", PR7, "--mode", "bypass", "--pid", "1"], { inbox: box.path });
-    expect(pinned.code).toBe(2);
-    expect(pinned.stderr).toContain("--pid applies to the file sink");
+    const outside = s.run(["watch", PR7]);
+    expect(outside.code).toBe(2);
+    expect(outside.stderr).toContain("CLAUDE_CODE_MESSAGING_SOCKET is unset");
     for (const id of ["constructor", "__proto__", "a/b"]) {
-      const bad = s.run(["watch", PR7, "--mode", "bypass", "--sink", "file", "--id", id]);
+      const bad = s.run(["watch", PR7, "--id", id]);
       expect(bad.code).toBe(2);
       expect(bad.stderr).toContain("--id must be a name");
     }
+    const pinned = s.run(["daemon", "--pid", "1"], { inbox: box.path });
+    expect(pinned.code).toBe(2);
+    expect(pinned.stderr).toContain("--pid applies to --id");
     expect(s.ghCalls()).toHaveLength(0);
     expect(await box.frames(0)).toHaveLength(0);
     expect(existsSync(s.socketPath())).toBe(false);
-    s.stop();
   }, 30000);
 
-  test("gh missing from PATH exits 2 for watch and for daemon alike, naming the tool", () => {
-    const s = new Scenario("nogh");
+  test("with no daemon answering, watch, unwatch, status, and wait exit 3 naming the exact background command; stop is a no-op", async () => {
+    // The CLI never starts the daemon: a child of the CLI would be a detached, cross-session
+    // sender whose frames the session holds. The agent starts it, so the agent needs the command.
+    const s = new Scenario("nodaemon");
+    const box = await s.inbox("a");
     for (const args of [
-      ["watch", PR7, "--mode", "bypass", "--sink", "file", "--id", "x"],
-      ["daemon", "--idle-seconds", "1"],
+      ["watch", PR7],
+      ["unwatch", "--all"],
+      ["status"],
+      ["wait", "--timeout", "1"],
     ]) {
-      const r = s.run(args, { env: { PATH: emptyBinDir } });
-      expect(r.code).toBe(2);
-      expect(r.stderr).toContain("gh not found on PATH");
+      const r = s.run(args, { inbox: box.path });
+      expect(r.code).toBe(3);
+      expect(r.stderr).toContain(`no pr-events daemon answers for session ${process.pid}`);
+      expect(r.stderr).toContain(`\n  bun "${SCRIPT}" daemon\n`);
     }
+    const named = s.run(["status", "--id", "codex-12"]);
+    expect(named.code).toBe(3);
+    expect(named.stderr).toContain(`\n  bun "${SCRIPT}" daemon --id codex-12\n`);
+    const stopped = s.run(["stop"], { inbox: box.path });
+    expect(stopped.code).toBe(0);
+    expect(stopped.stdout).toContain("no daemon running");
+    expect(s.ghCalls()).toHaveLength(0);
+  }, 30000);
+
+  test("gh missing from PATH: the daemon exits 2 naming the tool", async () => {
+    const s = new Scenario("nogh");
+    const box = await s.inbox("a");
+    const daemon = await s.start({ inbox: box.path, env: { PATH: emptyBinDir } });
+    expect(await daemon.exited).toBe(2);
+    expect(await new Response(daemon.stderr as ReadableStream).text()).toContain(
+      "gh not found on PATH",
+    );
     expect(existsSync(s.socketPath())).toBe(false);
-    s.stop();
   }, 30000);
 
-  test("a relative PR_EVENTS_DIR names the same directory in the CLI and in the daemon it spawns", async () => {
-    const s = new Scenario("reldir");
-    s.fixtures({
-      "rows-1": rows({ rollup: "PENDING" }),
-      "suites-1": suites([["ci", "queued", null]]),
-    });
-    const r = s.run(["watch", PR7, "--mode", "bypass", "--sink", "file", "--id", "x"], {
-      cwd: s.dir,
-      env: { PR_EVENTS_DIR: "runtime" },
-    });
-    expect(r.code).toBe(0);
-    expect(existsSync(join(s.dir, "runtime", "daemon.sock"))).toBe(true);
-    const stopped = s.run(["stop"], { cwd: s.dir, env: { PR_EVENTS_DIR: "runtime" } });
-    expect(stopped.stdout).toContain("daemon stopped");
-    expect(existsSync(join(s.dir, "runtime", "daemon.sock"))).toBe(false);
-    s.stop();
-  }, 30000);
-
-  test("CLAUDE_CODE_TMPDIR is a runtime directory ahead of the OS temp dir, which does not read it", () => {
+  test("CLAUDE_CODE_TMPDIR is a runtime directory ahead of the OS temp dir, which does not read it", async () => {
     const s = new Scenario("ladder");
-    const env = s.env();
+    const box = await s.inbox("a");
+    const env = s.env({ inbox: box.path });
     delete env.PR_EVENTS_DIR;
     delete env.XDG_RUNTIME_DIR;
     const result = Bun.spawnSync([process.execPath, SCRIPT, "status"], {
@@ -589,12 +646,51 @@ describe("pr-events.mts", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(3);
     const uid = process.getuid?.() ?? 0;
-    expect(result.stdout.toString()).toContain(
-      `dir: ${join(s.dir, "cc-tmp", `pr-events-${uid}`)}\n`,
+    expect(result.stderr.toString()).toContain(
+      ` on ${join(s.dir, "cc-tmp", `pr-events-${uid}`, `${process.pid}.sock`)};`,
     );
-    s.stop();
+  }, 30000);
+
+  test("the daemon exits on its own, socket removed, once the session whose inbox named it is gone", async () => {
+    // Started as a background task, nothing else ends it when the session exits; left running it
+    // would poll GitHub for a session that can no longer read the events.
+    const s = new Scenario("owner-gone");
+    const session = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]);
+    const inboxPath = join(s.dir, `${session.pid}.inbox`, `${session.pid}.sock`);
+    mkdirSync(join(s.dir, `${session.pid}.inbox`));
+    const daemon = await s.start({ inbox: inboxPath });
+    const socket = s.socketPath(String(session.pid));
+    expect(existsSync(socket)).toBe(true);
+    expect(s.run(["status"], { inbox: inboxPath }).stdout).toContain(`for session ${session.pid}`);
+    session.kill();
+    await session.exited;
+    const exit = await Promise.race([
+      daemon.exited,
+      Bun.sleep(5000).then(() => "timeout" as const),
+    ]);
+    expect(exit).toBe(0);
+    expect(existsSync(socket)).toBe(false);
+    expect(s.log(String(session.pid))).toContain(`session ${session.pid} exited`);
+  }, 30000);
+
+  test("a second daemon for the same session exits 0 saying so and leaves the first serving; a stale socket file is replaced", async () => {
+    const s = new Scenario("second");
+    const box = await s.inbox("a");
+    deadSocketFile(s.socketPath());
+    const first = await s.start({ inbox: box.path });
+    expect(s.log()).toContain("replacing the stale control socket");
+    const second = await s.start({ inbox: box.path });
+    expect(await second.exited).toBe(0);
+    expect(await new Response(second.stdout as ReadableStream).text()).toContain(
+      "another pr-events daemon already serves",
+    );
+    expect(first.exitCode).toBeNull();
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(
+      `daemon: running (pid ${first.pid})`,
+    );
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a rollup flip with updatedAt unchanged is a CI event and reads no detail", async () => {
@@ -609,58 +705,43 @@ describe("pr-events.mts", () => {
         ["lint", "completed", "skipped"],
       ]),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
     expect(await box.frames(0)).toHaveLength(0);
     const detailReads = () => s.ghCalls().filter((call) => call.includes("reviewThreads(first:"));
     expect(detailReads()).toHaveLength(1);
-    const r = s.run(["poll"]);
+    const r = s.run(["poll"], { inbox: box.path });
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("1 event(s)");
-    const frames = await box.frames(1);
-    expect(headlines(frames)).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci, lint`]);
-    expect(parseFrame(frames[0] as string).from_mode).toBe("bypass");
+    expect(headlines(await box.frames(1))).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci, lint`]);
     expect(detailReads()).toHaveLength(1);
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a reply inside an existing thread (thread count unchanged) is a comment event with path:line; the viewer's own is not", async () => {
     const s = new Scenario("reply");
     const box = await s.inbox("a");
+    const thread = (comments: CommentSpec[]): ThreadSpec => ({
+      path: "src/a.ts",
+      line: 12,
+      total: comments.length,
+      comments,
+    });
+    const first = { login: "alice", at: "2025-12-31T00:00:00Z", body: "first" };
+    const mine = { login: "me", at: "2026-01-01T00:30:00Z", body: "my own reply" };
     s.fixtures({
       "rows-1": rows({ rollup: "SUCCESS", threads: 1, updatedAt: T1 }),
       "suites-1": suites([["ci", "completed", "success"]]),
       "rows-2": rows({ rollup: "SUCCESS", threads: 1, updatedAt: T2 }),
-      "detail-1": detail({
-        threads: [
-          {
-            path: "src/a.ts",
-            line: 12,
-            total: 2,
-            comments: [
-              { login: "alice", at: "2025-12-31T00:00:00Z", body: "first" },
-              { login: "me", at: "2026-01-01T00:30:00Z", body: "my own reply" },
-            ],
-          },
-        ],
-      }),
+      "detail-1": detail({ threads: [thread([first, mine])] }),
       "detail-2": detail({
-        threads: [
-          {
-            path: "src/a.ts",
-            line: 12,
-            total: 3,
-            comments: [
-              { login: "alice", at: "2025-12-31T00:00:00Z", body: "first" },
-              { login: "me", at: "2026-01-01T00:30:00Z", body: "my own reply" },
-              { login: "bob", at: T2, body: "Looks wrong\nhere" },
-            ],
-          },
-        ],
+        threads: [thread([first, mine, { login: "bob", at: T2, body: "Looks wrong\nhere" }])],
       }),
       "viewer-1": VIEWER,
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["poll"]).code).toBe(0);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).code).toBe(0);
     const frames = await box.frames(2);
     expect(frames).toHaveLength(2);
     const content = parseFrame(frames[1] as string).message.content;
@@ -671,7 +752,7 @@ describe("pr-events.mts", () => {
     expect(content).not.toContain("my own reply");
     expect(content).not.toContain("first");
     expect(s.events().map((e) => e.kind)).toEqual(["ci", "comment"]);
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("the page's specimen is the rendered text, byte for byte: inline comments headlined under the review that published them, aligned", async () => {
@@ -679,9 +760,7 @@ describe("pr-events.mts", () => {
     // comments" or dropped the review wrapper would leave the specimen describing an event the
     // daemon never sends.
     const page = readFileSync(join(ROOT, "skills", "watch-prs-and-ci", "SKILL.md"), "utf-8");
-    const block = /```text\n<cross-session-message[^\n]*\n([\s\S]*?)<\/cross-session-message>/.exec(
-      page,
-    );
+    const block = /```text\n(PR octocat\/repo#12: new review[\s\S]*?)```/.exec(page);
     expect(block).not.toBeNull();
     const specimen = (block as RegExpExecArray)[1]?.trimEnd().split("\n") as string[];
     const [headline, first, second, url, closing] = specimen;
@@ -709,8 +788,9 @@ describe("pr-events.mts", () => {
       }),
       "viewer-1": VIEWER,
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     const frames = await box.frames(2);
     expect(parseFrame(frames[1] as string).message.content).toBe(
       [
@@ -722,7 +802,7 @@ describe("pr-events.mts", () => {
       ].join("\n"),
     );
     expect(s.events().map((e) => e.kind)).toEqual(["ci", "review"]);
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a comment event is not replayed when the CI read that follows it fails", async () => {
@@ -737,14 +817,15 @@ describe("pr-events.mts", () => {
       "suites-2": suites([["ci", "completed", "failure", 700]]),
       "log-700.txt": "boom",
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
     writeFileSync(join(s.stubDir, "fail-suites"), "");
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
-    expect(s.run(["poll"]).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     unlinkSync(join(s.stubDir, "fail-suites"));
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     expect(s.events().map((e) => e.kind)).toEqual(["ci", "comment", "ci"]);
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a comment in the baseline's own second, and one read ahead of its row, each arrive exactly once", async () => {
@@ -767,16 +848,17 @@ describe("pr-events.mts", () => {
       "detail-3": detail({ comments: [baseline, sameSecond, ahead] }),
       "rows-4": rows({ rollup: "SUCCESS", comments: 3, updatedAt: T3 }),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
     for (const expected of ["1 event(s)", "1 event(s)", "0 event(s)"]) {
-      expect(s.run(["poll"]).stdout).toContain(expected);
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain(expected);
     }
     expect(headlines(await box.frames(3))).toEqual([
       GREEN_A,
       `PR ${PR7}: 1 new comment by alice`,
       `PR ${PR7}: 1 new comment by carol`,
     ]);
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("reads with nothing new keep the whole window seen, so deleting the newest comment does not replay the baseline", async () => {
@@ -796,10 +878,13 @@ describe("pr-events.mts", () => {
       "detail-4": detail({ comments: baseline.slice(0, 2) }),
       "viewer-1": VIEWER,
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    for (let poll = 0; poll < 3; poll += 1) expect(s.run(["poll"]).stdout).toContain("0 event(s)");
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    for (let poll = 0; poll < 3; poll += 1) {
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    }
     expect(s.events().map((e) => e.kind)).toEqual(["ci"]);
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a row whose head differs from the --head recorded is a head-moved event naming the author; the recorded head is not", async () => {
@@ -815,14 +900,15 @@ describe("pr-events.mts", () => {
         "detail-1": detail({ commitAuthor: "carol" }),
         "suites-1": suites([["ci", "in_progress", null]]),
       });
-      const r = s.run(["watch", PR7, "--mode", "bypass", "--head", recorded], { inbox: box.path });
+      await s.start({ inbox: box.path });
+      const r = s.run(["watch", PR7, "--head", recorded], { inbox: box.path });
       expect(r.code).toBe(0);
       expect(headlines(await box.frames(expected.length))).toEqual(expected);
-      s.stop();
+      s.stop({ inbox: box.path });
     }
   }, 30000);
 
-  test("a merged row: merged event, then the MERGE commit is judged until settled, then the mainline CI event; wait --id still routes the dropped PR's events", async () => {
+  test("a merged row: merged event, then the MERGE commit is judged with the PR's gates until settled, then the mainline CI event; wait still reads the dropped PR's lines", async () => {
     const s = new Scenario("merged");
     const box = await s.inbox("a");
     s.fixtures({
@@ -832,9 +918,13 @@ describe("pr-events.mts", () => {
       "suites-2": suites([["ci", "in_progress", null, 200]]),
       "suites-3": suites([["ci", "completed", "success", 200]]),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(
+      `  ${REPO}@${SHORT_C} since 20`,
+    );
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     expect(headlines(await box.frames(3))).toEqual([
       GREEN_A,
       `PR ${PR7}: merged at ${T2}; mainline commit ${SHORT_C} is now watched for CI`,
@@ -845,53 +935,92 @@ describe("pr-events.mts", () => {
       .filter((call) => call.includes("checkSuites("))
       .map((call) => /-f oid=([0-9a-f]+)/.exec(call)?.[1]);
     expect(suiteOids).toEqual([HEAD_A, MERGE_C, MERGE_C]);
-    const status = s.run(["status"]).stdout;
-    expect(status).toContain("subscribers: 0");
+    const status = s.run(["status"], { inbox: box.path }).stdout;
     expect(status).toContain("prs: 0");
-    expect(status).toContain("pending commits: 0");
-    const routed = s.run(["wait", "--since", "0", "--timeout", "1", "--id", box.path]);
+    expect(status).toContain("commits: 0");
+    const routed = s.run(["wait", "--since", "0", "--timeout", "1"], { inbox: box.path });
     expect(routed.code).toBe(0);
     expect(routed.stdout.trim().split("\n")).toHaveLength(4);
-    s.stop();
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a merged row without a merge commit yet keeps its target, and the merged event carries the commit once GitHub reports it", async () => {
+    // Dropped at the first merged read, a merge commit reported one poll later would never be
+    // watched, and the mainline verdict would never arrive.
+    const s = new Scenario("merge-oid-late");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": rows({ state: "MERGED", mergedAt: T2, rollup: "SUCCESS" }),
+      "rows-4": rows({ state: "MERGED", mergedAt: T2, mergeCommit: MERGE_C, rollup: "SUCCESS" }),
+      "suites-2": suites([["ci", "in_progress", null, 200]]),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(`  ${PR7} head=`);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))).toEqual([
+      GREEN_A,
+      `PR ${PR7}: merged at ${T2}; mainline commit ${SHORT_C} is now watched for CI`,
+    ]);
+    const status = s.run(["status"], { inbox: box.path }).stdout;
+    expect(status).toContain("prs: 0");
+    expect(status).toContain("commits: 1");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a merged row whose merge commit never comes is given up after 5 polls with a trouble notice, not silently", async () => {
+    const s = new Scenario("merge-oid-never");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": rows({ state: "MERGED", mergedAt: T2, rollup: "SUCCESS" }),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    for (let poll = 1; poll <= 4; poll += 1) {
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    }
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))).toEqual([
+      GREEN_A,
+      `PR ${PR7}: merged at ${T2}; no merge commit reported after 5 polls, so its mainline CI is not watched`,
+    ]);
+    const status = s.run(["status"], { inbox: box.path }).stdout;
+    expect(status).toContain("prs: 0");
+    expect(status).toContain("commits: 0");
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("the same sha watched in two repositories is judged in each", async () => {
     const s = new Scenario("fork");
-    // Each watch polls at once, and a poll judges every pending commit: suites calls 1 to 3 belong
+    const id = ["--id", "codex"];
+    // Each watch polls at once, and a poll judges every watched commit: suites calls 1 to 3 belong
     // to the two watches, 4 and 5 to the explicit poll.
     s.fixtures({
       "suites-1": suites([["ci", "queued", null]]),
       "suites-4": suites([["ci", "completed", "success"]]),
     });
-    for (const [repo, id] of [
-      [REPO, "a"],
-      [FORK, "b"],
-    ]) {
-      const r = s.run([
-        "watch-commit",
-        repo as string,
-        HEAD_A,
-        "--mode",
-        "bypass",
-        "--sink",
-        "file",
-        "--id",
-        id as string,
-      ]);
-      expect(r.code).toBe(0);
+    await s.start({ id: "codex" });
+    for (const repo of [REPO, FORK]) {
+      expect(s.run(["watch-commit", repo, HEAD_A, ...id]).code).toBe(0);
     }
-    expect(s.run(["poll"]).stdout).toContain("2 event(s)");
-    expect(s.events().map((e) => [e.repo, e.sha, e.to])).toEqual([
-      [REPO, HEAD_A, ["a"]],
-      [FORK, HEAD_A, ["b"]],
+    expect(s.run(["poll", ...id]).stdout).toContain("2 event(s)");
+    expect(s.events("codex").map((e) => [e.repo, e.sha])).toEqual([
+      [REPO, HEAD_A],
+      [FORK, HEAD_A],
     ]);
     const repos = s
       .ghCalls()
       .filter((call) => call.includes("checkSuites("))
       .map((call) => /-f name=(\S+)/.exec(call)?.[1]);
     expect(repos).toEqual(["example", "example", "fork", "example", "fork"]);
-    expect(s.run(["status"]).stdout).toContain("pending commits: 0");
-    s.stop();
+    expect(s.run(["status", ...id]).stdout).toContain("commits: 0");
+    s.stop({ id: "codex" });
   }, 30000);
 
   test("a red CI event carries the --log-failed tail, and no other Actions endpoint is touched", async () => {
@@ -905,7 +1034,8 @@ describe("pr-events.mts", () => {
       ]),
       "log-501.txt": "test\tUnit tests\t2026-01-01T00:00:00Z Error: boom at src/a.ts:12\n",
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
     const frames = await box.frames(1);
     expect(frames).toHaveLength(1);
     const content = parseFrame(frames[0] as string).message.content;
@@ -917,45 +1047,54 @@ describe("pr-events.mts", () => {
       `run view 501 --log-failed --repo ${REPO}`,
     ]);
     expect(s.violations()).toBe("");
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a gate named after a green verdict re-judges the head; a gate absent from the suites is a trouble notice after the grace, never green", async () => {
+  test("a changed gate set re-judges the head: a gate absent while a bystander still runs is a trouble notice after the grace, never green, and the corrected name replaces the typo", async () => {
+    // Ranked below a pending bystander, the missing gate would be waited on for as long as
+    // anything ran; unioned with the typo, the corrected gate set could never go green.
     const s = new Scenario("gate");
     const box = await s.inbox("a");
     s.fixtures({
       "rows-1": rows({ rollup: "SUCCESS" }),
       "suites-1": suites([["bystander", "completed", "success"]]),
+      "suites-2": suites([
+        ["bystander", "completed", "success"],
+        ["other", "queued", null],
+      ]),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    const gated = s.run(["watch", PR7, "--mode", "bypass", "--expect-workflow", "gate"], {
-      inbox: box.path,
-    });
-    expect(gated.code).toBe(0);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, "--expect-workflow", "bystander"], { inbox: box.path }).code).toBe(
+      0,
+    );
     expect(headlines(await box.frames(1))).toEqual([
       `PR ${PR7}: CI green on ${SHORT_A}: bystander`,
     ]);
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    expect(s.run(["watch", PR7, "--expect-workflow", "gaet"], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     const frames = await box.frames(2);
     const content = parseFrame(frames[1] as string).message.content;
     expect(content).toContain("CI run not registered");
-    expect(content).toContain("no run registered for gate");
+    expect(content).toContain("no run registered for gaet");
+    expect(content).toContain("pending(queued): other");
     expect(content).not.toContain("green");
     expect(s.events().map((e) => e.kind)).toEqual(["ci", "trouble"]);
-    expect(s.run(["poll"]).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     s.fixtures({
       "suites-5": suites([
         ["bystander", "completed", "success"],
         ["gate", "completed", "success"],
+        ["other", "completed", "success"],
       ]),
     });
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    expect(s.run(["watch", PR7, "--expect-workflow", "gate"], { inbox: box.path }).code).toBe(0);
     expect(headlines(await box.frames(3)).at(-1)).toBe(
-      `PR ${PR7}: CI green on ${SHORT_A}: bystander, gate`,
+      `PR ${PR7}: CI green on ${SHORT_A}: bystander, gate, other`,
     );
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(" gates=gate ");
     expect(s.run(["unwatch", PR7], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["status"]).stdout).toContain("subscribers: 0");
-    s.stop();
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("prs: 0");
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a gate name with a comma is one name", async () => {
@@ -965,19 +1104,18 @@ describe("pr-events.mts", () => {
       "rows-1": rows({ rollup: "SUCCESS" }),
       "suites-1": suites([["CI, Linux", "completed", "success"]]),
     });
-    const r = s.run(["watch", PR7, "--mode", "bypass", "--expect-workflow", "CI, Linux"], {
-      inbox: box.path,
-    });
+    await s.start({ inbox: box.path });
+    const r = s.run(["watch", PR7, "--expect-workflow", "CI, Linux"], { inbox: box.path });
     expect(r.code).toBe(0);
     expect(headlines(await box.frames(1))).toEqual([
       `PR ${PR7}: CI green on ${SHORT_A}: CI, Linux`,
     ]);
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a merge commit keeps the gates named for it by watch-commit and for the PR; a trouble notice does not end its watch", async () => {
+  test("a merge commit keeps the gates watch-commit named for it over the PR's; a trouble notice does not end its watch", async () => {
     const s = new Scenario("gates");
-    const sink = ["--sink", "file", "--id", "a"];
+    const id = ["--id", "a"];
     s.fixtures({
       "rows-1": rows({ rollup: "SUCCESS" }),
       "suites-1": suites([["pr-gate", "completed", "success"]]),
@@ -989,34 +1127,57 @@ describe("pr-events.mts", () => {
         ["main-gate", "completed", "success", 301],
       ]),
     });
+    await s.start({ id: "a" });
+    expect(s.run(["watch", PR7, "--expect-workflow", "pr-gate", ...id]).code).toBe(0);
     expect(
-      s.run(["watch", PR7, "--mode", "bypass", "--expect-workflow", "pr-gate", ...sink]).code,
+      s.run(["watch-commit", REPO, MERGE_C, "--expect-workflow", "main-gate", ...id]).code,
     ).toBe(0);
-    expect(
-      s.run([
-        "watch-commit",
-        REPO,
-        MERGE_C,
-        "--mode",
-        "bypass",
-        "--expect-workflow",
-        "main-gate",
-        ...sink,
-      ]).code,
-    ).toBe(0);
-    expect(s.run(["poll"]).stdout).toContain("2 event(s)");
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
-    const events = s.events();
+    expect(s.run(["poll", ...id]).stdout).toContain("2 event(s)");
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    const events = s.events("a");
     expect(events.map((e) => e.kind)).toEqual(["ci", "merged", "trouble", "ci"]);
     expect(events[2]?.text).toContain("no run registered for main-gate");
+    expect(events[2]?.text).not.toContain("no run registered for pr-gate");
     expect(events[3]?.text).toBe(`CI green on ${SHORT_C}: main-gate, pr-gate`);
-    expect(s.run(["status"]).stdout).toContain("pending commits: 0");
-    s.stop();
+    expect(s.run(["status", ...id]).stdout).toContain("commits: 0");
+    s.stop({ id: "a" });
   }, 30000);
 
-  test("a failed PR-row read does not stop the pending commits from being judged", () => {
+  test("with no gate named, a first all-green read is not a verdict: a workflow registering red on the next read is reported, and an unchanged set is confirmed green", async () => {
+    // Poll 1 sees only a quick housekeeping run; the gate registers afterwards. Settled on poll 1,
+    // the red gate would never be reported.
+    const cases: Array<[string, RunSpec[], string]> = [
+      [
+        "late-red",
+        [
+          ["assign", "completed", "success", 1],
+          ["gate", "completed", "failure", 2],
+        ],
+        `CI red on ${SHORT_A}`,
+      ],
+      ["confirmed", [["assign", "completed", "success", 1]], `CI green on ${SHORT_A}: assign`],
+    ];
+    for (const [name, second, expected] of cases) {
+      const s = new Scenario(`register-${name}`);
+      const id = ["--id", name];
+      s.fixtures({
+        "suites-1": suites([["assign", "completed", "success", 1]]),
+        "suites-2": suites(second),
+        "log-2.txt": "gate failed",
+      });
+      await s.start({ id: name });
+      expect(s.run(["watch-commit", REPO, HEAD_A, ...id]).code).toBe(0);
+      expect(s.events(name)).toEqual([]);
+      expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+      expect(s.events(name).map((e) => e.text.split("\n")[0])).toEqual([expected]);
+      expect(s.run(["status", ...id]).stdout).toContain("commits: 0");
+      s.stop({ id: name });
+    }
+  }, 30000);
+
+  test("a failed PR-row read does not stop the watched commits from being judged", async () => {
     const s = new Scenario("rows-down");
-    const sink = ["--sink", "file", "--id", "a"];
+    const id = ["--id", "a"];
     s.fixtures({
       // Suites calls 1 to 3 belong to the two watches (the PR twice, the commit once); with the
       // rows read failing, the explicit poll's only suites call, the fourth, is the commit's.
@@ -1024,160 +1185,246 @@ describe("pr-events.mts", () => {
       "suites-1": suites([["ci", "queued", null]]),
       "suites-4": suites([["ci", "completed", "success"]]),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass", ...sink]).code).toBe(0);
-    expect(s.run(["watch-commit", REPO, MERGE_C, "--mode", "bypass", ...sink]).code).toBe(0);
+    await s.start({ id: "a" });
+    expect(s.run(["watch", PR7, ...id]).code).toBe(0);
+    expect(s.run(["watch-commit", REPO, MERGE_C, ...id]).code).toBe(0);
     writeFileSync(join(s.stubDir, "fail-rows"), "");
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
-    expect(s.events().map((e) => [e.kind, e.sha])).toEqual([["ci", MERGE_C]]);
-    s.stop();
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    expect(s.events("a").map((e) => [e.kind, e.sha])).toEqual([["ci", MERGE_C]]);
+    s.stop({ id: "a" });
   }, 30000);
 
-  test("a subscribed PR missing from the rows read counts as a failed poll, so three in a row raise the trouble notice", () => {
+  test("a watched PR missing from the rows read counts as a failed poll, so three in a row raise the trouble notice", async () => {
     const s = new Scenario("omitted");
-    const sink = ["--sink", "file", "--id", "a"];
+    const id = ["--id", "a"];
     s.fixtures({
       "rows-1": rows({ rollup: "PENDING" }, { number: 8, rollup: "PENDING" }),
       "suites-1": suites([["ci", "queued", null]]),
       "rows-3": rows({ rollup: "PENDING" }),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass", ...sink]).code).toBe(0);
-    expect(s.run(["watch", `${REPO}#8`, "--mode", "bypass", ...sink]).code).toBe(0);
+    await s.start({ id: "a" });
+    expect(s.run(["watch", PR7, ...id]).code).toBe(0);
+    expect(s.run(["watch", `${REPO}#8`, ...id]).code).toBe(0);
     for (const expected of ["0 event(s)", "0 event(s)", "1 event(s)"]) {
-      expect(s.run(["poll"]).stdout).toContain(expected);
+      expect(s.run(["poll", ...id]).stdout).toContain(expected);
     }
-    const events = s.events();
+    const events = s.events("a");
     expect(events.map((e) => e.kind)).toEqual(["trouble"]);
     expect(events[0]?.text).toContain(`${REPO}#8: not in the rows read`);
-    s.stop();
+    s.stop({ id: "a" });
   }, 30000);
 
-  test("two concurrent watch calls over a stale control socket: one daemon binds, both subscriptions land", async () => {
-    const s = new Scenario("race");
-    const a = await s.inbox("a");
-    const b = await s.inbox("b");
-    deadSocketFile(s.socketPath());
-    s.fixtures({
-      "rows-1": rows({ rollup: "PENDING" }),
-      "suites-1": suites([["ci", "queued", null]]),
-    });
-    const spawn = (inboxPath: string) =>
-      Bun.spawn([process.execPath, SCRIPT, "watch", PR7, "--mode", "bypass"], {
-        env: s.env({ inbox: inboxPath }),
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-    const [first, second] = [spawn(a.path), spawn(b.path)];
-    expect(await Promise.all([first.exited, second.exited])).toEqual([0, 0]);
-    const status = s.run(["status"]).stdout;
-    expect(status).toContain("subscribers: 2");
-    expect(status).toContain(`socket ${a.path}`);
-    expect(status).toContain(`socket ${b.path}`);
-    expect(
-      s
-        .log()
-        .split("\n")
-        .filter((line) => line.includes("listening on")),
-    ).toHaveLength(1);
-    expect(s.run(["status"]).stdout).toContain(`daemon: running (pid ${listeningPid(s.log())})`);
-    s.stop();
-  }, 30000);
-
-  test("a stale control socket file is replaced and the daemon starts", async () => {
-    const s = new Scenario("stale");
-    const box = await s.inbox("a");
-    deadSocketFile(s.socketPath());
-    s.fixtures({
-      "rows-1": rows({ rollup: "PENDING" }),
-      "suites-1": suites([["ci", "queued", null]]),
-    });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    expect(s.log()).toContain("replacing the stale control socket");
-    expect(s.run(["status"]).stdout).toContain("daemon: running");
-    s.stop();
-  }, 30000);
-
-  test("a subscriber whose inbox socket is gone is pruned; the other subscriber of the PR still receives", async () => {
-    const s = new Scenario("prune");
-    const a = await s.inbox("a");
-    const b = await s.inbox("b");
-    s.fixtures({
-      "rows-1": rows({ rollup: "PENDING" }),
-      "suites-1": suites([["ci", "queued", null]]),
-      "rows-3": rows({ rollup: "SUCCESS" }),
-      "suites-3": suites([["ci", "completed", "success"]]),
-    });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: a.path }).code).toBe(0);
-    expect(s.run(["watch", PR7, "--mode", "prompting"], { inbox: b.path }).code).toBe(0);
-    unlinkSync(a.path);
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
-    expect(await a.frames(0)).toHaveLength(0);
-    const frames = await b.frames(1);
-    expect(frames).toHaveLength(1);
-    expect(parseFrame(frames[0] as string).from_mode).toBe("prompting");
-    const status = s.run(["status"]).stdout;
-    expect(status).toContain("subscribers: 1");
-    expect(status).toContain(`${a.path} pruned=inbox gone`);
-    s.stop();
-  }, 30000);
-
-  test("a subscriber arriving after the verdict settled is handed it on a line of its own, even naming a workflow the verdict found; a repeat watch is not", async () => {
-    // The row's CI is settled and the only verdict line is addressed to the first subscriber, so
-    // without the replay the second never learns it, not even through `wait --id`. The gate the
-    // second names was not asked for by the first, but the verdict found and judged that run, so
-    // it is no reason to judge again.
-    const s = new Scenario("late");
-    const a = await s.inbox("a");
-    const b = await s.inbox("b");
-    s.fixtures({
-      "rows-1": rows({ rollup: "SUCCESS" }),
-      "suites-1": suites([
-        ["ci", "completed", "success"],
-        ["lint", "completed", "success"],
-      ]),
-    });
-    const green = `PR ${PR7}: CI green on ${SHORT_A}: ci, lint`;
-    const ci = ["--expect-workflow", "ci"];
-    const lint = ["--expect-workflow", "lint"];
-    expect(s.run(["watch", PR7, "--mode", "bypass", ...ci], { inbox: a.path }).code).toBe(0);
-    expect(s.run(["watch", PR7, "--mode", "prompting", ...lint], { inbox: b.path }).code).toBe(0);
-    expect(s.run(["watch", PR7, "--mode", "prompting", ...lint], { inbox: b.path }).code).toBe(0);
-    expect(headlines(await a.frames(1))).toEqual([green]);
-    const frames = await b.frames(1);
-    expect(headlines(frames)).toEqual([green]);
-    expect(parseFrame(frames[0] as string).from_mode).toBe("prompting");
-    expect(s.events().map((e) => [e.id, e.kind, e.sha, e.to])).toEqual([
-      [1, "ci", HEAD_A, [a.path]],
-      [2, "ci", HEAD_A, [b.path]],
-    ]);
-    const routed = s.run(["wait", "--since", "0", "--timeout", "1", "--id", b.path]);
-    expect(routed.code).toBe(0);
-    expect(routed.stdout.trim().split("\n")).toEqual([JSON.stringify(s.events()[1]), "cursor: 2"]);
-    expect(s.ghCalls().filter((call) => call.includes("checkSuites("))).toHaveLength(1);
-    s.stop();
-  }, 30000);
-
-  test("stop, fixtures advance, watch again: exactly the missed deltas arrive, none twice", async () => {
+  test("stop, fixtures advance, start again: the restarted daemon polls at once and exactly the missed deltas arrive, none twice", async () => {
     const s = new Scenario("resume");
     const box = await s.inbox("a");
     s.fixtures({
       "rows-1": rows({ rollup: "SUCCESS", comments: 1, updatedAt: T1 }),
       "suites-1": suites([["ci", "completed", "success"]]),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    s.stop();
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    s.stop({ inbox: box.path });
     s.fixtures({
       "rows-2": rows({ rollup: "SUCCESS", comments: 2, updatedAt: T2 }),
       "detail-2": detail({ comments: [{ login: "bob", at: T2, body: "ship it" }] }),
       "viewer-1": VIEWER,
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["poll"]).stdout).toContain("0 event(s)");
+    await s.start({ inbox: box.path });
     expect(headlines(await box.frames(2))).toEqual([GREEN_A, `PR ${PR7}: 1 new comment by bob`]);
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.events().map((e) => e.id)).toEqual([1, 2]);
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 
-  test("stop, 21 comments land, watch again: all 21 arrive in one event, the oldest included", async () => {
+  test("the WAL line exists when delivery is attempted; a refusing inbox leaves it logged and status shows the failure", async () => {
+    const live = new Scenario("wal-first");
+    const box = await live.inbox("a");
+    live.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+    });
+    await live.start({ inbox: box.path });
+    // Spawned asynchronously: the fake inbox samples the log at the moment the daemon connects,
+    // which a spawnSync would postpone until the CLI had exited.
+    const watch = Bun.spawn([process.execPath, SCRIPT, "watch", PR7, ...GATE_CI], {
+      env: live.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await watch.exited).toBe(0);
+    expect(await box.frames(1)).toHaveLength(1);
+    expect(box.walAtConnect).toEqual([[1]]);
+    expect(live.run(["status"], { inbox: box.path }).stdout).toContain("delivery: sent (#1 at ");
+    live.stop({ inbox: box.path });
+
+    const refused = new Scenario("wal-refused");
+    const dead = join(refused.dir, "dead", `${process.pid}.sock`);
+    mkdirSync(join(refused.dir, "dead"));
+    deadSocketFile(dead);
+    refused.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+    });
+    await refused.start({ inbox: dead });
+    expect(refused.run(["watch", PR7, ...GATE_CI], { inbox: dead }).code).toBe(0);
+    expect(refused.events().map((e) => [e.id, e.kind])).toEqual([[1, "ci"]]);
+    expect(refused.run(["status"], { inbox: dead }).stdout).toContain(
+      "delivery: failed: ECONNREFUSED (#1 at ",
+    );
+    refused.stop({ inbox: dead });
+  }, 30000);
+
+  test("a WAL tail cut mid-line does not swallow the next event appended", async () => {
+    const s = new Scenario("wal-tail");
+    const id = ["--id", "probe"];
+    writeFileSync(
+      s.file("events.jsonl", "probe"),
+      `${JSON.stringify({ id: 1, at: T1, repo: REPO, pr: 7, sha: null, kind: "comment", text: "old", url: "" })}\n{"id":2,"at":`,
+    );
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+    });
+    await s.start({ id: "probe" });
+    expect(s.run(["watch", PR7, ...GATE_CI, ...id]).code).toBe(0);
+    const r = s.run(["wait", "--since", "1", "--timeout", "1", ...id]);
+    expect(r.code).toBe(0);
+    const lines = r.stdout.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ id: 2, kind: "ci" });
+    s.stop({ id: "probe" });
+  }, 30000);
+
+  test("wait --since returns only newer lines and the cursor, blocks until a poll appends, exits 4 at timeout, and exits 3 once the daemon is gone", async () => {
+    const s = new Scenario("wait");
+    const id = ["--id", "probe"];
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": rows({ rollup: "FAILURE" }),
+      "suites-2": suites([["ci", "completed", "failure", 700]]),
+      "log-700.txt": "boom",
+      "rows-3": rows({ rollup: "FAILURE", updatedAt: T3, comments: 1 }),
+      "detail-2": detail({ comments: [{ login: "bob", at: T3, body: "again" }] }),
+      "viewer-1": VIEWER,
+    });
+    await s.start({ id: "probe" });
+    expect(s.run(["watch", PR7, ...GATE_CI, ...id]).code).toBe(0);
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    const since1 = s.run(["wait", "--since", "1", "--timeout", "1", ...id]);
+    expect(since1.code).toBe(0);
+    const lines = since1.stdout.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ id: 2, kind: "ci", pr: 7 });
+    expect(lines[1]).toBe("cursor: 2");
+    const timedOut = s.run(["wait", "--since", "2", "--timeout", "1", ...id]);
+    expect(timedOut.code).toBe(4);
+    expect(timedOut.stdout).toContain("cursor: 2");
+    const blocking = Bun.spawn(
+      [process.execPath, SCRIPT, "wait", "--since", "2", "--timeout", "20", ...id],
+      { env: s.env(), stdout: "pipe", stderr: "pipe" },
+    );
+    await Bun.sleep(300);
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    expect(await blocking.exited).toBe(0);
+    const unblocked = (await new Response(blocking.stdout).text()).trim().split("\n");
+    expect(JSON.parse(unblocked[0] as string)).toMatchObject({ id: 3, kind: "comment" });
+    expect(unblocked[1]).toBe("cursor: 3");
+    s.stop({ id: "probe" });
+    expect(s.run(["wait", "--since", "3", "--timeout", "1", ...id]).code).toBe(3);
+  }, 40000);
+
+  test("three failed polls in a row are one trouble notice, then one recovery, and the daemon stays up", async () => {
+    const s = new Scenario("trouble");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "PENDING" }),
+      "suites-1": suites([["ci", "queued", null]]),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
+    writeFileSync(join(s.stubDir, "fail-rows"), "");
+    for (const expected of ["0 event(s)", "0 event(s)", "1 event(s)", "0 event(s)"]) {
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain(expected);
+    }
+    unlinkSync(join(s.stubDir, "fail-rows"));
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))).toEqual([
+      `pr-events: polling failed 3 times in a row (rows: gh api graphql exited 1: gh: graphql boom); not a verdict. Auth errors in ${s.file("log")}: run stop, then start the daemon again`,
+      "pr-events: polling recovered",
+    ]);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("daemon: running");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a held delivery reported back by the inbox is what status shows; a report for an unknown message is logged and changes nothing", async () => {
+    // A session that holds a frame says so only by a peer_message_status frame to the daemon's
+    // control socket; a daemon that ignored frames without `cmd` would show the delivery as sent
+    // for good.
+    const s = new Scenario("held");
+    const box = await s.inbox("a", "held");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(await box.frames(1)).toHaveLength(1);
+    const deadline = Date.now() + 3000;
+    let status = s.run(["status"], { inbox: box.path }).stdout;
+    while (!status.includes("delivery: held") && Date.now() < deadline) {
+      await Bun.sleep(50);
+      status = s.run(["status"], { inbox: box.path }).stdout;
+    }
+    expect(status).toContain("delivery: held (#1 at ");
+    await sendLine(s.socketPath(), {
+      type: "peer_message_status",
+      orig_msg_id: "pr-events-1-not-ours",
+      state: "released",
+    });
+    while (!s.log().includes("unknown delivery") && Date.now() < deadline) await Bun.sleep(50);
+    expect(s.log()).toContain(
+      "peer_message_status for an unknown delivery pr-events-1-not-ours; ignored",
+    );
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("delivery: held (#1 at ");
+    s.stop({ inbox: box.path });
+    expect(JSON.parse(readFileSync(s.file("state.json"), "utf-8")).delivery).toMatchObject({
+      eventIds: [1],
+      outcome: "held",
+    });
+  }, 30000);
+
+  test("a poll with several events sends one frame: the events separated by a blank line, each with its own text and URL, one closing line", async () => {
+    // The receiver drops a second frame from one sender within the same second, so a poll that
+    // sent one frame per event would lose every event after the first.
+    const s = new Scenario("digest");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": rows({ rollup: "FAILURE", comments: 1, updatedAt: T2 }),
+      "detail-2": detail({ comments: [{ login: "bob", at: T2, body: "hm" }] }),
+      "viewer-1": VIEWER,
+      "suites-2": suites([["ci", "completed", "failure", 700]]),
+      "log-700.txt": "boom",
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("2 event(s)");
+    const frames = await box.frames(2);
+    expect(frames).toHaveLength(2);
+    const content = parseFrame(frames[1] as string).message.content;
+    const url = `https://github.com/${REPO}/pull/7`;
+    expect(content.split("\n\n")).toEqual([
+      `PR ${PR7}: 1 new comment by bob\n  bob  hm\n${url}`,
+      `PR ${PR7}: CI red on ${SHORT_A}\n  FAIL(failure): ci (700)\n  --- ci (700) failed-step log tail ---\n  boom\n${url}\n${CLOSING}`,
+    ]);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("delivery: sent (#2,#3 at ");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("stop, 21 comments land, start again: all 21 arrive in one event, the oldest included", async () => {
     // The detail read's window is the last 20 comments; the 21st oldest is beyond it and, with
     // the window alone, would never be reported.
     const s = new Scenario("backlog");
@@ -1194,23 +1441,24 @@ describe("pr-events.mts", () => {
       "suites-1": suites([["ci", "completed", "success"]]),
       "detail-1": detail({ comments: [opening] }),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    s.stop();
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    s.stop({ inbox: box.path });
     s.fixtures({
       "rows-2": rows({ rollup: "SUCCESS", comments: 22, updatedAt: T2 }),
       "detail-2": detail({ comments: missed.slice(1), commentsBefore: "c902" }),
       "older-1": olderComments([opening, missed[0] as CommentSpec]),
       "viewer-1": VIEWER,
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    await s.start({ inbox: box.path });
     const frames = await box.frames(2);
     const content = parseFrame(frames[1] as string).message.content.split("\n");
     expect(content[0]).toBe(`PR ${PR7}: 21 new comments by bob`);
     expect(content[1]).toBe("  bob  missed 1");
     expect(content[21]).toBe("  bob  missed 21");
     expect(s.events().map((e) => e.kind)).toEqual(["ci", "comment"]);
-    expect(s.run(["poll"]).stdout).toContain("0 event(s)");
-    s.stop();
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a backlog past the paging cap is a trouble event beside the comments that were read", async () => {
@@ -1234,285 +1482,16 @@ describe("pr-events.mts", () => {
       ...older,
       "viewer-1": VIEWER,
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["poll"]).stdout).toContain("2 event(s)");
-    expect(headlines(await box.frames(3))).toEqual([
-      GREEN_A,
-      `PR ${PR7}: 10 new comments by bob`,
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("2 event(s)");
+    const frames = await box.frames(2);
+    const content = parseFrame(frames[1] as string).message.content;
+    expect(content.split("\n")[0]).toBe(`PR ${PR7}: 10 new comments by bob`);
+    expect(content).toContain(
       `PR ${PR7}: issue comments: more than 10 pages since the last one reported; the older ones are not reported; read the PR`,
-    ]);
+    );
     expect(s.ghCalls().filter((call) => call.includes("query OlderComments("))).toHaveLength(9);
-    s.stop();
-  }, 30000);
-
-  test("unwatch with no daemon running edits the saved state, so the next start does not resume the subscription", () => {
-    const s = new Scenario("offline");
-    s.fixtures({
-      "rows-1": rows({ rollup: "PENDING" }),
-      "suites-1": suites([["ci", "queued", null]]),
-    });
-    const sink = ["--sink", "file", "--id", "probe"];
-    expect(s.run(["watch", PR7, "--mode", "bypass", ...sink]).code).toBe(0);
-    s.stop();
-    const r = s.run(["unwatch", "--all", ...sink]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("unwatched everything for probe");
-    const offline = s.run(["status"]).stdout;
-    expect(offline).toContain("daemon: not running\n");
-    expect(offline).toContain("prs: 0");
-    expect(s.run(["poll"]).code).toBe(0);
-    expect(s.run(["status"]).stdout).toContain("subscribers: 0");
-    s.stop();
-  }, 30000);
-
-  test("a daemon with no subscribers exits at --idle-seconds and removes its socket", async () => {
-    const s = new Scenario("idle");
-    const daemon = Bun.spawn([process.execPath, SCRIPT, "daemon", "--idle-seconds", "1"], {
-      env: s.env(),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const exit = await Promise.race([
-      daemon.exited,
-      Bun.sleep(10000).then(() => "timeout" as const),
-    ]);
-    expect(exit).toBe(0);
-    expect(existsSync(s.socketPath())).toBe(false);
-    expect(s.log()).toContain("no subscribers for 1 s; exiting");
-    expect(existsSync(join(s.dir, "state.json"))).toBe(true);
-    s.stop();
-  }, 30000);
-
-  test("a watch delivered on a connection accepted before the idle shutdown is refused, never subscribed into a daemon that no longer polls", async () => {
-    // The connection outlives the shutdown that unlinked the socket; a daemon that still accepted
-    // the watch would save a subscription nothing polls and answer ok.
-    const s = new Scenario("late-watch");
-    const daemon = Bun.spawn([process.execPath, SCRIPT, "daemon", "--idle-seconds", "1"], {
-      env: s.env(),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const deadline = Date.now() + 5000;
-    while (!existsSync(s.socketPath()) && Date.now() < deadline) await Bun.sleep(20);
-    const held = connect(s.socketPath());
-    await once(held, "connect");
-    while (existsSync(s.socketPath()) && Date.now() < deadline) await Bun.sleep(20);
-    expect(existsSync(s.socketPath())).toBe(false);
-    held.setEncoding("utf-8");
-    const replied = new Promise<string>((resolve) => {
-      let bytes = "";
-      held.on("data", (chunk: string) => {
-        bytes += chunk;
-      });
-      held.on("close", () => resolve(bytes));
-    });
-    held.write(
-      `${JSON.stringify({
-        cmd: "watch",
-        sink: { sink: "file", address: "late", pid: null },
-        mode: "bypass",
-        target: { kind: "pr", repo: REPO, number: 7, head: null, expected: [] },
-      })}\n`,
-    );
-    expect(await replied).toBe('{"ok":false,"error":"daemon stopping; retry"}\n');
-    expect(await daemon.exited).toBe(0);
-    expect(s.run(["status"]).stdout).toContain("subscribers: 0");
-    expect(s.ghCalls()).toHaveLength(0);
-    s.stop();
-  }, 30000);
-
-  test("a stopping reply makes watch retry: the daemon that answered is gone, so a fresh one is started and holds the subscription", async () => {
-    const s = new Scenario("retry");
-    s.fixtures({
-      "rows-1": rows({ rollup: "PENDING" }),
-      "suites-1": suites([["ci", "queued", null]]),
-    });
-    // A stand-in for a daemon caught mid-shutdown: it refuses the one command it receives, then
-    // unlinks its socket and leaves, as the real one does once its last connection closes.
-    const stopping = createServer((socket) => {
-      socket.once("data", () => {
-        socket.end('{"ok":false,"error":"daemon stopping; retry"}\n');
-        stopping.close();
-        rmSync(s.socketPath(), { force: true });
-      });
-    });
-    stopping.listen(s.socketPath());
-    await once(stopping, "listening");
-    // Spawned asynchronously: the stand-in answers from this process's event loop, which a
-    // spawnSync would hold.
-    const watch = Bun.spawn(
-      [process.execPath, SCRIPT, "watch", PR7, "--mode", "bypass", "--sink", "file", "--id", "x"],
-      { env: s.env(), stdout: "pipe", stderr: "pipe" },
-    );
-    expect(await watch.exited).toBe(0);
-    expect(await new Response(watch.stdout).text()).toContain("1 subscriber(s)");
-    const status = s.run(["status"]).stdout;
-    expect(status).toContain(`daemon: running (pid ${listeningPid(s.log())})`);
-    expect(status).toContain("subscribers: 1");
-    s.stop();
-  }, 30000);
-
-  test("the WAL line exists when delivery is attempted; a refusing inbox leaves it logged and status shows the failure", async () => {
-    const s = new Scenario("wal-first");
-    const box = await s.inbox("a");
-    const dead = join(s.dir, `${process.pid}.sock`);
-    deadSocketFile(dead);
-    s.fixtures({
-      "rows-1": rows({ rollup: "SUCCESS" }),
-      "rows-2": rows({ rollup: "SUCCESS" }, { number: 8, rollup: "SUCCESS" }),
-      "suites-1": suites([["ci", "completed", "success"]]),
-    });
-    // Spawned asynchronously: the fake inbox samples the log at the moment the daemon connects,
-    // which a spawnSync would postpone until the CLI had exited.
-    const watch = Bun.spawn([process.execPath, SCRIPT, "watch", PR7, "--mode", "bypass"], {
-      env: s.env({ inbox: box.path }),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(await watch.exited).toBe(0);
-    expect(await box.frames(1)).toHaveLength(1);
-    expect(box.walAtConnect).toEqual([[1]]);
-    expect(s.run(["watch", `${REPO}#8`, "--mode", "bypass"], { inbox: dead }).code).toBe(0);
-    expect(s.events().map((e) => [e.id, e.kind, e.to])).toEqual([
-      [1, "ci", [box.path]],
-      [2, "ci", [dead]],
-    ]);
-    const status = s.run(["status"]).stdout;
-    expect(status).toContain("subscribers: 1");
-    expect(status).toContain("prs: 1");
-    expect(status).toContain(`${dead} pruned=inbox refused (ECONNREFUSED) at `);
-    expect(status).toContain("delivery=failed: ECONNREFUSED (#2 at ");
-    s.stop();
-  }, 30000);
-
-  test("a held delivery reported back by the inbox is what status shows; a report for an unknown message is logged and changes nothing", async () => {
-    // The page promises `status` shows a held delivery, and a session that holds a frame says so
-    // only by a peer_message_status frame to the daemon's control socket; a daemon that ignored
-    // frames without `cmd` would show the delivery as sent for good.
-    const s = new Scenario("held");
-    const box = await s.inbox("a", "held");
-    s.fixtures({
-      "rows-1": rows({ rollup: "SUCCESS" }),
-      "suites-1": suites([["ci", "completed", "success"]]),
-    });
-    expect(s.run(["watch", PR7, "--mode", "prompting"], { inbox: box.path }).code).toBe(0);
-    expect(await box.frames(1)).toHaveLength(1);
-    const deadline = Date.now() + 3000;
-    let status = s.run(["status"]).stdout;
-    while (!status.includes("delivery=held") && Date.now() < deadline) {
-      await Bun.sleep(50);
-      status = s.run(["status"]).stdout;
-    }
-    expect(status).toContain(`socket ${box.path} mode=prompting`);
-    expect(status).toContain("delivery=held (#1 at ");
-    await sendLine(s.socketPath(), {
-      type: "peer_message_status",
-      orig_msg_id: "pr-events-1-not-ours",
-      state: "released",
-    });
-    while (!s.log().includes("unknown delivery") && Date.now() < deadline) await Bun.sleep(50);
-    expect(s.log()).toContain(
-      "peer_message_status for an unknown delivery pr-events-1-not-ours; ignored",
-    );
-    expect(s.run(["status"]).stdout).toContain("delivery=held (#1 at ");
-    s.stop();
-    expect(
-      JSON.parse(readFileSync(join(s.dir, "state.json"), "utf-8")).deliveries[box.path],
-    ).toMatchObject({
-      eventId: 1,
-      outcome: "held",
-    });
-  }, 30000);
-
-  test("a WAL tail cut mid-line does not swallow the next event appended", () => {
-    const s = new Scenario("wal-tail");
-    writeFileSync(
-      join(s.dir, "events.jsonl"),
-      `${JSON.stringify({ id: 1, at: T1, repo: REPO, pr: 7, sha: null, kind: "comment", text: "old", url: "", to: [] })}\n{"id":2,"at":`,
-    );
-    s.fixtures({
-      "rows-1": rows({ rollup: "SUCCESS" }),
-      "suites-1": suites([["ci", "completed", "success"]]),
-    });
-    const sink = ["--sink", "file", "--id", "probe"];
-    expect(s.run(["watch", PR7, "--mode", "bypass", ...sink]).code).toBe(0);
-    const r = s.run(["wait", "--since", "1", "--timeout", "1"]);
-    expect(r.code).toBe(0);
-    const lines = r.stdout.trim().split("\n");
-    expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0] as string)).toMatchObject({ id: 2, kind: "ci", to: ["probe"] });
-    s.stop();
-  }, 30000);
-
-  test("wait --since returns only newer matching lines and the cursor, blocks until a poll appends, exits 3 at timeout; a file subscriber past its lease is pruned", async () => {
-    const s = new Scenario("wait");
-    s.fixtures({
-      "rows-1": rows({ rollup: "SUCCESS" }),
-      "suites-1": suites([["ci", "completed", "success"]]),
-      "rows-2": rows({ rollup: "FAILURE" }),
-      "suites-2": suites([["ci", "completed", "failure", 700]]),
-      "log-700.txt": "boom",
-      "rows-3": rows({ rollup: "FAILURE", updatedAt: T3, comments: 1 }),
-      "detail-2": detail({ comments: [{ login: "bob", at: T3, body: "again" }] }),
-      "viewer-1": VIEWER,
-    });
-    const sink = ["--sink", "file", "--id", "probe"];
-    expect(s.run(["watch", PR7, "--mode", "prompting", ...sink]).code).toBe(0);
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
-    const since1 = s.run(["wait", "--since", "1", "--timeout", "1", "--id", "probe"]);
-    expect(since1.code).toBe(0);
-    const lines = since1.stdout.trim().split("\n");
-    expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0] as string)).toMatchObject({ id: 2, kind: "ci", pr: 7 });
-    expect(lines[1]).toBe("cursor: 2");
-    const other = s.run(["wait", "--since", "0", "--timeout", "1", "--id", "someone-else"]);
-    expect(other.code).toBe(3);
-    const timedOut = s.run(["wait", "--since", "2", "--timeout", "1"]);
-    expect(timedOut.code).toBe(3);
-    expect(timedOut.stdout).toContain("cursor: 2");
-    const blocking = Bun.spawn(
-      [process.execPath, SCRIPT, "wait", "--since", "2", "--timeout", "20"],
-      { env: s.env(), stdout: "pipe", stderr: "pipe" },
-    );
-    await Bun.sleep(300);
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
-    expect(await blocking.exited).toBe(0);
-    const unblocked = (await new Response(blocking.stdout).text()).trim().split("\n");
-    expect(JSON.parse(unblocked[0] as string)).toMatchObject({ id: 3, kind: "comment" });
-    expect(unblocked[1]).toBe("cursor: 3");
-
-    s.stop();
-    const statePath = join(s.dir, "state.json");
-    const state = JSON.parse(readFileSync(statePath, "utf-8"));
-    expect(state.subscriptions.probe.liveness.until > new Date().toISOString()).toBe(true);
-    state.subscriptions.probe.liveness.until = "2000-01-01T00:00:00Z";
-    writeFileSync(statePath, JSON.stringify(state));
-    expect(s.run(["poll"]).code).toBe(0);
-    const status = s.run(["status"]).stdout;
-    expect(status).toContain("subscribers: 0");
-    expect(status).toContain("probe pruned=lease lapsed");
-    s.stop();
-  }, 40000);
-
-  test("three failed polls in a row are one trouble notice, then one recovery, and the daemon stays up", async () => {
-    const s = new Scenario("trouble");
-    const box = await s.inbox("a");
-    s.fixtures({
-      "rows-1": rows({ rollup: "PENDING" }),
-      "suites-1": suites([["ci", "queued", null]]),
-    });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
-    writeFileSync(join(s.stubDir, "fail-rows"), "");
-    for (const expected of ["0 event(s)", "0 event(s)", "1 event(s)", "0 event(s)"]) {
-      expect(s.run(["poll"]).stdout).toContain(expected);
-    }
-    unlinkSync(join(s.stubDir, "fail-rows"));
-    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
-    expect(headlines(await box.frames(2))).toEqual([
-      `pr-events: polling failed 3 times in a row (rows: gh api graphql exited 1: gh: graphql boom); not a verdict. Auth errors in ${join(s.dir, "daemon.log")}: run stop, then watch again`,
-      "pr-events: polling recovered",
-    ]);
-    expect(s.run(["status"]).stdout).toContain("daemon: running");
-    s.stop();
+    s.stop({ inbox: box.path });
   }, 30000);
 });
