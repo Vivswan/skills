@@ -1009,6 +1009,29 @@ describe("pr-events.mts", () => {
     expect(s.run(["status"], { inbox: box.path }).stdout).toContain(
       `daemon: running (pid ${first.pid})`,
     );
+    // The second daemon touched neither the log nor the state: a running daemon that has saved
+    // a poll it has not yet appended must stay the only writer. The state names an event the log
+    // lacks; a daemon that read it before finding the socket taken would have appended it.
+    const seventeen = {
+      id: 17,
+      at: T1,
+      repo: REPO,
+      pr: 7,
+      sha: null,
+      kind: "comment",
+      text: "late",
+      url: "",
+    };
+    writeFileSync(s.file("state.json"), JSON.stringify({ lastEventId: 17, lastPoll: [seventeen] }));
+    const logBefore = existsSync(s.file("events.jsonl"))
+      ? readFileSync(s.file("events.jsonl"), "utf-8")
+      : "";
+    const third = await s.start({ inbox: box.path });
+    expect(await third.exited).toBe(0);
+    const logAfter = existsSync(s.file("events.jsonl"))
+      ? readFileSync(s.file("events.jsonl"), "utf-8")
+      : "";
+    expect(logAfter).toBe(logBefore);
     s.stop({ inbox: box.path });
   }, 30000);
 
@@ -1060,6 +1083,34 @@ describe("pr-events.mts", () => {
     expect(headlines(await box.frames(1))).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci`]);
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.ghCalls().filter((call) => call.includes("checkSuites(")).length).toBe(2);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))[1]).toBe(`PR ${PR7}: CI red on ${SHORT_A}`);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("an external check moving the aggregate rollup re-judges the head, but the same Actions runs are not a second verdict", async () => {
+    // A CodeQL suite starting flips the PR's rollup from SUCCESS to PENDING; the re-judgment sees
+    // the unchanged green runs and used to deliver the same green again.
+    const s = new Scenario("external-rollup");
+    const box = await s.inbox("a");
+    const green = suites([["ci", "completed", "success", 1]]);
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": green,
+      "rows-2": rows({ rollup: "PENDING" }),
+      "suites-2": green,
+      // The rollup catching up to SUCCESS reads no suites, so the third suites read is the rerun's.
+      "rows-3": rows({ rollup: "SUCCESS" }),
+      // A rerun of the gate is a changed run set and a real second verdict.
+      "rows-4": rows({ rollup: "FAILURE" }),
+      "suites-3": suites([["ci", "completed", "failure", 9]]),
+      "log-9.txt": "##[error]ci failed",
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(headlines(await box.frames(1))).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci`]);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     expect(headlines(await box.frames(2))[1]).toBe(`PR ${PR7}: CI red on ${SHORT_A}`);
     s.stop({ inbox: box.path });

@@ -640,6 +640,9 @@ type Scope = PrKey | CommitKey | null;
 /** How a poll judges a target's CI: with the settling bookkeeping, for terminal verdicts only, or not at all. */
 type Judging = "settling" | "terminal" | "none";
 
+/** A settled judgment; `event` is null when the same runs had already been reported. */
+type CiJudgment = { outcome: CiOutcome; runs: string; event: PrEvent | null };
+
 function isTerminalRollup(state: string | null): boolean {
   return state === "SUCCESS" || state === "FAILURE" || state === "ERROR";
 }
@@ -659,6 +662,13 @@ async function runDaemon(
   intervalSeconds: number,
 ): Promise<number> {
   const log = (line: string) => appendFileSync(files.log, `${new Date().toISOString()} ${line}\n`);
+  // The socket first: only its holder may read or repair the state and the log, or a second daemon
+  // starting while the first has saved a poll it has not yet appended would append it too.
+  const server = await bindControlSocket(files.socket, log);
+  if (server === null) {
+    console.log(`another pr-events daemon already serves ${describeOwner(owner)}; exiting`);
+    return 0;
+  }
   const { state, unlogged, newestEventAt } = loadState(files);
   if (unlogged.length > 0) {
     appendEvents(files, unlogged);
@@ -672,11 +682,6 @@ async function runDaemon(
     if (row.ci.pending) row.ci.grace = freshGrace();
   }
   for (const commit of Object.values(state.commits)) commit.grace = freshGrace();
-  const server = await bindControlSocket(files.socket, log);
-  if (server === null) {
-    console.log(`another pr-events daemon already serves ${describeOwner(owner)}; exiting`);
-    return 0;
-  }
   const banner = `pr-events daemon ${process.pid} for ${describeOwner(owner)}; socket ${files.socket}; log ${files.log}; poll every ${intervalSeconds} s`;
   console.log(banner);
   log(banner);
@@ -722,10 +727,17 @@ async function runDaemon(
     grace: Grace,
     emitted: PrEvent[],
     settling: boolean,
-  ): PrEvent | null => {
+    priorRuns: string | null = null,
+  ): CiJudgment | null => {
     const runs = discoverRuns(repo, sha);
     const verdict = judgeRuns(runs, expected);
     const base = { repo, pr: subject.pr, sha, url: subject.url };
+    // The Actions runs the verdict rests on. An external check (CodeQL, a bot) moving the PR's
+    // aggregate rollup re-judges the head, and the same runs must not become a second verdict.
+    const fingerprint = selectLatest(runs)
+      .map((run) => `${run.id}:${run.status}:${run.conclusion ?? ""}`)
+      .sort()
+      .join(",");
     // Workflows by id, not name: two workflow files can share a name, and a second one registering
     // under the same name is still a set that changed.
     const registered = [
@@ -733,10 +745,12 @@ async function runDaemon(
     ]
       .map(String)
       .sort();
-    const settle = (text: string): PrEvent => {
+    const settle = (text: string): CiJudgment => {
+      const outcome = outcomeOfVerdict(text);
+      if (priorRuns === fingerprint) return { outcome, runs: fingerprint, event: null };
       const event = emit({ ...base, kind: "ci", text });
       emitted.push(event);
-      return event;
+      return { outcome, runs: fingerprint, event };
     };
     // No run at all is a registration that has not happened yet, or a ref nothing triggers on;
     // the grace below decides which, as it does for a named gate.
@@ -890,7 +904,7 @@ async function runDaemon(
     }
     state.rows[key] = row;
     if (judging !== "none" && row.ci.pending) {
-      const verdict = judgeCi(
+      const judgment = judgeCi(
         ref.repo,
         current.headRefOid,
         watch.expected,
@@ -898,15 +912,18 @@ async function runDaemon(
         row.ci.grace,
         emitted,
         judging === "settling",
+        saved && !saved.ci.pending && saved.headRefOid === current.headRefOid
+          ? saved.ci.runs
+          : null,
       );
-      if (verdict) row.ci = { pending: false, outcome: outcomeOfVerdict(verdict.text) };
+      if (judgment) row.ci = { pending: false, outcome: judgment.outcome, runs: judgment.runs };
     }
   };
 
   const processCommit = (key: CommitKey, emitted: PrEvent[], judging: Judging): void => {
     const watch = state.commits[key];
     if (!watch || judging === "none") return;
-    const verdict = judgeCi(
+    const judgment = judgeCi(
       watch.repo,
       watch.sha,
       watch.expected,
@@ -915,7 +932,7 @@ async function runDaemon(
       emitted,
       judging === "settling",
     );
-    if (verdict !== null) delete state.commits[key];
+    if (judgment !== null) delete state.commits[key];
   };
 
   // One message per poll, and a second's gap between messages: the receiver drops a second frame

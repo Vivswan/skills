@@ -70,7 +70,11 @@ export interface CommitWatch {
 /** What a settled verdict said, so a rollup that only catches up with it is told from a new result. */
 export type CiOutcome = "green" | "red";
 
-export type RowCi = { pending: true; grace: Grace } | { pending: false; outcome: CiOutcome };
+/** A settled judgment: what it said, and a fingerprint of the GitHub Actions runs it judged (id,
+ * status, conclusion), so a later re-judgment that sees the same runs says nothing new. */
+export type RowCi =
+  | { pending: true; grace: Grace }
+  | { pending: false; outcome: CiOutcome; runs: string };
 
 export function outcomeOfVerdict(text: string): CiOutcome {
   return text.startsWith("CI green") ? "green" : "red";
@@ -231,7 +235,7 @@ export function loadState(files: OwnerFiles): LoadedState {
     }
     const row = state.rows[`${event.repo}#${event.pr}`];
     if (row && row.headRefOid === event.sha && row.ci.pending) {
-      row.ci = { pending: false, outcome: outcomeOfVerdict(event.text) };
+      row.ci = { pending: false, outcome: outcomeOfVerdict(event.text), runs: "" };
     }
   }
   const newest = unlogged.at(-1) ?? logged;
