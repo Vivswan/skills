@@ -8,6 +8,7 @@ import {
   statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { connect, createServer, type Server } from "node:net";
@@ -1721,6 +1722,22 @@ describe("pr-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a start lock older than the start wait is dead whatever pid it names: a crashed starter's pid reused by a live process does not wedge every start", async () => {
+    const s = new Scenario("old-lock");
+    const box = await s.inbox("a");
+    deadSocketFile(s.socketPath());
+    const lock = `${s.socketPath().slice(0, -".sock".length)}.lock`;
+    writeFileSync(lock, String(process.pid));
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const started = Date.now();
+    const daemon = await s.start({ inbox: box.path });
+    expect(daemon.exitCode).toBeNull();
+    expect(Date.now() - started).toBeLessThan(2500);
+    expect(s.log()).toContain("replacing the stale control socket");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a control socket path that is not a socket (a dangling symlink) is refused with its path, not retried forever", async () => {
     const s = new Scenario("not-a-socket");
     const box = await s.inbox("a");
@@ -2016,7 +2033,7 @@ describe("pr-events.mts", () => {
 
   test("a row whose head differs from the --head recorded is a head-moved event naming the author; the recorded head is not", async () => {
     const cases: Array<[string, string, string[]]> = [
-      ["moved", HEAD_A, [`PR ${PR7}: head moved to ${HEAD_B.slice(0, 12)} by carol`]],
+      ["moved", HEAD_A, [`PR ${PR7}: head moved to ${HEAD_B.slice(0, 12)}; last commit by carol`]],
       ["same", HEAD_B, []],
     ];
     for (const [name, recorded, expected] of cases) {

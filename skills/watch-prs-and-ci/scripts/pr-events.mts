@@ -8,8 +8,12 @@ import { once } from "node:events";
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
   existsSync,
+  fstatSync,
+  linkSync,
   lstatSync,
+  openSync,
   readFileSync,
   statSync,
   unlinkSync,
@@ -625,9 +629,12 @@ async function bindControlSocket(
       } catch (error) {
         if (errorCode(error) !== "ECONNREFUSED") throw error;
       }
-      // Still the file that refused: one replaced meanwhile is a live daemon's, not stale.
+      // Still the file that refused: one replaced meanwhile is a live daemon's, not stale. And
+      // still our lock: a start stalled past the lock's age limit has been broken, and the socket
+      // in place may be the breaker's.
       const now = lstatSync(path, { throwIfNoEntry: false });
       if (now === undefined || now.ino !== found.ino || now.ctimeMs !== found.ctimeMs) continue;
+      if (readLock(`${stem}.lock`)?.holder !== process.pid) continue;
       log(`replacing the stale control socket ${path}`);
       unlinkSync(path);
       const replaced = await tryListen(path);
@@ -652,66 +659,120 @@ async function tryListen(path: string): Promise<Server | null> {
   }
 }
 
-// A start holds the lock for milliseconds. Waiting past this on a live holder is a hung start,
-// and giving up beats a silent hang; a breaker's lock this old was left by a breaker that died.
-const START_LOCK_WAIT_MS = 5_000;
+// A start holds the lock for milliseconds, so a lock this old is dead whatever its pid says: the
+// pid of a starter that crashed can come back as an unrelated live process. Long enough that a
+// stall this long inside a start is a stopped process, not a slow one.
+const START_LOCK_WAIT_MS = 30_000;
 const START_LOCK_TICK_MS = 25;
 
 /**
  * Takes the exclusive lock file, created atomically with the holder's pid; returns its release. A
- * holder that died (SIGKILL skips the release), or this very pid from an earlier incarnation, is
- * broken by one starter at a time under a second lock, so a breaker never removes the fresh lock
- * another starter took in between.
+ * dead lock (its holder gone, no pid in it, this very pid from an earlier incarnation, or older
+ * than the wait) is broken by one starter at a time under a second lock, so a breaker never
+ * removes the fresh lock another starter took in between.
  */
 async function acquireStartLock(lockPath: string): Promise<() => void> {
-  const deadline = Date.now() + START_LOCK_WAIT_MS;
   for (;;) {
-    if (createLock(lockPath)) return () => removeLock(lockPath);
-    const holder = lockHolder(lockPath);
-    if (holder === null) continue;
+    // The release removes the lock only while it is still this start's: a start stalled past the
+    // age limit has been broken, and the file in place is a successor's.
+    if (createLock(lockPath)) {
+      return () => {
+        if (readLock(lockPath)?.holder === process.pid) removeLock(lockPath);
+      };
+    }
+    const seen = readLock(lockPath);
+    if (seen === null) continue;
+    const { holder } = seen;
     // No pid in the file is a dead lock, never pid 0: a signal to 0 asks about the process group.
-    if (holder !== 0 && holder !== process.pid && isProcessAlive(holder)) {
-      if (Date.now() >= deadline) {
-        throw new ToolingError(`${lockPath} is held by pid ${holder}; another start is hung`);
-      }
+    if (
+      holder !== 0 &&
+      holder !== process.pid &&
+      isProcessAlive(holder) &&
+      isYoung(lockAgeMs(lockPath))
+    ) {
       await sleep(START_LOCK_TICK_MS);
       continue;
     }
+    // A breaker's lock that exists and is old was left by a breaker that died; a missing one is
+    // nobody's to remove, since another starter may create it in between.
     const breaking = `${lockPath}.breaking`;
-    const breakerAge =
-      Date.now() - (statSync(breaking, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
-    if (breakerAge > START_LOCK_WAIT_MS) removeLock(breaking);
+    const breakerAge = lockAgeMs(breaking);
+    if (breakerAge !== null && !isYoung(breakerAge)) removeLock(breaking);
     if (!createLock(breaking)) {
       await sleep(START_LOCK_TICK_MS);
       continue;
     }
+    // The very file judged dead, not a fresh lock with the same pid: a starter that inherited the
+    // dead holder's pid takes one after breaking this one itself.
     try {
-      if (lockHolder(lockPath) === holder) removeLock(lockPath);
+      if (sameLock(readLock(lockPath), seen)) removeLock(lockPath);
     } finally {
       removeLock(breaking);
     }
   }
 }
 
+/** How long ago the lock file was written, or null when it is gone. */
+function lockAgeMs(lockPath: string): number | null {
+  const mtime = statSync(lockPath, { throwIfNoEntry: false })?.mtimeMs;
+  return mtime === undefined ? null : Date.now() - mtime;
+}
+
+/**
+ * Written within the age limit by this clock. Gone is not; neither is a lock from further in the
+ * future than the limit (a clock set back), while a file time a fraction of a millisecond ahead of
+ * `Date.now()` is the file system's finer clock, not the future.
+ */
+function isYoung(age: number | null): boolean {
+  return age !== null && age > -START_LOCK_WAIT_MS && age < START_LOCK_WAIT_MS;
+}
+
+/**
+ * Creates the lock file with the pid already in it: a private file is linked into place, which
+ * fails with EEXIST when the lock is held. A create followed by a write would show an empty lock
+ * in between, which a breaker reads as dead.
+ */
 function createLock(path: string): boolean {
+  const draft = `${path}.${process.pid}.draft`;
+  writeFileSync(draft, String(process.pid), { mode: 0o600 });
   try {
-    writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
+    linkSync(draft, path);
     return true;
   } catch (error) {
     if (errorCode(error) !== "EEXIST") throw error;
     return false;
+  } finally {
+    removeLock(draft);
   }
 }
 
-/** The pid in a lock file, or null when the file is gone or holds no pid (a dead lock either way). */
-function lockHolder(path: string): number | null {
+/** A lock file as one read of one inode: the pid in it (0 when it holds none) and its identity. */
+type Lock = { holder: number; ino: number; ctimeMs: number };
+
+/** The lock file's content and identity, or null when it is gone. */
+function readLock(path: string): Lock | null {
+  let fd: number;
   try {
-    const pid = Number(readFileSync(path, "utf-8").trim());
-    return Number.isInteger(pid) && pid > 0 ? pid : 0;
+    fd = openSync(path, "r");
   } catch (error) {
     if (errorCode(error) === "ENOENT") return null;
     throw error;
   }
+  try {
+    const stat = fstatSync(fd);
+    const pid = Number(readFileSync(fd, "utf-8").trim());
+    return {
+      holder: Number.isInteger(pid) && pid > 0 ? pid : 0,
+      ino: stat.ino,
+      ctimeMs: stat.ctimeMs,
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function sameLock(a: Lock | null, b: Lock): boolean {
+  return a !== null && a.ino === b.ino && a.ctimeMs === b.ctimeMs && a.holder === b.holder;
 }
 
 function removeLock(path: string): void {
@@ -1102,7 +1163,8 @@ async function runDaemon(
         emit({
           ...base,
           kind: "head",
-          text: `head moved to ${current.headRefOid.slice(0, 12)} by ${detail.lastCommitAuthor ?? "an unknown author"}`,
+          // The detail names the last commit's author; who pushed it is not in the read.
+          text: `head moved to ${current.headRefOid.slice(0, 12)}; last commit by ${detail.lastCommitAuthor ?? "an unknown author"}`,
         }),
       );
     }
