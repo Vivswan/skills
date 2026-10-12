@@ -194,7 +194,8 @@ const BREW_INDEXES: readonly BrewIndex[] = [
 function brewNames(json: string, index: BrewIndex): Record<string, string> {
   const parsed: unknown = JSON.parse(json);
   if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("not a list of entries");
-  const names: Record<string, string> = {};
+  // A null-prototype map: a plain object inherits `constructor`, so `??=` would skip that alias.
+  const names: Record<string, string> = Object.create(null);
   for (const entry of parsed as Record<string, unknown>[]) {
     const name = entry?.[index.nameKey];
     if (typeof name !== "string") throw new Error(`an entry has no ${index.nameKey}`);
@@ -218,7 +219,6 @@ async function brewLookup(io: Io, lower: string, index: BrewIndex): Promise<Cell
     timeoutMs: BREW_INDEX_TIMEOUT_MS,
   });
   if ("error" in loaded) return unknown(`homebrew ${index.kind} index ${loaded.error}`);
-  // hasOwn: a name every object inherits (constructor) must not read as a formula.
   const holder = Object.hasOwn(loaded.value, lower) ? loaded.value[lower] : undefined;
   return holder ? taken(holder) : free;
 }

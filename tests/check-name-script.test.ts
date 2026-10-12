@@ -205,6 +205,8 @@ describe("check-name.mts cells", () => {
       formulaIndex([
         { name: "wget" },
         { name: "python@3.15", aliases: ["python", "python3"], oldnames: ["python-legacy"] },
+        // An alias that every plain object inherits as a property must still be recorded.
+        { name: "builder-kit", aliases: ["constructor"] },
       ]),
       caskIndex([{ token: "docker-desktop", old_tokens: ["docker"] }]),
     );
@@ -214,10 +216,11 @@ describe("check-name.mts cells", () => {
       ["python-legacy", { status: "taken", detail: "homebrew formula python@3.15 via old name" }],
       ["docker-desktop", { status: "taken", detail: "homebrew cask docker-desktop" }],
       ["docker", { status: "taken", detail: "homebrew cask docker-desktop via old token" }],
+      ["constructor", { status: "taken", detail: "homebrew formula builder-kit via alias" }],
       // The negative control: a name in neither index reads free with both indexes present, and
-      // so does a name that is a property every JSON object inherits.
+      // so does an inherited property name that no index lists (lowercase, as the lookup is).
       [RANDOM, { status: "free" }],
-      ["constructor", { status: "free" }],
+      ["__proto__", { status: "free" }],
     ];
     for (const [name, expected] of cases) {
       const row = await checkName(indexes, OPTIONS, name);
