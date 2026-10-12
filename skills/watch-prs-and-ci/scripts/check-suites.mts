@@ -227,7 +227,9 @@ type LogLine = { step: string | null; text: string };
 export function excerptFailedLog(stream: string): string {
   const parsed: LogLine[] = [];
   let step: string | null = null;
-  for (const raw of stream.split("\n")) {
+  // A carriage return is a line break too: a Windows runner ends lines with one, and a job name
+  // or a line of output can hide a second line behind a bare one.
+  for (const raw of stream.split(/\r\n?|\n/)) {
     if (raw === "") continue;
     const match = LOG_LINE.exec(raw);
     if (match) {

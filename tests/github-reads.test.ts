@@ -799,6 +799,21 @@ describe("excerptFailedLog", () => {
       ].join("\n"),
     ],
     [
+      "a carriage return is a line break: a job name or text that hides a fence line behind one gives that line its own row",
+      [
+        row("test", "Run tests", "boom\r```\rafter", 2),
+        row("test", "Run tests", "##[error]Process completed with exit code 1.", 3),
+        ...windDown,
+      ],
+      [
+        "test / Run tests:",
+        "  boom",
+        "  ```",
+        "  after",
+        "  ##[error]Process completed with exit code 1.",
+      ].join("\n"),
+    ],
+    [
       "a passing suite's summary saying `0 failed` in the failing step is not an error line, so the assertion after it is still in the tail",
       [
         row("test", "ctest", "100% tests passed, 0 tests failed out of 1", 1),

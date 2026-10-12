@@ -624,9 +624,14 @@ function plural(count: number, noun: string): string {
  * inline comments in reads as one review with its comment count; such a wrapper with no new
  * inline comment and no body is dropped. The page's specimen is this text, byte for byte.
  */
+/**
+ * A poll's new activity as events: the reviews with the inline comments they published, then the
+ * loose comments. Two events, not one, so a subscription to one kind never drops or carries the
+ * other.
+ */
 function describeActivities(
   activities: Activity[],
-): { kind: "comment" | "review"; text: string } | null {
+): Array<{ kind: "comment" | "review"; text: string }> {
   const comments = activities.filter((activity) => activity.kind !== "review");
   const inlineOf = (review: Activity) =>
     comments.filter((comment) => comment.reviewId === review.id);
@@ -639,21 +644,28 @@ function describeActivities(
   );
   const headlined = new Set(reviews.flatMap((review) => inlineOf(review).map((c) => c.id)));
   const loose = comments.filter((comment) => !headlined.has(comment.id));
-  const summary = reviews.map((review) => {
-    const inline = inlineOf(review).length;
-    const headline = `new review by ${review.author} (${review.reviewState})`;
-    return inline === 0 ? headline : `${headline}, ${plural(inline, "review comment")}`;
-  });
+  const events: Array<{ kind: "comment" | "review"; text: string }> = [];
+  if (reviews.length > 0) {
+    const summary = reviews.map((review) => {
+      const inline = inlineOf(review).length;
+      const headline = `new review by ${review.author} (${review.reviewState})`;
+      return inline === 0 ? headline : `${headline}, ${plural(inline, "review comment")}`;
+    });
+    const items = reviews.flatMap((review) => [review, ...inlineOf(review)]);
+    events.push({ kind: "review", text: describeBatch(summary.join(", "), items) });
+  }
   if (loose.length > 0) {
     const authors = [...new Set(loose.map((comment) => comment.author))].join(", ");
-    summary.push(`${plural(loose.length, "new comment")} by ${authors}`);
+    const summary = `${plural(loose.length, "new comment")} by ${authors}`;
+    events.push({ kind: "comment", text: describeBatch(summary, loose) });
   }
-  if (summary.length === 0) return null;
+  return events;
+}
+
+/** The summary line, then the quoted bodies fenced, aligned on their `where` column. */
+function describeBatch(summary: string, items: Activity[]): string {
   const rows: [string, string][] = [];
-  for (const activity of [
-    ...reviews.flatMap((review) => [review, ...inlineOf(review)]),
-    ...loose,
-  ]) {
+  for (const activity of items) {
     const body = clip(flatten(activity.body));
     if (body === "") continue;
     // The path is the author's too (a file name can hold a newline), and a row must stay one line.
@@ -665,8 +677,7 @@ function describeActivities(
   }
   const width = Math.max(0, ...rows.map(([where]) => where.length));
   const quoted = rows.map(([where, body]) => `  ${where.padEnd(width)}  ${body}`);
-  const lines = [summary.join(", "), ...(quoted.length > 0 ? fenceQuoted(quoted) : [])];
-  return { kind: reviews.length > 0 ? "review" : "comment", text: lines.join("\n") };
+  return [summary, ...(quoted.length > 0 ? fenceQuoted(quoted) : [])].join("\n");
 }
 
 function isFailedRun(run: Run): boolean {
@@ -698,7 +709,7 @@ function describeRed(repo: string, sha: string, runs: Run[], verdictLines: strin
     if (excerpt === "") continue;
     lines.push(
       `  --- ${run.name} (${run.id}) failed-step log excerpt ---`,
-      ...indent(excerpt.split("\n")),
+      ...fenceQuoted(indent(excerpt.split("\n"))),
     );
   }
   if (failed.length > MAX_LOG_EXCERPTS) {
@@ -757,10 +768,11 @@ async function runDaemon(
       ? null
       : (processStart(owner.pid) ?? (owner.inbox === null ? null : inboxToken(owner.inbox)));
   const incarnation = owner.pid !== null && start !== null ? { pid: owner.pid, start } : null;
-  const { state, unlogged, newestEventAt, staleOwner } = loadState(files, incarnation);
+  const { state, unlogged, newestEventAt, staleOwner, movedEvents } = loadState(files, incarnation);
   if (staleOwner) {
+    const where = movedEvents === null ? "" : `; its events were moved to ${movedEvents}`;
     log(
-      `the saved state belonged to an earlier session with pid ${staleOwner.pid}; this session starts with no targets`,
+      `the saved state belonged to an earlier session with pid ${staleOwner.pid}; this session starts with no targets${where}`,
     );
   }
   if (unlogged.length > 0) {
@@ -925,9 +937,9 @@ async function runDaemon(
       detail = readPrDetail(ref, seen);
       const activities = seen ? newActivity(detail, seen, viewerLoginCached()) : [];
       row.seenActivity = [...row.seenActivity.slice(-1), detail.fetchedIds];
-      const described = describeActivities(activities);
-      if (described !== null && wanted(described.kind))
-        emitted.push(emit({ ...base, ...described }));
+      for (const described of describeActivities(activities)) {
+        if (wanted(described.kind)) emitted.push(emit({ ...base, ...described }));
+      }
       for (const gap of detail.gaps) {
         emitted.push(emit({ ...base, kind: "trouble", text: `${gap}; read the PR` }));
       }

@@ -238,6 +238,28 @@ export interface LoadedState {
   newestEventAt: string | null;
   /** The earlier session whose saved targets were set aside, when the pid was recycled. */
   staleOwner: OwnerIncarnation | null;
+  /** Where that session's events log went, when it had one. */
+  movedEvents: string | null;
+}
+
+/**
+ * An earlier incarnation's state and events files, renamed with its start token before the last
+ * extension: `<pid>.events.<start>.jsonl`. The events path, or null when it had no log.
+ */
+function setAside(files: OwnerFiles, owner: OwnerIncarnation): string | null {
+  const tag = owner.start.replace(/[^A-Za-z0-9.]+/g, "-");
+  const move = (path: string): string | null => {
+    const target = path.replace(/(\.[^.]+)$/, `.${tag}$1`);
+    try {
+      renameSync(path, target);
+      return target;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  move(files.state);
+  return move(files.events);
 }
 
 function readSavedState(files: OwnerFiles): State | null {
@@ -273,14 +295,17 @@ export function loadState(
 ): LoadedState {
   let state = readSavedState(files) ?? emptyState();
   let staleOwner: OwnerIncarnation | null = null;
+  let movedEvents: string | null = null;
   // A pid comes back around: targets saved by an earlier session that happened to have this pid
-  // are not this session's. The log stays, and the counter continues from it.
+  // are not this session's, and neither are its events. Both files are set aside under its start
+  // token, and this session's counter starts at zero: its readers are new too.
   if (
     incarnation &&
     state.owner &&
     (state.owner.pid !== incarnation.pid || state.owner.start !== incarnation.start)
   ) {
     staleOwner = state.owner;
+    movedEvents = setAside(files, staleOwner);
     state = emptyState();
   }
   if (incarnation) state.owner = incarnation;
@@ -304,7 +329,7 @@ export function loadState(
   }
   const newest = unlogged.at(-1) ?? logged;
   state.lastEventId = Math.max(state.lastEventId, newest?.id ?? 0);
-  return { state, unlogged, newestEventAt: newest?.at ?? null, staleOwner };
+  return { state, unlogged, newestEventAt: newest?.at ?? null, staleOwner, movedEvents };
 }
 
 export function saveState(files: OwnerFiles, state: State): void {
