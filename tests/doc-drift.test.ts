@@ -312,7 +312,7 @@ const SURFACES: Record<string, Surface> = {
       },
       {
         doc: { text: "--expect-workflow", occurrences: ">=1" },
-        script: { text: '"expect-workflow": { type: "string", multiple: true }', occurrences: 2 },
+        script: 'usage("--expect-workflow needs a workflow name")',
       },
       {
         doc: "pr-events.mts daemon [--interval <s>] [--idle-seconds <s>]",
