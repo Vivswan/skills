@@ -39,6 +39,8 @@ Every brief includes:
     So the brief says: write prompt and scratch files with the harness's file-writing tool, or with one plain command where it has none, and restore a mutated source with `cp` from a `/tmp` backup rather than a git command chained into the mutation. The rule costs nothing where the sandbox is lenient.
 14. **Every git command in the brief names the worktree: `git -C <absolute worktree path> ...`**, never `cd <worktree> && git ...`. The compound form trips the sandbox rule of item 13 where it applies, and `git -C` is one command. A shell's cwd is not a fact about the worktree: a teammate's cwd reset to the main checkout between turns, and its `git reset --soft` moved local main for a minute (restored, nothing pushed).
 
+    The same holds for every cwd-sensitive tool: package scripts run as `bun run --cwd <worktree> <script>`, and `bunx` has no `--cwd`, so a formatter runs as `cd <worktree> && bunx biome check --write <files>` in one call. From another directory, `bunx biome check --write <absolute paths>` skipped the repository's biome.json and retabbed whole files (restored from the index), and `bun run test` fell through to the shell's `test` builtin.
+
     The builder's FIRST command is the preflight `git -C <worktree> rev-parse --show-toplevel`, before any install or edit. It must print back the ABSOLUTE worktree path the brief declares: never the main checkout's path, and never a mere "somewhere under the harness's default worktree directory" test (Claude Code's `.claude/worktrees/` is one harness's default, not a fact about the worktree).
 
     A worktree-isolated spawn once did not materialize, and the builder was editing the main checkout.
