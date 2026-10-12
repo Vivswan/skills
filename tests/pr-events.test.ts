@@ -1,6 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { once } from "node:events";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { connect, createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import { tempDirs } from "./helpers/temp-dirs";
@@ -1125,6 +1134,75 @@ describe("pr-events.mts", () => {
     expect(existsSync(s.socketPath())).toBe(false);
     expect(s.log()).toContain("no subscribers for 1 s; exiting");
     expect(existsSync(join(s.dir, "state.json"))).toBe(true);
+    s.stop();
+  }, 30000);
+
+  test("a watch delivered on a connection accepted before the idle shutdown is refused, never subscribed into a daemon that no longer polls", async () => {
+    // The connection outlives the shutdown that unlinked the socket; a daemon that still accepted
+    // the watch would save a subscription nothing polls and answer ok.
+    const s = new Scenario("late-watch");
+    const daemon = Bun.spawn([process.execPath, SCRIPT, "daemon", "--idle-seconds", "1"], {
+      env: s.env(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const deadline = Date.now() + 5000;
+    while (!existsSync(s.socketPath()) && Date.now() < deadline) await Bun.sleep(20);
+    const held = connect(s.socketPath());
+    await once(held, "connect");
+    while (existsSync(s.socketPath()) && Date.now() < deadline) await Bun.sleep(20);
+    expect(existsSync(s.socketPath())).toBe(false);
+    held.setEncoding("utf-8");
+    const replied = new Promise<string>((resolve) => {
+      let bytes = "";
+      held.on("data", (chunk: string) => {
+        bytes += chunk;
+      });
+      held.on("close", () => resolve(bytes));
+    });
+    held.write(
+      `${JSON.stringify({
+        cmd: "watch",
+        sink: { sink: "file", address: "late", pid: null },
+        mode: "bypass",
+        target: { kind: "pr", repo: REPO, number: 7, head: null, expected: [] },
+      })}\n`,
+    );
+    expect(await replied).toBe('{"ok":false,"error":"daemon stopping; retry"}\n');
+    expect(await daemon.exited).toBe(0);
+    expect(s.run(["status"]).stdout).toContain("subscribers: 0");
+    expect(s.ghCalls()).toHaveLength(0);
+    s.stop();
+  }, 30000);
+
+  test("a stopping reply makes watch retry: the daemon that answered is gone, so a fresh one is started and holds the subscription", async () => {
+    const s = new Scenario("retry");
+    s.fixtures({
+      "rows-1": rows({ rollup: "PENDING" }),
+      "suites-1": suites([["ci", "queued", null]]),
+    });
+    // A stand-in for a daemon caught mid-shutdown: it refuses the one command it receives, then
+    // unlinks its socket and leaves, as the real one does once its last connection closes.
+    const stopping = createServer((socket) => {
+      socket.once("data", () => {
+        socket.end('{"ok":false,"error":"daemon stopping; retry"}\n');
+        stopping.close();
+        rmSync(s.socketPath(), { force: true });
+      });
+    });
+    stopping.listen(s.socketPath());
+    await once(stopping, "listening");
+    // Spawned asynchronously: the stand-in answers from this process's event loop, which a
+    // spawnSync would hold.
+    const watch = Bun.spawn(
+      [process.execPath, SCRIPT, "watch", PR7, "--mode", "bypass", "--sink", "file", "--id", "x"],
+      { env: s.env(), stdout: "pipe", stderr: "pipe" },
+    );
+    expect(await watch.exited).toBe(0);
+    expect(await new Response(watch.stdout).text()).toContain("1 subscriber(s)");
+    const status = s.run(["status"]).stdout;
+    expect(status).toContain(`daemon: running (pid ${listeningPid(s.log())})`);
+    expect(status).toContain("subscribers: 1");
     s.stop();
   }, 30000);
 

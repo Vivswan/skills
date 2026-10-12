@@ -128,6 +128,15 @@ type Reply =
   | { ok: true; events?: number; subscribers?: number; status?: StatusReply }
   | { ok: false; error: string };
 
+// A daemon that has begun its shutdown (idle, `stop`, or a signal) still answers connections it
+// had accepted; it refuses work it could no longer poll or save, and the CLI retries against
+// whatever listens next, starting a daemon if nothing does.
+const STOPPING_ERROR = "daemon stopping; retry";
+
+function isStopping(reply: Reply): boolean {
+  return !reply.ok && reply.error === STOPPING_ERROR;
+}
+
 function controlSocketPath(dir: string): string {
   return join(dir, CONTROL_SOCKET);
 }
@@ -205,18 +214,28 @@ async function findOrStart(dir: string): Promise<Socket> {
 }
 
 async function requestStarting(dir: string, command: Command): Promise<Reply> {
-  return exchange(await findOrStart(dir), command);
+  const deadline = Date.now() + START_TIMEOUT_MS;
+  for (;;) {
+    const reply = await exchange(await findOrStart(dir), command);
+    if (!isStopping(reply) || Date.now() > deadline) return reply;
+    await sleep(START_RETRY_MS);
+  }
 }
 
 async function requestRunning(dir: string, command: Command): Promise<Reply | null> {
-  let socket: Socket;
-  try {
-    socket = await connectOnce(controlSocketPath(dir));
-  } catch (error) {
-    if (isNobodyListening(error)) return null;
-    throw error;
+  const deadline = Date.now() + START_TIMEOUT_MS;
+  for (;;) {
+    let socket: Socket;
+    try {
+      socket = await connectOnce(controlSocketPath(dir));
+    } catch (error) {
+      if (isNobodyListening(error)) return null;
+      throw error;
+    }
+    const reply = await exchange(socket, command);
+    if (!isStopping(reply) || Date.now() > deadline) return reply;
+    await sleep(START_RETRY_MS);
   }
-  return exchange(socket, command);
 }
 
 function unwrap(reply: Reply): Reply & { ok: true } {
@@ -1192,6 +1211,9 @@ async function runDaemon(
   };
 
   const dispatch = async (command: Command): Promise<Reply> => {
+    if (stopping && command.cmd !== "status" && command.cmd !== "stop") {
+      return { ok: false, error: STOPPING_ERROR };
+    }
     switch (command.cmd) {
       case "watch":
         return {
