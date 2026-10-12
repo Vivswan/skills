@@ -669,8 +669,8 @@ export const REGISTRIES: readonly RegistryEntry[] = [
     kind: "registry",
     id: "typosquat",
     label: "one edit from a popular package on PyPI, npm, or crates",
-    // One letter short of the PyPI control, requests.
-    takenControl: "reqests",
+    // The PyPI control, requests, with its last letter changed.
+    takenControl: "requestz",
     lookup: typosquat,
   },
   {

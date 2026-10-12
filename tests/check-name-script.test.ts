@@ -120,7 +120,7 @@ function allTakenIo(resolving: string[]): Io {
     (entry) => entry.takenControl,
   );
   return fakeIo((url) => {
-    // The typosquat control is one letter short of the PyPI control, which the ranking carries.
+    // The typosquat control is one letter off the PyPI control, which the ranking carries.
     if (url.hostname === "hugovk.dev") {
       return { status: 200, body: { rows: [{ project: "requests" }] } };
     }
@@ -769,15 +769,15 @@ describe("check-name.mts typosquat column", () => {
   test("one edit apart means one insertion, deletion, substitution, or adjacent transposition; exact and two-edit names are not", () => {
     const cases: [string, string, boolean][] = [
       ["requezts", "requests", true],
-      ["reqests", "requests", true],
+      ["request", "requests", true],
       ["requeststs", "requests", false],
       ["requestss", "requests", true],
-      ["reqeusts", "requests", true],
+      ["requetss", "requests", true],
       ["requests", "requests", false],
-      ["reqeust", "requests", false],
+      ["requetsz", "requests", false],
       ["stseuqer", "requests", false],
       ["a", "", true],
-      ["ab", "ba", true],
+      ["qz", "zq", true],
     ];
     for (const [a, b, expected] of cases) expect(oneEditApart(a, b), `${a} ~ ${b}`).toBe(expected);
   });
@@ -849,7 +849,7 @@ describe("check-name.mts typosquat column", () => {
         const text = reply.text ?? JSON.stringify(reply.body);
         return new Response(text, { status: reply.status });
       });
-      const hit = await checkName(stands, OPTIONS, "reqests");
+      const hit = await checkName(stands, OPTIONS, "requestz");
       expect(cell(hit.cells, "typosquat").status, host).toBe(
         host === "hugovk.dev" ? "unknown" : "taken",
       );
@@ -929,9 +929,9 @@ describe("check-name.mts typosquat column", () => {
     // A cache directory that cannot be made (its path is a file) costs the fetch, not the cell.
     writeFileSync(join(scratch, "blocked"), "");
     const unwritable = { ...sourcesIo(["requests"], [], []), cacheDir: join(scratch, "blocked") };
-    const stillRead = await checkName(unwritable, OPTIONS, "reqests");
+    const stillRead = await checkName(unwritable, OPTIONS, "requestz");
     expect(cell(stillRead.cells, "typosquat").status).toBe("taken");
-    const row = await checkName(counting(), OPTIONS, "reqests");
+    const row = await checkName(counting(), OPTIONS, "requestz");
     expect(fetches).toBe(1);
     expect(indexFetches).toBe(2);
     expect(cell(row.cells, "typosquat").status).toBe("taken");
