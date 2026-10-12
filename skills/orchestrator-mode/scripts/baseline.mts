@@ -151,25 +151,41 @@ interface DiffResult {
   readonly diff: string;
 }
 
+// git's own text-or-binary rule (buffer_is_binary): a NUL within the first 8000 bytes. Decoding validity
+// is not the rule, so a Latin-1 file still renders as a patch and a NUL-bearing pair never does.
+const BINARY_PROBE_BYTES = 8000;
 // ignoreBOM keeps a leading U+FEFF in the string: the default strips it, and a pinned copy that differs
 // from the tree only by its BOM would then render as a drift with an empty diff.
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+function isBinary(bytes: Buffer): boolean {
+  return bytes.subarray(0, BINARY_PROBE_BYTES).includes(0);
+}
+
+/**
+ * Both sides fall back to latin1 together, never one each: a file re-encoded
+ * from Latin-1 to UTF-8 would otherwise decode to equal strings and render
+ * a drift with an empty diff.
+ */
+function decodeTexts(pinned: Buffer, current: Buffer): [string, string] {
+  try {
+    return [UTF8.decode(pinned), UTF8.decode(current)];
+  } catch {
+    return [pinned.toString("latin1"), current.toString("latin1")];
+  }
+}
 
 function compareFiles(baselineFile: string, treeFile: string): DiffResult {
   const pinned = readFileSync(baselineFile);
   const current = readFileSync(treeFile);
   if (pinned.equals(current)) return { identical: true, diff: "" };
-  let pinnedText: string;
-  let currentText: string;
-  try {
-    pinnedText = UTF8.decode(pinned);
-    currentText = UTF8.decode(current);
-  } catch {
+  if (isBinary(pinned) || isBinary(current)) {
     return {
       identical: false,
       diff: `binary files differ: ${pinned.length} bytes pinned, ${current.length} bytes in the tree`,
     };
   }
+  const [pinnedText, currentText] = decodeTexts(pinned, current);
   const patch = jsdiff.createTwoFilesPatch(
     baselineFile,
     treeFile,

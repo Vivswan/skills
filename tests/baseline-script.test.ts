@@ -340,19 +340,34 @@ describe("baseline.mts pin/check", () => {
   });
 
   test("a binary pair reports drift as 'binary files differ', never a text patch", () => {
-    // 0xff never occurs in UTF-8, so neither side decodes as text.
+    // git's rule: a NUL in the first 8000 bytes makes a file binary.
     const fx = makeFixture({});
-    fx.write("logo.bin", Buffer.from([0xff, 0xfe, 0x00, 0x01]));
+    fx.write("logo.bin", Buffer.from([0x00, 0x01]));
     expect(runBaseline(["pin", fx.baseline, fx.tree, "logo.bin"]).code).toBe(0);
-    fx.write("logo.bin", Buffer.from([0xff, 0xfe, 0x00, 0x02, 0x03]));
+    fx.write("logo.bin", Buffer.from([0x00, 0x02]));
 
     const check = runBaseline(["check", fx.baseline, fx.tree]);
     expect(check.code).toBe(1);
     const entry = fileStatus(check.summary, "logo.bin");
     expect(entry.status).toBe("drifted");
     expect(entry.detail).toContain("binary files differ");
-    expect(entry.detail).toContain("4 bytes pinned, 5 bytes in the tree");
+    expect(entry.detail).toContain("2 bytes pinned, 2 bytes in the tree");
     expect(entry.detail).not.toContain("@@");
+  });
+
+  test("a Latin-1 text file (not valid UTF-8) still renders as a text patch", () => {
+    const fx = makeFixture({});
+    fx.write("notes.txt", Buffer.from("café\n", "latin1"));
+    expect(runBaseline(["pin", fx.baseline, fx.tree, "notes.txt"]).code).toBe(0);
+    fx.write("notes.txt", Buffer.from("café updated\n", "latin1"));
+
+    const check = runBaseline(["check", fx.baseline, fx.tree]);
+    expect(check.code).toBe(1);
+    const entry = fileStatus(check.summary, "notes.txt");
+    expect(entry.status).toBe("drifted");
+    expect(entry.detail).toContain("-café\n");
+    expect(entry.detail).toContain("+café updated\n");
+    expect(entry.detail).not.toContain("binary files differ");
   });
 
   test("a one-line edit in a multi-megabyte file renders as one focused hunk within the timeout", () => {
