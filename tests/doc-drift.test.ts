@@ -16,6 +16,7 @@ const ROOT = join(import.meta.dir, "..");
 const FLEET_DOC = join(ROOT, "skills", "orchestrator-mode", "references", "fleet-monitor.md");
 const FLEET_SCRIPTS = join(ROOT, "skills", "orchestrator-mode", "scripts");
 const RUBBER_DUCK = join(ROOT, "skills", "rubber-duck-review");
+const WATCH_PRS = join(ROOT, "skills", "watch-prs-and-ci");
 const WORKTREE_HYGIENE = join(ROOT, "skills", "worktree-hygiene");
 const CODEX_BROWSER_FIX = join(ROOT, "skills", "codex-browser-fix");
 
@@ -292,6 +293,47 @@ const SURFACES: Record<string, Surface> = {
         script:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
           "process.stderr.write(`reviewer binary not found: ${tool}\\n`);\n        process.exitCode = 2;",
+      },
+    ],
+  },
+  "watch-prs-and-ci/SKILL.md <-> pr-events.mts": {
+    docPath: join(WATCH_PRS, "SKILL.md"),
+    scriptPath: join(WATCH_PRS, "scripts", "pr-events.mts"),
+    tokens: [
+      {
+        doc: "pr-events.mts watch <owner/repo>#<n> --mode bypass|prompting [--head <sha>] [--expect-workflow <name>]... [--sink socket|file] [--id <name>] [--pid <pid>]",
+        script:
+          '"  watch <owner/repo>#<n> --mode bypass|prompting [--head <sha>] [--expect-workflow <name>]... [sink options]"',
+      },
+      {
+        doc: "pr-events.mts watch-commit <owner/repo> <sha> --mode ... [--expect-workflow ...]",
+        script:
+          '"  watch-commit <owner/repo> <sha> --mode bypass|prompting [--expect-workflow <name>]... [sink options]"',
+      },
+      {
+        doc: { text: "--expect-workflow", occurrences: ">=1" },
+        script: { text: '"expect-workflow": { type: "string", multiple: true }', occurrences: 2 },
+      },
+      {
+        doc: "pr-events.mts daemon [--interval <s>] [--idle-seconds <s>]",
+        script: '"idle-seconds": { type: "string" }',
+      },
+      {
+        doc: { text: "--sink file --id", occurrences: ">=1" },
+        script: '"sink options: [--sink socket|file] [--id <name>] [--pid <pid>]"',
+      },
+      { doc: 'from-mode="bypass"', script: "from_mode: sub.mode" },
+      { doc: "`PR_EVENTS_DIR`", script: "PR_EVENTS_DIR: dir" },
+    ],
+  },
+  "watch-prs-and-ci/SKILL.md <-> state.mts": {
+    docPath: join(WATCH_PRS, "SKILL.md"),
+    scriptPath: join(WATCH_PRS, "scripts", "state.mts"),
+    tokens: [
+      { doc: "`events.jsonl`", script: 'EVENTS_FILE = "events.jsonl"' },
+      {
+        doc: { text: "`daemon.sock`", occurrences: ">=1" },
+        script: 'CONTROL_SOCKET = "daemon.sock"',
       },
     ],
   },
