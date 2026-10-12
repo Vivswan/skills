@@ -23,7 +23,6 @@ export const CLOSING_LINE = "automated notice from pr-events; no reply needed";
 // timer only bounds a connect or flush that never returns.
 const DELIVER_TIMEOUT_MS = 5_000;
 
-/** Writes one frame; rejects with the connect error's code, or ETIMEDOUT when nothing answered. */
 export function deliver(socketPath: string, frame: InboxFrame): Promise<void> {
   return new Promise((resolve, reject) => {
     const socket = connect(socketPath);

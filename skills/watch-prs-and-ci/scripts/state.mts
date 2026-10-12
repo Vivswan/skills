@@ -1,6 +1,3 @@
-// The daemon's durable state: where the runtime directory is, what the subscriptions and last-seen
-// rows look like, and the write-ahead log every event is appended to before any delivery.
-
 import {
   appendFileSync,
   chmodSync,
@@ -55,13 +52,18 @@ export interface CommitSubscription {
   expected: string[];
 }
 
+/** What keeps a subscription alive: its inbox's session, a named pid, or a lease `wait` renews. */
+export type Liveness =
+  | { kind: "inbox"; pid: number | null }
+  | { kind: "pid"; pid: number }
+  | { kind: "lease"; until: string };
+
 export interface Subscription {
   sink: Sink;
   /** The inbox socket path for a socket sink, the `--id` for a file sink; the key in `subscriptions`. */
   address: string;
-  pid: number | null;
   mode: Mode;
-  leaseUntil: string | null;
+  liveness: Liveness;
   prs: Record<PrKey, PrSubscription>;
   commits: Record<CommitKey, CommitSubscription>;
 }

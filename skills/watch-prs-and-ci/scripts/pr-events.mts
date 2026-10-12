@@ -8,7 +8,16 @@
 
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { appendFileSync, chmodSync, closeSync, openSync, unlinkSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -32,6 +41,7 @@ import {
   type CommitKey,
   commitKey,
   type EventInput,
+  type Liveness,
   LOG_FILE,
   loadState,
   type Mode,
@@ -143,7 +153,9 @@ function exchange(socket: Socket, command: Command): Promise<Reply> {
       }
     });
     socket.on("error", reject);
-    socket.on("close", () => reject(new Error("the daemon closed the connection without a reply")));
+    socket.on("close", () =>
+      reject(new ToolingError("the daemon closed the connection without a reply")),
+    );
     socket.write(`${JSON.stringify(command)}\n`);
   });
 }
@@ -195,7 +207,6 @@ async function requestStarting(dir: string, command: Command): Promise<Reply> {
   return exchange(await findOrStart(dir), command);
 }
 
-/** Null when no daemon runs. */
 async function requestRunning(dir: string, command: Command): Promise<Reply | null> {
   let socket: Socket;
   try {
@@ -410,6 +421,17 @@ async function cmdStop(dir: string): Promise<number> {
   return 0;
 }
 
+function describeLiveness(liveness: Liveness): string {
+  switch (liveness.kind) {
+    case "inbox":
+      return `pid=${liveness.pid ?? "-"}`;
+    case "pid":
+      return `pid=${liveness.pid}`;
+    case "lease":
+      return `lease=${liveness.until}`;
+  }
+}
+
 function describeDelivery(delivery: State["deliveries"][string] | undefined): string {
   return delivery ? `${delivery.outcome} (#${delivery.eventId} at ${delivery.at})` : "none";
 }
@@ -438,7 +460,7 @@ async function cmdStatus(dir: string): Promise<number> {
         .map((commit) => `${commit.repo}@${commit.sha.slice(0, 12)}`)
         .join(",") || "-";
     lines.push(
-      `  ${sub.sink} ${sub.address} mode=${sub.mode} pid=${sub.pid ?? "-"} lease=${sub.leaseUntil ?? "-"} prs=${prs} commits=${commits} delivery=${describeDelivery(state.deliveries[sub.address])}`,
+      `  ${sub.sink} ${sub.address} mode=${sub.mode} ${describeLiveness(sub.liveness)} prs=${prs} commits=${commits} delivery=${describeDelivery(state.deliveries[sub.address])}`,
     );
   }
   const pruned = Object.entries(state.deliveries).filter(
@@ -512,43 +534,58 @@ async function cmdWait(dir: string, args: string[]): Promise<number> {
 
 // --- daemon -------------------------------------------------------------------
 
-type Bound = { kind: "bound"; server: Server } | { kind: "inuse" };
+const BIND_LOCK_WAIT_MS = 5000;
+// A lock older than this was left by a daemon that died inside the critical section.
+const BIND_LOCK_STALE_MS = 10_000;
 
-function tryListen(path: string): Promise<Bound> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", (error) => {
-      if (errorCode(error) === "EADDRINUSE") resolve({ kind: "inuse" });
-      else reject(error);
-    });
-    server.listen(path, () => resolve({ kind: "bound", server }));
-  });
-}
-
-/** Binding the control socket is the single-instance lock; null means another daemon holds it. */
+/**
+ * Binding the control socket is the single-instance lock. Replacing a stale socket file is a
+ * probe, an unlink, and a bind, which two daemons starting at once would interleave (the second
+ * unlinks the first's live socket), so that sequence runs under a directory lock: mkdir is atomic.
+ */
 async function bindControlSocket(
   path: string,
   log: (line: string) => void,
 ): Promise<Server | null> {
-  const first = await tryListen(path);
-  if (first.kind === "bound") return first.server;
-  try {
-    (await connectOnce(path)).destroy();
-    log(`another daemon answers on ${path}; exiting`);
-    return null;
-  } catch (error) {
-    if (errorCode(error) !== "ECONNREFUSED") throw error;
+  const lock = `${path}.lock`;
+  const deadline = Date.now() + BIND_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") throw error;
+      const held = statSync(lock, { throwIfNoEntry: false });
+      if (held && Date.now() - held.mtimeMs > BIND_LOCK_STALE_MS) {
+        log(`removing the stale bind lock ${lock}`);
+        rmSync(lock, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error(`${lock} held for over ${BIND_LOCK_WAIT_MS} ms`);
+      await sleep(50);
+    }
   }
-  log(`replacing the stale control socket ${path}`);
   try {
-    unlinkSync(path);
-  } catch (error) {
-    if (errorCode(error) !== "ENOENT") throw error;
+    try {
+      (await connectOnce(path)).destroy();
+      log(`another daemon answers on ${path}; exiting`);
+      return null;
+    } catch (error) {
+      const code = errorCode(error);
+      if (code !== "ECONNREFUSED" && code !== "ENOENT") throw error;
+      if (code === "ECONNREFUSED") {
+        log(`replacing the stale control socket ${path}`);
+        unlinkSync(path);
+      }
+    }
+    const server = createServer();
+    server.listen(path);
+    await once(server, "listening");
+    chmodSync(path, 0o600);
+    return server;
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
   }
-  const second = await tryListen(path);
-  if (second.kind === "bound") return second.server;
-  log(`another daemon took ${path} first; exiting`);
-  return null;
 }
 
 function flatten(text: string): string {
@@ -629,6 +666,26 @@ function leaseFrom(now: number): string {
   return new Date(now + LEASE_MS).toISOString();
 }
 
+function livenessOf(sink: SinkChoice, now: number): Liveness {
+  if (sink.sink === "socket") return { kind: "inbox", pid: sink.pid };
+  if (sink.pid !== null) return { kind: "pid", pid: sink.pid };
+  return { kind: "lease", until: leaseFrom(now) };
+}
+
+function prunedReason(sub: Subscription, now: number): string | null {
+  const { liveness } = sub;
+  switch (liveness.kind) {
+    case "inbox":
+      return isLiveSubscriber(sub.address, liveness.pid)
+        ? null
+        : "inbox gone or its session exited";
+    case "pid":
+      return isProcessAlive(liveness.pid) ? null : `pid ${liveness.pid} exited`;
+    case "lease":
+      return Date.parse(liveness.until) > now ? null : "lease lapsed without a wait";
+  }
+}
+
 async function runDaemon(
   dir: string,
   intervalSeconds: number,
@@ -640,7 +697,6 @@ async function runDaemon(
   const state = loadState(dir);
   const server = await bindControlSocket(socketPath, log);
   if (server === null) return 0;
-  chmodSync(socketPath, 0o600);
   log(`daemon ${process.pid} listening on ${socketPath}; poll every ${intervalSeconds} s`);
 
   let polling: Promise<number> | null = null;
@@ -696,25 +752,30 @@ async function runDaemon(
     );
   };
 
+  const dropSubscription = (sub: Subscription, reason: string): void => {
+    delete state.subscriptions[sub.address];
+    state.deliveries[sub.address] = {
+      eventId: state.lastEventId,
+      at: new Date().toISOString(),
+      outcome: `pruned: ${reason}`,
+    };
+    log(`pruned ${sub.sink} ${sub.address}: ${reason}`);
+  };
+
+  const dropEmptySubscriptions = (): void => {
+    for (const sub of subscribers()) {
+      if (Object.keys(sub.prs).length === 0 && Object.keys(sub.commits).length === 0) {
+        dropSubscription(sub, "nothing left to watch");
+      }
+    }
+  };
+
   const prune = (): void => {
     const now = Date.now();
+    dropEmptySubscriptions();
     for (const sub of subscribers()) {
-      let reason: string | null = null;
-      if (sub.sink === "socket") {
-        if (!isLiveSubscriber(sub.address, sub.pid)) reason = "inbox gone or its session exited";
-      } else if (sub.pid !== null) {
-        if (!isProcessAlive(sub.pid)) reason = `pid ${sub.pid} exited`;
-      } else if (sub.leaseUntil === null || Date.parse(sub.leaseUntil) <= now) {
-        reason = "lease lapsed without a wait";
-      }
-      if (reason === null) continue;
-      delete state.subscriptions[sub.address];
-      state.deliveries[sub.address] = {
-        eventId: state.lastEventId,
-        at: new Date().toISOString(),
-        outcome: `pruned: ${reason}`,
-      };
-      log(`pruned ${sub.sink} ${sub.address}: ${reason}`);
+      const reason = prunedReason(sub, now);
+      if (reason !== null) dropSubscription(sub, reason);
     }
     for (const key of Object.keys(state.rows)) {
       if (subscribersOfPr(key).length === 0) delete state.rows[key];
@@ -758,8 +819,10 @@ async function runDaemon(
         return true;
       case "missing":
       case "trouble":
+        // Noticed once, at the grace; the sha stays judged, so a run that registers late still
+        // gets its verdict.
         grace.missingPolls += 1;
-        if (grace.missingPolls < MISSING_GRACE_POLLS) return false;
+        if (grace.missingPolls !== MISSING_GRACE_POLLS) return false;
         emitted.push(
           emit(
             {
@@ -773,7 +836,7 @@ async function runDaemon(
             targets,
           ),
         );
-        return true;
+        return false;
     }
   };
 
@@ -853,10 +916,14 @@ async function runDaemon(
       );
       if (oid) {
         for (const sub of targets) {
+          const previous = sub.commits[commitKey(ref.repo, oid)];
           sub.commits[commitKey(ref.repo, oid)] = {
             repo: ref.repo,
             sha: oid,
-            expected: (sub.prs[key] as { expected: string[] }).expected,
+            expected: union([
+              previous?.expected ?? [],
+              (sub.prs[key] as { expected: string[] }).expected,
+            ]),
           };
         }
         addPendingCommit(ref.repo, oid);
@@ -965,7 +1032,8 @@ async function runDaemon(
         for (const ref of refs) {
           const current = rows.get(prKey(ref));
           if (current === undefined) {
-            log(`${prKey(ref)}: not in the rows read; keeping the saved row`);
+            lastError = `${prKey(ref)}: not in the rows read (deleted, or no access?)`;
+            log(`poll: ${lastError}`);
             continue;
           }
           try {
@@ -1009,6 +1077,7 @@ async function runDaemon(
       }
     }
     await deliverAll(emitted);
+    dropEmptySubscriptions();
     saveState(dir, state);
     checkIdle();
     return emitted.length;
@@ -1056,15 +1125,13 @@ async function runDaemon(
     const sub: Subscription = state.subscriptions[sink.address] ?? {
       sink: sink.sink,
       address: sink.address,
-      pid: null,
       mode,
-      leaseUntil: null,
+      liveness: livenessOf(sink, now),
       prs: {},
       commits: {},
     };
     sub.mode = mode;
-    sub.pid = sink.pid;
-    sub.leaseUntil = sink.sink === "file" && sink.pid === null ? leaseFrom(now) : null;
+    sub.liveness = livenessOf(sink, now);
     if (target.kind === "pr") {
       const key = prKey(target);
       const previous = sub.prs[key];
@@ -1112,8 +1179,8 @@ async function runDaemon(
       }
       case "renew": {
         const sub = state.subscriptions[command.address];
-        if (sub && sub.sink === "file" && sub.pid === null) {
-          sub.leaseUntil = leaseFrom(Date.now());
+        if (sub?.liveness.kind === "lease") {
+          sub.liveness = { kind: "lease", until: leaseFrom(Date.now()) };
           saveState(dir, state);
         }
         return { ok: true };

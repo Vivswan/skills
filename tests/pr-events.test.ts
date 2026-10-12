@@ -397,6 +397,12 @@ function headlines(frames: string[]): string[] {
   return frames.map((frame) => parseFrame(frame).message.content.split("\n")[0] as string);
 }
 
+function listeningPid(log: string): string {
+  const match = /daemon (\d+) listening on/.exec(log);
+  if (!match) throw new Error("no listening line in the daemon log");
+  return match[1] as string;
+}
+
 const PR7 = `${REPO}#7`;
 const GREEN_A = `PR ${PR7}: CI green on ${SHORT_A}: ci`;
 
@@ -602,6 +608,7 @@ describe("pr-events.mts", () => {
       .map((call) => /-f oid=([0-9a-f]+)/.exec(call)?.[1]);
     expect(suiteOids).toEqual([HEAD_A, MERGE_C, MERGE_C]);
     const status = s.run(["status"]).stdout;
+    expect(status).toContain("subscribers: 0");
     expect(status).toContain("prs: 0");
     expect(status).toContain("pending commits: 0");
     const routed = s.run(["wait", "--since", "0", "--timeout", "1", "--id", box.path]);
@@ -698,13 +705,84 @@ describe("pr-events.mts", () => {
     expect(content).not.toContain("green");
     expect(s.events().map((e) => e.kind)).toEqual(["ci", "trouble"]);
     expect(s.run(["poll"]).stdout).toContain("0 event(s)");
+    s.fixtures({
+      "suites-5": suites([
+        ["bystander", "completed", "success"],
+        ["gate", "completed", "success"],
+      ]),
+    });
+    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(3)).at(-1)).toBe(
+      `PR ${PR7}: CI green on ${SHORT_A}: bystander, gate`,
+    );
+    expect(s.run(["unwatch", PR7], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["status"]).stdout).toContain("subscribers: 0");
     s.stop();
   }, 30000);
 
-  test("two concurrent watch calls: one daemon binds, both subscriptions land", async () => {
+  test("a merge commit keeps the gates named for it by watch-commit and for the PR; a trouble notice does not end its watch", async () => {
+    const s = new Scenario("gates");
+    const sink = ["--sink", "file", "--id", "a"];
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["pr-gate", "completed", "success"]]),
+      "suites-2": suites([]),
+      "rows-3": rows({ state: "MERGED", mergedAt: T2, mergeCommit: MERGE_C, rollup: "SUCCESS" }),
+      "suites-3": suites([["pr-gate", "completed", "success", 300]]),
+      "suites-4": suites([
+        ["pr-gate", "completed", "success", 300],
+        ["main-gate", "completed", "success", 301],
+      ]),
+    });
+    expect(
+      s.run(["watch", PR7, "--mode", "bypass", "--expect-workflow", "pr-gate", ...sink]).code,
+    ).toBe(0);
+    expect(
+      s.run([
+        "watch-commit",
+        REPO,
+        MERGE_C,
+        "--mode",
+        "bypass",
+        "--expect-workflow",
+        "main-gate",
+        ...sink,
+      ]).code,
+    ).toBe(0);
+    expect(s.run(["poll"]).stdout).toContain("2 event(s)");
+    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    const events = s.events();
+    expect(events.map((e) => e.kind)).toEqual(["ci", "merged", "trouble", "ci"]);
+    expect(events[2]?.text).toContain("no run registered for main-gate");
+    expect(events[3]?.text).toBe(`CI green on ${SHORT_C}: main-gate, pr-gate`);
+    expect(s.run(["status"]).stdout).toContain("pending commits: 0");
+    s.stop();
+  }, 30000);
+
+  test("a subscribed PR missing from the rows read counts as a failed poll, so three in a row raise the trouble notice", () => {
+    const s = new Scenario("omitted");
+    const sink = ["--sink", "file", "--id", "a"];
+    s.fixtures({
+      "rows-1": rows({ rollup: "PENDING" }, { number: 8, rollup: "PENDING" }),
+      "suites-1": suites([["ci", "queued", null]]),
+      "rows-3": rows({ rollup: "PENDING" }),
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass", ...sink]).code).toBe(0);
+    expect(s.run(["watch", `${REPO}#8`, "--mode", "bypass", ...sink]).code).toBe(0);
+    for (const expected of ["0 event(s)", "0 event(s)", "1 event(s)"]) {
+      expect(s.run(["poll"]).stdout).toContain(expected);
+    }
+    const events = s.events();
+    expect(events.map((e) => e.kind)).toEqual(["trouble"]);
+    expect(events[0]?.text).toContain(`${REPO}#8: not in the rows read`);
+    s.stop();
+  }, 30000);
+
+  test("two concurrent watch calls over a stale control socket: one daemon binds, both subscriptions land", async () => {
     const s = new Scenario("race");
     const a = await s.inbox("a");
     const b = await s.inbox("b");
+    deadSocketFile(s.socketPath());
     s.fixtures({
       "rows-1": rows({ rollup: "PENDING" }),
       "suites-1": suites([["ci", "queued", null]]),
@@ -727,6 +805,7 @@ describe("pr-events.mts", () => {
         .split("\n")
         .filter((line) => line.includes("listening on")),
     ).toHaveLength(1);
+    expect(s.run(["status"]).stdout).toContain(`daemon: running (pid ${listeningPid(s.log())})`);
     s.stop();
   }, 30000);
 
@@ -909,8 +988,8 @@ describe("pr-events.mts", () => {
     s.stop();
     const statePath = join(s.dir, "state.json");
     const state = JSON.parse(readFileSync(statePath, "utf-8"));
-    expect(state.subscriptions.probe.leaseUntil > new Date().toISOString()).toBe(true);
-    state.subscriptions.probe.leaseUntil = "2000-01-01T00:00:00Z";
+    expect(state.subscriptions.probe.liveness.until > new Date().toISOString()).toBe(true);
+    state.subscriptions.probe.liveness.until = "2000-01-01T00:00:00Z";
     writeFileSync(statePath, JSON.stringify(state));
     expect(s.run(["poll"]).code).toBe(0);
     const status = s.run(["status"]).stdout;
