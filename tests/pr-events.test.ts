@@ -536,6 +536,7 @@ class Scenario {
     repo: string;
     pr: number | null;
     sha: string | null;
+    runs?: string;
   }> {
     return readOr(() => readFileSync(this.file("events.jsonl", key), "utf-8"), "")
       .split("\n")
@@ -1116,6 +1117,78 @@ describe("pr-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a re-judgment that stays pending for a poll keeps the delivered verdict's runs: the poll that confirms the same green is silent", async () => {
+    // With no gate named, the re-judgment an external check triggers waits for two polls to agree
+    // on the workflow set. The row saved pending in between used to forget the runs the delivered
+    // green rested on, so the confirming poll delivered the same green again.
+    const s = new Scenario("pending-prior");
+    const box = await s.inbox("a");
+    const green = suites([["ci", "completed", "success", 1]]);
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": green,
+      "rows-2": rows({ rollup: "SUCCESS" }),
+      "suites-2": green,
+      "rows-3": rows({ rollup: "SUCCESS" }),
+      "suites-3": green,
+      "rows-4": rows({ rollup: "PENDING" }),
+      "suites-4": green,
+      "rows-5": rows({ rollup: "PENDING" }),
+      "suites-5": green,
+      "rows-6": rows({ rollup: "FAILURE" }),
+      "suites-6": suites([["ci", "completed", "failure", 9]]),
+      "log-9.txt": "##[error]ci failed",
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(1))).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci`]);
+    expect(s.events()[0]?.runs).toBe("1:completed:success");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))[1]).toBe(`PR ${PR7}: CI red on ${SHORT_A}`);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a verdict restored from the log ahead of the state carries its runs: the re-judgment an external check triggers is silent on the same runs", async () => {
+    // The restored verdict used to carry no runs, so the first re-judgment on that head delivered
+    // the logged green again.
+    const s = new Scenario("log-ahead-runs");
+    const box = await s.inbox("a");
+    const green = suites([["ci", "completed", "success", 1]]);
+    s.fixtures({
+      "rows-1": rows({ rollup: "PENDING" }),
+      "suites-1": suites([["ci", "queued", null, 1]]),
+      "rows-2": rows({ rollup: "SUCCESS" }),
+      "suites-2": green,
+      // The restart's own poll: the rollup only catching up with the restored verdict.
+      "rows-3": rows({ rollup: "SUCCESS" }),
+      "rows-4": rows({ rollup: "PENDING" }),
+      "suites-3": green,
+      "rows-5": rows({ rollup: "FAILURE" }),
+      "suites-4": suites([["ci", "completed", "failure", 9]]),
+      "log-9.txt": "##[error]ci failed",
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    const pending = readFileSync(s.file("state.json"), "utf-8");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(await box.frames(1)).toHaveLength(1);
+    s.stop({ inbox: box.path });
+    expect(s.events().map((e) => [e.id, e.kind, e.runs])).toEqual([
+      [1, "ci", "1:completed:success"],
+    ]);
+    writeFileSync(s.file("state.json"), pending);
+    await s.start({ inbox: box.path });
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))[1]).toBe(`PR ${PR7}: CI red on ${SHORT_A}`);
+    expect(s.events().map((e) => e.id)).toEqual([1, 2]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a PR number past the safe-integer range is a usage error, not a rounded number", () => {
     const s = new Scenario("big-number");
     const r = s.run(["watch", `${REPO}#9007199254740993`, ...GATE_CI], { inbox: s.socketPath() });
@@ -1124,29 +1197,34 @@ describe("pr-events.mts", () => {
     expect(s.ghCalls()).toEqual([]);
   });
 
-  test("a recycled session pid does not inherit the earlier session's targets: a saved state with another start token is set aside", async () => {
-    // State files are keyed by pid, and pids come back around; a new session given an exited
-    // session's pid would otherwise poll its PRs and receive its events.
-    const s = new Scenario("recycled-pid");
-    const box = await s.inbox("a");
-    writeFileSync(
-      s.file("state.json"),
-      JSON.stringify({
-        owner: { pid: process.pid, start: "an-earlier-incarnation" },
-        prs: { [PR7]: { head: null, expected: ["ci"] } },
-        lastEventId: 3,
-      }),
-    );
-    await s.start({ inbox: box.path });
-    expect(s.log()).toContain(
-      `the saved state belonged to an earlier session with pid ${process.pid}`,
-    );
-    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("prs: 0");
-    s.stop({ inbox: box.path });
-    const saved = JSON.parse(readFileSync(s.file("state.json"), "utf-8"));
-    expect(saved.owner.pid).toBe(process.pid);
-    expect(saved.owner.start).not.toBe("an-earlier-incarnation");
-  }, 30000);
+  // Without /proc there is no start token and the check is skipped by design, so the test is Linux's.
+  test.skipIf(process.platform !== "linux")(
+    "a recycled session pid does not inherit the earlier session's targets: a saved state with another start token is set aside",
+    async () => {
+      // State files are keyed by pid, and pids come back around; a new session given an exited
+      // session's pid would otherwise poll its PRs and receive its events.
+      const s = new Scenario("recycled-pid");
+      const box = await s.inbox("a");
+      writeFileSync(
+        s.file("state.json"),
+        JSON.stringify({
+          owner: { pid: process.pid, start: "an-earlier-incarnation" },
+          prs: { [PR7]: { head: null, expected: ["ci"] } },
+          lastEventId: 3,
+        }),
+      );
+      await s.start({ inbox: box.path });
+      expect(s.log()).toContain(
+        `the saved state belonged to an earlier session with pid ${process.pid}`,
+      );
+      expect(s.run(["status"], { inbox: box.path }).stdout).toContain("prs: 0");
+      s.stop({ inbox: box.path });
+      const saved = JSON.parse(readFileSync(s.file("state.json"), "utf-8"));
+      expect(saved.owner.pid).toBe(process.pid);
+      expect(saved.owner.start).not.toBe("an-earlier-incarnation");
+    },
+    30000,
+  );
 
   test("a reply inside an existing thread (thread count unchanged) is a comment event with path:line; the viewer's own is not", async () => {
     const s = new Scenario("reply");
@@ -1929,14 +2007,19 @@ describe("pr-events.mts", () => {
       }),
     );
     const line = (id: number, pr: number | null) =>
-      `${JSON.stringify({ id, at: T1, repo: REPO, pr, sha: HEAD_A, kind: "ci", text: "CI green", url: "" })}\n`;
+      `${JSON.stringify({ id, at: T1, repo: REPO, pr, sha: HEAD_A, kind: "ci", text: "CI green", url: "", runs: "1:completed:success" })}\n`;
     writeFileSync(files.events, line(1, null));
     const afterCommitLine = loadState(files).state;
     expect(Object.keys(afterCommitLine.commits)).toEqual([]);
     expect(afterCommitLine.rows[`${REPO}#7`]?.ci.pending).toBe(true);
     appendFileSync(files.events, line(2, 7));
     const afterPrLine = loadState(files).state;
-    expect(afterPrLine.rows[`${REPO}#7`]?.ci.pending).toBe(false);
+    // The line's runs come back with the verdict: a re-judgment seeing the same runs stays silent.
+    expect(afterPrLine.rows[`${REPO}#7`]?.ci).toEqual({
+      pending: false,
+      outcome: "green",
+      runs: "1:completed:success",
+    });
   });
 
   test("the first frame after a restart waits the full gap from the daemon's own start, so a stale saved clock cannot put two frames inside one second", async () => {

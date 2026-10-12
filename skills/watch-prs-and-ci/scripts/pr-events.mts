@@ -37,6 +37,7 @@ import {
   outcomeOfVerdict,
   ownerFiles,
   type PrEvent,
+  pendingCi,
   RuntimeDirError,
   readEventsSince,
   runtimeDir,
@@ -758,7 +759,7 @@ async function runDaemon(
     const settle = (text: string): CiJudgment => {
       const outcome = outcomeOfVerdict(text);
       if (priorRuns === fingerprint) return { outcome, runs: fingerprint, event: null };
-      const event = emit({ ...base, kind: "ci", text });
+      const event = emit({ ...base, kind: "ci", text, runs: fingerprint });
       emitted.push(event);
       return { outcome, runs: fingerprint, event };
     };
@@ -822,7 +823,7 @@ async function runDaemon(
     const base = { repo: ref.repo, pr: ref.number, sha: current.headRefOid, url: current.url };
     const row: SavedRow = {
       ...current,
-      ci: saved?.ci ?? { pending: true, grace: freshGrace() },
+      ci: saved?.ci ?? pendingCi(),
       seenActivity: saved?.seenActivity ?? [],
       mergeCommitPolls: saved?.mergeCommitPolls ?? 0,
     };
@@ -860,10 +861,12 @@ async function runDaemon(
       !saved.ci.pending &&
       !isTerminalRollup(saved.rollupState) &&
       rollupAgreesWith(current.rollupState, saved.ci.outcome);
-    if (saved && (changes.head || (changes.rollup && !rollupCatchingUp))) {
-      // A rollup move on the same head keeps the grace already spent waiting for its gate.
-      const grace = !changes.head && saved.ci.pending ? saved.ci.grace : freshGrace();
-      row.ci = { pending: true, grace };
+    // A new head is judged from nothing. A rollup move on a head still being judged keeps the grace
+    // already spent waiting for its gate (and the runs of the verdict before it); one on a settled
+    // head is judged again, carrying that verdict's runs so the same ones are not delivered twice.
+    if (saved && changes.head) row.ci = pendingCi();
+    else if (saved && !saved.ci.pending && changes.rollup && !rollupCatchingUp) {
+      row.ci = pendingCi(saved.ci.runs);
     }
     if (current.state === "MERGED") {
       const oid = current.mergeCommitOid;
@@ -922,9 +925,7 @@ async function runDaemon(
         row.ci.grace,
         emitted,
         judging === "settling",
-        saved && !saved.ci.pending && saved.headRefOid === current.headRefOid
-          ? saved.ci.runs
-          : null,
+        row.ci.priorRuns,
       );
       if (judgment) row.ci = { pending: false, outcome: judgment.outcome, runs: judgment.runs };
     }
@@ -1154,7 +1155,9 @@ async function runDaemon(
       state.prs[key] = { head: target.head, expected: target.expected };
       const row = state.rows[key];
       if (row && (row.ci.pending || !sameSet(previous?.expected ?? [], target.expected))) {
-        row.ci = { pending: true, grace: freshGrace() };
+        // A changed gate set is a new contract: its verdict on the same runs is news.
+        const sameGates = sameSet(previous?.expected ?? [], target.expected);
+        row.ci = pendingCi(sameGates && row.ci.pending ? row.ci.priorRuns : null);
       }
     } else {
       key = commitKey(target.repo, target.sha);

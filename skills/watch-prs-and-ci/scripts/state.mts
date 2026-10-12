@@ -27,6 +27,8 @@ export interface PrEvent {
   kind: EventKind;
   text: string;
   url: string;
+  /** On a `ci` line: the GitHub Actions runs the verdict rests on, `id:status:conclusion` sorted and comma-joined. */
+  runs?: string;
 }
 
 export type EventInput = Omit<PrEvent, "id" | "at">;
@@ -70,11 +72,19 @@ export interface CommitWatch {
 /** What a settled verdict said, so a rollup that only catches up with it is told from a new result. */
 export type CiOutcome = "green" | "red";
 
-/** A settled judgment: what it said, and a fingerprint of the GitHub Actions runs it judged (id,
- * status, conclusion), so a later re-judgment that sees the same runs says nothing new. */
+/**
+ * A settled judgment: what it said, and a fingerprint of the GitHub Actions runs it judged (id,
+ * status, conclusion), so a later re-judgment that sees the same runs says nothing new. A head
+ * being judged again after a verdict (a rollup move) carries that verdict's runs as `priorRuns`
+ * for as many polls as the re-judgment stays pending; null when nothing was delivered on the head.
+ */
 export type RowCi =
-  | { pending: true; grace: Grace }
+  | { pending: true; grace: Grace; priorRuns: string | null }
   | { pending: false; outcome: CiOutcome; runs: string };
+
+export function pendingCi(priorRuns: string | null = null): RowCi {
+  return { pending: true, grace: freshGrace(), priorRuns };
+}
 
 export function outcomeOfVerdict(text: string): CiOutcome {
   return text.startsWith("CI green") ? "green" : "red";
@@ -268,7 +278,7 @@ export function loadState(
     }
     const row = state.rows[`${event.repo}#${event.pr}`];
     if (row && row.headRefOid === event.sha && row.ci.pending) {
-      row.ci = { pending: false, outcome: outcomeOfVerdict(event.text), runs: "" };
+      row.ci = { pending: false, outcome: outcomeOfVerdict(event.text), runs: event.runs ?? "" };
     }
   }
   const newest = unlogged.at(-1) ?? logged;
