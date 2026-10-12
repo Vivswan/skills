@@ -28,7 +28,10 @@ export type Activity = {
 export type PrDetail = {
   lastCommitAuthor: string | null;
   unresolvedThreads: number;
+  /** What the read fetched, cut below the newest id already reported: the candidates for news. */
   activities: Activity[];
+  /** Every id the read fetched, the cut ones included: what the daemon has now seen. */
+  fetchedIds: string[];
   /** One line per connection whose older activity was left unread at the paging cap. */
   gaps: string[];
 };
@@ -204,6 +207,7 @@ class DetailReader {
   private readonly owner: string;
   private readonly name: string;
   readonly gaps: string[] = [];
+  readonly fetchedIds: string[] = [];
 
   constructor(
     private readonly ref: PrRef,
@@ -230,9 +234,10 @@ class DetailReader {
     return variables;
   }
 
-  // The seen set holds two reads' windows, so a node older than the newest reported one on the
+  // The seen set holds two reads' fetched ids, so a node older than the newest reported one on the
   // stopping page is history the set has forgotten, not news: a back page is wider than a
-  // thread's window, and would otherwise resurface comments from before the baseline.
+  // thread's window, and would otherwise resurface comments from before the baseline. Every
+  // fetched id still counts as seen, so a cut page does not narrow the next read's set.
   private readBack(
     first: Connection,
     what: string,
@@ -240,10 +245,11 @@ class DetailReader {
     older: (cursor: string) => Connection,
   ): unknown[] {
     const seen = this.seen;
-    if (seen === null) return first.nodes;
     const newer: unknown[] = [];
     let page = first;
     for (let pages = 1; ; pages += 1) {
+      this.fetchedIds.push(...page.nodes.map(idOf));
+      if (seen === null) return page.nodes;
       const boundary = page.nodes.findLastIndex((node) => seen.has(idOf(node)));
       if (boundary >= 0) return [...page.nodes.slice(boundary), ...newer];
       if (!page.hasPreviousPage) return [...page.nodes, ...newer];
@@ -350,6 +356,7 @@ class DetailReader {
       lastCommitAuthor: typeof commitAuthor === "string" ? commitAuthor : null,
       unresolvedThreads,
       activities,
+      fetchedIds: this.fetchedIds,
       gaps: this.gaps,
     };
   }

@@ -1181,6 +1181,19 @@ describe("readPrDetail", () => {
       lastCommitAuthor: "octocat",
       unresolvedThreads: 2,
       activities: expected,
+      fetchedIds: [
+        "review-comment:11",
+        "review-comment:23",
+        "review-comment:24",
+        "review-comment:25",
+        "review-comment:31",
+        "review-comment:32",
+        "comment:1",
+        "comment:2",
+        "review:1",
+        "review:2",
+        "review:3",
+      ],
       gaps: [],
     });
     const calls = s.calls();
@@ -1268,6 +1281,7 @@ describe("readPrDetail", () => {
       "reply",
       "reply",
     ]);
+    expect(detail.fetchedIds).toContain("review-comment:190");
     const calls = s.calls();
     expect(calls).toHaveLength(3);
     expect(calls[1]).toContain("query OlderThreadComments(");
@@ -1326,6 +1340,7 @@ describe("newActivity", () => {
     const detail = {
       lastCommitAuthor: null,
       unresolvedThreads: 0,
+      fetchedIds: [],
       gaps: [],
       activities: [
         activity("comment:1", "2026-03-01T10:00:02Z", "work-bot"),

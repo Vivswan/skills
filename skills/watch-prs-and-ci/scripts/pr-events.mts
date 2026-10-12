@@ -934,10 +934,7 @@ async function runDaemon(
       const seen = saved ? new Set(row.seenActivity.flat()) : null;
       detail = readPrDetail(ref, seen);
       const activities = seen ? newActivity(detail, seen, viewerLoginCached()) : [];
-      row.seenActivity = [
-        ...row.seenActivity.slice(-1),
-        detail.activities.map((activity) => activity.id),
-      ];
+      row.seenActivity = [...row.seenActivity.slice(-1), detail.fetchedIds];
       const described = describeActivities(activities);
       if (described !== null) emitted.push(emit({ ...base, ...described }, targets));
       for (const gap of detail.gaps) {

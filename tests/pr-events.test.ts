@@ -779,6 +779,29 @@ describe("pr-events.mts", () => {
     s.stop();
   }, 30000);
 
+  test("reads with nothing new keep the whole window seen, so deleting the newest comment does not replay the baseline", async () => {
+    // A read cut below the newest reported comment must not narrow what counts as seen: after two
+    // such reads the seen set would hold that one comment alone, and its deletion would make the
+    // baseline comments beneath it new again.
+    const s = new Scenario("deleted");
+    const box = await s.inbox("a");
+    const baseline = [1, 2, 3].map((n) => ({ login: "dev", at: T1, body: `c${n}`, id: 900 + n }));
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS", comments: 3, updatedAt: T1 }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "detail-1": detail({ comments: baseline }),
+      "rows-2": rows({ rollup: "SUCCESS", comments: 3, updatedAt: T2 }),
+      "rows-3": rows({ rollup: "SUCCESS", comments: 3, updatedAt: T3 }),
+      "rows-4": rows({ rollup: "SUCCESS", comments: 2, updatedAt: T3 }),
+      "detail-4": detail({ comments: baseline.slice(0, 2) }),
+      "viewer-1": VIEWER,
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    for (let poll = 0; poll < 3; poll += 1) expect(s.run(["poll"]).stdout).toContain("0 event(s)");
+    expect(s.events().map((e) => e.kind)).toEqual(["ci"]);
+    s.stop();
+  }, 30000);
+
   test("a row whose head differs from the --head recorded is a head-moved event naming the author; the recorded head is not", async () => {
     const cases: Array<[string, string, string[]]> = [
       ["moved", HEAD_A, [`PR ${PR7}: head moved to ${HEAD_B.slice(0, 12)} by carol`]],
