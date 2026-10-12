@@ -17,6 +17,21 @@ import type { PrKey, Row } from "./pr-rows.mts";
 
 export type EventKind = "comment" | "review" | "ci" | "head" | "merged" | "closed" | "trouble";
 
+/** The kinds a PR subscription can narrow to; `trouble` is tooling news and always comes. */
+export type SubscribedKind = Exclude<EventKind, "trouble">;
+export const ALL_SUBSCRIBED: readonly SubscribedKind[] = [
+  "comment",
+  "review",
+  "ci",
+  "head",
+  "merged",
+  "closed",
+];
+
+export function isSubscribedKind(value: string): value is SubscribedKind {
+  return (ALL_SUBSCRIBED as readonly string[]).includes(value);
+}
+
 /** One line of the write-ahead log; every line is addressed to the daemon's one owner. */
 export interface PrEvent {
   id: number;
@@ -33,10 +48,11 @@ export interface PrEvent {
 
 export type EventInput = Omit<PrEvent, "id" | "at">;
 
-/** What the owner asked for on a PR: the head they pushed, and the complete gate set. */
+/** What the owner asked for on a PR: the head they pushed, the complete gate set, and the kinds they hear about, sorted. */
 export interface PrWatch {
   head: string | null;
   expected: string[];
+  events: SubscribedKind[];
 }
 
 /** `${repo}@${sha}`: a fork shares its commits' shas with the upstream repository. */
@@ -241,7 +257,12 @@ function readSavedState(files: OwnerFiles): State | null {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`${files.state} is not an object; move it aside to start fresh`);
   }
-  return { ...emptyState(), ...(parsed as Partial<State>) };
+  const state = { ...emptyState(), ...(parsed as Partial<State>) };
+  // A subscription saved before kinds could be narrowed hears everything, as it did then.
+  for (const watch of Object.values(state.prs) as Array<Partial<PrWatch>>) {
+    watch.events ??= [...ALL_SUBSCRIBED].sort();
+  }
+  return state;
 }
 
 // The state is the source of the log: an id is never reused, so the counter also clears any line

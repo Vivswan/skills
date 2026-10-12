@@ -668,6 +668,14 @@ describe("pr-events.mts", () => {
     const pinned = s.run(["daemon", "--pid", "1"], { inbox: box.path });
     expect(pinned.code).toBe(2);
     expect(pinned.stderr).toContain("--pid applies to --id");
+    const bogus = s.run(["watch", PR7, "--events", "ci,bogus"], { inbox: box.path });
+    expect(bogus.code).toBe(2);
+    expect(bogus.stderr).toContain(
+      "--events must name kinds from comment, review, ci, head, merged, closed, got: bogus",
+    );
+    const commit = s.run(["watch-commit", REPO, HEAD_A, "--events", "ci"], { inbox: box.path });
+    expect(commit.code).toBe(2);
+    expect(commit.stderr).toContain("--events applies to watch");
     const long = s.run(["daemon", "--id", "x".repeat(120)]);
     expect(long.code).toBe(2);
     expect(long.stderr).toContain("longer than the 104 bytes a Unix socket allows");
@@ -1234,6 +1242,85 @@ describe("pr-events.mts", () => {
       `1:completed:success:${T3}`,
     ]);
     s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("--events narrows a PR's subscription: a kind left out is neither logged nor delivered, its bookkeeping still advances, and a repeated watch replaces the set without replaying what was filtered", async () => {
+    const s = new Scenario("events-filter");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "PENDING" }),
+      "suites-1": suites([["ci", "in_progress", null]]),
+      "rows-2": rows({ rollup: "PENDING", comments: 1, updatedAt: T2 }),
+      "suites-2": suites([["ci", "in_progress", null]]),
+      "detail-2": detail({ comments: [{ login: "bob", at: T2, body: "first" }] }),
+      "viewer-1": VIEWER,
+      "rows-3": rows({ rollup: "SUCCESS", comments: 1, updatedAt: T2 }),
+      "suites-3": suites([["ci", "completed", "success"]]),
+      "rows-4": rows({ rollup: "SUCCESS", comments: 1, updatedAt: T2 }),
+      "rows-5": rows({ rollup: "SUCCESS", comments: 2, updatedAt: T3 }),
+      "detail-3": detail({
+        comments: [
+          { login: "bob", at: T2, body: "first" },
+          { login: "bob", at: T3, body: "second" },
+        ],
+      }),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, "--events", "ci", ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(" events=ci");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.events()).toEqual([]);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(1))).toEqual([GREEN_A]);
+    const widened = s.run(["watch", PR7, "--events", "ci,comment", ...GATE_CI], {
+      inbox: box.path,
+    });
+    expect(widened.code).toBe(0);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(" events=ci,comment");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    const frames = await box.frames(2);
+    expect(headlines(frames)[1]).toBe(`PR ${PR7}: 1 new comment by bob`);
+    expect(text(frames[1] as string)).toContain("second");
+    expect(text(frames[1] as string)).not.toContain("first");
+    expect(s.events().map((e) => e.kind)).toEqual(["ci", "comment"]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a merged PR subscribed without ci hands no merge commit over, and without merged says nothing; with merged alone the line does not claim a CI watch", async () => {
+    const quiet = new Scenario("events-merged-quiet");
+    const quietBox = await quiet.inbox("a");
+    const merged = rows({ state: "MERGED", mergedAt: T2, mergeCommit: MERGE_C, rollup: "SUCCESS" });
+    quiet.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": merged,
+    });
+    await quiet.start({ inbox: quietBox.path });
+    const sub = ["watch", PR7, "--events", "comment,review", ...GATE_CI];
+    expect(quiet.run(sub, { inbox: quietBox.path }).code).toBe(0);
+    expect(quiet.run(["poll"], { inbox: quietBox.path }).stdout).toContain("0 event(s)");
+    const status = quiet.run(["status"], { inbox: quietBox.path }).stdout;
+    expect(status).toContain("prs: 0");
+    expect(status).toContain("commits: 0");
+    expect(quiet.events()).toEqual([]);
+    expect(await quietBox.frames(0)).toHaveLength(0);
+    quiet.stop({ inbox: quietBox.path });
+
+    const loud = new Scenario("events-merged-only");
+    const loudBox = await loud.inbox("a");
+    loud.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": merged,
+    });
+    await loud.start({ inbox: loudBox.path });
+    expect(loud.run(["watch", PR7, "--events", "merged"], { inbox: loudBox.path }).code).toBe(0);
+    expect(loud.run(["poll"], { inbox: loudBox.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await loudBox.frames(1))).toEqual([
+      `PR ${PR7}: merged at ${T2}; mainline commit ${SHORT_C}`,
+    ]);
+    expect(loud.run(["status"], { inbox: loudBox.path }).stdout).toContain("commits: 0");
+    loud.stop({ inbox: loudBox.path });
   }, 30000);
 
   test("a PR number past the safe-integer range is a usage error, not a rounded number", () => {

@@ -305,9 +305,9 @@ const SURFACES: Record<string, Surface> = {
         script: '"  daemon [--interval <s>] [--id <name>] [--pid <pid>]"',
       },
       {
-        doc: "pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--id <name>]",
+        doc: "pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]",
         script:
-          '"  watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--id <name>]"',
+          '"  watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]"',
       },
       {
         doc: "pr-events.mts watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]",

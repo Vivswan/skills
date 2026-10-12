@@ -24,13 +24,16 @@ import {
 import { type Activity, newActivity, readPrDetail, viewerLogin } from "./pr-detail.mts";
 import { type PrKey, type PrRef, prKey, type Row, readRows, rowChanged } from "./pr-rows.mts";
 import {
+  ALL_SUBSCRIBED,
   appendEvents,
   type CiOutcome,
   type CommitKey,
   commitKey,
   type EventInput,
+  type EventKind,
   freshGrace,
   type Grace,
+  isSubscribedKind,
   loadState,
   nextEvent,
   type Owner,
@@ -44,6 +47,7 @@ import {
   runtimeDir,
   type SavedRow,
   type State,
+  type SubscribedKind,
   saveState,
 } from "./state.mts";
 
@@ -77,7 +81,7 @@ const QUOTED = /'[^']*'|"[^"]*"/g;
 const USAGE = [
   "usage: pr-events.mts <command> [options]",
   "  daemon [--interval <s>] [--id <name>] [--pid <pid>]",
-  "  watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--id <name>]",
+  "  watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]",
   "  watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]",
   "  unwatch <owner/repo>#<n> | --all          [--id <name>]",
   "  wait [--since <id>] [--timeout <s>] [--id <name>]",
@@ -172,7 +176,14 @@ function startCommand(owner: Owner): string {
 // --- control protocol --------------------------------------------------------
 
 type WatchTarget =
-  | { kind: "pr"; repo: string; number: number; head: string | null; expected: string[] }
+  | {
+      kind: "pr";
+      repo: string;
+      number: number;
+      head: string | null;
+      expected: string[];
+      events: SubscribedKind[];
+    }
   | { kind: "commit"; repo: string; sha: string; expected: string[] };
 
 type Command =
@@ -287,6 +298,20 @@ function parseExpected(values: string[] | undefined): string[] {
   return [...new Set(names)].sort();
 }
 
+// One flag carries one kind or a comma-separated list; the flags of one call are the complete set,
+// and no flag at all is every kind.
+function parseEvents(values: string[] | undefined): SubscribedKind[] {
+  if (values === undefined) return [...ALL_SUBSCRIBED].sort();
+  const kinds = values.flatMap((value) => value.split(","));
+  const unknown = kinds.find((kind) => !isSubscribedKind(kind));
+  if (unknown !== undefined) {
+    usage(
+      `--events must name kinds from ${ALL_SUBSCRIBED.join(", ")}, got: ${unknown || "nothing"}`,
+    );
+  }
+  return [...new Set(kinds as SubscribedKind[])].sort();
+}
+
 function parse<T extends ParseArgsOptionsConfig>(args: string[], options: T, positionals: number) {
   try {
     const parsed = parseArgs({ args, options, allowPositionals: true, strict: true });
@@ -329,6 +354,7 @@ async function cmdWatch(dir: string, args: string[]): Promise<number> {
       ...OWNER_OPTIONS,
       head: { type: "string" },
       "expect-workflow": { type: "string", multiple: true },
+      events: { type: "string", multiple: true },
     },
     1,
   );
@@ -341,15 +367,21 @@ async function cmdWatch(dir: string, args: string[]): Promise<number> {
     ...ref,
     head: values.head ?? null,
     expected: parseExpected(values["expect-workflow"]),
+    events: parseEvents(values.events),
   });
 }
 
 async function cmdWatchCommit(dir: string, args: string[]): Promise<number> {
   const { values, positionals } = parse(
     args,
-    { ...OWNER_OPTIONS, "expect-workflow": { type: "string", multiple: true } },
+    {
+      ...OWNER_OPTIONS,
+      "expect-workflow": { type: "string", multiple: true },
+      events: { type: "string", multiple: true },
+    },
     2,
   );
+  if (values.events !== undefined) usage("--events applies to watch; a commit's only kind is ci");
   const [repo, sha] = positionals;
   if (repo === undefined || !REPO_PATTERN.test(repo)) {
     usage(`watch-commit needs <owner/repo>, got: ${repo ?? "nothing"}`);
@@ -416,6 +448,11 @@ function gates(expected: string[]): string {
   return expected.join(",") || "-";
 }
 
+/** The subscription's kinds when narrowed; the full set is the default and says nothing. */
+function narrowedTo(events: SubscribedKind[]): string {
+  return events.length === ALL_SUBSCRIBED.length ? "" : ` events=${events.join(",")}`;
+}
+
 async function cmdStatus(dir: string, args: string[]): Promise<number> {
   const { values } = parse(args, OWNER_OPTIONS, 0);
   const owner = resolveOwner(values);
@@ -437,7 +474,7 @@ async function cmdStatus(dir: string, args: string[]): Promise<number> {
       ? `head=${row.headRefOid.slice(0, 12)} state=${row.state} ci=${row.ci.pending ? "pending" : "settled"} updated=${row.updatedAt}`
       : "not polled yet";
     lines.push(
-      `  ${key} ${seen} gates=${gates(pr.expected)} recorded-head=${pr.head?.slice(0, 12) ?? "-"}`,
+      `  ${key} ${seen} gates=${gates(pr.expected)} recorded-head=${pr.head?.slice(0, 12) ?? "-"}${narrowedTo(pr.events)}`,
     );
   }
   const commits = Object.values(state.commits);
@@ -765,6 +802,7 @@ async function runDaemon(
     emitted: PrEvent[],
     settling: boolean,
     priorRuns: string | null = null,
+    subscribed = true,
   ): CiJudgment | null => {
     const runs = discoverRuns(repo, sha);
     const verdict = judgeRuns(runs, expected);
@@ -785,7 +823,8 @@ async function runDaemon(
       .sort();
     const settle = (text: string): CiJudgment => {
       const outcome = outcomeOfVerdict(text);
-      if (priorRuns === fingerprint) return { outcome, runs: fingerprint, event: null };
+      if (priorRuns === fingerprint || !subscribed)
+        return { outcome, runs: fingerprint, event: null };
       const event = emit({ ...base, kind: "ci", text, runs: fingerprint });
       emitted.push(event);
       return { outcome, runs: fingerprint, event };
@@ -856,6 +895,10 @@ async function runDaemon(
     };
     const headMoved = saved ? current.headRefOid !== saved.headRefOid : watch.head !== null;
     const changes = rowChanged(saved, current);
+    // A kind the owner left out is not an event for this PR: not numbered, not logged, not
+    // delivered. The row's bookkeeping advances the same, so a later wider subscription does not
+    // replay it. `trouble` is tooling news and always comes.
+    const wanted = (kind: EventKind): boolean => kind === "trouble" || watch.events.includes(kind);
     let detail: ReturnType<typeof readPrDetail> | null = null;
     // A first sighting reads the detail too: what is on the PR now is the baseline, by id.
     if (!saved || changes.activity) {
@@ -864,12 +907,13 @@ async function runDaemon(
       const activities = seen ? newActivity(detail, seen, viewerLoginCached()) : [];
       row.seenActivity = [...row.seenActivity.slice(-1), detail.fetchedIds];
       const described = describeActivities(activities);
-      if (described !== null) emitted.push(emit({ ...base, ...described }));
+      if (described !== null && wanted(described.kind))
+        emitted.push(emit({ ...base, ...described }));
       for (const gap of detail.gaps) {
         emitted.push(emit({ ...base, kind: "trouble", text: `${gap}; read the PR` }));
       }
     }
-    if (headMoved && watch.head !== current.headRefOid) {
+    if (headMoved && watch.head !== current.headRefOid && wanted("head")) {
       detail ??= readPrDetail(ref, null);
       emitted.push(
         emit({
@@ -918,27 +962,34 @@ async function runDaemon(
       }
       // The line's sha is the merge commit, whole: the text shows it short, and a log reader
       // watching the mainline needs all of it.
-      emitted.push(
-        emit({
-          ...base,
-          sha: oid,
-          kind: "merged",
-          text: `merged at ${mergedAt}; mainline commit ${oid.slice(0, 12)} is now watched for CI`,
-        }),
-      );
+      const handover = wanted("ci");
+      if (wanted("merged")) {
+        emitted.push(
+          emit({
+            ...base,
+            sha: oid,
+            kind: "merged",
+            text: `merged at ${mergedAt}; mainline commit ${oid.slice(0, 12)}${handover ? " is now watched for CI" : ""}`,
+          }),
+        );
+      }
       // A watch-commit that already named its own gates for this commit keeps them.
-      state.commits[commitKey(ref.repo, oid)] ??= {
-        repo: ref.repo,
-        sha: oid,
-        expected: watch.expected,
-        firstSeenAt: new Date().toISOString(),
-        grace: freshGrace(),
-      };
+      if (handover) {
+        state.commits[commitKey(ref.repo, oid)] ??= {
+          repo: ref.repo,
+          sha: oid,
+          expected: watch.expected,
+          firstSeenAt: new Date().toISOString(),
+          grace: freshGrace(),
+        };
+      }
       dropPr(key);
       return;
     }
     if (current.state === "CLOSED") {
-      emitted.push(emit({ ...base, kind: "closed", text: "closed without merging" }));
+      if (wanted("closed")) {
+        emitted.push(emit({ ...base, kind: "closed", text: "closed without merging" }));
+      }
       dropPr(key);
       return;
     }
@@ -953,6 +1004,7 @@ async function runDaemon(
         emitted,
         judging === "settling",
         row.ci.priorRuns,
+        wanted("ci"),
       );
       if (judgment) row.ci = { pending: false, outcome: judgment.outcome, runs: judgment.runs };
     }
@@ -1180,7 +1232,7 @@ async function runDaemon(
     if (target.kind === "pr") {
       key = prKey(target);
       const previous = state.prs[key];
-      state.prs[key] = { head: target.head, expected: target.expected };
+      state.prs[key] = { head: target.head, expected: target.expected, events: target.events };
       const row = state.rows[key];
       if (row && (row.ci.pending || !sameSet(previous?.expected ?? [], target.expected))) {
         // A changed gate set is a new contract: its verdict on the same runs is news.
@@ -1199,7 +1251,9 @@ async function runDaemon(
       };
     }
     saveState(files, state);
-    log(`watch ${describeTarget(target)} gates=${gates(target.expected)}`);
+    log(
+      `watch ${describeTarget(target)} gates=${gates(target.expected)}${target.kind === "pr" ? narrowedTo(target.events) : ""}`,
+    );
     // The target is saved for the next daemon; a poll for it would outlive this one's socket.
     if ((await runPoll(key)) === null) throw new Error(STOPPING_ERROR);
     return watchedCount();

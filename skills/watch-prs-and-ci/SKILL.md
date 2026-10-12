@@ -86,6 +86,8 @@ Each message holds one poll's events, each with the PR's URL, and the closing li
 
 The texts above are the shape, and the specimen is the exact text. The shipped script and this page are kept in sync upstream, and where they disagree, trust the script and report the drift.
 
+`--events <kind>[,<kind>...]` on `watch`, repeatable, narrows a PR to some of `comment`, `review`, `ci`, `head`, `merged`, `closed`. A kind left out is never logged or delivered for that PR, `trouble` always comes, a repeated `watch` replaces the set, and a merge hands its commit over to CI only when `ci` is in the set.
+
 ## After a Merge
 
 A watched PR needs nothing more. The `merged` event names the merge commit, and the daemon judges that commit's CI with the PR's gates, so the mainline verdict arrives as a later `ci` message.
@@ -149,7 +151,7 @@ A daemon killed between saving a poll's state and appending its log lines comple
 
 ```text
 pr-events.mts daemon [--interval <s>] [--id <name>] [--pid <pid>]
-pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--id <name>]
+pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]
 pr-events.mts watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]
 pr-events.mts unwatch <owner/repo>#<n> | --all [--id <name>]
 pr-events.mts wait [--since <id>] [--timeout <s>] [--id <name>]
@@ -227,6 +229,8 @@ When a workflow's runs share a `concurrency` group key, GitHub keeps at most one
 | a `trouble` event: the gate workflow never registered | the named `--expect-workflow` has no run on the head two full polls after its CI went pending (a head move or a rollup change); bystanders may be green or still running | check the name against `.github/workflows/*.yml`, then `watch` again with the right set, or dispatch it by hand with `gh workflow run <gate workflow file> --ref <branch>`; never read the rollup as green |
 | a `trouble` event: polling failed, polling retries | three consecutive polls failed (gh, network, or GitHub); the daemon keeps polling | wait for the recovery event; read the log if it does not come |
 | a `trouble` event: no merge commit reported | GitHub reported no merge commit for the merged PR within 5 polls | read the merge commit from the PR page and `watch-commit` it |
+
+A local subagent spawned with the Agent tool shares its session's inbox socket and pid (`CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_PID` are the session's, with `CLAUDE_CODE_CHILD_SESSION=1`), so a `watch` run inside it subscribes the session's daemon, and the events land with the session, which relays them. A teammate from agent teams is a separate process with its own socket and runs its own daemon.
 
 ## Fallback Without gh
 
