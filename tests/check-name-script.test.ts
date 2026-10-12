@@ -109,6 +109,7 @@ function fakeIo(
     githubToken: null,
     timeoutMs: 5_000,
     arxivGapMs: 0,
+    githubSearchGapMs: 0,
     cacheDir: null,
   };
 }
@@ -438,17 +439,20 @@ describe("check-name.mts cells", () => {
     expect(cell(row.cells, "pypi")).toEqual({ status: "free" });
   });
 
-  test("arXiv and Maven Central lookups each run one at a time across the rows of a process", async () => {
+  test("arXiv, Maven Central, and GitHub search lookups each run one at a time across the rows of a process", async () => {
     const inFlight: Record<string, number> = {};
     const overlap: Record<string, number> = {};
     const base = fakeIo(() => undefined);
+    const serialised = (url: URL) =>
+      url.hostname === "export.arxiv.org" ||
+      url.hostname === "search.maven.org" ||
+      url.pathname === "/search/repositories";
     const io: Io = {
       ...base,
       fetch: async (input, init) => {
-        const host = new URL(input).hostname;
-        if (host !== "export.arxiv.org" && host !== "search.maven.org") {
-          return base.fetch(input, init);
-        }
+        const url = new URL(input);
+        if (!serialised(url)) return base.fetch(input, init);
+        const host = url.hostname;
         inFlight[host] = (inFlight[host] ?? 0) + 1;
         if ((inFlight[host] ?? 0) > 1) overlap[host] = (overlap[host] ?? 0) + 1;
         await Bun.sleep(5);
@@ -458,6 +462,41 @@ describe("check-name.mts cells", () => {
     };
     await Promise.all(["lumera", "tarnix", "quillo"].map((n) => checkName(io, WITH_ARXIV, n)));
     expect(overlap).toEqual({});
+  });
+
+  test("GitHub searches, pages and rows alike, are the Io's gap apart: 30 searches a minute per token is shared by every lane on the machine", async () => {
+    const gap = 40;
+    const starts: number[] = [];
+    const base = fakeIo((url) => {
+      if (url.pathname !== "/search/repositories") return undefined;
+      starts.push(Date.now());
+      // A full page above the threshold, so a second page is asked for; then a short one.
+      const full = Array.from({ length: 100 }, (_, i) => ({
+        name: `other-${i}`,
+        stargazers_count: 500,
+      }));
+      return { status: 200, body: { items: url.searchParams.get("page") === "1" ? full : [] } };
+    });
+    const io: Io = { ...base, githubSearchGapMs: gap };
+    await Promise.all(["lumera", "tarnix"].map((n) => checkName(io, OPTIONS, n)));
+    expect(starts).toHaveLength(4);
+    for (let i = 1; i < starts.length; i++) {
+      // A timer can wake a millisecond or two early.
+      expect((starts[i] ?? 0) - (starts[i - 1] ?? 0), `gap ${i}`).toBeGreaterThanOrEqual(gap - 5);
+    }
+  });
+
+  test("a GitHub search answered 403 or 429 is the rate limit, so the cell says to retry later", async () => {
+    for (const status of [403, 429]) {
+      const io = fakeIo((url) =>
+        url.pathname === "/search/repositories" ? { status } : undefined,
+      );
+      const row = await checkName(io, OPTIONS, "lumera");
+      expect(cell(row.cells, "github-repo"), String(status)).toEqual({
+        status: "unknown",
+        detail: "github search rate-limited; retry later",
+      });
+    }
   });
 
   test("a Hugging Face 307 is a handle that exists under another casing, so taken", async () => {

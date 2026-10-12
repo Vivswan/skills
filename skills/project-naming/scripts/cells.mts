@@ -16,6 +16,9 @@ export type Io = {
   timeoutMs: number;
   /** arXiv asks for one request every three seconds; its lookups are serialised this far apart. */
   arxivGapMs: number;
+  /** GitHub allows 30 searches a minute per token, 10 with none, and every lane on the machine
+   * shares the token; the searches are serialised this far apart. */
+  githubSearchGapMs: number;
   /** Where the typosquat column keeps the day's popular-name lists, or null for no cache. */
   cacheDir: string | null;
 };

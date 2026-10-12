@@ -28,6 +28,9 @@ export type Row = { name: string; cells: Record<string, Cell> };
 
 export const REQUEST_TIMEOUT_MS = 20_000;
 export const ARXIV_GAP_MS = 3_000;
+/** GitHub's search limit is 30 a minute with a token and 10 without. */
+export const GITHUB_SEARCH_GAP_MS = 2_000;
+export const GITHUB_SEARCH_GAP_ANONYMOUS_MS = 6_000;
 
 export type Options = {
   table: readonly RegistryEntry[];
@@ -202,12 +205,14 @@ async function main(): Promise<number> {
     process.stderr.write("--registries and --no-arxiv together leave no column to check\n");
     return 2;
   }
+  const githubToken = githubTokenFromEnvironment();
   const io: Io = {
     fetch: (url, init) => fetch(url, init),
     resolve: (host) => dns.lookup(host),
-    githubToken: githubTokenFromEnvironment(),
+    githubToken,
     timeoutMs: REQUEST_TIMEOUT_MS,
     arxivGapMs: ARXIV_GAP_MS,
+    githubSearchGapMs: githubToken ? GITHUB_SEARCH_GAP_MS : GITHUB_SEARCH_GAP_ANONYMOUS_MS,
     cacheDir: join(tmpdir(), "check-name-cache"),
   };
   const result = await run(io, options, names);

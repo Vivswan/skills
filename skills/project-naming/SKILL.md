@@ -78,7 +78,9 @@ One lane per style, run in parallel (the `/orchestrator-mode` skill, where insta
 
 Drop a lane the brief rules out. Add a lane when the owner's exemplars share a style the table lacks.
 
-Where the harness has a pipeline or workflow tool, steps 3 to 6 are one run, not prose between agents. Each lane returns rows in a fixed shape (name, say it, the three scores, registries, meaning verdict, verdict) plus what it dropped. A lane with no survivor reruns once with a tightened prompt. The merge dedupes against the brief's rejected list and runs the arXiv column once.
+Where the harness has a pipeline or workflow tool, steps 3 to 6 are one run, not prose between agents. Each lane returns rows in a fixed shape (name, say it, the three scores, registries, meaning verdict, verdict) plus what it dropped. A lane with no survivor reruns once with a tightened prompt.
+
+The merge dedupes against the brief's rejected list and runs the arXiv and `github-repo` columns once.
 
 The rejection round (step 7) sits between runs: rewrite the brief, rerun only the lanes it changed. A lane report that travels as a message gets cut; rows in a schema do not.
 
@@ -104,7 +106,9 @@ numpi   free  free                free    free                            free  
 - arXiv allows one request every three seconds, and the script spaces its own that far. Lanes run with `--no-arxiv`; the lead runs the arXiv column once, over the merged shortlist, in step 6.
 - Maven Central's search holds some requests for half a minute and more, so the script runs its lookups one at a time and asks again after a short wait; an `unknown(maven TimeoutError ...)` cell is three holds in a row, rerun later.
 - Docker Hub ids are 4 to 30 lowercase letters and digits; a name outside that reads `unknown` there because Docker would refuse it, not because it is free.
-- GitHub counts an exact-name repository as taken from 20 stars. Pass `GH_TOKEN` or be logged into `gh` for the search rate limit.
+- GitHub counts an exact-name repository as taken from 20 stars. Pass `GH_TOKEN` or be logged into `gh` for the per-token search limit.
+- GitHub allows 30 searches a minute per token, 10 with none, shared by every lane, so the script spaces its searches two seconds apart with a token and six without: a 20-name batch takes about a minute on the `github-repo` column, three with no token. A rate-limited reply is `unknown(github search rate-limited; retry later)`.
+- Lanes leave `github-repo` out of `--registries`; the lead runs that column once, over the merged shortlist, in step 6, as with arXiv.
 - Homebrew's per-name pages answer an entry's own name only (`python` is an alias of `python@3.15` and has no page), so the script reads the formula and cask indexes whole, kept a day in the same cache as the typosquat lists. The cell names the formula or cask, and `via alias`, `via old name`, or `via old token` when the name is one of those.
 - The `typosquat` column is one edit (a letter added, dropped, changed, or two swapped) from a popular package. The cell names the package, the registry as `claimed` or `unclaimed` (`--registries` names the claimed ones; without it every registry is claimed), and the list it came from. The lists are kept a day under the OS temp dir in `check-name-cache`.
 - A list that could not be read is named in the same cell beside any hit (`taken(1 edit from lumeras on unclaimed pypi (...); claimed crates lookup failed (crates search HTTP 503))`), and is the cell when nothing hit. A hit list with a failed source is not complete: rerun before reading it as the only collision.

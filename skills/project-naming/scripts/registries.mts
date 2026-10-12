@@ -101,6 +101,33 @@ async function huggingFace(io: Io, name: string): Promise<Cell> {
   );
 }
 
+/** One lookup at a time against a host that punishes bursts, `gapMs` apart. The gap is waited
+ * before a lookup, never after one, so the last lookup ends the process. */
+function serialQueue(): <T>(gapMs: number, work: () => Promise<T>) => Promise<T> {
+  let turn: Promise<void> = Promise.resolve();
+  let lastDone = 0;
+  return (gapMs, work) => {
+    const mine = turn.then(async () => {
+      const wait = lastDone + gapMs - Date.now();
+      if (wait > 0) await Bun.sleep(wait);
+      try {
+        return await work();
+      } finally {
+        lastDone = Date.now();
+      }
+    });
+    turn = mine.then(
+      () => undefined,
+      () => undefined,
+    );
+    return mine;
+  };
+}
+
+const arxivQueue = serialQueue();
+const mavenQueue = serialQueue();
+const githubSearchQueue = serialQueue();
+
 function githubHeaders(io: Io): Record<string, string> {
   return io.githubToken ? { authorization: `Bearer ${io.githubToken}` } : {};
 }
@@ -141,6 +168,9 @@ async function githubSearchPage(io: Io, url: string): Promise<GithubSearch | Cel
   let body: unknown;
   try {
     const response = await get(io, url, githubHeaders(io));
+    if (response.status === 403 || response.status === 429) {
+      return unknown("github search rate-limited; retry later");
+    }
     if (response.status !== 200) return unknown(`github search HTTP ${response.status}`);
     body = await response.json();
   } catch (error) {
@@ -160,7 +190,7 @@ async function githubRepo(io: Io, name: string): Promise<Cell> {
   const query = encodeURIComponent(`${name} in:name fork:true`);
   for (let page = 1; page <= GITHUB_SEARCH_PAGES; page++) {
     const url = `https://api.github.com/search/repositories?q=${query}&sort=stars&order=desc&per_page=100&page=${page}`;
-    const search = await githubSearchPage(io, url);
+    const search = await githubSearchQueue(io.githubSearchGapMs, () => githubSearchPage(io, url));
     if ("status" in search) return search;
     const { items } = search;
     const exact = items.find((item) => item.name.toLowerCase() === name.toLowerCase());
@@ -334,32 +364,6 @@ async function bluesky(io: Io, name: string): Promise<Cell> {
     return unknown(`bluesky ${String(error)}`);
   }
 }
-
-/** One lookup at a time against a host that punishes bursts, `gapMs` apart. The gap is waited
- * before a lookup, never after one, so the last lookup ends the process. */
-function serialQueue(): <T>(gapMs: number, work: () => Promise<T>) => Promise<T> {
-  let turn: Promise<void> = Promise.resolve();
-  let lastDone = 0;
-  return (gapMs, work) => {
-    const mine = turn.then(async () => {
-      const wait = lastDone + gapMs - Date.now();
-      if (wait > 0) await Bun.sleep(wait);
-      try {
-        return await work();
-      } finally {
-        lastDone = Date.now();
-      }
-    });
-    turn = mine.then(
-      () => undefined,
-      () => undefined,
-    );
-    return mine;
-  };
-}
-
-const arxivQueue = serialQueue();
-const mavenQueue = serialQueue();
 
 /** Papers whose title carries the name. The export API rate-limits after a few dozen calls, and
  * answers `max_results=0` with HTTP 500, so one entry is asked for and only the count is read. */
