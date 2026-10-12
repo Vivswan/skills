@@ -140,6 +140,8 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   const candidates: string[] = [];
   if (env.PR_EVENTS_DIR) candidates.push(resolve(env.PR_EVENTS_DIR));
   if (env.XDG_RUNTIME_DIR) candidates.push(join(env.XDG_RUNTIME_DIR, "pr-events"));
+  // Claude Code's own temp root, which os.tmpdir() does not read.
+  if (env.CLAUDE_CODE_TMPDIR) candidates.push(join(env.CLAUDE_CODE_TMPDIR, `pr-events-${uid}`));
   candidates.push(join(tmpdir(), `pr-events-${uid}`), `/tmp/pr-events-${uid}`);
   const refused: string[] = [];
   for (const dir of candidates) {

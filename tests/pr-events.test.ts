@@ -558,6 +558,24 @@ describe("pr-events.mts", () => {
     s.stop();
   }, 30000);
 
+  test("CLAUDE_CODE_TMPDIR is a runtime directory ahead of the OS temp dir, which does not read it", () => {
+    const s = new Scenario("ladder");
+    const env = s.env();
+    delete env.PR_EVENTS_DIR;
+    delete env.XDG_RUNTIME_DIR;
+    const result = Bun.spawnSync([process.execPath, SCRIPT, "status"], {
+      env: { ...env, CLAUDE_CODE_TMPDIR: join(s.dir, "cc-tmp") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    const uid = process.getuid?.() ?? 0;
+    expect(result.stdout.toString()).toContain(
+      `dir: ${join(s.dir, "cc-tmp", `pr-events-${uid}`)}\n`,
+    );
+    s.stop();
+  }, 30000);
+
   test("a rollup flip with updatedAt unchanged is a CI event and reads no detail", async () => {
     const s = new Scenario("rollup");
     const box = await s.inbox("a");
