@@ -1218,10 +1218,13 @@ describe("readPrDetail", () => {
     url: `https://example.com/r${id}`,
   });
 
-  test("each connection pages back from the newest until a reported id appears: 21 missed comments and a 5-reply thread arrive whole, the reviews stop at their first page", () => {
+  test("each connection pages back from the newest to the newest reported id: 21 missed comments and a 5-reply thread arrive whole, what is older than that id on the stopping page does not, and the reviews stop at their first page", () => {
     // The fixed windows (comments last 20, thread comments last 3) are what the daemon reads on
     // every poll; after a stop that missed 21 comments, the 21st oldest is beyond the window and
-    // would never be reported. The reviews page carries a reported id, so it is not paged.
+    // would never be reported. A thread's back page is wider than its window, so the stopping
+    // page carries the thread's first comment from before the baseline; the seen set (two reads'
+    // windows) has never held it, and kept it would come back as new. The reviews page carries
+    // a reported id, so it is not paged.
     const missed = Array.from({ length: 21 }, (_, i) => comment(101 + i, 10 + i));
     const replies = Array.from({ length: 5 }, (_, i) => comment(201 + i, 40 + i, `t${201 + i}`));
     const s = scenario({
@@ -1236,7 +1239,7 @@ describe("readPrDetail", () => {
             isResolved: false,
             path: "src/a.ts",
             line: 3,
-            total: 6,
+            total: 7,
             comments: replies.slice(2),
             before: "t203",
           },
@@ -1244,7 +1247,11 @@ describe("readPrDetail", () => {
         commitAuthor: "octocat",
       }),
       "older-comments-1.json": olderPage("comments", [comment(100, 9), missed[0] as CommentSpec]),
-      "older-thread-1.json": olderThreadPage([comment(200, 39, "t200"), ...replies.slice(0, 2)]),
+      "older-thread-1.json": olderThreadPage([
+        comment(190, 30, "t190"),
+        comment(200, 39, "t200"),
+        ...replies.slice(0, 2),
+      ]),
     });
     const seen = new Set(["comment:100", "review:1", "review-comment:200"]);
     const detail = readPrDetail(PR7, seen);
@@ -1257,8 +1264,10 @@ describe("readPrDetail", () => {
       "review:1",
       "review:2",
     ]);
-    expect(detail.activities[0]?.kind).toBe("review-comment");
-    expect(detail.activities[1]?.kind).toBe("reply");
+    expect(detail.activities.map((activity) => activity.kind).slice(0, 2)).toEqual([
+      "reply",
+      "reply",
+    ]);
     const calls = s.calls();
     expect(calls).toHaveLength(3);
     expect(calls[1]).toContain("query OlderThreadComments(");

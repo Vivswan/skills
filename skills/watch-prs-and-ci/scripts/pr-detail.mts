@@ -230,34 +230,35 @@ class DetailReader {
     return variables;
   }
 
-  /**
-   * The nodes of a connection from its newest page back to the first page carrying an id already
-   * reported, oldest first. At the cap the older nodes stay unread and the gap is recorded.
-   */
+  // The seen set holds two reads' windows, so a node older than the newest reported one on the
+  // stopping page is history the set has forgotten, not news: a back page is wider than a
+  // thread's window, and would otherwise resurface comments from before the baseline.
   private readBack(
     first: Connection,
     what: string,
     idOf: (node: unknown) => string,
     older: (cursor: string) => Connection,
   ): unknown[] {
+    const seen = this.seen;
+    if (seen === null) return first.nodes;
+    const newer: unknown[] = [];
     let page = first;
-    const nodes = [...first.nodes];
-    for (let pages = 1; this.seen !== null && page.hasPreviousPage; pages += 1) {
-      const seen = this.seen;
-      if (page.nodes.some((node) => seen.has(idOf(node)))) break;
+    for (let pages = 1; ; pages += 1) {
+      const boundary = page.nodes.findLastIndex((node) => seen.has(idOf(node)));
+      if (boundary >= 0) return [...page.nodes.slice(boundary), ...newer];
+      if (!page.hasPreviousPage) return [...page.nodes, ...newer];
       if (pages === MAX_BACK_PAGES) {
         this.gaps.push(
           `${what}: more than ${MAX_BACK_PAGES} pages since the last one reported; the older ones are not reported`,
         );
-        break;
+        return [...page.nodes, ...newer];
       }
       if (page.startCursor === null) {
         throw new GhError(`GraphQL response: ${what} hasPreviousPage without a startCursor`);
       }
+      newer.unshift(...page.nodes);
       page = older(page.startCursor);
-      nodes.unshift(...page.nodes);
     }
-    return nodes;
   }
 
   private olderComments(cursor: string): Connection {
@@ -278,7 +279,6 @@ class DetailReader {
     );
   }
 
-  /** Reads one page of threads into `activities`; returns how many of them are unresolved. */
   private threads(pr: unknown, firstIndex: number, activities: Activity[]): number {
     let unresolved = 0;
     const threads = get(pr, "reviewThreads");

@@ -199,11 +199,14 @@ Three rules follow, and the daemon embodies them:
 
 - **One poller per user per machine.** Sessions subscribe; they never poll, spawn a watcher, or run `gh run watch`. A hand-rolled watcher beside the daemon is a second poller on the same account.
 - **The sustained interval is at least 60 s.** That is the floor of the daemon's `--interval`.
-- **GraphQL only, REST only for failed-run logs.** The reads of one poll, in order:
-  - one aliased batch read over every subscribed PR; GitHub prices a request by its node count, so a batch of PRs costs about what one does
-  - one detail read per PR whose row moved, paged back only to the last activity already reported
-  - check suites by commit, for each head or commit whose verdict is pending
-  - `gh run view <id> --log-failed` once per failed run, at most 3 excerpts per verdict
+- **GraphQL only, REST only for failed-run logs.** The one REST call is `gh run view <id> --log-failed`, once per failed run, at most 3 excerpts per verdict; it never changes a verdict.
+
+The reads of one poll, in order:
+
+1. one aliased batch read over every subscribed PR; GitHub prices a request by its node count, so a batch of PRs costs about what one does
+2. one detail read per PR whose row moved, paged back only to the last activity already reported
+3. check suites by commit, for each head or commit whose verdict is pending
+4. the failed-run log excerpts, when a verdict is red
 
 A poll costs `1 + (PRs whose row moved) + (heads and commits with CI pending)` GraphQL requests, plus one detail read at a PR's first sighting and one viewer lookup per daemon. At steady state, nothing moving, that is the batch read alone, once a minute. A rate-limited GraphQL answer is tooling trouble, never a reason to fall back to REST.
 
