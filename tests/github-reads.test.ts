@@ -264,6 +264,7 @@ function row(spec: Partial<Row> = {}): Row {
 
 /** `at` is the publication instant; `created` (default: the same) is the draft's creation. */
 type CommentSpec = {
+  id: number;
   at: string;
   created?: string;
   login: string | null;
@@ -273,7 +274,7 @@ type CommentSpec = {
 
 function commentNode(spec: CommentSpec): unknown {
   return {
-    databaseId: 1,
+    databaseId: spec.id,
     publishedAt: spec.at,
     createdAt: spec.created ?? spec.at,
     author: spec.login === null ? null : { login: spec.login },
@@ -291,6 +292,7 @@ type ThreadSpec = {
 };
 
 type ReviewSpec = {
+  id: string;
   submittedAt: string | null;
   state: string;
   login: string;
@@ -312,7 +314,7 @@ function detailPage(spec: {
           comments: { nodes: (spec.comments ?? []).map(commentNode) },
           reviews: {
             nodes: (spec.reviews ?? []).map((review) => ({
-              fullDatabaseId: "1",
+              fullDatabaseId: review.id,
               submittedAt: review.submittedAt,
               state: review.state,
               author: { login: review.login },
@@ -887,15 +889,23 @@ describe("readPrDetail", () => {
       "detail-1.json": detailPage({
         comments: [
           {
+            id: 1,
             at: "2026-03-01T10:05:00Z",
             login: "work-bot",
             body: "ping",
             url: "https://example.com/c1",
           },
-          { at: "2026-03-01T10:06:00Z", login: null, body: "gone", url: "https://example.com/c2" },
+          {
+            id: 2,
+            at: "2026-03-01T10:06:00Z",
+            login: null,
+            body: "gone",
+            url: "https://example.com/c2",
+          },
         ],
         reviews: [
           {
+            id: "1",
             submittedAt: "2026-03-01T10:07:00Z",
             state: "APPROVED",
             login: "work-bot",
@@ -903,6 +913,7 @@ describe("readPrDetail", () => {
             url: "https://example.com/r1",
           },
           {
+            id: "2",
             submittedAt: "2026-03-01T10:08:00Z",
             state: "COMMENTED",
             login: "work-bot",
@@ -910,6 +921,7 @@ describe("readPrDetail", () => {
             url: "https://example.com/r2",
           },
           {
+            id: "3",
             submittedAt: null,
             state: "PENDING",
             login: "octocat",
@@ -925,6 +937,7 @@ describe("readPrDetail", () => {
             total: 1,
             comments: [
               {
+                id: 11,
                 at: "2026-03-01T10:01:00Z",
                 login: "work-bot",
                 body: "nit",
@@ -939,6 +952,7 @@ describe("readPrDetail", () => {
             total: 5,
             comments: [
               {
+                id: 23,
                 at: "2026-03-01T10:02:00Z",
                 created: "2026-03-01T09:50:00Z",
                 login: "work-bot",
@@ -946,6 +960,7 @@ describe("readPrDetail", () => {
                 url: "https://example.com/t2-3",
               },
               {
+                id: 24,
                 at: "2026-03-01T10:03:00Z",
                 created: "2026-03-01T09:50:30Z",
                 login: "octocat",
@@ -953,6 +968,7 @@ describe("readPrDetail", () => {
                 url: "https://example.com/t2-4",
               },
               {
+                id: 25,
                 at: "2026-03-01T10:04:00Z",
                 created: "2026-03-01T09:51:00Z",
                 login: "work-bot",
@@ -968,6 +984,7 @@ describe("readPrDetail", () => {
       "detail-2.json": detailPage({
         comments: [
           {
+            id: 9,
             at: "2026-03-01T10:09:00Z",
             login: "work-bot",
             body: "page-2 noise",
@@ -982,12 +999,14 @@ describe("readPrDetail", () => {
             total: 2,
             comments: [
               {
+                id: 31,
                 at: "2026-03-01T10:10:00Z",
                 login: "work-bot",
                 body: "first",
                 url: "https://example.com/t3-1",
               },
               {
+                id: 32,
                 at: "2026-03-01T10:11:00Z",
                 login: "octocat",
                 body: "second",
@@ -1002,6 +1021,7 @@ describe("readPrDetail", () => {
     const detail = readPrDetail({ repo: "octocat/repo", number: 7 });
     const expected: Activity[] = [
       {
+        id: "review-comment:11",
         kind: "review-comment",
         at: "2026-03-01T10:01:00Z",
         author: "work-bot",
@@ -1011,6 +1031,7 @@ describe("readPrDetail", () => {
         line: 12,
       },
       {
+        id: "review-comment:23",
         kind: "reply",
         at: "2026-03-01T10:02:00Z",
         author: "work-bot",
@@ -1020,6 +1041,7 @@ describe("readPrDetail", () => {
         line: null,
       },
       {
+        id: "review-comment:24",
         kind: "reply",
         at: "2026-03-01T10:03:00Z",
         author: "octocat",
@@ -1029,6 +1051,7 @@ describe("readPrDetail", () => {
         line: null,
       },
       {
+        id: "review-comment:25",
         kind: "reply",
         at: "2026-03-01T10:04:00Z",
         author: "work-bot",
@@ -1038,6 +1061,7 @@ describe("readPrDetail", () => {
         line: null,
       },
       {
+        id: "review-comment:31",
         kind: "review-comment",
         at: "2026-03-01T10:10:00Z",
         author: "work-bot",
@@ -1047,6 +1071,7 @@ describe("readPrDetail", () => {
         line: 3,
       },
       {
+        id: "review-comment:32",
         kind: "reply",
         at: "2026-03-01T10:11:00Z",
         author: "octocat",
@@ -1056,6 +1081,7 @@ describe("readPrDetail", () => {
         line: 3,
       },
       {
+        id: "comment:1",
         kind: "comment",
         at: "2026-03-01T10:05:00Z",
         author: "work-bot",
@@ -1063,6 +1089,7 @@ describe("readPrDetail", () => {
         url: "https://example.com/c1",
       },
       {
+        id: "comment:2",
         kind: "comment",
         at: "2026-03-01T10:06:00Z",
         author: "ghost",
@@ -1070,6 +1097,7 @@ describe("readPrDetail", () => {
         url: "https://example.com/c2",
       },
       {
+        id: "review:1",
         kind: "review",
         at: "2026-03-01T10:07:00Z",
         author: "work-bot",
@@ -1103,7 +1131,8 @@ describe("readPrDetail", () => {
 });
 
 describe("newActivity", () => {
-  const activity = (at: string, author: string): Activity => ({
+  const activity = (id: string, at: string, author: string): Activity => ({
+    id,
     kind: "comment",
     at,
     author,
@@ -1111,35 +1140,32 @@ describe("newActivity", () => {
     url: "https://example.com/c",
   });
 
-  test("filters by instant, not string order, drops the viewer's own, and sorts oldest first", () => {
-    // sinceIso carries milliseconds while GitHub's timestamps do not: compared as strings,
-    // "...00Z" sorts after "...00.000Z", so an equal instant would read as new.
+  test("news is an unseen id, never a later instant: a same-second comment is new, a seen later one is not; the viewer's own are dropped; oldest first", () => {
+    // GitHub's timestamps have one-second grain. Judged by instant against a 10:00:00 watermark,
+    // comment 5 (published in that same second) would never be reported, and comment 1 (read
+    // ahead of its row last time) would be reported again.
     const detail = {
       lastCommitAuthor: null,
       unresolvedThreads: 0,
       activities: [
-        activity("2026-03-01T10:00:02Z", "work-bot"),
-        activity("2026-03-01T10:00:00Z", "octocat"),
-        activity("2026-03-01T10:00:00Z", "work-bot"),
-        activity("2026-03-01T09:59:59Z", "work-bot"),
-        activity("2026-03-01T10:00:01Z", "octocat"),
-        activity("2026-03-01T10:00:01Z", "example-user"),
+        activity("comment:1", "2026-03-01T10:00:02Z", "work-bot"),
+        activity("comment:2", "2026-03-01T10:00:00Z", "octocat"),
+        activity("comment:3", "2026-03-01T10:00:00Z", "work-bot"),
+        activity("comment:4", "2026-03-01T09:59:59Z", "work-bot"),
+        activity("comment:5", "2026-03-01T10:00:00Z", "example-user"),
+        activity("comment:6", "2026-03-01T10:00:01Z", "octocat"),
       ],
     };
-    expect(newActivity(detail, "2026-03-01T10:00:00.000Z", "octocat")).toEqual([
-      activity("2026-03-01T10:00:01Z", "example-user"),
-      activity("2026-03-01T10:00:02Z", "work-bot"),
+    const seen = new Set(["comment:1", "comment:2", "comment:3", "comment:4"]);
+    expect(newActivity(detail, seen, "octocat")).toEqual([
+      activity("comment:5", "2026-03-01T10:00:00Z", "example-user"),
     ]);
-  });
-
-  test("an unparsable sinceIso is refused, never read as nothing new", () => {
-    expect(() =>
-      newActivity(
-        { lastCommitAuthor: null, unresolvedThreads: 0, activities: [] },
-        "yesterday",
-        "octocat",
-      ),
-    ).toThrow("sinceIso is not a timestamp: yesterday");
+    expect(newActivity(detail, new Set(), "octocat")).toEqual([
+      activity("comment:4", "2026-03-01T09:59:59Z", "work-bot"),
+      activity("comment:3", "2026-03-01T10:00:00Z", "work-bot"),
+      activity("comment:5", "2026-03-01T10:00:00Z", "example-user"),
+      activity("comment:1", "2026-03-01T10:00:02Z", "work-bot"),
+    ]);
   });
 });
 

@@ -870,13 +870,20 @@ async function runDaemon(
       ...current,
       ciPending: saved?.ciPending ?? true,
       missingPolls: saved?.missingPolls ?? 0,
+      seenActivity: saved?.seenActivity ?? [],
     };
     const headMoved = saved ? current.headRefOid !== saved.headRefOid : recordedHeads.size > 0;
     const changes = rowChanged(saved, current);
     let detail: ReturnType<typeof readPrDetail> | null = null;
-    if (saved && changes.activity) {
+    // A first sighting reads the detail too: what is on the PR now is the baseline, by id.
+    if (!saved || changes.activity) {
       detail = readPrDetail(ref);
-      const activities = newActivity(detail, saved.updatedAt, viewerLoginCached());
+      const seen = new Set(row.seenActivity.flat());
+      const activities = saved ? newActivity(detail, seen, viewerLoginCached()) : [];
+      row.seenActivity = [
+        ...row.seenActivity.slice(-1),
+        detail.activities.map((activity) => activity.id),
+      ];
       if (activities.length > 0) {
         const { kind, text } = describeActivities(activities);
         emitted.push(emit({ ...base, kind, text }, targets));

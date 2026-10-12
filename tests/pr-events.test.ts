@@ -7,10 +7,12 @@ import { tempDirs } from "./helpers/temp-dirs";
 
 // Contract tests for the PR-events daemon. A stub gh on PATH dispatches each GraphQL query on the
 // substring only that query class carries and serves hand-written fixture N for call N of the
-// class (the last fixture repeats once the sequence runs out). Each subscriber is a fake Claude
-// Code inbox: a Unix socket named by this live pid, collecting every connection's bytes. Polls are
-// driven with `poll`, so no timer fires and the fixture order is the poll order. Every test ends
-// with `stop` and the control socket gone, so no daemon outlives its test.
+// class (the last fixture repeats once the sequence runs out). A PR's first sighting reads its
+// detail as the baseline, so every scenario starts with an empty `detail-1` and a scenario's own
+// detail fixtures begin at 2. Each subscriber is a fake Claude Code inbox: a Unix socket named by
+// this live pid, collecting every connection's bytes. Polls are driven with `poll`, so no timer
+// fires and the fixture order is the poll order. Every test ends with `stop` and the control
+// socket gone, so no daemon outlives its test.
 
 const SCRIPT = join(ROOT, "skills", "watch-prs-and-ci", "scripts", "pr-events.mts");
 const temp = tempDirs();
@@ -132,6 +134,8 @@ interface CommentSpec {
   login: string;
   at: string;
   body: string;
+  /** Defaults to the comment's position in its fixture, from 901; the daemon's cursor is by id. */
+  id?: number;
 }
 
 interface ThreadSpec {
@@ -165,7 +169,9 @@ function detail(spec: {
     data: {
       repository: {
         pullRequest: {
-          comments: { nodes: (spec.comments ?? []).map((c) => commentNode(c, nextId())) },
+          comments: {
+            nodes: (spec.comments ?? []).map((c) => commentNode(c, c.id ?? nextId())),
+          },
           reviews: { nodes: [] },
           reviewThreads: {
             nodes: (spec.threads ?? []).map((thread) => ({
@@ -174,7 +180,7 @@ function detail(spec: {
               line: thread.line,
               comments: {
                 totalCount: thread.total,
-                nodes: thread.comments.map((c) => commentNode(c, nextId())),
+                nodes: thread.comments.map((c) => commentNode(c, c.id ?? nextId())),
               },
             })),
             pageInfo: { hasNextPage: false, endCursor: null },
@@ -288,6 +294,7 @@ class Scenario {
     this.dir = temp.dir(`pr-events-${name}-`);
     this.stubDir = join(this.dir, "stub");
     mkdirSync(this.stubDir);
+    this.fixtures({ "detail-1": detail({}) });
     scenarios.push(this);
   }
 
@@ -502,13 +509,15 @@ describe("pr-events.mts", () => {
     });
     expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
     expect(await box.frames(0)).toHaveLength(0);
+    const detailReads = () => s.ghCalls().filter((call) => call.includes("reviewThreads(first:"));
+    expect(detailReads()).toHaveLength(1);
     const r = s.run(["poll"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("1 event(s)");
     const frames = await box.frames(1);
     expect(headlines(frames)).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci, lint`]);
     expect(parseFrame(frames[0] as string).from_mode).toBe("bypass");
-    expect(s.ghCalls().some((call) => call.includes("reviewThreads(first:"))).toBe(false);
+    expect(detailReads()).toHaveLength(1);
     s.stop();
   }, 30000);
 
@@ -520,6 +529,19 @@ describe("pr-events.mts", () => {
       "suites-1": suites([["ci", "completed", "success"]]),
       "rows-2": rows({ rollup: "SUCCESS", threads: 1, updatedAt: T2 }),
       "detail-1": detail({
+        threads: [
+          {
+            path: "src/a.ts",
+            line: 12,
+            total: 2,
+            comments: [
+              { login: "alice", at: "2025-12-31T00:00:00Z", body: "first" },
+              { login: "me", at: "2026-01-01T00:30:00Z", body: "my own reply" },
+            ],
+          },
+        ],
+      }),
+      "detail-2": detail({
         threads: [
           {
             path: "src/a.ts",
@@ -557,7 +579,7 @@ describe("pr-events.mts", () => {
       "rows-1": rows({ rollup: "SUCCESS" }),
       "suites-1": suites([["ci", "completed", "success"]]),
       "rows-2": rows({ rollup: "FAILURE", comments: 1, updatedAt: T2 }),
-      "detail-1": detail({ comments: [{ login: "bob", at: T2, body: "hm" }] }),
+      "detail-2": detail({ comments: [{ login: "bob", at: T2, body: "hm" }] }),
       "viewer-1": VIEWER,
       "suites-2": suites([["ci", "completed", "failure", 700]]),
       "log-700.txt": "boom",
@@ -569,6 +591,38 @@ describe("pr-events.mts", () => {
     unlinkSync(join(s.stubDir, "fail-suites"));
     expect(s.run(["poll"]).stdout).toContain("1 event(s)");
     expect(s.events().map((e) => e.kind)).toEqual(["ci", "comment", "ci"]);
+    s.stop();
+  }, 30000);
+
+  test("a comment in the baseline's own second, and one read ahead of its row, each arrive exactly once", async () => {
+    // Judged by instant against the row's updatedAt, alice's T1 comment is never newer than the
+    // T1 baseline, and carol's T3 comment (published between the row read and the detail read
+    // that followed it) is reported now and again when the row catches up to T3.
+    const s = new Scenario("cursor");
+    const box = await s.inbox("a");
+    const baseline = { login: "dev", at: T1, body: "opening", id: 901 };
+    const sameSecond = { login: "alice", at: T1, body: "same second", id: 902 };
+    const ahead = { login: "carol", at: T3, body: "ahead of the row", id: 903 };
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS", comments: 1, updatedAt: T1 }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "detail-1": detail({ comments: [baseline] }),
+      "rows-2": rows({ rollup: "SUCCESS", comments: 2, updatedAt: T1 }),
+      "detail-2": detail({ comments: [baseline, sameSecond] }),
+      "viewer-1": VIEWER,
+      "rows-3": rows({ rollup: "SUCCESS", comments: 3, updatedAt: T2 }),
+      "detail-3": detail({ comments: [baseline, sameSecond, ahead] }),
+      "rows-4": rows({ rollup: "SUCCESS", comments: 3, updatedAt: T3 }),
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    for (const expected of ["1 event(s)", "1 event(s)", "0 event(s)"]) {
+      expect(s.run(["poll"]).stdout).toContain(expected);
+    }
+    expect(headlines(await box.frames(3))).toEqual([
+      GREEN_A,
+      `PR ${PR7}: 1 new comment by alice`,
+      `PR ${PR7}: 1 new comment by carol`,
+    ]);
     s.stop();
   }, 30000);
 
@@ -901,7 +955,7 @@ describe("pr-events.mts", () => {
     s.stop();
     s.fixtures({
       "rows-2": rows({ rollup: "SUCCESS", comments: 2, updatedAt: T2 }),
-      "detail-1": detail({ comments: [{ login: "bob", at: T2, body: "ship it" }] }),
+      "detail-2": detail({ comments: [{ login: "bob", at: T2, body: "ship it" }] }),
       "viewer-1": VIEWER,
     });
     expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
@@ -1011,7 +1065,7 @@ describe("pr-events.mts", () => {
       "suites-2": suites([["ci", "completed", "failure", 700]]),
       "log-700.txt": "boom",
       "rows-3": rows({ rollup: "FAILURE", updatedAt: T3, comments: 1 }),
-      "detail-1": detail({ comments: [{ login: "bob", at: T3, body: "again" }] }),
+      "detail-2": detail({ comments: [{ login: "bob", at: T3, body: "again" }] }),
       "viewer-1": VIEWER,
     });
     const sink = ["--sink", "file", "--id", "probe"];

@@ -72,6 +72,8 @@ export interface SavedRow extends Row {
   ciPending: boolean;
   /** Polls in a row on which no run had registered; the grace before a trouble event. */
   missingPolls: number;
+  /** The activity ids the last two detail reads returned, oldest read first; what is in neither is news. */
+  seenActivity: string[][];
 }
 
 export interface PendingCommit {

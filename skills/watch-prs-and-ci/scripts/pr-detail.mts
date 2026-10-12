@@ -8,6 +8,8 @@ import type { PrRef } from "./pr-rows.mts";
 const MAX_PAGES = 50;
 
 export type Activity = {
+  /** `<kind class>:<GitHub database id>`; the daemon's cursor is the set of these it has reported. */
+  id: string;
   kind: "comment" | "review" | "review-comment" | "reply";
   at: string;
   author: string;
@@ -98,6 +100,7 @@ function commentActivity(
   // submitted; only the publication instant is news to anyone but its author.
   const publishedAt = get(node, "publishedAt");
   const activity: Activity = {
+    id: `${thread === undefined ? "comment" : "review-comment"}:${requireNumber(get(node, "databaseId"), `${what} databaseId`)}`,
     kind,
     at:
       typeof publishedAt === "string"
@@ -126,6 +129,7 @@ function reviewActivities(pr: unknown): Activity[] {
     const body = typeof get(node, "body") === "string" ? (get(node, "body") as string) : "";
     if (state === "COMMENTED" && body === "") continue;
     activities.push({
+      id: `review:${requireString(get(node, "fullDatabaseId"), "review fullDatabaseId")}`,
       kind: "review",
       at: submittedAt,
       author: loginOf(node),
@@ -193,12 +197,18 @@ export function readPrDetail(ref: PrRef): PrDetail {
   };
 }
 
-/** Activities strictly after sinceIso by instant, the viewer's own excluded, oldest first. */
-export function newActivity(detail: PrDetail, sinceIso: string, viewer: string): Activity[] {
-  const since = Date.parse(sinceIso);
-  if (Number.isNaN(since)) throw new Error(`newActivity: sinceIso is not a timestamp: ${sinceIso}`);
+/**
+ * Activities whose id is not in `seen`, the viewer's own excluded, oldest first. Ids, never
+ * instants: GitHub's timestamps have one-second grain, so a comment published in the same second
+ * as the last read would be older-or-equal to any watermark and never reported.
+ */
+export function newActivity(
+  detail: PrDetail,
+  seen: ReadonlySet<string>,
+  viewer: string,
+): Activity[] {
   return detail.activities
-    .filter((activity) => activity.author !== viewer && Date.parse(activity.at) > since)
+    .filter((activity) => activity.author !== viewer && !seen.has(activity.id))
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
