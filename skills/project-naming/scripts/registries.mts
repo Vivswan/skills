@@ -328,8 +328,15 @@ async function mavenCentral(io: Io, name: string): Promise<Cell> {
   );
 }
 
+/** A Lucene field value as a phrase. Unquoted, `a:foo-bar` leaves the hyphen to the query
+ * parser, which may read it as an operator; quoted, the artifact id is asked for as written. A
+ * quote or backslash in the value is escaped so it stays part of the phrase. */
+function lucenePhrase(value: string): string {
+  return `"${value.replace(/["\\]/g, "\\$&")}"`;
+}
+
 async function mavenLookup(io: Io, spelling: string): Promise<Cell> {
-  const query = encodeURIComponent(`a:${spelling}`);
+  const query = encodeURIComponent(`a:${lucenePhrase(spelling)}`);
   const url = `https://search.maven.org/solrsearch/select?q=${query}&rows=0&wt=json`;
   for (let attempt = 1; ; attempt++) {
     try {

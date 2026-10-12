@@ -16,6 +16,7 @@ import { spawnSync } from "node:child_process";
 import { promises as dns } from "node:dns";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { domainToASCII } from "node:url";
 import { parseArgs } from "node:util";
 import { type Cell, type Claimed, type Io, renderCell, unknown } from "./cells.mts";
 import { type Column, REGISTRIES, type RegistryEntry } from "./registries.mts";
@@ -34,11 +35,41 @@ export const GITHUB_SEARCH_GAP_ANONYMOUS_MS = 6_000;
 
 export type Options = {
   table: readonly RegistryEntry[];
+  /** The zones `tlds` returns, so each names a distinct column. */
   domains: string[];
   arxiv: boolean;
   /** The column ids to run, or null for every column. */
   registries: string[] | null;
 };
+
+/** Letters, digits, dashes, and dots, the Unicode full stops that IDNA maps to a dot included.
+ * Anything else names no zone: a space, a comma that `--registries` splits on, or a slash,
+ * which the host parser would silently drop together with everything after it. */
+const ZONE_SPELLING = /^[\p{L}\p{M}\p{N}\p{Pd}.\u3002\uFF0E\uFF61]+$/u;
+/** What a spelling must be once canonical: dot-separated labels of up to 63 letters, digits,
+ * and inner dashes, the last with a letter in it, since a top-level domain is never all digits
+ * and the host parser makes an IPv4 address of a hex or decimal spelling. */
+const ZONE =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*(?=[a-z0-9-]*[a-z])[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+/** A host name is at most 253 characters and a name at most 39, so this leaves room for any. */
+const ZONE_MAX = 213;
+
+/** The distinct zones the `--domain` spellings name, first-seen order, and the spellings that
+ * name none. DNS is case-insensitive, a dot on either end spells the same zone, and a Unicode
+ * zone is looked up by its punycode form, so `COM`, `.com`, and `com.` are one zone, and a
+ * Unicode zone is the same zone as its `xn--` spelling, not two readings of one record. */
+export function tlds(spellings: readonly string[]): { zones: string[]; rejected: string[] } {
+  const zones = new Set<string>();
+  const rejected: string[] = [];
+  for (const spelling of spellings) {
+    const zone = ZONE_SPELLING.test(spelling)
+      ? domainToASCII(spelling).replace(/^\.+|\.+$/g, "")
+      : "";
+    if (ZONE.test(zone) && zone.length <= ZONE_MAX) zones.add(zone);
+    else rejected.push(spelling);
+  }
+  return { zones: [...zones], rejected };
+}
 
 export function allColumns(table: readonly RegistryEntry[], domains: string[]): Column[] {
   return table.flatMap((entry) => (entry.kind === "domains" ? domains.map(entry.forTld) : [entry]));
@@ -182,7 +213,15 @@ async function main(): Promise<number> {
     );
     return 2;
   }
-  const domains = (parsed.values.domain as string[] | undefined) ?? ["com", "ai", "dev"];
+  const { zones: domains, rejected } = tlds(
+    (parsed.values.domain as string[] | undefined) ?? ["com", "ai", "dev"],
+  );
+  if (rejected.length > 0) {
+    process.stderr.write(
+      `--domain: not a top-level domain: ${rejected.map((spelling) => JSON.stringify(spelling)).join(", ")}\n`,
+    );
+    return 2;
+  }
   const selected =
     (parsed.values.registries as string | undefined)?.split(",").map((id) => id.trim()) ?? null;
   if (selected) {

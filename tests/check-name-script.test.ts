@@ -11,6 +11,7 @@ import {
   renderTsv,
   run,
   runControls,
+  tlds,
 } from "../skills/project-naming/scripts/check-name.mts";
 import {
   GITHUB_STARS_TAKEN,
@@ -296,14 +297,14 @@ describe("check-name.mts cells", () => {
     const maven = (reply: Reply) =>
       fakeIo((url) => {
         if (url.hostname !== "search.maven.org") return undefined;
-        expect(url.searchParams.get("q")).toBe("a:lumera");
+        expect(url.searchParams.get("q")).toBe('a:"lumera"');
         return reply;
       });
     // Artifact ids are case-sensitive: an id published in mixed case is missed by the lowercase
     // query alone, so the spelling as given is asked for too.
     const mixedCase = fakeIo((url) => {
       if (url.hostname !== "search.maven.org") return undefined;
-      const hit = url.searchParams.get("q") === "a:JLargeArrays";
+      const hit = url.searchParams.get("q") === 'a:"JLargeArrays"';
       return { status: 200, body: { response: { numFound: hit ? 1 : 0 } } };
     });
     const mixed = await checkName(mixedCase, OPTIONS, "JLargeArrays");
@@ -324,6 +325,26 @@ describe("check-name.mts cells", () => {
       const row = await checkName(maven(reply), OPTIONS, "lumera");
       expect(cell(row.cells, "maven"), String(reply.status)).toEqual(expected);
     }
+  });
+
+  test("a Maven artifact id with a dash is asked for as a quoted phrase, so the count is for that id and not for a parsed expression", async () => {
+    // Unquoted, the hyphen is left to the query parser; the count must be for the id as written.
+    const seen: string[] = [];
+    const counting = (count: number) =>
+      fakeIo((url) => {
+        if (url.hostname !== "search.maven.org") return undefined;
+        seen.push(url.search);
+        const asked = url.searchParams.get("q");
+        return {
+          status: 200,
+          body: { response: { numFound: asked === 'a:"foo-bar"' ? count : 0 } },
+        };
+      });
+    const taken = await checkName(counting(2), OPTIONS, "foo-bar");
+    expect(cell(taken.cells, "maven")).toEqual({ status: "taken", detail: "2 maven artifact(s)" });
+    expect(seen).toEqual(["?q=a%3A%22foo-bar%22&rows=0&wt=json"]);
+    const free = await checkName(counting(0), OPTIONS, "foo-bar");
+    expect(cell(free.cells, "maven")).toEqual({ status: "free" });
   });
 
   test("a Maven request that stalls is abandoned and asked again; the third stall is the unknown cell", async () => {
@@ -1152,6 +1173,55 @@ describe("check-name.mts registry table", () => {
     ]);
   });
 
+  test("--domain spellings of one zone make one column: case, a dot on either end, a repeat, and a Unicode zone next to its punycode; a spelling that names no zone is rejected by name", () => {
+    expect(tlds(["com", "COM", ".com", "com.", "com"])).toEqual({ zones: ["com"], rejected: [] });
+    expect(tlds(["ai", "com", "AI"]).zones).toEqual(["ai", "com"]);
+    // The resolver takes the punycode form only; the Unicode spelling would read every name free.
+    // IDNA maps the ideographic and fullwidth full stops to a dot, on either end too.
+    expect(tlds(["\u4e2d\u56fd", "xn--fiqs8s", "XN--FIQS8S", "\uff23om"]).zones).toEqual([
+      "xn--fiqs8s",
+      "com",
+    ]);
+    expect(tlds(["com\u3002", "\uff0ecom", "\uff61com\uff61", "co.uk"]).zones).toEqual([
+      "com",
+      "co.uk",
+    ]);
+    // A space is no host; a comma is what --registries splits on, so its column could never be
+    // selected; a slash would be dropped with everything after it; dots alone leave no zone; a
+    // hex spelling is read as an IPv4 address; a label has at most 63 characters and no dash at
+    // either end; a host name has at most 253, and the name before the zone up to 39.
+    const longest = Array(3).fill("a".repeat(63)).join(".");
+    const notZones = [
+      "com ",
+      "com,net",
+      "com/evil",
+      ".",
+      "",
+      "0x7f000001",
+      "a".repeat(64),
+      "-com",
+      "com-",
+      `${longest}.${"b".repeat(22)}`,
+    ];
+    expect(tlds(notZones)).toEqual({ zones: [], rejected: notZones });
+    expect(tlds(["a".repeat(63), `${longest}.${"b".repeat(21)}`]).zones).toEqual([
+      "a".repeat(63),
+      `${longest}.${"b".repeat(21)}`,
+    ]);
+    for (const spellings of [
+      ["com", "COM"],
+      ["com", "com"],
+    ]) {
+      const options: Options = { ...OPTIONS, domains: tlds(spellings).zones };
+      const dnsIds = columns(options)
+        .map((c) => c.id)
+        .filter((id) => id.startsWith("dns-"));
+      expect(dnsIds, spellings.join(" ")).toEqual(["dns-com"]);
+      const header = renderTsv(options, []).trimEnd().split("\t");
+      expect(new Set(header).size, spellings.join(" ")).toBe(header.length);
+    }
+  });
+
   test("--registries narrows the columns, the controls, and the header to the ids named, dns ids included", async () => {
     const subset: Options = { ...WITH_ARXIV, registries: ["npm", "dns-com"] };
     expect(columns(subset).map((c) => c.id)).toEqual(["npm", "dns-com"]);
@@ -1209,6 +1279,17 @@ describe("check-name.mts output", () => {
     );
     expect(emptied.exitCode).toBe(2);
     expect(emptied.stderr.toString()).toContain("no column");
+    // Dots alone would resolve the bare name as a host; a space or a comma is no zone at all.
+    for (const tld of [".", "", "com ", "com,net"]) {
+      const notHost = Bun.spawnSync([process.execPath, SCRIPT, "--domain", tld, "lumera"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(notHost.exitCode, JSON.stringify(tld)).toBe(2);
+      expect(notHost.stderr.toString(), JSON.stringify(tld)).toContain(
+        `--domain: not a top-level domain: ${JSON.stringify(tld)}`,
+      );
+    }
     // A space, a trailing dash, and a 40th character: each refused by some registry, so none
     // may be read as free there.
     for (const name of ["two words", "example-", `a${"b".repeat(39)}`]) {
