@@ -9,13 +9,13 @@ The two sections below are the gate's two values. The base choice exists in dire
 
 Who merges, the standing merge exceptions, draft discipline, line accounting, the exit-conditioned landing, and the babysit-to-convergence loop are defined in the `/pr-landing-discipline` skill. Show-the-change PR bodies are the `/pr-and-issue-discipline` skill's.
 
-Review-before-landing and the CI watcher after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode. Their definitions and defaults live there, not here.
+Review-before-landing and the PR or mainline-tip subscription after every push or merge stay in orchestrator-mode's Land section (6), and the fleet-specific babysit addition (cross-track comment routing) in orchestrator-mode's Babysit section (5). The steps below only name WHEN those gates fire in each mode. Their definitions and defaults live there, not here.
 
 ## Direct Commits to the Mainline
 
 1. **One pending change on the mainline at a time, in plan order.** Wait for the previous landing's CI verdict before pushing the next. When the mainline's runs share a concurrency group key, GitHub keeps at most one running plus one pending run per key, so a third push cancels the pending run and that SHA never gets a verdict (two landings in one production session needed reruns for exactly this).
 
-   The one-watcher rule in orchestrator-mode's Land section (6) keeps the API budget intact.
+   The one-poller rule in orchestrator-mode's Land section (6) keeps the API budget intact: sessions subscribe, and only the daemon polls.
 2. **Take the builder's branch** (named in its completion signal) and prepare it per the repo's conventions: rebase onto the mainline, cherry-pick its commits, or export and apply its diff as a patch.
    - A DEPENDENT track (based on a sibling's branch) needs one extra recorded fact, MAINTAINED rather than set-once: the dependency's tip sha. Pin it when the upper track branches, and re-record it after every restack of the upper branch. The boundary tracks the branch's ACTUAL current base, so it updates at exactly the moments the base changes, and a stale recording replays later or rewritten dependency commits.
    - At landing, transplant only the track-specific delta: `git rebase --onto <mainline> <recorded-dep-tip> <upper-branch>`. A dependency landed via squash or cherry-pick leaves its original commits outside the mainline's ancestry, so a whole-branch rebase would replay the dependency's changes.
