@@ -156,6 +156,9 @@ type GithubSearch = { incomplete_results: boolean; items: GithubItem[] };
 function githubSearch(body: unknown): GithubSearch | string {
   if (typeof body !== "object" || body === null) return "not an object";
   const { incomplete_results, items } = body as Record<string, unknown>;
+  if (incomplete_results !== undefined && typeof incomplete_results !== "boolean") {
+    return "incomplete_results is not a boolean";
+  }
   if (!Array.isArray(items)) return "no items list";
   for (const item of items as Record<string, unknown>[]) {
     if (typeof item?.name !== "string") return "an item has no name";
@@ -529,7 +532,7 @@ async function wiktionary(io: Io, name: string): Promise<Cell> {
   return free;
 }
 
-type UrbanEntry = { word?: string; definition?: string; thumbs_up?: number };
+type UrbanEntry = { word: string; definition?: string; thumbs_up?: number };
 
 /** Exact-match entries only: Urban Dictionary's search is fuzzy and would flag every name. */
 async function urban(io: Io, name: string): Promise<Cell> {
@@ -539,8 +542,11 @@ async function urban(io: Io, name: string): Promise<Cell> {
     if (response.status !== 200) return unknown(`urban HTTP ${response.status}`);
     const list = ((await response.json()) as { list?: unknown } | null)?.list;
     if (!Array.isArray(list)) return unknown("urban reply malformed: no list");
+    if (!list.every((entry) => typeof entry?.word === "string")) {
+      return unknown("urban reply malformed: an entry has no word");
+    }
     const exact = (list as UrbanEntry[]).filter(
-      (entry) => (entry.word ?? "").toLowerCase() === name.toLowerCase(),
+      (entry) => entry.word.toLowerCase() === name.toLowerCase(),
     );
     if (exact.length === 0) return free;
     exact.sort((a, b) => (b.thumbs_up ?? 0) - (a.thumbs_up ?? 0));

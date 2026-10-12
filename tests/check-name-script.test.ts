@@ -573,7 +573,7 @@ describe("check-name.mts cells", () => {
     });
   });
 
-  test("a GitHub search 200 whose body is not the result list (no items, items not a list, an item without a name or a star count) is unknown, never free and never a thrown run", async () => {
+  test("a GitHub search 200 whose body is not the result list (no items, items not a list, an item without a name or a star count, a non-boolean incomplete flag) is unknown, never free and never a thrown run", async () => {
     const malformed: unknown[] = [
       null,
       {},
@@ -581,6 +581,7 @@ describe("check-name.mts cells", () => {
       { items: [{}] },
       { items: [{ name: "lumera" }] },
       { items: [{ name: 7, stargazers_count: 100 }] },
+      { items: [], incomplete_results: "true" },
     ];
     for (const body of malformed) {
       const io = fakeIo((url) =>
@@ -699,7 +700,7 @@ describe("check-name.mts cells", () => {
     expect(cell(row.cells, "wiktionary")).toEqual({ status: "taken", detail: "word in English" });
   });
 
-  test("Urban Dictionary's fuzzy hits are ignored; an exact entry is taken with its top definition; a 200 without the list is unknown, never free", async () => {
+  test("Urban Dictionary's fuzzy hits are ignored; an exact entry is taken with its top definition; a 200 without the list, or with an entry without a word, is unknown, never free", async () => {
     const io = fakeIo((url) => {
       if (url.hostname !== "api.urbandictionary.com") return undefined;
       if (url.searchParams.get("term") === "lumera") {
@@ -725,14 +726,21 @@ describe("check-name.mts cells", () => {
       status: "taken",
       detail: "2 entries: the [popular] one",
     });
-    for (const body of [null, {}, { list: "none" }]) {
-      const noList = fakeIo((url) =>
+    const malformed: [unknown, string][] = [
+      [null, "no list"],
+      [{}, "no list"],
+      [{ list: "none" }, "no list"],
+      [{ list: [{}] }, "an entry has no word"],
+      [{ list: [{ definition: "synthetic slang" }] }, "an entry has no word"],
+    ];
+    for (const [body, what] of malformed) {
+      const io = fakeIo((url) =>
         url.hostname === "api.urbandictionary.com" ? { status: 200, body } : undefined,
       );
-      const row = await checkName(noList, OPTIONS, "lumera");
+      const row = await checkName(io, OPTIONS, "lumera");
       expect(cell(row.cells, "urban"), JSON.stringify(body)).toEqual({
         status: "unknown",
-        detail: "urban reply malformed: no list",
+        detail: `urban reply malformed: ${what}`,
       });
     }
   });
