@@ -99,12 +99,22 @@ async function get(io: Io, url: string, headers: Record<string, string> = {}): P
 }
 
 let arxivTurn: Promise<void> = Promise.resolve();
+let arxivLastDone = 0;
 
+/** The gap is waited before a lookup, never after one, so the last lookup ends the process. */
 function arxivSerialised<T>(io: Io, work: () => Promise<T>): Promise<T> {
-  const mine = arxivTurn.then(work);
+  const mine = arxivTurn.then(async () => {
+    const wait = arxivLastDone + io.arxivGapMs - Date.now();
+    if (wait > 0) await Bun.sleep(wait);
+    try {
+      return await work();
+    } finally {
+      arxivLastDone = Date.now();
+    }
+  });
   arxivTurn = mine.then(
-    () => Bun.sleep(io.arxivGapMs),
-    () => Bun.sleep(io.arxivGapMs),
+    () => undefined,
+    () => undefined,
   );
   return mine;
 }
@@ -543,6 +553,7 @@ async function main(): Promise<number> {
   return result.failures.length > 0 ? 1 : 0;
 }
 
+// exitCode, not process.exit(): a long table on a piped stdout drains fully before the end.
 if (import.meta.main) {
-  process.exit(await main());
+  process.exitCode = await main();
 }

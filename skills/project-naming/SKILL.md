@@ -48,6 +48,7 @@ Turn the answers into one page every lane reads. The owner approves it before an
 exemplars:   <the names the owner likes>, scored 1 to 5 by closeness
 grows into:  <scope in one line>
 claims:      pypi npm hf github dns:com,ai
+languages:   <the languages the users read, from the interview>
 hard gate:   the table under Conditions, plus anything the owner added
 soft scores: exemplar closeness, elegance, room to grow
 ```
@@ -95,8 +96,9 @@ The script's Wiktionary column reads every sense in every language from the page
 
 ```text
 for each survivor:
-  say it aloud in Spanish, Portuguese, French, Italian, German, Hindi, Turkish,
-    Arabic, Japanese, Mandarin, Russian, Korean: which word is it one sound away from?
+  say it aloud in every language the brief lists, then in Spanish, Portuguese, French,
+    Italian, German, Hindi, Turkish, Arabic, Japanese, Mandarin, Russian, Korean:
+    which word is it one sound away from?
   is it a drug, a perfume, a car, a company, an ML method? (one web search: "<name>" AI OR company OR app)
 verdict per name: SERIOUS (the word named), MILD (the word named), NONE, each with its source
 ```
