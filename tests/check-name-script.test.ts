@@ -724,13 +724,22 @@ describe("check-name.mts typosquat column", () => {
     });
   }
 
-  test("a hit names the package, the registry, and the basis; every source hit is listed; an exact match is the registry column's business, not a typo", async () => {
+  test("a hit names the package, the registry with whether the run claims it, and the basis; every source hit is listed; an exact match is the registry column's business, not a typo", async () => {
     const io = sourcesIo(["requests", "Requezt"], ["request"], ["requests"]);
     const row = await checkName(io, OPTIONS, "requezts");
     expect(cell(row.cells, "typosquat")).toEqual({
       status: "taken",
       detail:
-        "1 edit from requests on pypi (top 5000 by downloads); 1 edit from requests on crates (the 100 most downloaded crates the search returns for it)",
+        "1 edit from requests on claimed pypi (top 5000 by downloads); 1 edit from requests on claimed crates (the 100 most downloaded crates the search returns for it)",
+    });
+    // The page reads a hit on an unclaimed registry as MINOR and one on a claimed registry as a
+    // gate failure, so the cell says which: --registries names the claimed ones.
+    const cratesBrief: Options = { ...OPTIONS, registries: ["crates", "typosquat"] };
+    const partly = await checkName(io, cratesBrief, "requezts");
+    expect(cell(partly.cells, "typosquat")).toEqual({
+      status: "taken",
+      detail:
+        "1 edit from requests on unclaimed pypi (top 5000 by downloads); 1 edit from requests on claimed crates (the 100 most downloaded crates the search returns for it)",
     });
     const exact = await checkName(sourcesIo(["requests"], [], []), OPTIONS, "Requests");
     expect(cell(exact.cells, "typosquat")).toEqual({ status: "free" });
@@ -740,7 +749,7 @@ describe("check-name.mts typosquat column", () => {
     const row = await checkName(sourcesIo([], ["@types/node", "react"], []), OPTIONS, "Reactt");
     expect(cell(row.cells, "typosquat")).toEqual({
       status: "taken",
-      detail: "1 edit from react on npm (top 5000 by downloads)",
+      detail: "1 edit from react on claimed npm (top 5000 by downloads)",
     });
   });
 
@@ -763,7 +772,6 @@ describe("check-name.mts typosquat column", () => {
         "unknown",
       );
       expect(detail(cell(row.cells, "typosquat"))).toContain("reply unreadable");
-      // A hit on another source still stands over the unreadable one.
       const stands = withReply(sourcesIo(["requests"], [], []), host, () => {
         const text = reply.text ?? JSON.stringify(reply.body);
         return new Response(text, { status: reply.status });
@@ -772,10 +780,11 @@ describe("check-name.mts typosquat column", () => {
       expect(cell(hit.cells, "typosquat").status, host).toBe(
         host === "hugovk.dev" ? "unknown" : "taken",
       );
+      expect(detail(cell(hit.cells, "typosquat")), host).toContain("lookup failed");
     }
   });
 
-  test("a source that cannot be read is unknown when nothing else hit, and is overridden by a hit elsewhere", async () => {
+  test("a source that could not be read is the cell when nothing hit, and is named beside a hit elsewhere, so a hit on an unclaimed registry cannot hide a failed lookup on a claimed one", async () => {
     const down = withReply(
       sourcesIo([], [], []),
       "hugovk.dev",
@@ -784,15 +793,32 @@ describe("check-name.mts typosquat column", () => {
     const row = await checkName(down, OPTIONS, "lumera");
     expect(cell(row.cells, "typosquat")).toEqual({
       status: "unknown",
-      detail: "top-pypi-packages HTTP 503",
+      detail: "claimed pypi lookup failed (top-pypi-packages HTTP 503)",
     });
-    const hitElsewhere = withReply(
-      sourcesIo([], ["lumeras"], []),
-      "hugovk.dev",
+    // A crates-only brief: the PyPI hit is a MINOR note on the page, and the crates search, the
+    // one list the brief gates on, could not be read. Reported as the hit alone, the row would
+    // pass the gate on a lookup that never happened.
+    const cratesBrief: Options = { ...OPTIONS, registries: ["crates", "typosquat"] };
+    const cratesDown = withReply(
+      sourcesIo(["lumeras"], [], []),
+      "crates.io",
       () => new Response("", { status: 503 }),
     );
-    const stands = await checkName(hitElsewhere, OPTIONS, "lumera");
-    expect(cell(stands.cells, "typosquat").status).toBe("taken");
+    const hidden = await checkName(cratesDown, cratesBrief, "lumera");
+    expect(cell(hidden.cells, "typosquat")).toEqual({
+      status: "taken",
+      detail:
+        "1 edit from lumeras on unclaimed pypi (top 5000 by downloads); claimed crates lookup failed (crates search HTTP 503)",
+    });
+    const nothingHit = await checkName(
+      withReply(sourcesIo([], [], []), "crates.io", () => new Response("", { status: 503 })),
+      cratesBrief,
+      "lumera",
+    );
+    expect(cell(nothingHit.cells, "typosquat")).toEqual({
+      status: "unknown",
+      detail: "claimed crates lookup failed (crates search HTTP 503)",
+    });
   });
 
   test("the PyPI ranking and the Homebrew indexes are fetched once per process and read from the cache directory for a day, after which they are fetched again", async () => {
@@ -1001,7 +1027,7 @@ describe("check-name.mts registry table", () => {
     expect(failures).toEqual([]);
     const blind: Options = {
       ...extended,
-      table: [...REGISTRIES, { ...extra, lookup: async () => ({ status: "free" }) }],
+      table: [...REGISTRIES, { ...extra, lookup: async (): Promise<Cell> => ({ status: "free" }) }],
     };
     expect(await runControls(allTakenIo(["nic.com"]), blind, RANDOM)).toEqual([
       { column: "extra", control: "occupied", expected: "taken", got: { status: "free" } },

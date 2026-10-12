@@ -17,7 +17,7 @@ import { promises as dns } from "node:dns";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { type Cell, type Io, renderCell, unknown } from "./cells.mts";
+import { type Cell, type Claimed, type Io, renderCell, unknown } from "./cells.mts";
 import { type Column, REGISTRIES, type RegistryEntry } from "./registries.mts";
 
 const USAGE =
@@ -41,17 +41,21 @@ export function allColumns(table: readonly RegistryEntry[], domains: string[]): 
   return table.flatMap((entry) => (entry.kind === "domains" ? domains.map(entry.forTld) : [entry]));
 }
 
+export function claimed(options: Options): Claimed {
+  return (id) => options.registries === null || options.registries.includes(id);
+}
+
 export function columns(options: Options): Column[] {
+  const isClaimed = claimed(options);
   return allColumns(options.table, options.domains).filter(
-    (column) =>
-      (options.arxiv || column.id !== "arxiv") &&
-      (options.registries === null || options.registries.includes(column.id)),
+    (column) => (options.arxiv || column.id !== "arxiv") && isClaimed(column.id),
   );
 }
 
 export async function checkName(io: Io, options: Options, name: string): Promise<Row> {
   const cols = columns(options);
-  const cells = await Promise.all(cols.map((column) => column.lookup(io, name)));
+  const isClaimed = claimed(options);
+  const cells = await Promise.all(cols.map((column) => column.lookup(io, name, isClaimed)));
   return {
     name,
     cells: Object.fromEntries(cols.map((column, i) => [column.id, cells[i] ?? unknown("missing")])),
@@ -81,8 +85,9 @@ export async function runControls(
   freeControl: string,
 ): Promise<ControlVerdict[]> {
   const cols = columns(options).filter((column) => column.kind === "registry");
+  const isClaimed = claimed(options);
   const [takenCells, freeRow] = await Promise.all([
-    Promise.all(cols.map((column) => column.lookup(io, column.takenControl))),
+    Promise.all(cols.map((column) => column.lookup(io, column.takenControl, isClaimed))),
     checkName(io, options, freeControl),
   ]);
   const failures: ControlVerdict[] = [];

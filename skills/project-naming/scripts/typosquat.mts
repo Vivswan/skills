@@ -1,8 +1,8 @@
-// The typosquat column: is the name one edit away from a popular package on a claimed registry?
+// The typosquat column: is the name one edit away from a popular package on PyPI, npm, or crates?
 // Each registry's popular names come from one public list, read through cache.mts.
 
 import { cached, stringList } from "./cache.mts";
-import { type Cell, free, type Io, taken, unknown } from "./cells.mts";
+import { type Cell, type Claimed, free, type Io, taken, unknown } from "./cells.mts";
 
 /** The top of each download ranking; names past this are not what a typo lands on. */
 export const RANKING_TOP = 5_000;
@@ -102,21 +102,24 @@ function sources(io: Io, lower: string): Promise<Source>[] {
   ];
 }
 
-/** With no hit, a source that could not be read is the cell: the name may be one edit from what
- * that source would have shown. */
-export async function typosquat(io: Io, name: string): Promise<Cell> {
+/** Every source's outcome is in the cell: a source that could not be read is named beside the
+ * hits, since the name may be one edit from what it would have shown, and with no hit it is the
+ * cell. A hit on an unclaimed registry alone must not read as a complete check of the claimed one. */
+export async function typosquat(io: Io, name: string, claimed: Claimed): Promise<Cell> {
   const lower = name.toLowerCase();
   const hits: string[] = [];
-  const errors: string[] = [];
+  const failures: string[] = [];
   for (const found of await Promise.all(sources(io, lower))) {
+    const registry = `${claimed(found.registry) ? "claimed" : "unclaimed"} ${found.registry}`;
     if ("error" in found) {
-      errors.push(found.error);
+      failures.push(`${registry} lookup failed (${found.error})`);
       continue;
     }
     const near = found.names.find((candidate) => oneEditApart(lower, candidate.toLowerCase()));
-    if (near) hits.push(`1 edit from ${near} on ${found.registry} (${found.basis})`);
+    if (near) hits.push(`1 edit from ${near} on ${registry} (${found.basis})`);
   }
-  if (hits.length > 0) return taken(hits.join("; "));
-  if (errors.length > 0) return unknown(errors.join("; "));
+  const detail = [...hits, ...failures].join("; ");
+  if (hits.length > 0) return taken(detail);
+  if (failures.length > 0) return unknown(detail);
   return free;
 }

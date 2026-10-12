@@ -3,7 +3,16 @@
 // the table.
 
 import { cached, stringList, stringMap } from "./cache.mts";
-import { type Cell, free, get, type Io, renderCell, taken, unknown } from "./cells.mts";
+import {
+  type Cell,
+  type Claimed,
+  free,
+  get,
+  type Io,
+  renderCell,
+  taken,
+  unknown,
+} from "./cells.mts";
 import { type Note, sayAsSpelled } from "./say.mts";
 import { typosquat } from "./typosquat.mts";
 
@@ -16,7 +25,7 @@ export type Registry = {
   takenControl: string;
   /** What the control must read; any taken cell unless the column exists to see something finer. */
   controlHolds?: (cell: Cell) => boolean;
-  lookup: (io: Io, name: string) => Promise<Cell>;
+  lookup: (io: Io, name: string, claimed: Claimed) => Promise<Cell>;
 };
 
 /** One column per top-level domain the run asks for, each its own registry. */

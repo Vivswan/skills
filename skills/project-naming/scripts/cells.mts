@@ -35,6 +35,11 @@ export async function get(
   });
 }
 
+/** Whether the run claims a registry: `--registries` names the claimed ones, and a run without it
+ * claims every registry. The page reads a typosquat hit on a claimed registry as a gate failure
+ * and one on an unclaimed registry as a MINOR note, so the cell says which. */
+export type Claimed = (registryId: string) => boolean;
+
 export const free: Cell = { status: "free" };
 export const taken = (detail: string): Cell => ({ status: "taken", detail });
 export const unknown = (detail: string): Cell => ({ status: "unknown", detail });
