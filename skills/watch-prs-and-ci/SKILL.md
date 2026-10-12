@@ -113,7 +113,8 @@ one only   binding daemon.sock is the lock: in use -> connect to the winner; ref
 stop       each poll prunes subscribers whose session is gone (socket sink) or whose lease lapsed (file sink);
            10 min with none -> save, unlink the socket, exit; `stop`, SIGTERM, SIGINT -> the same at once
 users      everything is keyed by uid: each user has their own daemon, log, subscriptions, `gh` identity, and rate budget
-agents     `status` prints the subscribers, PRs, last event, last delivery state per subscriber, and the log path
+agents     `status` prints the subscribers, PRs, last event, last delivery state per subscriber, the log path, and
+           each former subscriber as `<address> pruned=<reason> at <iso> delivery=<last outcome>`
 ```
 
 ```bash
@@ -171,7 +172,7 @@ bun "<skill-dir>/scripts/pr-events.mts" wait --id codex-12 --since 0 --timeout 3
 
 Run `wait` as a background command and read the file when it exits. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 3 is the timeout with nothing new: re-arm, or escalate to the user.
 
-`--id` names the file-sink subscription the reader holds: `wait` selects the lines whose `to` field names it, and each `wait` renews its 24 h lease. A file subscriber whose lease lapsed is pruned, and `--pid <pid>` at `watch` time prunes on that process's death instead.
+`--id` names the file-sink subscription the reader holds: `wait` selects the lines whose `to` field names it, and each `wait` renews its 24 h lease. A file subscriber whose lease lapsed is pruned. `--pid <pid>` at `watch` time prunes on that process's death instead; it is accepted with the file sink only, since an inbox is already named by its session's pid.
 
 Every event line has the same shape, whichever sink delivers it:
 
