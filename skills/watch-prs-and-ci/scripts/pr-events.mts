@@ -483,7 +483,7 @@ async function cmdStatus(dir: string): Promise<number> {
   lines.push(`prs: ${rows.length}`);
   for (const [key, row] of rows) {
     lines.push(
-      `  ${key} head=${row.headRefOid.slice(0, 12)} state=${row.state} ci=${row.ciPending ? "pending" : "settled"} updated=${row.updatedAt}`,
+      `  ${key} head=${row.headRefOid.slice(0, 12)} state=${row.state} ci=${row.ci.pending ? "pending" : "settled"} updated=${row.updatedAt}`,
     );
   }
   const commits = Object.values(state.pendingCommits);
@@ -797,7 +797,7 @@ async function runDaemon(
     targets: Subscription[],
     grace: { missingPolls: number },
     emitted: PrEvent[],
-  ): boolean => {
+  ): PrEvent | null => {
     const runs = discoverRuns(repo, sha);
     const verdict = judgeRuns(runs, expected);
     const base = { repo, pr: subject.pr, sha, url: subject.url };
@@ -807,21 +807,24 @@ async function runDaemon(
     switch (kind) {
       case "pending":
         grace.missingPolls = 0;
-        return false;
-      case "green":
-        emitted.push(emit({ ...base, kind: "ci", text: describeGreen(sha, runs) }, targets));
-        return true;
-      case "red":
-        emitted.push(
-          emit({ ...base, kind: "ci", text: describeRed(repo, sha, runs, verdict.lines) }, targets),
-        );
-        return true;
+        return null;
+      case "green": {
+        const event = emit({ ...base, kind: "ci", text: describeGreen(sha, runs) }, targets);
+        emitted.push(event);
+        return event;
+      }
+      case "red": {
+        const text = describeRed(repo, sha, runs, verdict.lines);
+        const event = emit({ ...base, kind: "ci", text }, targets);
+        emitted.push(event);
+        return event;
+      }
       case "missing":
       case "trouble":
         // Noticed once, at the grace; the sha stays judged, so a run that registers late still
         // gets its verdict.
         grace.missingPolls += 1;
-        if (grace.missingPolls !== MISSING_GRACE_POLLS) return false;
+        if (grace.missingPolls !== MISSING_GRACE_POLLS) return null;
         emitted.push(
           emit(
             {
@@ -835,7 +838,7 @@ async function runDaemon(
             targets,
           ),
         );
-        return false;
+        return null;
     }
   };
 
@@ -868,8 +871,7 @@ async function runDaemon(
     const base = { repo: ref.repo, pr: ref.number, sha: current.headRefOid, url: current.url };
     const row: SavedRow = {
       ...current,
-      ciPending: saved?.ciPending ?? true,
-      missingPolls: saved?.missingPolls ?? 0,
+      ci: saved?.ci ?? { pending: true, missingPolls: 0 },
       seenActivity: saved?.seenActivity ?? [],
     };
     const headMoved = saved ? current.headRefOid !== saved.headRefOid : recordedHeads.size > 0;
@@ -906,8 +908,9 @@ async function runDaemon(
       );
     }
     if (saved && (changes.head || changes.rollup)) {
-      row.ciPending = true;
-      if (changes.head) row.missingPolls = 0;
+      // A rollup move on the same head keeps the grace already spent waiting for its gate.
+      const missingPolls = !changes.head && saved.ci.pending ? saved.ci.missingPolls : 0;
+      row.ci = { pending: true, missingPolls };
     }
     if (current.state === "MERGED") {
       const oid = current.mergeCommitOid;
@@ -946,20 +949,18 @@ async function runDaemon(
       return;
     }
     state.rows[key] = row;
-    if (row.ciPending) {
-      const settled = judgeCi(
+    if (row.ci.pending) {
+      const verdict = judgeCi(
         ref.repo,
         current.headRefOid,
         expected,
         { pr: ref.number, url: current.url },
         targets,
-        row,
+        row.ci,
         emitted,
       );
-      if (settled) {
-        row.ciPending = false;
-        row.missingPolls = 0;
-      }
+      if (verdict)
+        row.ci = { pending: false, verdict: { eventId: verdict.id, text: verdict.text } };
     }
   };
 
@@ -970,7 +971,7 @@ async function runDaemon(
     const expected = union(
       targets.map((sub) => (sub.commits[key] as { expected: string[] }).expected),
     );
-    const settled = judgeCi(
+    const verdict = judgeCi(
       pending.repo,
       pending.sha,
       expected,
@@ -979,7 +980,7 @@ async function runDaemon(
       pending,
       emitted,
     );
-    if (!settled) return;
+    if (verdict === null) return;
     for (const sub of targets) delete sub.commits[key];
     delete state.pendingCommits[key];
   };
@@ -1126,6 +1127,18 @@ async function runDaemon(
     finish(0);
   };
 
+  // Whether the verdict settled on this row's head was addressed to the subscriber, on the
+  // verdict's own line or on a replay of it.
+  const handedVerdict = (address: string, row: SavedRow, eventId: number): boolean =>
+    readEventsSince(dir, eventId - 1).some(
+      (event) =>
+        event.kind === "ci" &&
+        event.repo === row.repo &&
+        event.pr === row.number &&
+        event.sha === row.headRefOid &&
+        event.to.includes(address),
+    );
+
   const subscribe = async (sink: SinkChoice, mode: Mode, target: WatchTarget): Promise<number> => {
     const now = Date.now();
     const sub: Subscription = state.subscriptions[sink.address] ?? {
@@ -1138,14 +1151,26 @@ async function runDaemon(
     };
     sub.mode = mode;
     sub.liveness = livenessOf(sink, now);
+    state.subscriptions[sink.address] = sub;
+    const replayed: PrEvent[] = [];
     if (target.kind === "pr") {
       const key = prKey(target);
       const previous = sub.prs[key];
       const expected = union([previous?.expected ?? [], target.expected]);
       sub.prs[key] = { head: target.head, expected };
-      // A gate named now was not judged by a verdict already settled on this head.
       const row = state.rows[key];
-      if (row && expected.length > (previous?.expected.length ?? 0)) row.ciPending = true;
+      if (row && expected.length > (previous?.expected.length ?? 0)) {
+        // A gate named now was not judged by a verdict already settled on this head.
+        row.ci = { pending: true, missingPolls: 0 };
+      } else if (
+        row &&
+        !row.ci.pending &&
+        !handedVerdict(sink.address, row, row.ci.verdict.eventId)
+      ) {
+        // The verdict settled before this subscriber arrived: it is handed over, to them alone.
+        const base = { repo: row.repo, pr: row.number, sha: row.headRefOid, url: row.url };
+        replayed.push(emit({ ...base, kind: "ci", text: row.ci.verdict.text }, [sub]));
+      }
     } else {
       const key = commitKey(target.repo, target.sha);
       const previous = sub.commits[key];
@@ -1156,11 +1181,11 @@ async function runDaemon(
       };
       addPendingCommit(target.repo, target.sha);
     }
-    state.subscriptions[sink.address] = sub;
     delete state.pruned[sink.address];
     saveState(dir, state);
     checkIdle();
     log(`watch ${sink.sink} ${sink.address} (${mode}): ${describeTarget(target)}`);
+    await deliverAll(replayed);
     if (polling) await polling;
     await runPoll();
     return subscribers().length;

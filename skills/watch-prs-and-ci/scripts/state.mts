@@ -68,10 +68,14 @@ export interface Subscription {
   commits: Record<CommitKey, CommitSubscription>;
 }
 
+/** A head's CI: still being judged, or settled by the verdict event a later subscriber is handed. */
+export type RowCi =
+  /** `missingPolls`: polls in a row on which no run had registered; the grace before a trouble event. */
+  | { pending: true; missingPolls: number }
+  | { pending: false; verdict: { eventId: number; text: string } };
+
 export interface SavedRow extends Row {
-  ciPending: boolean;
-  /** Polls in a row on which no run had registered; the grace before a trouble event. */
-  missingPolls: number;
+  ci: RowCi;
   /** The activity ids the last two detail reads returned, oldest read first; what is in neither is news. */
   seenActivity: string[][];
 }

@@ -973,6 +973,34 @@ describe("pr-events.mts", () => {
     s.stop();
   }, 30000);
 
+  test("a subscriber arriving after the verdict settled is handed it on a line of its own; a repeat watch is not", async () => {
+    // The row's CI is settled and the only verdict line is addressed to the first subscriber, so
+    // without the replay the second never learns it, not even through `wait --id`.
+    const s = new Scenario("late");
+    const a = await s.inbox("a");
+    const b = await s.inbox("b");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: a.path }).code).toBe(0);
+    expect(s.run(["watch", PR7, "--mode", "prompting"], { inbox: b.path }).code).toBe(0);
+    expect(s.run(["watch", PR7, "--mode", "prompting"], { inbox: b.path }).code).toBe(0);
+    expect(headlines(await a.frames(1))).toEqual([GREEN_A]);
+    const frames = await b.frames(1);
+    expect(headlines(frames)).toEqual([GREEN_A]);
+    expect(parseFrame(frames[0] as string).from_mode).toBe("prompting");
+    expect(s.events().map((e) => [e.id, e.kind, e.sha, e.to])).toEqual([
+      [1, "ci", HEAD_A, [a.path]],
+      [2, "ci", HEAD_A, [b.path]],
+    ]);
+    const routed = s.run(["wait", "--since", "0", "--timeout", "1", "--id", b.path]);
+    expect(routed.code).toBe(0);
+    expect(routed.stdout.trim().split("\n")).toEqual([JSON.stringify(s.events()[1]), "cursor: 2"]);
+    expect(s.ghCalls().filter((call) => call.includes("checkSuites("))).toHaveLength(1);
+    s.stop();
+  }, 30000);
+
   test("stop, fixtures advance, watch again: exactly the missed deltas arrive, none twice", async () => {
     const s = new Scenario("resume");
     const box = await s.inbox("a");
