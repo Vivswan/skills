@@ -66,9 +66,7 @@ export interface CommitWatch {
   grace: Grace;
 }
 
-export type RowCi =
-  | { pending: true; grace: Grace }
-  | { pending: false; verdict: { eventId: number; text: string } };
+export type RowCi = { pending: true; grace: Grace } | { pending: false };
 
 export interface SavedRow extends Row {
   ci: RowCi;

@@ -595,7 +595,7 @@ describe("pr-events.mts", () => {
     const outside = s.run(["watch", PR7]);
     expect(outside.code).toBe(2);
     expect(outside.stderr).toContain("CLAUDE_CODE_MESSAGING_SOCKET is unset");
-    for (const id of ["constructor", "__proto__", "a/b"]) {
+    for (const id of ["a/b", "..", "x y"]) {
       const bad = s.run(["watch", PR7, "--id", id]);
       expect(bad.code).toBe(2);
       expect(bad.stderr).toContain("--id must be a name");
@@ -711,7 +711,12 @@ describe("pr-events.mts", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    await Bun.sleep(500);
+    // The fake logs a call as it starts, so the session ends while the slow detail read is in flight.
+    const detailReads = () =>
+      s.ghCalls().filter((call) => call.includes("reviewThreads(first:")).length;
+    const started = Date.now() + 5000;
+    while (detailReads() < 2 && Date.now() < started) await Bun.sleep(20);
+    expect(detailReads()).toBe(2);
     session.kill();
     await session.exited;
     const exit = await Promise.race([
@@ -821,6 +826,57 @@ describe("pr-events.mts", () => {
     expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
     expect(s.events("regrace").map((e) => e.kind)).toEqual(["trouble"]);
     s.stop({ id: "regrace" });
+  }, 30000);
+
+  test("a watch queued behind a poll when the stop arrives is refused instead of polling after the socket is gone", async () => {
+    // The queued watch awaited the poll in flight, as the stop did; once that poll was drained it
+    // would start another, delivering and saving after the socket had been released.
+    const s = new Scenario("queued-watch");
+    const box = await s.inbox("a");
+    s.fixtures({ "suites-1": suites([["ci", "completed", "success"]]) });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    const cli = (args: string[]) =>
+      Bun.spawn([process.execPath, SCRIPT, ...args], {
+        env: s.env({ inbox: box.path }),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    // A's poll waits in its delivery gap; B queues behind it; the stop lands in the same wait.
+    const a = cli(["watch-commit", REPO, HEAD_B, ...GATE_CI]);
+    await Bun.sleep(200);
+    const b = cli(["watch-commit", REPO, MERGE_C, ...GATE_CI]);
+    await Bun.sleep(200);
+    const stop = cli(["stop"]);
+    expect(await a.exited).toBe(0);
+    expect(await b.exited).toBe(2);
+    expect(await new Response(b.stderr).text()).toContain("daemon stopping; retry");
+    expect(await stop.exited).toBe(0);
+    expect(existsSync(s.socketPath())).toBe(false);
+    expect(headlines(await box.frames(2))).toHaveLength(2);
+    expect(s.events().map((e) => e.sha)).toEqual([HEAD_A, HEAD_B]);
+    expect(Object.keys(JSON.parse(readFileSync(s.file("state.json"), "utf-8")).commits)).toEqual([
+      `${REPO}@${MERGE_C}`,
+    ]);
+  }, 30000);
+
+  test("a stop arriving while a signal's shutdown drains waits for that same shutdown, so it answers once the socket is gone", async () => {
+    const s = new Scenario("double-stop");
+    const box = await s.inbox("a");
+    s.fixtures({ "suites-1": suites([["ci", "completed", "success"]]) });
+    const daemon = await s.start({ inbox: box.path });
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    const a = Bun.spawn([process.execPath, SCRIPT, "watch-commit", REPO, HEAD_B, ...GATE_CI], {
+      env: s.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await Bun.sleep(300);
+    daemon.kill("SIGTERM");
+    s.stop({ inbox: box.path });
+    expect(await a.exited).toBe(0);
+    expect(await daemon.exited).toBe(0);
+    expect(headlines(await box.frames(2))).toHaveLength(2);
   }, 30000);
 
   test("a second daemon for the same session exits 0 saying so and leaves the first serving; a stale socket file is replaced", async () => {

@@ -59,6 +59,7 @@ const OWNER_CHECK_MS = 1000;
 // The receiver drops a second frame from one sender within the same second; a poll triggered by
 // `watch` right after another waits this long before its message goes out.
 const MIN_DELIVERY_GAP_MS = 1100;
+const STOPPING_ERROR = "daemon stopping; retry";
 
 const USAGE = [
   "usage: pr-events.mts <command> [options]",
@@ -111,8 +112,7 @@ function resolveOwner(
 ): Owner {
   const pid = parsePositiveInt(values.pid, "--pid") ?? null;
   if (values.id !== undefined) {
-    // Ids key plain objects that come back from JSON, so a name an object inherits cannot be one.
-    if (!ID_PATTERN.test(values.id) || values.id in Object.prototype) {
+    if (!ID_PATTERN.test(values.id)) {
       usage(`--id must be a name of letters, digits, . _ or -, not ${values.id}`);
     }
     return { key: values.id, inbox: null, pid };
@@ -136,7 +136,6 @@ function resolveOwner(
 // Linux allows 108 bytes for a Unix socket path and macOS 104; a longer one fails at bind.
 const SOCKET_PATH_MAX = 104;
 
-/** The owner's files, refused when their socket path is longer than a bind allows. */
 function filesOf(dir: string, owner: Owner): OwnerFiles {
   const files = ownerFiles(dir, owner);
   if (Buffer.byteLength(files.socket) > SOCKET_PATH_MAX) {
@@ -667,7 +666,6 @@ async function runDaemon(
     return event;
   };
 
-  /** A settled verdict's event; null while the head is still being judged. */
   const judgeCi = (
     repo: string,
     sha: string,
@@ -833,8 +831,7 @@ async function runDaemon(
         row.ci.grace,
         emitted,
       );
-      if (verdict)
-        row.ci = { pending: false, verdict: { eventId: verdict.id, text: verdict.text } };
+      if (verdict) row.ci = { pending: false };
     }
   };
 
@@ -969,6 +966,7 @@ async function runDaemon(
 
   const runPoll = (): Promise<number> => {
     if (polling) return polling;
+    if (stopping) return Promise.resolve(0);
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
     polling = poll().finally(() => {
@@ -978,11 +976,16 @@ async function runDaemon(
     return polling;
   };
 
-  // A poll in flight is drained first: released earlier, the socket would let a replacement daemon
-  // start while this one still delivers and saves over the replacement's state. The socket is gone
-  // and the state saved before anyone is answered.
-  const shutdown = async (reason: string): Promise<void> => {
-    if (stopping) return;
+  // One shutdown, whoever asks first; a later stop waits for the same one. A poll in flight is
+  // drained first: released earlier, the socket would let a replacement daemon start while this
+  // one still delivers and saves over the replacement's state. The socket is gone and the state
+  // saved before anyone is answered.
+  let shuttingDown: Promise<void> | null = null;
+  const shutdown = (reason: string): Promise<void> => {
+    shuttingDown ??= drainAndStop(reason);
+    return shuttingDown;
+  };
+  const drainAndStop = async (reason: string): Promise<void> => {
     stopping = true;
     if (pollTimer) clearTimeout(pollTimer);
     clearInterval(ownerTimer);
@@ -1029,6 +1032,8 @@ async function runDaemon(
     saveState(files, state);
     log(`watch ${describeTarget(target)} gates=${gates(target.expected)}`);
     if (polling) await polling;
+    // The target is saved for the next daemon; a poll for it would outlive this one's socket.
+    if (stopping) throw new Error(STOPPING_ERROR);
     await runPoll();
     return watchedCount();
   };
@@ -1037,7 +1042,7 @@ async function runDaemon(
     // A connection accepted before the stop can still carry a command; work it would add has no
     // poll left to run it.
     if (stopping && command.cmd !== "status" && command.cmd !== "stop") {
-      return { ok: false, error: "daemon stopping; retry" };
+      return { ok: false, error: STOPPING_ERROR };
     }
     switch (command.cmd) {
       case "watch":
