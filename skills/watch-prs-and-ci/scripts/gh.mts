@@ -5,6 +5,25 @@ import { spawnSync } from "node:child_process";
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
+/** A read refused before it was made, by the guard the caller installed. */
+export class AbortedRead extends Error {}
+
+let guard: (() => string | null) | null = null;
+
+/**
+ * Installs a check made before every gh spawn; a reason returned refuses the read with AbortedRead.
+ * Every read is synchronous and holds the event loop, so a caller whose owner may go away between
+ * reads (the daemon's session) notices at the next read instead of at the end of a poll.
+ */
+export function guardReads(check: (() => string | null) | null): void {
+  guard = check;
+}
+
+export function beforeRead(): void {
+  const reason = guard?.() ?? null;
+  if (reason !== null) throw new AbortedRead(reason);
+}
+
 /** A gh call or response-shape failure. The caller decides whether it retries. */
 export class GhError extends Error {
   /** gh exits 1 on a GraphQL reply that carries an `errors` entry, with the reply still on stdout;
@@ -18,6 +37,7 @@ export class GhError extends Error {
 }
 
 export function gh(args: string[], timeoutMs: number = DEFAULT_TIMEOUT_MS): string {
+  beforeRead();
   const result = spawnSync("gh", args, {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],

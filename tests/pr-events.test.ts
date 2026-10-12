@@ -1314,7 +1314,9 @@ describe("pr-events.mts", () => {
     s.stop({ id: "a" });
   }, 30000);
 
-  test("stop, fixtures advance, start again: the restarted daemon polls at once and exactly the missed deltas arrive, none twice", async () => {
+  test("stop, fixtures advance, start again: the restarted daemon polls at once and exactly the missed deltas arrive, none twice, a second after the last message", async () => {
+    // A restart right after a stop would otherwise send its first message within a second of
+    // the previous daemon's last one, which the receiver drops.
     const s = new Scenario("resume");
     const box = await s.inbox("a");
     s.fixtures({
@@ -1322,7 +1324,13 @@ describe("pr-events.mts", () => {
       "suites-1": suites([["ci", "completed", "success"]]),
     });
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    // Spawned asynchronously, so the fake inbox stamps the arrival as it happens.
+    const watch = Bun.spawn([process.execPath, SCRIPT, "watch", PR7, ...GATE_CI], {
+      env: s.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await watch.exited).toBe(0);
     s.stop({ inbox: box.path });
     s.fixtures({
       "rows-2": rows({ rollup: "SUCCESS", comments: 2, updatedAt: T2 }),
@@ -1331,6 +1339,8 @@ describe("pr-events.mts", () => {
     });
     await s.start({ inbox: box.path });
     expect(headlines(await box.frames(2))).toEqual([GREEN_A, `PR ${PR7}: 1 new comment by bob`]);
+    const [first, second] = box.arrivedAt as [number, number];
+    expect(second - first).toBeGreaterThanOrEqual(1000);
     expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.events().map((e) => e.id)).toEqual([1, 2]);

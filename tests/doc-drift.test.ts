@@ -319,17 +319,6 @@ const SURFACES: Record<string, Surface> = {
       },
     ],
   },
-  "watch-prs-and-ci/SKILL.md <-> state.mts": {
-    docPath: join(WATCH_PRS, "SKILL.md"),
-    scriptPath: join(WATCH_PRS, "scripts", "state.mts"),
-    tokens: [
-      { doc: "`<session-pid>.events.jsonl`", script: 'EVENTS_SUFFIX = ".events.jsonl"' },
-      {
-        doc: { text: "`<session-pid>.sock`", occurrences: ">=1" },
-        script: 'SOCKET_SUFFIX = ".sock"',
-      },
-    ],
-  },
   "worktree-hygiene/SKILL.md <-> retire-branch.mts": {
     docPath: join(WORKTREE_HYGIENE, "SKILL.md"),
     scriptPath: join(WORKTREE_HYGIENE, "scripts", "retire-branch.mts"),

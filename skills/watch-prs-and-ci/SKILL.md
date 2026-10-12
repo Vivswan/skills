@@ -200,7 +200,9 @@ The reads of one poll, in order:
 3. check suites by commit, for each head or commit whose verdict is pending
 4. the failed-run log excerpts, when a verdict is red
 
-A poll costs `1 + (PRs whose row moved) + (heads and commits with CI pending)` GraphQL requests, plus one detail read at a PR's first sighting and one viewer lookup per daemon. At steady state, nothing moving, that is the batch read alone, once a minute. A rate-limited GraphQL answer is tooling trouble, never a reason to fall back to REST.
+A poll costs `1 + (PRs whose row moved) + (heads and commits with CI pending)` GraphQL requests, plus one detail read at a PR's first sighting and one viewer lookup per daemon. A backlog adds one page per 20 missed comments, and a head with more than 100 check suites is read twice to confirm the snapshot.
+
+At steady state, nothing moving, that is the batch read alone, once a minute. A rate-limited GraphQL answer is tooling trouble, never a reason to fall back to REST.
 
 When a workflow's runs share a `concurrency` group key, GitHub keeps at most one running plus one pending run per key. A newer push cancels the pending run, and the running one too where `cancel-in-progress` evaluates true, so the older head never gets a verdict. The daemon judges the current head: after a stacked push only the newest head gets a verdict, so wait for it before pushing again.
 

@@ -5,6 +5,7 @@
 
 import { spawnSync } from "node:child_process";
 import {
+  beforeRead,
   DEFAULT_TIMEOUT_MS,
   GhError,
   get,
@@ -214,6 +215,7 @@ export function failedJobLog(
   runId: number,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): string {
+  beforeRead();
   const result = spawnSync(
     "sh",
     ["-c", 'exec gh run view "$1" --log-failed --repo "$2" 2>&1', "sh", String(runId), repo],

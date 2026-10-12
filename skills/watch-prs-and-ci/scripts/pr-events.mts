@@ -10,7 +10,7 @@ import { connect, createServer, type Server, type Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
 import { discoverRuns, failedJobLog, judgeRuns, type Run, selectLatest } from "./check-suites.mts";
-import { GhError } from "./gh.mts";
+import { AbortedRead, GhError, guardReads } from "./gh.mts";
 import {
   deliver,
   FROM_NAME,
@@ -645,6 +645,7 @@ async function runDaemon(
     Object.keys(state.prs).length + Object.keys(state.commits).length;
 
   const ownerGone = (): boolean => owner.pid !== null && !isProcessAlive(owner.pid);
+  guardReads(() => (ownerGone() ? `${describeOwner(owner)} exited` : null));
 
   const emit = (input: EventInput): PrEvent => {
     const event = appendEvent(files, state, input);
@@ -839,7 +840,9 @@ async function runDaemon(
 
   // One message per poll, and a second's gap between messages: the receiver drops a second frame
   // from one sender within the same second.
-  let lastDeliveryAt = 0;
+  // The clock survives a restart: a daemon started right after the last one stopped would otherwise
+  // send its first message within a second of the previous one.
+  let lastDeliveryAt = state.delivery ? Date.parse(state.delivery.at) : 0;
   const deliverDigest = async (emitted: PrEvent[]): Promise<void> => {
     if (owner.inbox === null || emitted.length === 0) return;
     const gap = lastDeliveryAt + MIN_DELIVERY_GAP_MS - Date.now();
@@ -881,39 +884,40 @@ async function runDaemon(
       lastError = `${where}: ${error.message}`;
       log(`poll: ${lastError}`);
     };
-    // Every gh read is synchronous and holds the event loop, so the owner's end is checked between
-    // them too: a poll for a session that is gone stops at the next step instead of running out.
+    // A read refused because the session is gone ends the poll where it stands; the owner timer
+    // does the shutdown.
     const refs = watchedRefs();
     try {
-      if (refs.length > 0 && !ownerGone()) {
-        const rows = readRows(refs);
-        for (const ref of refs) {
-          if (ownerGone()) break;
-          const current = rows.get(prKey(ref));
-          if (current === undefined) {
-            lastError = `${prKey(ref)}: not in the rows read (deleted, or no access?)`;
-            log(`poll: ${lastError}`);
-            continue;
+      try {
+        if (refs.length > 0) {
+          const rows = readRows(refs);
+          for (const ref of refs) {
+            const current = rows.get(prKey(ref));
+            if (current === undefined) {
+              lastError = `${prKey(ref)}: not in the rows read (deleted, or no access?)`;
+              log(`poll: ${lastError}`);
+              continue;
+            }
+            try {
+              processRow(ref, current, emitted);
+            } catch (error) {
+              noteGhError(prKey(ref), error);
+            }
           }
-          try {
-            processRow(ref, current, emitted);
-          } catch (error) {
-            noteGhError(prKey(ref), error);
-          }
+        }
+      } catch (error) {
+        noteGhError("rows", error);
+      }
+      for (const key of Object.keys(state.commits)) {
+        try {
+          processCommit(key, emitted);
+        } catch (error) {
+          noteGhError(key, error);
         }
       }
     } catch (error) {
-      noteGhError("rows", error);
-    }
-    for (const key of Object.keys(state.commits)) {
-      if (ownerGone()) break;
-      try {
-        processCommit(key, emitted);
-      } catch (error) {
-        noteGhError(key, error);
-      }
-    }
-    if (ownerGone()) {
+      if (!(error instanceof AbortedRead)) throw error;
+      log(`poll stopped: ${error.message}`);
       saveState(files, state);
       return emitted.length;
     }
