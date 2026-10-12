@@ -1,0 +1,29 @@
+{
+  "name": "project-naming",
+  "description": "Name a project, package, or paper from a table of checked candidates, scored against the names the owner already likes.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/project-naming",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": ["agent-skills", "naming", "branding", "registry-check", "plugin-ready"],
+  "skills": "./",
+  "interface": {
+    "displayName": "Project Naming",
+    "shortDescription": "Checked, scored name candidates for a project or package.",
+    "longDescription": "Interviews the owner for the names they like, runs one search lane per naming style, checks every candidate on PyPI, npm, crates, Hugging Face, GitHub, arXiv, DNS, Wiktionary and Urban Dictionary with controls, and presents one ranked table with a verdict per name.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/project-naming",
+    "defaultPrompt": [
+      "Find a better name for this project.",
+      "Is this package name free everywhere?",
+      "Name this paper and its code release."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

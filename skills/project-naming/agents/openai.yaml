@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Naming"
+  short_description: "Checked, scored name candidates for a project or package."
+  brand_color: "#0F766E"
