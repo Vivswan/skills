@@ -33,8 +33,8 @@ function runProbe(cwd: string, ...args: string[]) {
 const units = (page: string) => scanPage(page).units.map((u) => [u.kind, u.line, u.text] as const);
 
 describe("what Markdown renders as prose", () => {
-  // Bun's renderer decides block structure; each row is a shape a line-based
-  // reading got wrong in review, with the units the renderer yields for it.
+  // The Markdown tree decides block structure; each row is a shape a line-based
+  // reading got wrong in review, with the units the tree yields for it.
   test.each([
     ["indented code", `# T\n\n    ${words(71)}\n\nafter\n`, [["paragraph", 5, "after"]]],
     ["a setext heading", `${words(71)}\n======\n\nafter\n`, [["paragraph", 4, "after"]]],
@@ -91,6 +91,21 @@ describe("what Markdown renders as prose", () => {
       ],
     ],
     [
+      "a comment that only begins like a marker opens no region (the page checker reads the same grammar)",
+      "<!-- BEGIN GENERATED: m extra words -->\n\nvisible\n\n<!-- END GENERATED: m extra words -->\n",
+      [["paragraph", 3, "visible"]],
+    ],
+    [
+      "a marker is one line: a comment whose hint spans lines opens no region",
+      "<!-- BEGIN GENERATED: m (\na note\n) -->\n\nvisible\n\n<!-- END GENERATED: m (\na note\n) -->\n",
+      [["paragraph", 5, "visible"]],
+    ],
+    [
+      "a marker pair under > is quoted text, as it is to the renderer that splices regions",
+      "> <!-- BEGIN GENERATED: m -->\n> kept\n> <!-- END GENERATED: m -->\n",
+      [["paragraph", 2, "kept"]],
+    ],
+    [
       "a paragraph inside a blockquote, once",
       "> quoted words\n",
       [["paragraph", 1, "quoted words"]],
@@ -131,8 +146,11 @@ describe("what Markdown renders as prose", () => {
       wordCount(scanPage(`${words(70)} <!-- hidden words here -->\n`).units[0]?.text ?? ""),
     ).toBe(70);
     expect(wordCount(scanPage(`${words(35)}<br>${words(36)}\n`).units[0]?.text ?? "")).toBe(71);
+    // A comment between two halves of a word renders them joined; only a tag is a break.
+    expect(wordCount(scanPage("one<!-- note -->two\n").units[0]?.text ?? "")).toBe(1);
+    // Only the inner `<!-- x -->` is a comment; the reader sees the rest joined as `<!-- y -->`, three words.
     expect(wordCount(scanPage(`${words(70)} <!-<!-- x -->- y -->\n`).units[0]?.text ?? "")).toBe(
-      70,
+      73,
     );
   });
 
@@ -142,6 +160,21 @@ describe("what Markdown renders as prose", () => {
     expect(wordCount(unit?.text ?? "")).toBe(71);
     expect(scanPage(page).codespans).toEqual([{ text: "x/y.ts", line: 1 }]);
     expect(scanPage(page).links).toEqual([{ href: "README.md", line: 1 }]);
+  });
+
+  test("a placeholder in angle brackets is words the reader sees, inside a code span or escaped in prose", () => {
+    // A renderer-stream reading ran its HTML-tag regex over code-span text and dropped `<absolute worktree
+    // path>`, so a 74-word brief item passed the cap as 70.
+    const page = "Run `git -C <absolute worktree path> ...` as \\<role> says.\n";
+    expect(scanPage(page).units[0]?.text).toBe(
+      "Run git -C <absolute worktree path> ... as <role> says.",
+    );
+  });
+
+  test("a marker pair inside a paragraph is inline HTML, not a region: the code span between them is still checked", () => {
+    const page = "before <!-- BEGIN GENERATED: m --> `x/y.ts` <!-- END GENERATED: m --> after\n";
+    expect(scanPage(page).codespans).toEqual([{ text: "x/y.ts", line: 1 }]);
+    expect(wordCount(scanPage(page).units[0]?.text ?? "")).toBe(3);
   });
 });
 
@@ -229,12 +262,13 @@ describe("the path check", () => {
     ]);
   });
 
-  test("link destinations in every Markdown form are checked from the page; a link quoted in a code span is not", () => {
+  test("link destinations in every Markdown form are checked from the page; a link quoted in a code span, or a definition no reference uses, is not", () => {
     const root = repo({ "docs/a.md": "", "docs/b.md": "" });
     const page = [
       "[b](b.md#top), [angle](<b.md>), [titled](gone-1.md 'title'), [site](https://example.com/x.md), [here](#anchor), [ref][r], `[q](./gone-2.md)`.",
       "",
       "[r]: ../gone-3.md",
+      "[unused]: ./gone-4.md",
     ].join("\n");
     expect(probePage(page, "docs/a.md", options(root)).map((f) => f.message)).toEqual([
       "link target gone-1.md does not exist",
@@ -323,8 +357,13 @@ describe("the CLI", () => {
         "  --shape-only  word counts only; skip the check that named paths exist",
         "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
       ].join("\n");
+    // A vendored copy ships beside the skill's package.json and bun.lock, as the bootstrap requires.
     const root = repo({ "a.md": "" });
-    const copy = join(root, "docs_probe.ts");
+    const skillDir = dirname(dirname(PROBE));
+    for (const file of ["package.json", "bun.lock"])
+      copyFileSync(join(skillDir, file), join(root, file));
+    const copy = join(root, "scripts", "docs_probe.ts");
+    mkdirSync(dirname(copy));
     copyFileSync(PROBE, copy);
     const renamed = spawnSync("bun", [copy], { cwd: root, encoding: "utf8" });
     expect([renamed.status, renamed.stdout, renamed.stderr]).toEqual([

@@ -363,6 +363,7 @@ describe("dependency bootstrap", () => {
     "arch-lint.mts",
     "render-architecture-map.mts",
     "check-architecture-page.mts",
+    "docs-probe.mts",
   ];
 
   /** The copied arch-lint with its install limit rewritten, so the timeout path runs in a test instead of ten minutes. */
@@ -515,6 +516,11 @@ describe("dependency bootstrap", () => {
     expect(
       run(join(root, "scripts", "check-architecture-page.mts"), ["--page", "x.md"], root),
     ).toEqual({ status: 2, stdout: "", stderr: hint });
+    expect(run(join(root, "scripts", "docs-probe.mts"), ["x.md"], root)).toEqual({
+      status: 2,
+      stdout: "",
+      stderr: hint,
+    });
   });
 
   test("the install is sent to XDG_CACHE_HOME/skills-deps/<skill>-<lock hash>, never into the skill folder", () => {
@@ -1510,5 +1516,26 @@ describe("thirteenth Copilot round on the moved scripts", () => {
     });
     const out = run(RENDER, ["--page", "docs/crlf.md"], root);
     expect([out.status, out.stderr]).toEqual([0, ""]);
+  });
+});
+
+describe("codex round on the tree reading", () => {
+  const REPO_URL = "https://github.com/octo/example/blob/main/";
+  const diagram = '```mermaid\nflowchart LR\n  a["src/engine/run.ts<br>run()"]\n```';
+
+  test("a marker is one line: a comment whose hint spans lines is no region to the renderer or the page check", () => {
+    const comments = `<!-- BEGIN GENERATED: architecture-map (\na note\n) -->\n\n${diagram}\n\n<!-- END GENERATED: architecture-map (\na note\n) -->\n`;
+    const root = variant("multiline-comment", { "docs/multi.md": `# T\n\n${comments}` });
+    expect(run(RENDER, ["--page", "docs/multi.md"], root)).toEqual({
+      status: 2,
+      stdout: "",
+      stderr:
+        'render-architecture-map: region "architecture-map" needs exactly one BEGIN and one END marker, found 0 and 0\n',
+    });
+    const page = run(CHECK_PAGE, ["--page", "docs/multi.md", "--repo-url", REPO_URL], root);
+    expect(page.status).toBe(1);
+    expect(page.stderr).toContain(
+      'line 7: the diagram has no "Demonstrated by:" line before the next heading',
+    );
   });
 });
