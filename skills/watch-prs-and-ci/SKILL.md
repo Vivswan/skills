@@ -54,6 +54,9 @@ bun "<skill-dir>/scripts/pr-events.mts" watch <owner/repo>#<n> --mode bypass --h
 
 `watch` returns once its baseline poll has finished, a few seconds, so a `ci` event for an already-green head can arrive before the call returns. The call is safe to repeat: a second `watch` for the same PR re-asserts the mode, records the head and gates it names, and never starts a second daemon.
 
+- A PR's first sighting reads what is already on it, comments and reviews by id, and reports none of it. Only what lands afterwards is an event.
+- A verdict that settled before a session subscribed is handed to that session on a line of its own.
+
 ### 2. Keep working, never poll
 
 Nothing to run, sleep on, or check. A message arrives when something changed. Never read the PR by hand between messages, never spawn a watcher subagent, and never run `gh run watch`: the daemon is the one poller for this user.
@@ -64,15 +67,15 @@ Each message is one event for one PR, with the PR's URL and the closing line `au
 
 | Kind | The line says | What to do |
 | --- | --- | --- |
-| `comment` | `PR octocat/repo#12: 1 new comment by octocat`, then the body, with `path:line` for a review-thread reply | triage it as a review round: reply, fix, or resolve |
-| `review` | `PR octocat/repo#12: new review by octocat (CHANGES_REQUESTED), 2 review comments`, then each comment with its `path:line` | the same, per the `/pr-landing-discipline` skill |
-| `ci` | one line, `CI green on 1a2b3c4d5e6f: checks, lint`, or `CI red on 1a2b3c4` with the workflow, the job, and the failed-job log tail | green: carry on; red: fix from the excerpt, push, and the next verdict arrives on its own |
-| `head` | `PR octocat/repo#12: head moved by octocat to 1a2b3c4; CI pending` | a head no subscriber recorded with `--head`: someone else pushed, or your own push without a fresh `watch --head`; pull before touching the branch |
-| `merged` | `PR octocat/repo#12: merged as 9f8e7d6; watching its mainline CI` | stop babysitting; the `ci` event for the merge commit follows |
+| `comment` | `PR octocat/repo#12: 1 new comment by octocat`, then one indented line per comment: the author, or `path:line` for a review-thread comment, then the body | triage it as a review round: reply, fix, or resolve |
+| `review` | `PR octocat/repo#12: new review by octocat (CHANGES_REQUESTED), 2 review comments`, then the review body and each of its comments with `path:line` (The Specimen above) | the same, per the `/pr-landing-discipline` skill |
+| `ci` | `PR octocat/repo#12: CI green on 1a2b3c4d5e6f: checks, lint`, or `CI red on 1a2b3c4d5e6f` with one line per run and the failed-step log tail of each failed run | green: carry on; red: fix from the excerpt, push, and the next verdict arrives on its own |
+| `head` | `PR octocat/repo#12: head moved to 1a2b3c4d5e6f by octocat` | a head no subscriber recorded with `--head`: someone else pushed, or your own push without a fresh `watch --head`; pull before touching the branch |
+| `merged` | `PR octocat/repo#12: merged at 2026-10-12T14:03:20Z; mainline commit 9f8e7d6c5b4a is now watched for CI` | stop babysitting; the `ci` event for the merge commit follows |
 | `closed` | `PR octocat/repo#12: closed without merging` | stop babysitting |
-| `trouble` | `polling failed, not a verdict` after three failed polls, or `gate workflow "checks" never registered on 1a2b3c4; not green` | tooling trouble, never a red or green pipeline; Gotchas below |
+| `trouble` | `polling failed 3 times in a row (...); not a verdict`, `CI run not registered on 1a2b3c4d5e6f after 2 polls; not a verdict` with `no run registered for checks` under it, or `issue comments: more than 10 pages since the last one reported; the older ones are not reported; read the PR` | tooling trouble, never a red or green pipeline; Gotchas below |
 
-The texts above are the shape. The shipped script and this page are kept in sync upstream, and where they disagree, trust the script and report the drift.
+The texts above are the shape, and the specimen is the exact text. The shipped script and this page are kept in sync upstream, and where they disagree, trust the script and report the drift.
 
 ## How an Agent Knows Its Mode
 
@@ -83,7 +86,7 @@ Claude Code accepts exactly two mode tokens on an incoming message, and a sessio
 | Claude Code running without permission prompts (bypass permissions, or a session started with permissions skipped) | `--mode bypass` |
 | anything that stops to ask before a tool call, including a Claude Code session in its default mode | `--mode prompting` |
 
-A held frame is visible: the session shows a held delivery notice instead of the event text, `status` shows the delivery as held, and the Gotchas row below names the remedy.
+A held frame is visible: the session shows a held delivery notice instead of the event text, it reports the hold back to the daemon, `status` shows that subscriber's last delivery as `held`, and the Gotchas row below names the remedy.
 
 ## After a Merge
 
@@ -111,10 +114,13 @@ find       one fixed directory per user (the ladder below), so there is nothing 
            the subscriber's inbox is never guessed: it is CLAUDE_CODE_MESSAGING_SOCKET as handed over at `watch`
 one only   binding daemon.sock is the lock: in use -> connect to the winner; refused on an existing file -> unlink, bind again
 stop       each poll prunes subscribers whose session is gone (socket sink) or whose lease lapsed (file sink);
-           10 min with none -> save, unlink the socket, exit; `stop`, SIGTERM, SIGINT -> the same at once
+           10 min with none -> save, unlink the socket, exit; `stop`, SIGTERM, SIGINT -> the same at once;
+           a `watch` that reaches a stopping daemon is answered `daemon stopping; retry` and starts a fresh one
 users      everything is keyed by uid: each user has their own daemon, log, subscriptions, `gh` identity, and rate budget
-agents     `status` prints the subscribers, PRs, last event, last delivery state per subscriber, the log path, and
-           each former subscriber as `<address> pruned=<reason> at <iso> delivery=<last outcome>`
+agents     `status` prints the subscribers, PRs, last event, the log path, each subscriber's last delivery as
+           `delivery=<outcome> (#<event> at <iso>)`, and each former subscriber as `<address> pruned=<reason> at <iso> delivery=...`;
+           the outcome is `sent`, `failed: <code>`, or what the receiving session reported back:
+           `held`, `released`, `denied`, `expired`, `refused`, or `dropped`
 ```
 
 ```bash
@@ -134,9 +140,9 @@ The runtime directory, tried in this order. Each must be creatable as a private 
 
 | File | Holds |
 | --- | --- |
-| `daemon.sock` | the control socket, also the daemon's `from` address |
+| `daemon.sock` | the control socket, also the daemon's `from` address, where a session reports a held or refused delivery |
 | `events.jsonl` | the write-ahead log, one line per event, appended before any delivery |
-| `state.json` | subscriptions and last-seen rows, written tmp-then-rename after every poll |
+| `state.json` | subscriptions, last-seen rows with the activity ids already reported, and each subscriber's last delivery, written tmp-then-rename after every poll |
 | `daemon.log` | the daemon's stderr; the first place to read on exit 2 |
 
 A `gh` call is a fresh process each time, so tokens refresh under gh's control, and the daemon never exits on gh trouble: three consecutive failed polls raise one `trouble` event per subscriber, and a recovery event follows.
@@ -181,21 +187,25 @@ Every event line has the same shape, whichever sink delivers it:
 {"id":17,"at":"2026-10-12T14:03:20Z","repo":"octocat/repo","pr":12,"kind":"review","text":"...","url":"https://github.com/octocat/repo/pull/12","to":["codex-12"]}
 ```
 
-`kind` is one of `comment`, `review`, `ci`, `head`, `merged`, `closed`, `trouble`. `to` lists the sink addresses the line was delivered to: file-sink names and inbox socket paths. A held or dropped socket delivery leaves the line in the log, so nothing is lost to a session that was away.
+`kind` is one of `comment`, `review`, `ci`, `head`, `merged`, `closed`, `trouble`. `to` lists the subscribers the line was addressed to, file-sink names and inbox socket paths, written before any delivery is attempted; how each subscriber's last delivery went is in `status`. A held, refused, or dropped socket delivery leaves the line in the log, so nothing is lost to a session that was away.
 
 ## Polling Budget
 
-GitHub throttles in separate buckets. The core REST bucket is 5000 requests per hour per user, the Actions REST endpoints (`gh run list`, `gh run watch`, `gh run view`) are a secondary bucket on top, and GraphQL has its own.
+GitHub throttles in separate buckets: the core REST bucket, a secondary bucket for the Actions REST endpoints (`gh run list`, `gh run watch`, `gh run view`) on top of it, and GraphQL's own.
 
-Ten sessions on one account, each running its own watcher, locked the Actions bucket for over an hour with 403 "API rate limit exceeded" while core still read 5000/5000, and every REST-based CI verdict was blind. GraphQL kept answering throughout.
+Parallel pollers on one account exhaust the Actions bucket while the core bucket still reads full, and every REST-based CI verdict is blind until it refills. GraphQL keeps answering. That is why the daemon is the one poller for the user and polls through GraphQL, once a minute.
 
 Three rules follow, and the daemon embodies them:
 
-- **One poller per user per machine.** Sessions subscribe; they never poll, spawn a watcher, or run `gh run watch`. A hand-rolled watcher beside the daemon is the incident above.
+- **One poller per user per machine.** Sessions subscribe; they never poll, spawn a watcher, or run `gh run watch`. A hand-rolled watcher beside the daemon is a second poller on the same account.
 - **The sustained interval is at least 60 s.** That is the floor of the daemon's `--interval`.
-- **GraphQL only, REST only for failed-run logs.** One aliased batch read covers every subscribed PR per poll (about 3 nodes per PR, so 12 PRs cost 1 point), check suites by commit when a head's rollup moves, and `gh run view <id> --log-failed` once per failed run, at most 3 excerpts per verdict.
+- **GraphQL only, REST only for failed-run logs.** The reads of one poll, in order:
+  - one aliased batch read over every subscribed PR; GitHub prices a request by its node count, so a batch of PRs costs about what one does
+  - one detail read per PR whose row moved, paged back only to the last activity already reported
+  - check suites by commit, for each head or commit whose verdict is pending
+  - `gh run view <id> --log-failed` once per failed run, at most 3 excerpts per verdict
 
-At 12 PRs and 3 pending commits the daemon makes about 4 calls a minute, 8 at worst, under 600 points an hour of 5000. A rate-limited GraphQL answer is tooling trouble, never a reason to fall back to REST.
+A poll costs `1 + (PRs whose row moved) + (heads and commits with CI pending)` GraphQL requests, plus one detail read at a PR's first sighting and one viewer lookup per daemon. At steady state, nothing moving, that is the batch read alone, once a minute. A rate-limited GraphQL answer is tooling trouble, never a reason to fall back to REST.
 
 When a workflow's runs share a `concurrency` group key, GitHub keeps at most one running plus one pending run per key. A newer push cancels the pending run, and the running one too where `cancel-in-progress` evaluates true, so the older head never gets a verdict. The daemon judges the current head: after a stacked push only the newest head gets a verdict, so wait for it before pushing again.
 
