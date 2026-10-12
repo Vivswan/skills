@@ -112,8 +112,8 @@ start     the session runs `daemon` as a background task; the owner is the sessi
 one only  binding `<runtime-dir>/<session-pid>.sock` is the rule: a second daemon of the session finds it
           answering and exits 0; a socket file nobody answers on was left by a crash and is replaced
 poll      once a minute, and at once on `watch`; a restart with saved targets polls at once
-stop      the session's pid gone (checked every second, and between the reads of a poll) -> save,
-          unlink the socket, exit; `stop`, SIGTERM, SIGINT -> the same at once
+stop      the session's pid gone (checked every second, and before every gh read) -> finish the poll
+          in flight, save, unlink the socket, exit; `stop`, SIGTERM, SIGINT -> the same at once
 agents    `status` prints the targets with their gates, the last delivery and how it went, and the last event
 ```
 
@@ -200,7 +200,9 @@ The reads of one poll, in order:
 3. check suites by commit, for each head or commit whose verdict is pending
 4. the failed-run log excerpts, when a verdict is red
 
-A poll costs `1 + (PRs whose row moved) + (heads and commits with CI pending)` GraphQL requests, plus one detail read at a PR's first sighting and one viewer lookup per daemon. A backlog adds one page per 20 missed comments, and a head with more than 100 check suites is read twice to confirm the snapshot.
+The nominal cost of a poll is `1 + (PRs whose row moved) + (heads and commits with CI pending)` GraphQL requests, plus one detail read at a PR's first sighting and one viewer lookup per daemon.
+
+On top of that, the batch read is one request per 30 PRs, a backlog adds one page per 20 missed comments, and a head with more than 100 check suites is read again until two reads agree.
 
 At steady state, nothing moving, that is the batch read alone, once a minute. A rate-limited GraphQL answer is tooling trouble, never a reason to fall back to REST.
 

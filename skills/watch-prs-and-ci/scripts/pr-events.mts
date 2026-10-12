@@ -133,6 +133,20 @@ function resolveOwner(
   return { key: String(sessionPid), inbox, pid: sessionPid };
 }
 
+// Linux allows 108 bytes for a Unix socket path and macOS 104; a longer one fails at bind.
+const SOCKET_PATH_MAX = 104;
+
+/** The owner's files, refused when their socket path is longer than a bind allows. */
+function filesOf(dir: string, owner: Owner): OwnerFiles {
+  const files = ownerFiles(dir, owner);
+  if (Buffer.byteLength(files.socket) > SOCKET_PATH_MAX) {
+    usage(
+      `the socket path ${files.socket} is longer than the ${SOCKET_PATH_MAX} bytes a Unix socket allows; use a shorter --id or PR_EVENTS_DIR`,
+    );
+  }
+  return files;
+}
+
 function describeOwner(owner: Owner): string {
   return owner.inbox === null ? `file sink ${owner.key}` : `session ${owner.key}`;
 }
@@ -285,7 +299,7 @@ function describeTarget(target: WatchTarget): string {
 }
 
 async function watch(dir: string, owner: Owner, target: WatchTarget): Promise<number> {
-  const reply = unwrap(await request(owner, ownerFiles(dir, owner), { cmd: "watch", target }));
+  const reply = unwrap(await request(owner, filesOf(dir, owner), { cmd: "watch", target }));
   console.log(
     `watching ${describeTarget(target)} for ${describeOwner(owner)}; ${reply.watched} target(s)`,
   );
@@ -340,7 +354,7 @@ async function cmdUnwatch(dir: string, args: string[]): Promise<number> {
   if (values.all === true && positionals.length > 0) usage("--all takes no target");
   const pr = values.all === true ? null : parseTarget(positionals[0]);
   const owner = resolveOwner(values);
-  unwrap(await request(owner, ownerFiles(dir, owner), { cmd: "unwatch", pr }));
+  unwrap(await request(owner, filesOf(dir, owner), { cmd: "unwatch", pr }));
   console.log(
     pr === null
       ? `unwatched everything for ${describeOwner(owner)}`
@@ -352,7 +366,7 @@ async function cmdUnwatch(dir: string, args: string[]): Promise<number> {
 async function cmdPoll(dir: string, args: string[]): Promise<number> {
   const { values } = parse(args, OWNER_OPTIONS, 0);
   const owner = resolveOwner(values);
-  const reply = unwrap(await request(owner, ownerFiles(dir, owner), { cmd: "poll" }));
+  const reply = unwrap(await request(owner, filesOf(dir, owner), { cmd: "poll" }));
   console.log(`polled; ${reply.events} event(s)`);
   return 0;
 }
@@ -360,7 +374,7 @@ async function cmdPoll(dir: string, args: string[]): Promise<number> {
 async function cmdStop(dir: string, args: string[]): Promise<number> {
   const { values } = parse(args, OWNER_OPTIONS, 0);
   const owner = resolveOwner(values);
-  const reply = await requestIfRunning(ownerFiles(dir, owner), { cmd: "stop" });
+  const reply = await requestIfRunning(filesOf(dir, owner), { cmd: "stop" });
   if (reply === null) {
     console.log(`no daemon running for ${describeOwner(owner)}`);
     return 0;
@@ -389,7 +403,7 @@ function gates(expected: string[]): string {
 async function cmdStatus(dir: string, args: string[]): Promise<number> {
   const { values } = parse(args, OWNER_OPTIONS, 0);
   const owner = resolveOwner(values);
-  const files = ownerFiles(dir, owner);
+  const files = filesOf(dir, owner);
   const status = unwrap(await request(owner, files, { cmd: "status" })).status as StatusReply;
   const { state } = status;
   const lines = [
@@ -434,7 +448,7 @@ async function cmdWait(dir: string, args: string[]): Promise<number> {
     0,
   );
   const owner = resolveOwner(values);
-  const files = ownerFiles(dir, owner);
+  const files = filesOf(dir, owner);
   // A wait with no daemon would block for its whole timeout on a log nothing appends to.
   const status = unwrap(await request(owner, files, { cmd: "status" })).status as StatusReply;
   let since: number;
@@ -964,13 +978,15 @@ async function runDaemon(
     return polling;
   };
 
-  // Synchronous on purpose: the socket is gone and the state saved before anyone is answered. A
-  // delivery still in flight finishes on its own and the process exits with it.
-  const shutdown = (reason: string): void => {
+  // A poll in flight is drained first: released earlier, the socket would let a replacement daemon
+  // start while this one still delivers and saves over the replacement's state. The socket is gone
+  // and the state saved before anyone is answered.
+  const shutdown = async (reason: string): Promise<void> => {
     if (stopping) return;
     stopping = true;
     if (pollTimer) clearTimeout(pollTimer);
     clearInterval(ownerTimer);
+    if (polling) await polling.catch(() => {});
     saveState(files, state);
     server.close();
     try {
@@ -984,7 +1000,7 @@ async function runDaemon(
   };
 
   const ownerTimer = setInterval(() => {
-    if (ownerGone()) shutdown(`${describeOwner(owner)} exited`);
+    if (ownerGone()) void shutdown(`${describeOwner(owner)} exited`);
   }, OWNER_CHECK_MS);
 
   // The flags of a call are the complete gate set. A watch restarts a pending judgment's grace, so
@@ -1018,6 +1034,11 @@ async function runDaemon(
   };
 
   const dispatch = async (command: Command): Promise<Reply> => {
+    // A connection accepted before the stop can still carry a command; work it would add has no
+    // poll left to run it.
+    if (stopping && command.cmd !== "status" && command.cmd !== "stop") {
+      return { ok: false, error: "daemon stopping; retry" };
+    }
     switch (command.cmd) {
       case "watch":
         return { ok: true, watched: await subscribe(command.target) };
@@ -1036,7 +1057,7 @@ async function runDaemon(
       case "status":
         return { ok: true, status: { pid: process.pid, state } };
       case "stop":
-        shutdown("stop command");
+        await shutdown("stop command");
         return { ok: true };
     }
   };
@@ -1094,8 +1115,8 @@ async function runDaemon(
     );
   });
 
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
   // A restart with saved targets polls at once: what moved while the daemon was down is news.
   if (watchedCount() > 0) {
     runPoll().catch((error: unknown) => log(`poll crashed: ${errorText(error)}`));
@@ -1117,7 +1138,7 @@ async function cmdDaemon(dir: string, args: string[]): Promise<number> {
     usage(`--interval must be at least ${MIN_INTERVAL_SECONDS} seconds, got: ${interval}`);
   }
   requireGh();
-  return runDaemon(owner, ownerFiles(dir, owner), interval);
+  return runDaemon(owner, filesOf(dir, owner), interval);
 }
 
 // --- entry ---------------------------------------------------------------------

@@ -603,6 +603,9 @@ describe("pr-events.mts", () => {
     const pinned = s.run(["daemon", "--pid", "1"], { inbox: box.path });
     expect(pinned.code).toBe(2);
     expect(pinned.stderr).toContain("--pid applies to --id");
+    const long = s.run(["daemon", "--id", "x".repeat(120)]);
+    expect(long.code).toBe(2);
+    expect(long.stderr).toContain("longer than the 104 bytes a Unix socket allows");
     expect(s.ghCalls()).toHaveLength(0);
     expect(await box.frames(0)).toHaveLength(0);
     expect(existsSync(s.socketPath())).toBe(false);
@@ -684,20 +687,25 @@ describe("pr-events.mts", () => {
     expect(s.log(String(session.pid))).toContain(`session ${session.pid} exited`);
   }, 30000);
 
-  test("the session's end is noticed between the reads of a poll, not only after it", async () => {
-    // Every gh read holds the event loop; a poll of several slow reads for a session that is gone
-    // would otherwise run to its end before the daemon noticed.
+  test("the session's end is noticed before every gh read, within one target's reads too", async () => {
+    // Every gh read holds the event loop; a target whose detail read is slow would otherwise go on
+    // to its check-suite read for a session that is gone.
     const s = new Scenario("owner-gone-midpoll");
     const session = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]);
     const inboxPath = join(s.dir, `${session.pid}.inbox`, `${session.pid}.sock`);
     mkdirSync(join(s.dir, `${session.pid}.inbox`));
-    s.fixtures({ "suites-1": suites([["ci", "queued", null]]) });
+    s.fixtures({
+      "rows-1": rows({ rollup: "PENDING" }),
+      "suites-1": suites([["ci", "queued", null]]),
+      "rows-2": rows({ rollup: "PENDING", comments: 1, updatedAt: T2 }),
+      "detail-2": detail({ comments: [{ login: "bob", at: T2, body: "hm" }] }),
+      "viewer-1": VIEWER,
+    });
     const daemon = await s.start({ inbox: inboxPath });
-    expect(s.run(["watch-commit", REPO, HEAD_A], { inbox: inboxPath }).code).toBe(0);
-    expect(s.run(["watch-commit", REPO, HEAD_B], { inbox: inboxPath }).code).toBe(0);
+    expect(s.run(["watch", PR7], { inbox: inboxPath }).code).toBe(0);
     const suiteReads = () => s.ghCalls().filter((call) => call.includes("checkSuites(")).length;
-    expect(suiteReads()).toBe(3);
-    writeFileSync(join(s.stubDir, "slow-suites"), "");
+    expect(suiteReads()).toBe(1);
+    writeFileSync(join(s.stubDir, "slow-detail"), "");
     const poll = Bun.spawn([process.execPath, SCRIPT, "poll"], {
       env: s.env({ inbox: inboxPath }),
       stdout: "pipe",
@@ -712,8 +720,48 @@ describe("pr-events.mts", () => {
     ]);
     expect(exit).toBe(0);
     await poll.exited;
-    expect(suiteReads()).toBe(4);
+    expect(suiteReads()).toBe(1);
     expect(s.log(String(session.pid))).toContain(`session ${session.pid} exited`);
+  }, 30000);
+
+  test("a watch on a connection accepted before the stop is refused, and a stop drains the poll in flight before the socket goes", async () => {
+    // Released at once, the socket would let a replacement daemon start while this one still
+    // delivers and saves over its state; answered ok, the watch would add work no poll runs.
+    const s = new Scenario("stop-drain");
+    const box = await s.inbox("a");
+    s.fixtures({ "suites-1": suites([["ci", "completed", "success"]]) });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    const held = connect(s.socketPath());
+    await new Promise<void>((resolve) => held.once("connect", () => resolve()));
+    // A second poll right after the first waits its delivery gap; the stop lands inside that wait.
+    const poll = Bun.spawn([process.execPath, SCRIPT, "watch-commit", REPO, HEAD_B, ...GATE_CI], {
+      env: s.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await Bun.sleep(300);
+    const stopped = Date.now();
+    s.stop({ inbox: box.path });
+    expect(Date.now() - stopped).toBeGreaterThanOrEqual(500);
+    expect(await poll.exited).toBe(0);
+    expect(headlines(await box.frames(2))).toHaveLength(2);
+    held.setEncoding("utf-8");
+    const replied = new Promise<string>((resolve) => {
+      let bytes = "";
+      held.on("data", (chunk: string) => {
+        bytes += chunk;
+      });
+      held.on("close", () => resolve(bytes));
+    });
+    held.write(
+      `${JSON.stringify({
+        cmd: "watch",
+        target: { kind: "pr", repo: REPO, number: 7, head: null, expected: [] },
+      })}\n`,
+    );
+    expect(await replied).toBe('{"ok":false,"error":"daemon stopping; retry"}\n');
+    expect(JSON.parse(readFileSync(s.file("state.json"), "utf-8")).prs).toEqual({});
   }, 30000);
 
   test("two polls seconds apart deliver two messages at least a second apart, so the receiver keeps both", async () => {
