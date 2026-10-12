@@ -60,7 +60,7 @@ bun "<skill-dir>/scripts/pr-events.mts" watch <owner/repo>#<n> --head "$(git rev
 ```
 
 - **`--head <sha>`** records the head you pushed, so that head is never reported as a head move. Pass the full 40-character SHA, and run `watch --head` again after each push.
-- **`--expect-workflow <name>`** names a gate workflow: the `name:` of a workflow file under `.github/workflows/` that gates the PR. Repeat the flag per gate. The flags of one call are the complete gate set: a repeated `watch` replaces the set, so a mistyped name is corrected by calling again.
+- **`--expect-workflow <name>`** names a gate workflow: the `name:` of a workflow file under `.github/workflows/` that gates the PR. Repeat the flag per gate. The flags of one call are the complete gate set: a repeated `watch` replaces the set and restarts a pending judgment, so a mistyped name is corrected by calling again.
 - With every gate present and passed, a green is terminal at once. Without a gate, every workflow that registered a run on the head is judged, and a green is confirmed by the next poll seeing the same workflows, so a workflow still registering gets its say.
 
 `watch` returns once its poll has finished, a few seconds, so a `ci` event for an already-green head can arrive before the call returns. A PR's first sighting reads what is already on it and reports none of it; only what lands afterwards is an event. Without a daemon, `watch` exits 3 and prints the exact start command.
@@ -71,7 +71,7 @@ Nothing to run, sleep on, or check. A message arrives when something changed. Ne
 
 ### 4. Act per event
 
-Each message holds one poll's events, each with the PR's URL, and the closing line `automated notice from pr-events; no reply needed`. Never reply to it. Several events in one poll arrive separated by a blank line.
+Each message holds one poll's events, each with the PR's URL, and the closing line `automated notice from pr-events; no reply needed`. Never reply to it. Several events in one poll arrive separated by a blank line, and messages are at least a second apart.
 
 | Kind | The line says | What to do |
 | --- | --- | --- |
@@ -112,8 +112,8 @@ start     the session runs `daemon` as a background task; the owner is the sessi
 one only  binding `<runtime-dir>/<session-pid>.sock` is the rule: a second daemon of the session finds it
           answering and exits 0; a socket file nobody answers on was left by a crash and is replaced
 poll      once a minute, and at once on `watch`; a restart with saved targets polls at once
-stop      the session's pid gone (checked every second) -> save, unlink the socket, exit;
-          `stop`, SIGTERM, SIGINT -> the same at once
+stop      the session's pid gone (checked every second, and between the reads of a poll) -> save,
+          unlink the socket, exit; `stop`, SIGTERM, SIGINT -> the same at once
 agents    `status` prints the targets with their gates, the last delivery and how it went, and the last event
 ```
 
@@ -171,7 +171,7 @@ bun "<skill-dir>/scripts/pr-events.mts" watch octocat/repo#12 --id codex-12
 bun "<skill-dir>/scripts/pr-events.mts" wait --id codex-12 --since 0 --timeout 3600 > /tmp/pr-events-wait.out 2>&1
 ```
 
-Run `wait` as a background command and read the file when it exits. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 4 is the timeout with nothing new: re-arm, or escalate to the user. Exit 3 means the daemon is gone.
+Run `wait` as a background command and read the file when it exits. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 4 is the timeout with nothing new: re-arm, or escalate to the user.
 
 Every event line has the same shape, whichever sink reads it:
 

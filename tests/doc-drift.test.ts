@@ -317,14 +317,6 @@ const SURFACES: Record<string, Surface> = {
         doc: { text: "--expect-workflow", occurrences: ">=1" },
         script: 'usage("--expect-workflow needs a workflow name")',
       },
-      {
-        doc: { text: "--id codex-12", occurrences: ">=1" },
-        script: 'const OWNER_OPTIONS = { id: { type: "string" } } as const;',
-      },
-      {
-        doc: { text: "`CLAUDE_CODE_MESSAGING_SOCKET`", occurrences: ">=1" },
-        script: "const inbox = env.CLAUDE_CODE_MESSAGING_SOCKET;",
-      },
     ],
   },
   "watch-prs-and-ci/SKILL.md <-> state.mts": {
@@ -335,10 +327,6 @@ const SURFACES: Record<string, Surface> = {
       {
         doc: { text: "`<session-pid>.sock`", occurrences: ">=1" },
         script: 'SOCKET_SUFFIX = ".sock"',
-      },
-      {
-        doc: { text: "`PR_EVENTS_DIR`", occurrences: ">=1" },
-        script: "if (env.PR_EVENTS_DIR) candidates.push(resolve(env.PR_EVENTS_DIR));",
       },
     ],
   },

@@ -46,7 +46,7 @@ export function commitKey(repo: string, sha: string): CommitKey {
 
 /**
  * What a head still being judged carries between polls: the polls in a row on which no run had
- * registered (the grace before a trouble event), and the workflow set the last read saw (a green
+ * registered (the grace before a trouble event), and the workflow ids the last read saw (a green
  * with no gate named is terminal only once two reads agree on that set).
  */
 export interface Grace {
@@ -66,7 +66,6 @@ export interface CommitWatch {
   grace: Grace;
 }
 
-/** A head's CI: still being judged, or settled by a verdict event. */
 export type RowCi =
   | { pending: true; grace: Grace }
   | { pending: false; verdict: { eventId: number; text: string } };

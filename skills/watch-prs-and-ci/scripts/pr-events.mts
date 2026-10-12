@@ -1,11 +1,7 @@
 #!/usr/bin/env bun
-// One daemon per Claude Code session, started by that session as a background task, polling GitHub
-// for the PRs and commits the session watches. Events are appended to a write-ahead log first and
-// then delivered to the session's inbox, one message per poll. A non-Claude agent names a file-sink
-// daemon with --id and reads the log with `wait`.
-//
-// Exit codes: 0 ok; 2 usage, gh missing, or no runtime directory; 3 no daemon answers for this
-// session (stderr names the command that starts one); `wait` exits 4 at its timeout.
+// One daemon per Claude Code session, started by that session as a background task. A child of the
+// session is rendered as plain text; a detached process is a cross-session sender whose frames the
+// session holds, which is why the CLI never starts the daemon and the page says never to detach it.
 
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -60,6 +56,9 @@ const WAIT_TICK_MS = 1000;
 // The owner's end is noticed between polls, so a finished session does not leave a poller behind
 // for the rest of the interval.
 const OWNER_CHECK_MS = 1000;
+// The receiver drops a second frame from one sender within the same second; a poll triggered by
+// `watch` right after another waits this long before its message goes out.
+const MIN_DELIVERY_GAP_MS = 1100;
 
 const USAGE = [
   "usage: pr-events.mts <command> [options]",
@@ -170,27 +169,35 @@ async function connectOnce(path: string): Promise<Socket> {
   return socket;
 }
 
-function exchange(socket: Socket, command: Command): Promise<Reply> {
+// The first line a socket carries; the connection closing first is the error the message names.
+// Framed by hand: node:readline on a bun client socket emits close before a reply that arrives
+// after a delay, so it cannot read a daemon's answer.
+function firstLine(socket: Socket, closedEarly: string): Promise<string> {
   return new Promise((resolve, reject) => {
     let buffer = "";
     socket.setEncoding("utf-8");
-    socket.on("data", (chunk: string) => {
+    const onData = (chunk: string) => {
       buffer += chunk;
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
-      socket.destroy();
-      try {
-        resolve(JSON.parse(buffer.slice(0, newline)) as Reply);
-      } catch (error) {
-        reject(error);
-      }
-    });
-    socket.on("error", reject);
-    socket.on("close", () =>
-      reject(new ToolingError("the daemon closed the connection without a reply")),
-    );
-    socket.write(`${JSON.stringify(command)}\n`);
+      socket.off("data", onData);
+      resolve(buffer.slice(0, newline));
+    };
+    socket.on("data", onData);
+    socket.once("close", () => reject(new ToolingError(closedEarly)));
+    socket.once("error", reject);
   });
+}
+
+async function exchange(socket: Socket, command: Command): Promise<Reply> {
+  socket.write(`${JSON.stringify(command)}\n`);
+  try {
+    return JSON.parse(
+      await firstLine(socket, "the daemon closed the connection without a reply"),
+    ) as Reply;
+  } finally {
+    socket.destroy();
+  }
 }
 
 function isNobodyListening(error: unknown): boolean {
@@ -637,6 +644,8 @@ async function runDaemon(
   const watchedCount = (): number =>
     Object.keys(state.prs).length + Object.keys(state.commits).length;
 
+  const ownerGone = (): boolean => owner.pid !== null && !isProcessAlive(owner.pid);
+
   const emit = (input: EventInput): PrEvent => {
     const event = appendEvent(files, state, input);
     log(`event #${event.id} ${event.kind} ${subjectOf(event)}: ${event.text.split("\n")[0]}`);
@@ -655,7 +664,13 @@ async function runDaemon(
     const runs = discoverRuns(repo, sha);
     const verdict = judgeRuns(runs, expected);
     const base = { repo, pr: subject.pr, sha, url: subject.url };
-    const registered = workflowNames(runs);
+    // Workflows by id, not name: two workflow files can share a name, and a second one registering
+    // under the same name is still a set that changed.
+    const registered = [
+      ...new Set(selectLatest(runs).map((run) => run.workflowId ?? `run:${run.id}`)),
+    ]
+      .map(String)
+      .sort();
     const settle = (text: string): PrEvent => {
       const event = emit({ ...base, kind: "ci", text });
       emitted.push(event);
@@ -822,9 +837,14 @@ async function runDaemon(
     if (verdict !== null) delete state.commits[key];
   };
 
-  // One message per poll: the receiver drops a second frame from one sender within a second.
+  // One message per poll, and a second's gap between messages: the receiver drops a second frame
+  // from one sender within the same second.
+  let lastDeliveryAt = 0;
   const deliverDigest = async (emitted: PrEvent[]): Promise<void> => {
     if (owner.inbox === null || emitted.length === 0) return;
+    const gap = lastDeliveryAt + MIN_DELIVERY_GAP_MS - Date.now();
+    if (gap > 0) await sleep(gap);
+    lastDeliveryAt = Date.now();
     const frame: InboxFrame = {
       type: "user",
       message: { role: "user", content: renderDigest(emitted) },
@@ -861,11 +881,14 @@ async function runDaemon(
       lastError = `${where}: ${error.message}`;
       log(`poll: ${lastError}`);
     };
+    // Every gh read is synchronous and holds the event loop, so the owner's end is checked between
+    // them too: a poll for a session that is gone stops at the next step instead of running out.
     const refs = watchedRefs();
     try {
-      if (refs.length > 0) {
+      if (refs.length > 0 && !ownerGone()) {
         const rows = readRows(refs);
         for (const ref of refs) {
+          if (ownerGone()) break;
           const current = rows.get(prKey(ref));
           if (current === undefined) {
             lastError = `${prKey(ref)}: not in the rows read (deleted, or no access?)`;
@@ -883,11 +906,16 @@ async function runDaemon(
       noteGhError("rows", error);
     }
     for (const key of Object.keys(state.commits)) {
+      if (ownerGone()) break;
       try {
         processCommit(key, emitted);
       } catch (error) {
         noteGhError(key, error);
       }
+    }
+    if (ownerGone()) {
+      saveState(files, state);
+      return emitted.length;
     }
     const daemonWide = { repo: "", pr: null, sha: null, url: "", kind: "trouble" as const };
     if (lastError !== null) {
@@ -952,32 +980,30 @@ async function runDaemon(
   };
 
   const ownerTimer = setInterval(() => {
-    if (owner.pid !== null && !isProcessAlive(owner.pid)) {
-      shutdown(`${describeOwner(owner)} exited`);
-    }
+    if (ownerGone()) shutdown(`${describeOwner(owner)} exited`);
   }, OWNER_CHECK_MS);
 
+  // The flags of a call are the complete gate set. A watch restarts a pending judgment's grace, so
+  // two calls seconds apart do not spend the polls meant to be a minute apart; a settled head is
+  // judged again only when the set changed, so a corrected gate name gets its verdict.
   const subscribe = async (target: WatchTarget): Promise<number> => {
     if (target.kind === "pr") {
       const key = prKey(target);
       const previous = state.prs[key];
       state.prs[key] = { head: target.head, expected: target.expected };
-      // The flags of this call are the complete gate set; a changed set restarts the judgment,
-      // grace included, so a corrected gate name gets its verdict.
       const row = state.rows[key];
-      if (row && previous && !sameSet(previous.expected, target.expected)) {
+      if (row && (row.ci.pending || !sameSet(previous?.expected ?? [], target.expected))) {
         row.ci = { pending: true, grace: freshGrace() };
       }
     } else {
       const key = commitKey(target.repo, target.sha);
       const previous = state.commits[key];
-      const unchanged = previous !== undefined && sameSet(previous.expected, target.expected);
       state.commits[key] = {
         repo: target.repo,
         sha: target.sha,
         expected: target.expected,
         firstSeenAt: previous?.firstSeenAt ?? new Date().toISOString(),
-        grace: unchanged ? previous.grace : freshGrace(),
+        grace: freshGrace(),
       };
     }
     saveState(files, state);
@@ -1058,18 +1084,10 @@ async function runDaemon(
   };
 
   server.on("connection", (socket) => {
-    let buffer = "";
-    socket.setEncoding("utf-8");
-    socket.on("error", (error) => log(`control connection: ${errorText(error)}`));
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
-      const line = buffer.slice(0, newline);
-      buffer = "";
-      socket.removeAllListeners("data");
-      void handleLine(line, socket);
-    });
+    firstLine(socket, "closed before a line").then(
+      (line) => handleLine(line, socket),
+      (error) => log(`control connection: ${errorText(error)}`),
+    );
   });
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));

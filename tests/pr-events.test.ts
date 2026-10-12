@@ -29,6 +29,7 @@ next() {
 serve() {
   local prefix="$1" n="$2"
   if [ -f "\${STUB_DIR}/fail-\${prefix}" ]; then echo "gh: graphql boom" >&2; exit 1; fi
+  if [ -f "\${STUB_DIR}/slow-\${prefix}" ]; then sleep 2; fi
   while [ "$n" -gt 1 ] && [ ! -f "\${STUB_DIR}/\${prefix}-\${n}.json" ]; do n=$((n-1)); done
   local file="\${STUB_DIR}/\${prefix}-\${n}.json"
   if [ ! -f "$file" ]; then echo "stub gh: no \${prefix} fixture" >&2; exit 1; fi
@@ -109,18 +110,21 @@ function rows(...specs: RowSpec[]): string {
   return JSON.stringify({ data: { r0: prs } });
 }
 
-/** [workflow name, status, conclusion, run id] */
-type RunSpec = [string, string, string | null, number?];
+/** [workflow name, status, conclusion, run id, workflow id (default: derived from the name)] */
+type RunSpec = [string, string, string | null, number?, number?];
 
 function suites(runs: RunSpec[]): string {
-  const nodes = runs.map(([name, status, conclusion, id], i) => ({
+  const nodes = runs.map(([name, status, conclusion, id, workflowId], i) => ({
     status,
     conclusion,
     app: { slug: "github-actions" },
     workflowRun: {
       databaseId: id ?? 100 + i,
       updatedAt: T1,
-      workflow: { databaseId: [...name].reduce((sum, c) => sum + c.charCodeAt(0), 0), name },
+      workflow: {
+        databaseId: workflowId ?? [...name].reduce((sum, c) => sum + c.charCodeAt(0), 0),
+        name,
+      },
     },
   }));
   return JSON.stringify({
@@ -256,6 +260,8 @@ interface Inbox {
   frames: (expected: number) => Promise<string[]>;
   /** The write-ahead log's event ids as they stood when each connection arrived. */
   walAtConnect: number[][];
+  /** When each connection arrived, meaningful only while this process's event loop was free. */
+  arrivedAt: number[];
   close: () => void;
 }
 
@@ -293,9 +299,11 @@ function inbox(dir: string, walPath: string, reportState?: string): Promise<Inbo
   const path = join(dir, `${process.pid}.sock`);
   const connections: string[] = [];
   const walAtConnect: number[][] = [];
+  const arrivedAt: number[] = [];
   return new Promise((resolve, reject) => {
     const server: Server = createServer((socket) => {
       walAtConnect.push(eventIds(walPath));
+      arrivedAt.push(Date.now());
       let bytes = "";
       socket.setEncoding("utf-8");
       socket.on("data", (chunk: string) => {
@@ -326,6 +334,7 @@ function inbox(dir: string, walPath: string, reportState?: string): Promise<Inbo
           return [...connections];
         },
         walAtConnect,
+        arrivedAt,
         close: () => server.close(),
       }),
     );
@@ -673,6 +682,97 @@ describe("pr-events.mts", () => {
     expect(exit).toBe(0);
     expect(existsSync(socket)).toBe(false);
     expect(s.log(String(session.pid))).toContain(`session ${session.pid} exited`);
+  }, 30000);
+
+  test("the session's end is noticed between the reads of a poll, not only after it", async () => {
+    // Every gh read holds the event loop; a poll of several slow reads for a session that is gone
+    // would otherwise run to its end before the daemon noticed.
+    const s = new Scenario("owner-gone-midpoll");
+    const session = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]);
+    const inboxPath = join(s.dir, `${session.pid}.inbox`, `${session.pid}.sock`);
+    mkdirSync(join(s.dir, `${session.pid}.inbox`));
+    s.fixtures({ "suites-1": suites([["ci", "queued", null]]) });
+    const daemon = await s.start({ inbox: inboxPath });
+    expect(s.run(["watch-commit", REPO, HEAD_A], { inbox: inboxPath }).code).toBe(0);
+    expect(s.run(["watch-commit", REPO, HEAD_B], { inbox: inboxPath }).code).toBe(0);
+    const suiteReads = () => s.ghCalls().filter((call) => call.includes("checkSuites(")).length;
+    expect(suiteReads()).toBe(3);
+    writeFileSync(join(s.stubDir, "slow-suites"), "");
+    const poll = Bun.spawn([process.execPath, SCRIPT, "poll"], {
+      env: s.env({ inbox: inboxPath }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await Bun.sleep(500);
+    session.kill();
+    await session.exited;
+    const exit = await Promise.race([
+      daemon.exited,
+      Bun.sleep(6000).then(() => "timeout" as const),
+    ]);
+    expect(exit).toBe(0);
+    await poll.exited;
+    expect(suiteReads()).toBe(4);
+    expect(s.log(String(session.pid))).toContain(`session ${session.pid} exited`);
+  }, 30000);
+
+  test("two polls seconds apart deliver two messages at least a second apart, so the receiver keeps both", async () => {
+    // The receiver drops a second frame from one sender within the same second; two `watch`
+    // calls in a row each poll at once.
+    const s = new Scenario("gap");
+    const box = await s.inbox("a");
+    s.fixtures({ "suites-1": suites([["ci", "completed", "success"]]) });
+    await s.start({ inbox: box.path });
+    for (const sha of [HEAD_A, HEAD_B]) {
+      // Spawned asynchronously, so the fake inbox stamps each arrival as it happens.
+      const watch = Bun.spawn([process.execPath, SCRIPT, "watch-commit", REPO, sha, ...GATE_CI], {
+        env: s.env({ inbox: box.path }),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(await watch.exited).toBe(0);
+    }
+    expect(headlines(await box.frames(2))).toEqual([
+      `commit ${REPO}@${SHORT_A}: CI green on ${SHORT_A}: ci`,
+      `commit ${REPO}@${HEAD_B.slice(0, 12)}: CI green on ${HEAD_B.slice(0, 12)}: ci`,
+    ]);
+    const [first, second] = box.arrivedAt as [number, number];
+    expect(second - first).toBeGreaterThanOrEqual(1000);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("the registered workflow set is compared by workflow id: a second workflow under the same name is a change, so the green waits", async () => {
+    // Two workflow files can share a name; by name the set would read unchanged and the first
+    // all-green read would settle before the second workflow had run.
+    const s = new Scenario("same-name");
+    const id = ["--id", "same-name"];
+    s.fixtures({
+      "suites-1": suites([["CI", "completed", "success", 1, 11]]),
+      "suites-2": suites([
+        ["CI", "completed", "success", 1, 11],
+        ["CI", "completed", "success", 2, 22],
+      ]),
+    });
+    await s.start({ id: "same-name" });
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...id]).code).toBe(0);
+    expect(s.run(["poll", ...id]).stdout).toContain("0 event(s)");
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    expect(s.events("same-name").map((e) => e.text)).toEqual([`CI green on ${SHORT_A}: CI`]);
+    s.stop({ id: "same-name" });
+  }, 30000);
+
+  test("a repeated watch restarts the missing-workflow grace: two calls seconds apart are not the two polls a minute apart", async () => {
+    const s = new Scenario("regrace");
+    const id = ["--id", "regrace"];
+    s.fixtures({ "suites-1": suites([["bystander", "completed", "success"]]) });
+    await s.start({ id: "regrace" });
+    const gate = ["--expect-workflow", "checks"];
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...gate, ...id]).code).toBe(0);
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...gate, ...id]).code).toBe(0);
+    expect(s.events("regrace")).toEqual([]);
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    expect(s.events("regrace").map((e) => e.kind)).toEqual(["trouble"]);
+    s.stop({ id: "regrace" });
   }, 30000);
 
   test("a second daemon for the same session exits 0 saying so and leaves the first serving; a stale socket file is replaced", async () => {
@@ -1462,7 +1562,7 @@ describe("pr-events.mts", () => {
   }, 30000);
 
   test("a backlog past the paging cap is a trouble event beside the comments that were read", async () => {
-    const s = new Scenario("gap");
+    const s = new Scenario("paging-cap");
     const box = await s.inbox("a");
     const older: Record<string, string> = {};
     for (let page = 1; page <= 9; page += 1) {
