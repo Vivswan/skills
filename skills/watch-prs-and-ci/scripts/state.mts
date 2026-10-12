@@ -152,6 +152,17 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   );
 }
 
+/** Drops the rows and pending commits no subscriber holds. */
+export function dropUnheldTargets(state: State): void {
+  const subs = Object.values(state.subscriptions);
+  for (const key of Object.keys(state.rows)) {
+    if (!subs.some((sub) => key in sub.prs)) delete state.rows[key];
+  }
+  for (const key of Object.keys(state.pendingCommits)) {
+    if (!subs.some((sub) => key in sub.commits)) delete state.pendingCommits[key];
+  }
+}
+
 export function loadState(dir: string): State {
   let text: string;
   try {

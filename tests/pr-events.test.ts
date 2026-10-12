@@ -728,6 +728,23 @@ describe("pr-events.mts", () => {
     s.stop();
   }, 30000);
 
+  test("a gate name with a comma is one name", async () => {
+    const s = new Scenario("comma");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["CI, Linux", "completed", "success"]]),
+    });
+    const r = s.run(["watch", PR7, "--mode", "bypass", "--expect-workflow", "CI, Linux"], {
+      inbox: box.path,
+    });
+    expect(r.code).toBe(0);
+    expect(headlines(await box.frames(1))).toEqual([
+      `PR ${PR7}: CI green on ${SHORT_A}: CI, Linux`,
+    ]);
+    s.stop();
+  }, 30000);
+
   test("a merge commit keeps the gates named for it by watch-commit and for the PR; a trouble notice does not end its watch", async () => {
     const s = new Scenario("gates");
     const sink = ["--sink", "file", "--id", "a"];
@@ -906,7 +923,9 @@ describe("pr-events.mts", () => {
     const r = s.run(["unwatch", "--all", ...sink]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("unwatched everything for probe");
-    expect(s.run(["status"]).stdout).toContain("daemon: not running\n");
+    const offline = s.run(["status"]).stdout;
+    expect(offline).toContain("daemon: not running\n");
+    expect(offline).toContain("prs: 0");
     expect(s.run(["poll"]).code).toBe(0);
     expect(s.run(["status"]).stdout).toContain("subscribers: 0");
     s.stop();

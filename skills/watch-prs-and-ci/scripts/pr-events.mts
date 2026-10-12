@@ -40,6 +40,7 @@ import {
   CONTROL_SOCKET,
   type CommitKey,
   commitKey,
+  dropUnheldTargets,
   type EventInput,
   type Liveness,
   LOG_FILE,
@@ -255,9 +256,10 @@ function parseMode(value: string | undefined): Mode {
   usage(`--mode must be bypass or prompting, got: ${value}`);
 }
 
+// A workflow name is matched exactly, commas and all; one flag carries one name.
 function parseExpected(values: string[] | undefined): string[] {
-  const names = (values ?? []).flatMap((value) => value.split(",")).map((name) => name.trim());
-  if (names.some((name) => name === "")) usage("--expect-workflow needs a workflow name");
+  const names = values ?? [];
+  if (names.some((name) => name.trim() === "")) usage("--expect-workflow needs a workflow name");
   return [...new Set(names)].sort();
 }
 
@@ -388,6 +390,7 @@ function unwatchOffline(dir: string, address: string, pr: PrRef | null): void {
   if (!sub) return;
   if (pr === null) delete state.subscriptions[address];
   else delete sub.prs[prKey(pr)];
+  dropUnheldTargets(state);
   saveState(dir, state);
 }
 
@@ -777,12 +780,7 @@ async function runDaemon(
       const reason = prunedReason(sub, now);
       if (reason !== null) dropSubscription(sub, reason);
     }
-    for (const key of Object.keys(state.rows)) {
-      if (subscribersOfPr(key).length === 0) delete state.rows[key];
-    }
-    for (const key of Object.keys(state.pendingCommits)) {
-      if (subscribersOfCommit(key).length === 0) delete state.pendingCommits[key];
-    }
+    dropUnheldTargets(state);
     for (const [address, { at }] of Object.entries(state.pruned)) {
       if (Date.parse(at) + LEASE_MS <= now) {
         delete state.pruned[address];
