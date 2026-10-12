@@ -382,11 +382,23 @@ async function arxivLookup(io: Io, name: string): Promise<Cell> {
 }
 
 /** Every top-level domain registry runs its own nic host. */
-const DNS_TAKEN_CONTROL = "nic";
+/** The zone apex, in zone-file notation, which no candidate spells (a name starts with a
+ * letter). No host under an arbitrary zone is guaranteed an address (nic.uk and nic.ca have none,
+ * nic.co.uk does not exist), where a zone a registry delegates has name servers by definition,
+ * and a name server has an address. */
+const DNS_TAKEN_CONTROL = "@";
 
 async function domain(io: Io, name: string, tld: string): Promise<Cell> {
-  const host = `${name.toLowerCase()}.${tld}`;
+  const apex = name === DNS_TAKEN_CONTROL;
+  const host = apex ? tld : `${name.toLowerCase()}.${tld}`;
   try {
+    if (apex) {
+      // The server list comes from the stub resolver; the server's address goes through the
+      // system lookup the candidates take, so a blind system lookup fails this control.
+      const [server] = await io.resolveNs(host);
+      await io.resolve(server ?? host);
+      return taken(`${host} is delegated`);
+    }
     await io.resolve(host);
     return taken(`${host} resolves`);
   } catch (error) {

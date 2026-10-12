@@ -118,6 +118,12 @@ function defaultReply(url: URL): Reply {
   return { status: 404 };
 }
 
+function dnsFailure(code: string): Error {
+  const error = new Error(code) as Error & { code: string };
+  error.code = code;
+  return error;
+}
+
 function fakeIo(
   handler: (url: URL) => Reply | undefined,
   resolving: string[] = [],
@@ -132,9 +138,13 @@ function fakeIo(
     },
     resolve: async (host) => {
       if (resolving.includes(host)) return [{ address: "192.0.2.1", family: 4 }];
-      const error = new Error(dnsError) as Error & { code: string };
-      error.code = dnsError;
-      throw error;
+      throw dnsFailure(dnsError);
+    },
+    // A zone with resolving hosts under it is delegated, and they are its name servers.
+    resolveNs: async (zone) => {
+      const servers = resolving.filter((host) => host.endsWith(`.${zone}`));
+      if (servers.length > 0) return servers;
+      throw dnsFailure(dnsError);
     },
     githubToken: null,
     timeoutMs: 5_000,
@@ -1392,7 +1402,7 @@ describe("check-name.mts controls", () => {
       ].sort(),
     );
     expect(failures.every((f) => f.expected === "taken")).toBe(true);
-    expect(failures.find((f) => f.column === "dns-com")?.control).toBe("nic");
+    expect(failures.find((f) => f.column === "dns-com")?.control).toBe("@");
     // The say column is a note on every name, the random one included, so it is no instrument
     // and never a failure.
     expect(failures.map((f) => f.column)).not.toContain("say");
@@ -1416,8 +1426,44 @@ describe("check-name.mts controls", () => {
   test("a resolver blind to every host fails the DNS taken control while the HTTP controls pass", async () => {
     const failures = await runControls(allTakenIo([]), WITH_ARXIV, RANDOM);
     expect(failures).toEqual([
-      { column: "dns-com", control: "nic", expected: "taken", got: { status: "free" } },
+      { column: "dns-com", control: "@", expected: "taken", got: { status: "free" } },
     ]);
+  });
+
+  test("the DNS taken control is the zone's delegation, so a zone whose registry serves no nic host (co.uk, uk, ca) passes it, and a zone nothing delegates fails it free", async () => {
+    // nic.co.uk does not exist and nic.uk has no address, so a control host under the zone
+    // failed every accepted zone of that kind; a delegated zone has name servers by definition.
+    const zones: Options = { ...OPTIONS, domains: ["co.uk", "uk", "ca"] };
+    const io = allTakenIo(["example.co.uk", "example.ca"]);
+    expect(await runControls(io, zones, RANDOM)).toEqual([]);
+    const control = await checkName(io, zones, "lumera");
+    expect(cell(control.cells, "dns-co.uk")).toEqual({ status: "free" });
+    const bogus: Options = { ...OPTIONS, domains: ["xyzzy"] };
+    expect(await runControls(io, bogus, RANDOM)).toEqual([
+      { column: "dns-xyzzy", control: "@", expected: "taken", got: { status: "free" } },
+    ]);
+    // The server list and the candidates' lookups are different resolvers: the control resolves
+    // a listed server through the candidates' one, so a system lookup blind to every host fails
+    // the control free while the stub resolver still delegates the zone.
+    const com: Options = { ...OPTIONS, domains: ["com"] };
+    const blind: Io = {
+      ...allTakenIo(["nic.com"]),
+      resolve: async () => {
+        throw dnsFailure("ENOTFOUND");
+      },
+    };
+    expect(await runControls(blind, com, RANDOM)).toEqual([
+      { column: "dns-com", control: "@", expected: "taken", got: { status: "free" } },
+    ]);
+    // A resolver that cannot answer leaves the control unknown, never free.
+    const dark: Io = {
+      ...io,
+      resolveNs: async () => {
+        throw dnsFailure("EAI_AGAIN");
+      },
+    };
+    const [failure] = await runControls(dark, com, RANDOM);
+    expect(failure?.got).toEqual({ status: "unknown", detail: "com EAI_AGAIN" });
   });
 
   test("the Wiktionary control must come back flagged: a label-less reading of the control word is a failed instrument", async () => {

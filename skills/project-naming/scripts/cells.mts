@@ -11,6 +11,8 @@ export type Io = {
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
   /** Resolves a hostname to at least one address, or throws (ENOTFOUND for an unregistered name). */
   resolve: (host: string) => Promise<unknown>;
+  /** Lists a zone's name servers, or throws (ENOTFOUND for a zone no registry delegates). */
+  resolveNs: (zone: string) => Promise<string[]>;
   githubToken: string | null;
   /** A request past this is an `unknown` cell, so one stalled endpoint cannot hold the table. */
   timeoutMs: number;

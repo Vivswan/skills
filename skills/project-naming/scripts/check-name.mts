@@ -253,6 +253,7 @@ async function main(): Promise<number> {
   const io: Io = {
     fetch: (url, init) => fetch(url, init),
     resolve: (host) => dns.lookup(host),
+    resolveNs: (zone) => dns.resolveNs(zone),
     githubToken,
     timeoutMs: REQUEST_TIMEOUT_MS,
     arxivGapMs: ARXIV_GAP_MS,

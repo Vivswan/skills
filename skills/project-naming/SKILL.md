@@ -102,7 +102,7 @@ numpi   free  free                free    free                            free  
 ```
 
 - `--registries` selects the availability columns; the gate columns `say`, `typosquat`, `wiktionary`, and `urban` run on every name whatever it names, so a selective run cannot skip them: the hard gate reads the first two, and step 5 reads the two meaning columns, on every name.
-- Two controls run with every batch: per registry column, a name known to be taken there (the registry's own `nic` host for DNS, a word with a flagged sense for Wiktionary), and one random string that must be free everywhere. A column that answers either wrongly is reported on stderr as a failed instrument and the exit code is 1. Do not read that column.
+- Two controls run with every batch: per registry column, a name known to be taken there (the zone's own delegation for DNS, spelled `@`; a word with a flagged sense for Wiktionary), and one random string that must be free everywhere. A column that answers either wrongly is reported on stderr as a failed instrument and the exit code is 1. Do not read that column.
 - `unknown` is not `free`. A rate-limited arXiv or a 5xx stays `unknown` in the table; rerun later or drop the column with `--no-arxiv`.
 - arXiv allows one request every three seconds, and the script spaces its own that far. Lanes run with `--no-arxiv`; the lead runs the arXiv column once, over the merged shortlist, in step 6.
 - Maven Central's search holds some requests for half a minute and more, so the script runs its lookups one at a time and asks again after a short wait; an `unknown(maven TimeoutError ...)` cell is three holds in a row, rerun later.
