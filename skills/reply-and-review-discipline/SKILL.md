@@ -83,24 +83,25 @@ The agent reviews under the user's account, so publishing is the user's act: the
 
 4. **Carry the answer for the PR**, through every revision of the pending review. A `/rubber-duck-review` pass on this PR expands only the `## Review Criteria` sections the user chose here, not every installed one: that skill's every-section rule is for the user's own change, and this choice scopes it. Then read the PR's linked document and the code, and only then write.
 
-**Stage:** one JSON body, the head commit inside it, no `event` field. `commit_id` belongs in the file: with `--input`, a `-f` field goes to the URL query string. The heredoc is quoted, since comment bodies carry backticks an unquoted one would run as commands, so the SHA goes in afterwards. The file lives in a `mktemp` directory, removed when the staging is done, like the `/pr-and-issue-discipline` skill's PR-body fallback.
+**Stage:** one JSON body, the head commit inside it, no `event` field. `commit_id` belongs in the file: with `--input`, a `-f` field goes to the URL query string.
+
+The file is written with the harness's file-writing tool, the head SHA already in it: comment bodies carry backticks a shell heredoc would run, and some sandboxes refuse heredocs, a `trap`, or a variable chained into the command. One plain command per step, the removal its own last command, like the `/pr-and-issue-discipline` skill's PR-body fallback.
 
 A finding that spans several lines is anchored on its whole range with `start_line` and `line`; `start_side` and `side` name the diff side the lines are on, `RIGHT` for lines in the new file, `LEFT` for a removed range. A single-line anchor only when one line is the whole finding.
 
 ```bash
-review_dir=$(mktemp -d "${TMPDIR:-/tmp}/pr-review-XXXXXX"); trap 'rm -rf "$review_dir"' EXIT
-cat > "$review_dir/review.json" <<'EOF'
-{
-  "commit_id": "HEAD_SHA",
-  "comments": [
-    {"path": "src/metrics.ts", "line": 42, "side": "RIGHT", "body": "Review summary (copy into the summary box)\n\n[comment, not approve yet]\n\n**Works:** ...\n**Blocks:** ..."},
-    {"path": "src/metrics.ts", "start_line": 84, "start_side": "RIGHT", "line": 88, "side": "RIGHT", "body": "[blocking] The two headline metrics disagree on answers that cannot be parsed. Count them the same way in both."}
-  ]
-}
-EOF
-head_sha=$(gh pr view <n> --repo <owner>/<repo> --json headRefOid -q .headRefOid)
-sed -i.bak "s/\"commit_id\": \"HEAD_SHA\"/\"commit_id\": \"$head_sha\"/" "$review_dir/review.json"   # the whole property, so a body saying HEAD_SHA is untouched
-gh api -X POST repos/<owner>/<repo>/pulls/<n>/reviews --input "$review_dir/review.json" --jq .id   # no "event": stays pending
+gh pr view <n> --repo <owner>/<repo> --json headRefOid -q .headRefOid                          # 1. the head SHA, for commit_id below
+mktemp -d /tmp/pr-review-XXXXXX                                                                   # 2. prints e.g. /tmp/pr-review-Kq3mZp; copy the printed path by hand
+# 3. write /tmp/pr-review-Kq3mZp/review.json with the harness's file-writing tool:
+#    {
+#      "commit_id": "<head SHA>",
+#      "comments": [
+#        {"path": "src/metrics.ts", "line": 42, "side": "RIGHT", "body": "Review summary (copy into the summary box)\n\n[comment, not approve yet]\n\n**Works:** ...\n**Blocks:** ..."},
+#        {"path": "src/metrics.ts", "start_line": 84, "start_side": "RIGHT", "line": 88, "side": "RIGHT", "body": "[blocking] The two headline metrics disagree on answers that cannot be parsed. Count them the same way in both."}
+#      ]
+#    }
+gh api -X POST repos/<owner>/<repo>/pulls/<n>/reviews --input /tmp/pr-review-Kq3mZp/review.json --jq .id   # 4. no "event": stays pending
+rm -rf /tmp/pr-review-Kq3mZp                                                                      # 5. its own command, whatever gh returned
 ```
 
 **Revise:** GitHub keeps one pending review per author per PR, so a second POST fails. Read the pending review's comments as they are now, since the user may have edited them in the web UI, and rebuild the full set from that text. Then delete it, confirm none remains, recreate, and tell the user the id changed:
