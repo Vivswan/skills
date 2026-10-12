@@ -12,7 +12,7 @@
 unslop:
   url: https://github.com/cursor/plugins.git
   path: pstack/skills/unslop
-  commit: 11713c683fe4add4fd403ea880580abbc9e0875f
+  commit: 1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def
   license: none published
   frontmatter:
     disable-model-invocation: null
@@ -28,7 +28,7 @@ frontend-design:
 design-taste-frontend:
   url: https://github.com/Leonxlnx/taste-skill.git
   path: skills/taste-skill
-  commit: e79ca9ec7e071eb3a3b623c4fb752e853fc3ed58
+  commit: d237dd399d57524945c0c81327da5da19f7a468d
   license: MIT
   license_file: LICENSE
   frontmatter:
