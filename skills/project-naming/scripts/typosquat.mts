@@ -57,14 +57,27 @@ async function source(
   url: string,
   basis: string,
   extract: (text: string) => string[],
+  revive: (stored: unknown) => string[] | null = stringList,
 ): Promise<Source> {
-  const loaded = await cached(io, { url, extract, revive: stringList });
+  const loaded = await cached(io, { url, extract, revive });
   if ("error" in loaded) return { registry, error: `${label} ${loaded.error}` };
   return { registry, names: loaded.value, basis };
 }
 
+/** A full ranking with no entries is a malformed reply, not a registry with nothing popular. */
+function nonEmpty(names: string[], what: string): string[] {
+  if (names.length === 0) throw new Error(`${what} is empty`);
+  return names;
+}
+
+/** A cached ranking an earlier build saved empty is a miss, so the ranking is fetched again. */
+function nonEmptyStringList(stored: unknown): string[] | null {
+  const list = stringList(stored);
+  return list && list.length > 0 ? list : null;
+}
+
 // The project publishes the ranking at hugovk.github.io, which redirects here.
-const PYPI_TOP_URL = "https://hugovk.dev/top-pypi-packages/top-pypi-packages.min.json";
+export const PYPI_TOP_URL = "https://hugovk.dev/top-pypi-packages/top-pypi-packages.min.json";
 
 /** npm publishes no ranking and its search matches whole words (a one-letter typo returns
  * nothing), so the list is npm-high-impact's by-downloads ranking of the packages npm itself
@@ -82,14 +95,27 @@ function quotedNames(moduleText: string): string[] {
 function sources(io: Io, lower: string): Promise<Source>[] {
   const ranking = `top ${RANKING_TOP} by downloads`;
   return [
-    source(io, "pypi", "top-pypi-packages", PYPI_TOP_URL, ranking, (text) =>
-      stringsOf(text, ["rows"], (row) => (row as { project?: unknown }).project).slice(
-        0,
-        RANKING_TOP,
-      ),
+    source(
+      io,
+      "pypi",
+      "top-pypi-packages",
+      PYPI_TOP_URL,
+      ranking,
+      (text) =>
+        nonEmpty(
+          stringsOf(text, ["rows"], (row) => (row as { project?: unknown }).project),
+          "rows",
+        ).slice(0, RANKING_TOP),
+      nonEmptyStringList,
     ),
-    source(io, "npm", "npm-high-impact", NPM_TOP_URL, ranking, (text) =>
-      quotedNames(text).slice(0, RANKING_TOP),
+    source(
+      io,
+      "npm",
+      "npm-high-impact",
+      NPM_TOP_URL,
+      ranking,
+      (text) => quotedNames(text).slice(0, RANKING_TOP),
+      nonEmptyStringList,
     ),
     source(
       io,

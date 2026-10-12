@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import type { Cell, Io } from "../skills/project-naming/scripts/cells.mts";
@@ -18,7 +19,7 @@ import {
   WIKTIONARY_FLAG,
 } from "../skills/project-naming/scripts/registries.mts";
 import { sayAsSpelled } from "../skills/project-naming/scripts/say.mts";
-import { oneEditApart } from "../skills/project-naming/scripts/typosquat.mts";
+import { oneEditApart, PYPI_TOP_URL } from "../skills/project-naming/scripts/typosquat.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
 // check-name.mts is driven through an injected fetch and resolver: every registry reply here is
@@ -74,7 +75,8 @@ function defaultReply(url: URL): Reply {
   if (url.hostname === "search.maven.org")
     return { status: 200, body: { response: { numFound: 0 } } };
   if (url.hostname === "public.api.bsky.app") return BLUESKY_FREE;
-  if (url.hostname === "hugovk.dev") return { status: 200, body: { rows: [] } };
+  if (url.hostname === "hugovk.dev")
+    return { status: 200, body: { rows: [{ project: "filler-name" }] } };
   if (url.hostname === "cdn.jsdelivr.net") return { status: 200, text: npmModule(["filler-name"]) };
   if (url.pathname === "/api/v1/crates") return { status: 200, body: { crates: [] } };
   if (url.hostname === "api.urbandictionary.com") return { status: 200, body: { list: [] } };
@@ -793,7 +795,12 @@ describe("check-name.mts typosquat column", () => {
   function sourcesIo(pypi: string[], npm: string[], crates: string[]): Io {
     return fakeIo((url) => {
       if (url.hostname === "hugovk.dev") {
-        return { status: 200, body: { rows: pypi.map((project) => ({ project })) } };
+        // A full ranking is never empty: the filler keeps the reply well-formed when a case
+        // supplies no names of its own.
+        return {
+          status: 200,
+          body: { rows: [...pypi, "filler-name"].map((project) => ({ project })) },
+        };
       }
       if (url.hostname === "cdn.jsdelivr.net") {
         return { status: 200, text: npmModule([...npm, "filler-name"]) };
@@ -838,6 +845,9 @@ describe("check-name.mts typosquat column", () => {
     const malformed: [string, Reply][] = [
       ["hugovk.dev", { status: 200, body: { message: "unavailable" } }],
       ["hugovk.dev", { status: 200, body: { rows: [{ project: 7 }] } }],
+      // An empty full ranking is malformed, not a registry with nothing popular: with PyPI's
+      // rows empty and npm carrying the control, the control would pass while numpi read free.
+      ["hugovk.dev", { status: 200, body: { rows: [] } }],
       ["hugovk.dev", { status: 200, text: "not json" }],
       ["cdn.jsdelivr.net", { status: 200, text: "export const topDownload = []\n" }],
       ["cdn.jsdelivr.net", { status: 200, body: { error: "Cannot load 'react' ranking" } }],
@@ -926,6 +936,21 @@ describe("check-name.mts typosquat column", () => {
     await Promise.all(["lumera", "tarnix"].map((name) => checkName(first, OPTIONS, name)));
     expect(fetches).toBe(1);
     expect(indexFetches).toBe(2);
+    // A ranking an earlier build cached empty is a miss, not a complete list: with that file on
+    // disk and the fetch answering empty too, the source fails instead of reading every name free.
+    const emptyCache = join(scratch, "empty-ranking");
+    mkdirSync(emptyCache, { recursive: true });
+    writeFileSync(
+      join(emptyCache, `${createHash("sha256").update(PYPI_TOP_URL).digest("hex")}.json`),
+      "[]",
+    );
+    const emptyAgain = withReply(
+      { ...sourcesIo([], [], []), cacheDir: emptyCache },
+      "hugovk.dev",
+      () => new Response(JSON.stringify({ rows: [] }), { status: 200 }),
+    );
+    const cachedEmpty = await checkName(emptyAgain, OPTIONS, "numpi");
+    expect(detail(cell(cachedEmpty.cells, "typosquat"))).toContain("rows is empty");
     // A malformed reply is not cached: the next process asks again.
     const broken = withReply(
       { ...sourcesIo([], [], []), cacheDir: join(scratch, "broken") },
