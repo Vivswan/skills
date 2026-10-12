@@ -2,6 +2,7 @@
 // REGISTRIES: its column, its control row, the TSV header, and `--list-registries` follow from
 // the table.
 
+import { cached, stringList, stringMap } from "./cache.mts";
 import { type Cell, free, get, type Io, renderCell, taken, unknown } from "./cells.mts";
 import { type Note, sayAsSpelled } from "./say.mts";
 import { typosquat } from "./typosquat.mts";
@@ -151,13 +152,74 @@ async function githubRepo(io: Io, name: string): Promise<Cell> {
   );
 }
 
-/** Formulae and casks are separate indexes; a name is taken when either has it. */
+/** The indexes are tens of megabytes where every other reply is one name's. */
+const BREW_INDEX_TIMEOUT_MS = 120_000;
+
+type BrewIndex = {
+  kind: "formula" | "cask";
+  url: string;
+  /** The key of an entry's own name. */
+  nameKey: string;
+  /** Keys of the lists of other names an entry goes by, each with how the cell says so. */
+  via: Record<string, string>;
+};
+
+const BREW_INDEXES: readonly BrewIndex[] = [
+  {
+    kind: "formula",
+    url: "https://formulae.brew.sh/api/formula.json",
+    nameKey: "name",
+    via: { aliases: "alias", oldnames: "old name" },
+  },
+  {
+    kind: "cask",
+    url: "https://formulae.brew.sh/api/cask.json",
+    nameKey: "token",
+    via: { old_tokens: "old token" },
+  },
+];
+
+/** Every name an index answers to, lowercased, mapped to the cell detail for it, an entry's own
+ * name winning over another entry's alias. An empty index is a malformed reply: it would read
+ * every name free. */
+function brewNames(json: string, index: BrewIndex): Record<string, string> {
+  const parsed: unknown = JSON.parse(json);
+  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("not a list of entries");
+  const names: Record<string, string> = {};
+  for (const entry of parsed as Record<string, unknown>[]) {
+    const name = entry?.[index.nameKey];
+    if (typeof name !== "string") throw new Error(`an entry has no ${index.nameKey}`);
+    names[name.toLowerCase()] = `homebrew ${index.kind} ${name}`;
+    for (const [key, how] of Object.entries(index.via)) {
+      const others = stringList(entry[key]);
+      if (!others) throw new Error(`${name} has no ${key} list`);
+      for (const other of others) {
+        names[other.toLowerCase()] ??= `homebrew ${index.kind} ${name} via ${how}`;
+      }
+    }
+  }
+  return names;
+}
+
+async function brewLookup(io: Io, lower: string, index: BrewIndex): Promise<Cell> {
+  const loaded = await cached(io, {
+    url: index.url,
+    extract: (text) => brewNames(text, index),
+    revive: stringMap,
+    timeoutMs: BREW_INDEX_TIMEOUT_MS,
+  });
+  if ("error" in loaded) return unknown(`homebrew ${index.kind} index ${loaded.error}`);
+  // hasOwn: a name every object inherits (constructor) must not read as a formula.
+  const holder = Object.hasOwn(loaded.value, lower) ? loaded.value[lower] : undefined;
+  return holder ? taken(holder) : free;
+}
+
+/** The per-name pages answer an entry's own name only: `formula/python.json` is a 404 while
+ * `python` is an alias of `python@3.15`, and no page resolves an alias. So the two indexes are
+ * read whole, once a day, and a name is taken when either knows it. */
 async function homebrew(io: Io, name: string): Promise<Cell> {
   const lower = name.toLowerCase();
-  const readings = await Promise.all([
-    lookup404(io, `https://formulae.brew.sh/api/formula/${lower}.json`, "homebrew formula"),
-    lookup404(io, `https://formulae.brew.sh/api/cask/${lower}.json`, "homebrew cask"),
-  ]);
+  const readings = await Promise.all(BREW_INDEXES.map((index) => brewLookup(io, lower, index)));
   return (
     readings.find((cell) => cell.status === "taken") ??
     readings.find((cell) => cell.status === "unknown") ??
@@ -483,8 +545,8 @@ export const REGISTRIES: readonly RegistryEntry[] = [
   {
     kind: "registry",
     id: "homebrew",
-    label: "Homebrew formula or cask",
-    // wget: a formula, read 200 on 2026-10-12.
+    label: "Homebrew formula or cask, aliases and old names included",
+    // wget: a formula in the index on 2026-10-12.
     takenControl: "wget",
     lookup: homebrew,
   },

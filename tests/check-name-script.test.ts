@@ -41,11 +41,36 @@ function npmModule(names: string[]): string {
   return `export const topDownload = [\n${names.map((name) => `  '${name}'`).join(",\n")}\n]\n`;
 }
 
+/** The shape of formulae.brew.sh's two indexes: a formula entry carries `name`, `aliases`, and
+ * `oldnames`; a cask entry `token` and `old_tokens`. */
+type Formula = { name: string; aliases?: string[]; oldnames?: string[] };
+type Cask = { token: string; old_tokens?: string[] };
+function formulaIndex(entries: Formula[]): Reply {
+  return {
+    status: 200,
+    body: entries.map((f) => ({
+      name: f.name,
+      aliases: f.aliases ?? [],
+      oldnames: f.oldnames ?? [],
+    })),
+  };
+}
+function caskIndex(entries: Cask[]): Reply {
+  return {
+    status: 200,
+    body: entries.map((c) => ({ token: c.token, old_tokens: c.old_tokens ?? [] })),
+  };
+}
+const FORMULA_INDEX = "/api/formula.json";
+const CASK_INDEX = "/api/cask.json";
+
 /** Every registry answers `free` unless the handler says otherwise: a 404 for the lookups that
  * use one, an empty result for the searches, a missing page for Wiktionary, the resolver's
- * "unable to resolve" for Bluesky. */
+ * "unable to resolve" for Bluesky, a one-entry index for Homebrew (an empty one is unreadable). */
 function defaultReply(url: URL): Reply {
   if (url.pathname === "/search/repositories") return { status: 200, body: { items: [] } };
+  if (url.pathname === FORMULA_INDEX) return formulaIndex([{ name: "filler-formula" }]);
+  if (url.pathname === CASK_INDEX) return caskIndex([{ token: "filler-cask" }]);
   if (url.hostname === "search.maven.org")
     return { status: 200, body: { response: { numFound: 0 } } };
   if (url.hostname === "public.api.bsky.app") return BLUESKY_FREE;
@@ -98,6 +123,8 @@ function allTakenIo(resolving: string[]): Io {
     if (url.hostname === "hugovk.dev") {
       return { status: 200, body: { rows: [{ project: "requests" }] } };
     }
+    // The Homebrew control is a formula in the index, not a path of its own.
+    if (url.pathname === FORMULA_INDEX) return formulaIndex([{ name: "wget" }]);
     const path = decodeURIComponent(url.pathname + url.search).toLowerCase();
     const named = controls.find((control) => path.includes(control));
     if (!named) return undefined;
@@ -163,22 +190,75 @@ describe("check-name.mts cells", () => {
     expect(cell(row.cells, "crates")).toEqual({ status: "free" });
   });
 
-  test("Homebrew: a formula or a cask takes the name, both 404 is free, and an unreadable index with no hit is unknown", async () => {
-    const brew = (formula: number, cask: number) =>
+  test("Homebrew: a name is taken as a formula, a cask, an alias, an old name, or an old token in the indexes; the per-name pages answer canonical names only", async () => {
+    // formula/python.json is a 404 while python is an alias of python@3.15, and cask/docker.json
+    // a 404 while docker is an old token of docker-desktop: the per-name pages would read both
+    // free. Only the index knows, so a name reads through the index and never a per-name page.
+    const brew = (formula: Reply, cask: Reply) =>
       fakeIo((url) => {
         if (url.hostname !== "formulae.brew.sh") return undefined;
-        return { status: url.pathname.startsWith("/api/cask/") ? cask : formula };
+        if (url.pathname === FORMULA_INDEX) return formula;
+        if (url.pathname === CASK_INDEX) return cask;
+        throw new Error(`a per-name page was asked for: ${url.pathname}`);
       });
-    const cases: [number, number, Cell][] = [
-      [404, 404, { status: "free" }],
-      [200, 404, { status: "taken", detail: "homebrew formula" }],
-      [404, 200, { status: "taken", detail: "homebrew cask" }],
-      [200, 503, { status: "taken", detail: "homebrew formula" }],
-      [503, 404, { status: "unknown", detail: "homebrew formula HTTP 503" }],
+    const indexes = brew(
+      formulaIndex([
+        { name: "wget" },
+        { name: "python@3.15", aliases: ["python", "python3"], oldnames: ["python-legacy"] },
+      ]),
+      caskIndex([{ token: "docker-desktop", old_tokens: ["docker"] }]),
+    );
+    const cases: [string, Cell][] = [
+      ["wget", { status: "taken", detail: "homebrew formula wget" }],
+      ["Python", { status: "taken", detail: "homebrew formula python@3.15 via alias" }],
+      ["python-legacy", { status: "taken", detail: "homebrew formula python@3.15 via old name" }],
+      ["docker-desktop", { status: "taken", detail: "homebrew cask docker-desktop" }],
+      ["docker", { status: "taken", detail: "homebrew cask docker-desktop via old token" }],
+      // The negative control: a name in neither index reads free with both indexes present, and
+      // so does a name that is a property every JSON object inherits.
+      [RANDOM, { status: "free" }],
+      ["constructor", { status: "free" }],
     ];
-    for (const [formula, cask, expected] of cases) {
-      const row = await checkName(brew(formula, cask), OPTIONS, "Lumera");
-      expect(cell(row.cells, "homebrew"), `${formula}/${cask}`).toEqual(expected);
+    for (const [name, expected] of cases) {
+      const row = await checkName(indexes, OPTIONS, name);
+      expect(cell(row.cells, "homebrew"), name).toEqual(expected);
+    }
+    const down: Reply = { status: 503 };
+    const wgetOnly = formulaIndex([{ name: "wget" }]);
+    const dockerOnly = caskIndex([{ token: "docker-desktop" }]);
+    const unreadable: [Reply, Reply, string, Cell][] = [
+      [down, dockerOnly, "wget", { status: "unknown", detail: "homebrew formula index HTTP 503" }],
+      [wgetOnly, down, "wget", { status: "taken", detail: "homebrew formula wget" }],
+      [
+        wgetOnly,
+        down,
+        "docker-desktop",
+        { status: "unknown", detail: "homebrew cask index HTTP 503" },
+      ],
+      [
+        down,
+        dockerOnly,
+        "docker-desktop",
+        { status: "taken", detail: "homebrew cask docker-desktop" },
+      ],
+    ];
+    for (const [formula, cask, name, expected] of unreadable) {
+      const row = await checkName(brew(formula, cask), OPTIONS, name);
+      expect(cell(row.cells, "homebrew"), `${formula.status}/${cask.status} ${name}`).toEqual(
+        expected,
+      );
+    }
+    // A 200 whose body is not the index is unreadable, never an index with no entries.
+    const malformed: Reply[] = [
+      { status: 200, body: [] },
+      { status: 200, body: [{ aliases: [], oldnames: [] }] },
+      { status: 200, body: [{ name: "wget", aliases: "none", oldnames: [] }] },
+      { status: 200, body: { message: "unavailable" } },
+    ];
+    for (const reply of malformed) {
+      const row = await checkName(brew(reply, dockerOnly), OPTIONS, "wget");
+      expect(cell(row.cells, "homebrew").status, JSON.stringify(reply.body)).toBe("unknown");
+      expect(detail(cell(row.cells, "homebrew"))).toContain("reply unreadable");
     }
   });
 
@@ -715,17 +795,22 @@ describe("check-name.mts typosquat column", () => {
     expect(cell(stands.cells, "typosquat").status).toBe("taken");
   });
 
-  test("the PyPI ranking is fetched once per process and read from the cache directory for a day, after which it is fetched again", async () => {
+  test("the PyPI ranking and the Homebrew indexes are fetched once per process and read from the cache directory for a day, after which they are fetched again", async () => {
     const scratch = temp.dir("check-name-cache-");
     const cacheDir = join(scratch, "cache");
+    // The Homebrew indexes are tens of megabytes: fetched per name, a batch of twenty would pull
+    // them twenty times.
     let fetches = 0;
+    let indexFetches = 0;
     const counting = (): Io => {
       const base = sourcesIo(["requests"], [], []);
       return {
         ...base,
         cacheDir,
         fetch: (input, init) => {
-          if (new URL(input).hostname === "hugovk.dev") fetches++;
+          const url = new URL(input);
+          if (url.hostname === "hugovk.dev") fetches++;
+          if (url.hostname === "formulae.brew.sh") indexFetches++;
           return base.fetch(input, init);
         },
       };
@@ -733,6 +818,7 @@ describe("check-name.mts typosquat column", () => {
     const first = counting();
     await Promise.all(["lumera", "tarnix"].map((name) => checkName(first, OPTIONS, name)));
     expect(fetches).toBe(1);
+    expect(indexFetches).toBe(2);
     // A malformed reply is not cached: the next process asks again.
     const broken = withReply(
       { ...sourcesIo([], [], []), cacheDir: join(scratch, "broken") },
@@ -740,7 +826,7 @@ describe("check-name.mts typosquat column", () => {
       () => new Response("not json", { status: 200 }),
     );
     await checkName(broken, OPTIONS, "lumera");
-    expect(readdirSync(join(scratch, "broken"))).toHaveLength(2);
+    expect(readdirSync(join(scratch, "broken"))).toHaveLength(4);
     // A cache directory that cannot be made (its path is a file) costs the fetch, not the cell.
     writeFileSync(join(scratch, "blocked"), "");
     const unwritable = { ...sourcesIo(["requests"], [], []), cacheDir: join(scratch, "blocked") };
@@ -748,6 +834,7 @@ describe("check-name.mts typosquat column", () => {
     expect(cell(stillRead.cells, "typosquat").status).toBe("taken");
     const row = await checkName(counting(), OPTIONS, "reqests");
     expect(fetches).toBe(1);
+    expect(indexFetches).toBe(2);
     expect(cell(row.cells, "typosquat").status).toBe("taken");
     // A day later every file is stale: the ranking is fetched again, and a stale entry no lookup
     // refreshes (a search for a name this run never asks about) leaves with the purge.
@@ -756,6 +843,7 @@ describe("check-name.mts typosquat column", () => {
     for (const entry of readdirSync(cacheDir)) utimesSync(join(cacheDir, entry), stale, stale);
     await checkName(counting(), OPTIONS, "lumera");
     expect(fetches).toBe(2);
+    expect(indexFetches).toBe(4);
     const left = readdirSync(cacheDir);
     expect(left).not.toContain("orphan.json");
     expect(left.length).toBeGreaterThan(0);
