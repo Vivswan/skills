@@ -52,7 +52,7 @@ bun "<skill-dir>/scripts/pr-events.mts" watch <owner/repo>#<n> --mode bypass --h
 - **`--head <sha>`** records the head you pushed, so that head is never reported as a head move. Pass the full 40-character SHA, and run `watch --head` again after each push.
 - **`--expect-workflow <name>`** names a gate workflow: the `name:` of a workflow file under `.github/workflows/` that gates the PR. Repeat the flag per gate. Without it, every workflow that registered a run on the head is judged, and at least one must have.
 
-The call is safe to repeat. A second `watch` for the same PR re-asserts the mode, records the head and gates it names, and never starts a second daemon.
+`watch` returns once its baseline poll has finished, a few seconds, so a `ci` event for an already-green head can arrive before the call returns. The call is safe to repeat: a second `watch` for the same PR re-asserts the mode, records the head and gates it names, and never starts a second daemon.
 
 ### 2. Keep working, never poll
 
@@ -145,7 +145,7 @@ A `gh` call is a fresh process each time, so tokens refresh under gh's control, 
 pr-events.mts watch <owner/repo>#<n> --mode bypass|prompting [--head <sha>] [--expect-workflow <name>]... [--sink socket|file] [--id <name>] [--pid <pid>]
 pr-events.mts watch-commit <owner/repo> <sha> --mode ... [--expect-workflow ...]
 pr-events.mts unwatch <owner/repo>#<n> | --all
-pr-events.mts wait [--since <id>] [--timeout <s>]
+pr-events.mts wait [--id <name>] [--since <id>] [--timeout <s>]
 pr-events.mts poll
 pr-events.mts status
 pr-events.mts stop
@@ -166,12 +166,12 @@ Codex, the Copilot CLI, a shell, or a Claude Code session with no `CLAUDE_CODE_M
 
 ```bash
 bun "<skill-dir>/scripts/pr-events.mts" watch octocat/repo#12 --mode prompting --sink file --id codex-12
-bun "<skill-dir>/scripts/pr-events.mts" wait --since 0 --timeout 3600 > /tmp/pr-events-wait.out 2>&1
+bun "<skill-dir>/scripts/pr-events.mts" wait --id codex-12 --since 0 --timeout 3600 > /tmp/pr-events-wait.out 2>&1
 ```
 
 Run `wait` as a background command and read the file when it exits. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 3 is the timeout with nothing new: re-arm, or escalate to the user.
 
-Each `wait` renews the subscription's 24 h lease, and a file subscriber whose lease lapsed is pruned. `--pid <pid>` at `watch` time prunes on that process's death instead.
+`--id` names the file-sink subscription the reader holds, and each `wait` renews its 24 h lease; a file subscriber whose lease lapsed is pruned. `--pid <pid>` at `watch` time prunes on that process's death instead.
 
 Every event line has the same shape, whichever sink delivers it:
 

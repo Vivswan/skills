@@ -23,7 +23,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-prs-and-
 - **One `watch` per PR**, with the session's permission mode, the head it pushed, and the gate workflows. The daemon starts itself on the first call and exits once no subscriber is left.
 - **Seven event kinds** as messages: comment, review, CI verdict with the failed-job log tail, head moved to a SHA no subscriber recorded, merged, closed, and tooling trouble.
 - **The merge commit's mainline CI** follows a merge event automatically. `watch-commit` covers a direct mainline push with no PR.
-- **A file sink** for Codex, the Copilot CLI, or a shell: `--sink file --id <name>` and a blocking `wait --since <id>`.
+- **A file sink** for Codex, the Copilot CLI, or a shell: `--sink file --id <name>` and a blocking `wait --id <name> --since <id>`.
 - **One poller per user, 60 s floor, GraphQL only**: the rate-bucket incident that motivated it is in the skill's Polling Budget.
 - **A checks URL** as the fallback when the `gh` CLI is unavailable.
 
