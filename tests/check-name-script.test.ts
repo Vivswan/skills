@@ -1207,7 +1207,7 @@ describe("check-name.mts typosquat column", () => {
     expect(left.length).toBeGreaterThan(0);
   });
 
-  test("a ranking shorter than its source publishes is a cut list, never a complete one: a crates page under its entries, or a PyPI or npm list under the top it is read for, is the cell unknown naming the source and the count, a page cached short is fetched again, and the control run reports the lane dark", async () => {
+  test("a cut list is never a ranking: a crates page under 100, or a PyPI or npm list under its top 5000, is the cell unknown naming source and count, a page cached short is fetched again, and the control run reports the lane dark", async () => {
     // With regex on every list and requests cut from PyPI's, the regez control passed on all
     // three while requestz read free: a list is complete only at the size its source publishes.
     const cut = (host: string, reply: Reply) =>
@@ -1278,7 +1278,7 @@ describe("check-name.mts typosquat column", () => {
     );
   });
 
-  test("two processes on one cold cache fetch each list once: the second waits on the first's lock file beside the entry and reads what it wrote; a lock a dead process left is broken, and one a live process holds past the request bound is left alone and worked around", async () => {
+  test("two processes on one cold cache fetch each list once: the second waits on the lock file beside the entry and reads its write; a dead holder's lock is broken, a live one past the request bound is left and worked around", async () => {
     const scratch = temp.dir("check-name-lock-");
     const requests: string[] = [];
     const isRanking = (url: URL) =>
