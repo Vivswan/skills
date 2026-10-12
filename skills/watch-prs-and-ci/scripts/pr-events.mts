@@ -614,7 +614,7 @@ function describeRed(repo: string, sha: string, runs: Run[], verdictLines: strin
     const excerpt = failedJobLog(repo, run.id);
     if (excerpt === "") continue;
     lines.push(
-      `  --- ${run.name} (${run.id}) failed-step log tail ---`,
+      `  --- ${run.name} (${run.id}) failed-step log excerpt ---`,
       ...indent(excerpt.split("\n")),
     );
   }

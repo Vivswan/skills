@@ -3,6 +3,7 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   discoverRuns,
+  excerptFailedLog,
   failedJobLog,
   judgeRuns,
   type Run,
@@ -681,7 +682,7 @@ describe("judgeRuns", () => {
 });
 
 describe("failedJobLog", () => {
-  test("the excerpt is the last 80 lines of gh's merged stream, kept through a nonzero exit; the only REST call", () => {
+  test("the excerpt is read from the whole of gh's merged stream, kept through a nonzero exit; the only REST call", () => {
     // The stderr line keeps its place in the merged stream, a log past spawnSync's 1 MiB default
     // buffer still ends with its final lines instead of a truncated prefix's tail, and
     // --log-failed's nonzero exit (a run with no failed step) never loses the text. The run's
@@ -698,7 +699,7 @@ describe("failedJobLog", () => {
       "log-7.exit": "3",
     });
     expect(failedJobLog("octocat/repo", 7)).toBe(
-      [...lines.slice(-79), "warning after the log"].join("\n"),
+      [...lines.slice(-19), "warning after the log"].join("\n"),
     );
     expect(s.calls()).toEqual(["run view 7 --log-failed --repo octocat/repo"]);
     expect(s.violations()).toBe("");
@@ -713,6 +714,96 @@ describe("failedJobLog", () => {
     );
     expect(s.violations()).toBe("");
   });
+});
+
+describe("excerptFailedLog", () => {
+  // gh renders the stream as `<job>\t<step>\t<timestamp> <text>`; the fixtures are written in
+  // that shape by hand. A run's last lines are its wind-down (the summary job's rows, credential
+  // cleanup), so the tail of a real stream never showed the failing assertion.
+  const row = (job: string, step: string, text: string, second = 0) =>
+    `${job}\t${step}\t2026-01-01T00:00:${String(second).padStart(2, "0")}.0000000Z ${text}`;
+  const windDown = [
+    ...Array.from({ length: 30 }, (_, i) =>
+      row("all-green", "Summarize", `checks ${i + 1}: passed`),
+    ),
+    row("all-green", "Post Checkout", "Post job cleanup."),
+    row("all-green", "Post Checkout", "Removing credentials from the git config"),
+  ];
+  const cases: Array<[string, string[], string]> = [
+    [
+      "the lines naming an error are kept under their job and step, the wind-down tail and the runner's exit-code line are not",
+      [
+        row("test", "Run tests", "$ bun test", 1),
+        row("test", "Run tests", "FAIL tests/sum.test.ts > adds two numbers", 2),
+        row("test", "Run tests", "error: expect(received).toBe(expected)", 2),
+        row("test", "Run tests", "Ran 12 tests across 3 files.", 3),
+        row("test", "Run tests", "##[error]Process completed with exit code 1.", 3),
+        ...windDown,
+      ],
+      [
+        "test / Run tests:",
+        "  FAIL tests/sum.test.ts > adds two numbers",
+        "  error: expect(received).toBe(expected)",
+      ].join("\n"),
+    ],
+    [
+      "a compiler diagnostic names an error, and the exit-code line after it does not crowd it out",
+      [
+        row("build", "Typecheck", "$ tsc -p ."),
+        row("build", "Typecheck", "src/a.ts(12,3): error TS2304: Cannot find name 'missing'."),
+        row("build", "Typecheck", "##[error]Process completed with exit code 2."),
+      ],
+      ["build / Typecheck:", "  src/a.ts(12,3): error TS2304: Cannot find name 'missing'."].join(
+        "\n",
+      ),
+    ],
+    [
+      "with no line naming an error, the last 20 lines of the step that failed last, its exit-code line among them",
+      [
+        ...Array.from({ length: 5 }, (_, i) => row("build", "Checkout", `checkout ${i + 1}`)),
+        ...Array.from({ length: 25 }, (_, i) => row("build", "Compile", `compiling unit ${i + 1}`)),
+        row("build", "Compile", "##[error]Process completed with exit code 1."),
+      ],
+      [
+        "build / Compile:",
+        ...Array.from({ length: 19 }, (_, i) => `  compiling unit ${i + 7}`),
+        "  ##[error]Process completed with exit code 1.",
+      ].join("\n"),
+    ],
+    [
+      "a whole-job segment (gh's UNKNOWN STEP when step logs are unavailable) is cut at the runner's exit-code line, so the tail is the failing command's output, not the cleanup after it",
+      [
+        ...Array.from({ length: 5 }, (_, i) =>
+          row("test", "UNKNOWN STEP", `expected ${i + 1}, received ${i + 2}`),
+        ),
+        row("test", "UNKNOWN STEP", "##[error]Process completed with exit code 1."),
+        ...Array.from({ length: 30 }, (_, i) => row("test", "UNKNOWN STEP", `cleanup ${i + 1}`)),
+      ],
+      [
+        "test / UNKNOWN STEP:",
+        ...Array.from({ length: 5 }, (_, i) => `  expected ${i + 1}, received ${i + 2}`),
+        "  ##[error]Process completed with exit code 1.",
+      ].join("\n"),
+    ],
+    [
+      "error lines from two steps carry each step's heading",
+      [
+        row("test", "Unit", "::error file=a.ts::expected 1"),
+        row("test", "Integration", "##[error]The integration run timed out"),
+      ],
+      [
+        "test / Unit:",
+        "  ::error file=a.ts::expected 1",
+        "test / Integration:",
+        "  ##[error]The integration run timed out",
+      ].join("\n"),
+    ],
+  ];
+  for (const [name, lines, expected] of cases) {
+    test(name, () => {
+      expect(excerptFailedLog(`${lines.join("\n")}\n`)).toBe(expected);
+    });
+  }
 });
 
 // --- pr-rows.mts -------------------------------------------------------------

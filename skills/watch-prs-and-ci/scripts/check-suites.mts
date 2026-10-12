@@ -1,5 +1,5 @@
 // The CI reads for one commit, and the pure judgment over them. Discovery is GraphQL (one request
-// per page of 100 check suites); REST is touched only for failed-job logs, because the Actions REST
+// per page of 100 check suites); REST is touched only for failed-step logs, because the Actions REST
 // endpoints are a secondary rate bucket that parallel watchers lock for longer than a run lasts,
 // while GraphQL keeps answering.
 
@@ -19,7 +19,18 @@ import {
 // hide a re-queued suite from both, so a multi-page snapshot is judged only once two reads agree.
 const MAX_SUITE_PAGES = 10;
 const MAX_SNAPSHOT_ROUNDS = 5;
-const LOG_TAIL_LINES = 80;
+// The excerpt of a failed run's log: the lines that name an error or a failure (`::error`,
+// `##[error]`, `error:`, `error TS2304`, `Error`, `FAIL`, `FAILED`), or the failing step's own tail
+// when none does. The stream's last lines are the run's wind-down (a summary job, credential
+// cleanup), which is why a plain tail misses the error. The runner's own exit-code line is on every
+// failed step and says nothing on its own, so it never counts as a match.
+const ERROR_LINE = /\b(?:[Ee]rror|ERROR|FAIL|FAILED)\b/;
+const EXIT_CODE_LINE = /Process completed with exit code \d+/;
+const MAX_EXCERPT_LINES = 40;
+const STEP_TAIL_LINES = 20;
+// `gh run view --log-failed` renders `<job>\t<step>\t<line>`, the line still carrying its timestamp.
+const LOG_LINE = /^([^\t]*)\t([^\t]*)\t(.*)$/;
+const LINE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /;
 
 // External apps (CodeQL, Semgrep) register check suites without a workflowRun; only github-actions
 // suites carrying one are workflow runs.
@@ -204,6 +215,55 @@ export function judgeRuns(runs: Run[], expected: string[]): Verdict {
   return { kind: "green", lines };
 }
 
+type LogLine = { step: string | null; text: string };
+
+/**
+ * The excerpt of a `--log-failed` stream: the lines naming an error, grouped under their
+ * `<job> / <step>:` and capped, else the last lines of the step that failed last. A line without
+ * the job and step columns (gh's own stderr) belongs to the step before it.
+ */
+export function excerptFailedLog(stream: string): string {
+  const parsed: LogLine[] = [];
+  let step: string | null = null;
+  for (const raw of stream.split("\n")) {
+    if (raw === "") continue;
+    const match = LOG_LINE.exec(raw);
+    if (match) {
+      step = `${match[1]} / ${match[2]}`;
+      parsed.push({ step, text: (match[3] as string).replace(LINE_TIMESTAMP, "") });
+    } else {
+      parsed.push({ step, text: raw });
+    }
+  }
+  const matching = parsed.filter(
+    (line) => ERROR_LINE.test(line.text) && !EXIT_CODE_LINE.test(line.text),
+  );
+  let kept: LogLine[];
+  let overflow = 0;
+  if (matching.length > 0) {
+    kept = matching.slice(0, MAX_EXCERPT_LINES);
+    overflow = matching.length - kept.length;
+  } else {
+    const last = parsed.at(-1)?.step ?? null;
+    const stepLines = parsed.filter((line) => line.step === last);
+    // gh labels a job whose step logs are unavailable as one step, cleanup included; the runner's
+    // exit-code line is where the failing command's output ends.
+    const exit = stepLines.findLastIndex((line) => EXIT_CODE_LINE.test(line.text));
+    kept = (exit < 0 ? stepLines : stepLines.slice(0, exit + 1)).slice(-STEP_TAIL_LINES);
+  }
+  const out: string[] = [];
+  let heading: string | null | undefined;
+  for (const line of kept) {
+    if (line.step !== heading) {
+      heading = line.step;
+      if (heading !== null) out.push(`${heading}:`);
+    }
+    out.push(heading === null ? line.text : `  ${line.text}`);
+  }
+  if (overflow > 0) out.push(`${overflow} more lines naming an error`);
+  return out.join("\n");
+}
+
 // The only REST call, and informational: a rate-limited or expired-log answer is returned as the
 // excerpt and never changes a verdict. --log-failed exits non-zero for runs with no failed step.
 // The shell merges both streams, so the excerpt keeps gh's interleaving; the unbounded buffer keeps
@@ -226,12 +286,11 @@ export function failedJobLog(
       timeout: timeoutMs,
     },
   );
-  const text = (result.stdout ?? "").replace(/\n$/, "");
-  const lines = text === "" ? [] : text.split("\n");
+  const lines = [excerptFailedLog(result.stdout ?? "")].filter((text) => text !== "");
   if (result.error) {
     const code = (result.error as NodeJS.ErrnoException).code;
     const why = code === "ETIMEDOUT" ? `no answer within ${timeoutMs} ms` : result.error.message;
     lines.push(`gh run view ${runId} --log-failed: ${why}`);
   }
-  return lines.slice(-LOG_TAIL_LINES).join("\n");
+  return lines.join("\n");
 }

@@ -1403,7 +1403,7 @@ describe("pr-events.mts", () => {
     s.stop({ id: "scoped" });
   }, 30000);
 
-  test("a red CI event carries the --log-failed tail, and no other Actions endpoint is touched", async () => {
+  test("a red CI event carries the failed-step log excerpt naming the job and step, and no other Actions endpoint is touched", async () => {
     const s = new Scenario("red");
     const box = await s.inbox("a");
     s.fixtures({
@@ -1422,7 +1422,9 @@ describe("pr-events.mts", () => {
     expect(content).toContain(`CI red on ${SHORT_A}`);
     expect(content).toContain("FAIL(failure): ci (501)");
     expect(content).toContain("pass: lint (502)");
-    expect(content).toContain("Error: boom at src/a.ts:12");
+    expect(content).toContain(
+      "  --- ci (501) failed-step log excerpt ---\n  test / Unit tests:\n    Error: boom at src/a.ts:12",
+    );
     expect(s.ghCalls().filter((call) => call.startsWith("run "))).toEqual([
       `run view 501 --log-failed --repo ${REPO}`,
     ]);
@@ -1962,7 +1964,7 @@ describe("pr-events.mts", () => {
     const url = `https://github.com/${REPO}/pull/7`;
     expect(content.split("\n\n")).toEqual([
       `PR ${PR7}: 1 new comment by bob\n  bob  hm\n${url}`,
-      `PR ${PR7}: CI red on ${SHORT_A}\n  FAIL(failure): ci (700)\n  --- ci (700) failed-step log tail ---\n  boom\n${url}\n${CLOSING}`,
+      `PR ${PR7}: CI red on ${SHORT_A}\n  FAIL(failure): ci (700)\n  --- ci (700) failed-step log excerpt ---\n  boom\n${url}\n${CLOSING}`,
     ]);
     expect(s.run(["status"], { inbox: box.path }).stdout).toContain("delivery: sent (#2,#3 at ");
     s.stop({ inbox: box.path });
