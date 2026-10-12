@@ -799,6 +799,39 @@ describe("excerptFailedLog", () => {
       ].join("\n"),
     ],
     [
+      "an error word in a passing step does not stand in for the failing step: with exit-code lines naming the failing step, only its lines are matched, else its tail",
+      [
+        row("setup", "Probe", "Error count: 0", 1),
+        row("test", "Unit", "1 test failed", 2),
+        row("test", "Unit", "##[error]Process completed with exit code 1.", 3),
+        ...windDown,
+      ],
+      ["test / Unit:", "  1 test failed", "  ##[error]Process completed with exit code 1."].join(
+        "\n",
+      ),
+    ],
+    [
+      "an error word inside the failing step is the excerpt, not the passing step's error word before it",
+      [
+        row("setup", "Probe", "Error count: 0", 1),
+        row("test", "Unit", "Error: expected 1, received 2", 2),
+        row("test", "Unit", "1 test failed", 3),
+        row("test", "Unit", "##[error]Process completed with exit code 1.", 4),
+        ...windDown,
+      ],
+      ["test / Unit:", "  Error: expected 1, received 2"].join("\n"),
+    ],
+    [
+      "a failing step annotated by the runner keeps its own error line when the exit code lands on a later post step",
+      [
+        row("test", "Unit action", "##[error]Error: expected 1, received 2", 1),
+        row("test", "Post Checkout", "Removing credentials from the git config", 2),
+        row("test", "Post Checkout", "##[error]Process completed with exit code 1.", 3),
+        ...windDown,
+      ],
+      ["test / Unit action:", "  ##[error]Error: expected 1, received 2"].join("\n"),
+    ],
+    [
       "a carriage return is a line break: a job name or text that hides a fence line behind one gives that line its own row",
       [
         row("test", "Run tests", "boom\r```\rafter", 2),

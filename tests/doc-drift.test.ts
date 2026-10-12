@@ -314,6 +314,10 @@ const SURFACES: Record<string, Surface> = {
         script: '"watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]"',
       },
       {
+        doc: "pr-events.mts unwatch <owner/repo>#<n> | <owner/repo>@<sha-prefix> | --all [--id <name>]",
+        script: '"unwatch <owner/repo>#<n> | <owner/repo>@<sha-prefix> | --all [--id <name>]"',
+      },
+      {
         doc: { text: "--expect-workflow", occurrences: ">=1" },
         script: 'usage("--expect-workflow needs a workflow name")',
       },

@@ -11,12 +11,15 @@ import {
   closeSync,
   existsSync,
   fstatSync,
+  ftruncateSync,
   linkSync,
   lstatSync,
   openSync,
   readFileSync,
+  renameSync,
+  rmSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -109,7 +112,7 @@ const COMMAND_USAGE: Record<string, string> = {
   watch:
     "watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]",
   "watch-commit": "watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]",
-  unwatch: "unwatch <owner/repo>#<n> | <owner/repo>@<sha> | --all [--id <name>]",
+  unwatch: "unwatch <owner/repo>#<n> | <owner/repo>@<sha-prefix> | --all [--id <name>]",
   wait: "wait [--since <id>] [--timeout <s>] [--id <name>]",
   poll: "poll | status | stop                     [--id <name>]",
 };
@@ -437,16 +440,20 @@ async function cmdWatchCommit(dir: string, args: string[]): Promise<number> {
   });
 }
 
-// A commit target as `status` prints it: `<owner/repo>@<sha>`, the sha whole.
+// A commit target as `status` prints it: `<owner/repo>@<sha>`, the sha whole or its first twelve
+// or more characters.
 const COMMIT_TARGET_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)@([0-9a-f]+)$/;
+const MIN_SHA_PREFIX = 12;
 
 function parseUnwatchTarget(target: string | undefined): PrRef | { repo: string; sha: string } {
-  if (target === undefined) usage("missing <owner/repo>#<n>, <owner/repo>@<sha>, or --all");
+  if (target === undefined) usage("missing <owner/repo>#<n>, <owner/repo>@<sha-prefix>, or --all");
   const commit = COMMIT_TARGET_PATTERN.exec(target);
   if (commit === null) return parseTarget(target);
   const [, repo, sha] = commit as unknown as [string, string, string];
-  if (!SHA_PATTERN.test(sha)) {
-    usage(`unwatch needs a full 40-character lowercase sha after @, got: ${sha}`);
+  if (sha.length < MIN_SHA_PREFIX || sha.length > 40) {
+    usage(
+      `unwatch needs a lowercase sha of ${MIN_SHA_PREFIX} to 40 characters after @, as status prints it, got: ${sha}`,
+    );
   }
   return { repo, sha };
 }
@@ -619,21 +626,34 @@ async function liveDaemon(files: OwnerFiles, pid: number): Promise<number | null
 /**
  * Binding the control socket is the single-instance rule for a session: a bind refused by a daemon
  * that answers means this one is the second, and it leaves; a socket file nobody answers on was
- * left by a daemon that died and is replaced. Bind, probe, and replacement are one critical section
- * under a lock file beside the socket: two starts in the same second, the ordinary case after a
- * `watch` exited 3, would otherwise both see a stale or half-bound socket refuse, both unlink, and
- * both bind, the second unlink taking the first's live socket.
+ * left by a daemon that died and is replaced. Bind, probe, and replacement happen under a lock
+ * file beside the socket: two starts in the same second, the ordinary case after a `watch` exited
+ * 3, would otherwise both see a stale or half-bound socket refuse, both unlink, and both bind, the
+ * second unlink taking the first's live socket. `preflight` runs once the socket is held, still
+ * under the lock: what it refuses is closed and unlinked while no other start can have replaced it.
  */
 async function bindControlSocket(
   path: string,
+  token: string,
   log: (line: string) => void,
+  preflight: () => void,
 ): Promise<Server | null> {
-  const stem = path.slice(0, -SOCKET_SUFFIX.length);
-  const release = await acquireStartLock(`${stem}.lock`);
+  const lockPath = `${path.slice(0, -SOCKET_SUFFIX.length)}.lock`;
+  const release = await acquireStartLock(lockPath, token);
   try {
     for (;;) {
       const bound = await tryListen(path);
-      if (bound !== null) return bound;
+      if (bound !== null) {
+        try {
+          preflight();
+        } catch (error) {
+          bound.close();
+          await once(bound, "close");
+          rmSync(path, { force: true });
+          throw error;
+        }
+        return bound;
+      }
       const found = lstatSync(path, { throwIfNoEntry: false });
       if (found === undefined) continue;
       if (!found.isSocket()) throw new ToolingError(`${path} is not a socket; remove it`);
@@ -644,11 +664,11 @@ async function bindControlSocket(
       } catch (error) {
         if (errorCode(error) !== "ECONNREFUSED") throw error;
       }
-      // Still the file that refused, and still our lock: a start broken while it stalled must not
-      // unlink the socket its successor put in place.
-      const now = lstatSync(path, { throwIfNoEntry: false });
-      if (now === undefined || now.ino !== found.ino || now.ctimeMs !== found.ctimeMs) continue;
-      if (readLock(`${stem}.lock`)?.pid !== process.pid) continue;
+      // The file that refused, by inode: the daemon that left it may still be on its way out. And
+      // still this start's lock: a breaker that moved a fresh lock aside puts it back, and in the
+      // moment between, another start can have taken the path.
+      if (lstatSync(path, { throwIfNoEntry: false })?.ino !== found.ino) continue;
+      if (!holdsLock(lockPath, token)) continue;
       log(`replacing the stale control socket ${path}`);
       unlinkSync(path);
     }
@@ -670,115 +690,123 @@ async function tryListen(path: string): Promise<Server | null> {
   }
 }
 
+// A start holds the lock for milliseconds; a live holder still there after this is a hung start,
+// and exiting with its name beats waiting in silence.
+const START_LOCK_WAIT_MS = 5_000;
 const START_LOCK_TICK_MS = 25;
-// This process's own start token, written into every lock it takes; empty where /proc has none.
-const START_TOKEN = processStart(process.pid) ?? "";
 
 /**
- * Takes the exclusive lock file, created atomically with the holder's pid and start token;
- * returns its release. A lock is dead when its holder is gone, or its pid came back as another
- * process (the token differs), or it names this very process; a dead lock is broken by one
- * starter at a time under a second lock, so a breaker never removes the fresh lock another starter
- * took in between. A live holder is waited on: it holds the lock for milliseconds.
+ * Takes the exclusive lock file, created atomically with the holder's pid and start token, and
+ * returns its release. A lock is stale when its pid is dead, or alive as another process (its start
+ * token differs); a live holder is waited on. A stale lock is broken by one atomic rename aside;
+ * the renamer that finds the path gone lost and tries again. The renamer that succeeds reads what
+ * it moved: the stale file it judged, which it removes before creating a fresh lock, or a fresh
+ * lock another start took in between, which it links back into place. The release removes the
+ * lock by inode where it stands and then empties it: a breaker that judged an older lock and
+ * renamed this one aside, before or during the release, links back a file with no pid, which the
+ * next start breaks on sight instead of waiting on a daemon that holds no lock.
  */
-async function acquireStartLock(lockPath: string): Promise<() => void> {
-  const breaking = `${lockPath}.breaking`;
+async function acquireStartLock(lockPath: string, token: string): Promise<() => void> {
+  const deadline = Date.now() + START_LOCK_WAIT_MS;
   for (;;) {
-    if (createLock(lockPath)) return () => releaseLock(lockPath);
-    const seen = readLock(lockPath);
-    if (seen === null) continue;
-    if (!isDeadLock(seen)) {
+    const fd = createLock(lockPath, token);
+    if (fd !== null) {
+      return () => {
+        const mine = fstatSync(fd).ino;
+        if (lstatSync(lockPath, { throwIfNoEntry: false })?.ino === mine) {
+          rmSync(lockPath, { force: true });
+        }
+        ftruncateSync(fd, 0);
+        closeSync(fd);
+      };
+    }
+    const held = readLock(lockPath);
+    if (held === null) continue;
+    if (!isStaleLock(held)) {
+      if (Date.now() >= deadline) {
+        throw new ToolingError(
+          `another start holds ${lockPath}: pid ${held.pid}; if it is hung, stop it and start again`,
+        );
+      }
       await sleep(START_LOCK_TICK_MS);
       continue;
     }
-    const breaker = readLock(breaking);
-    if (breaker !== null) {
-      if (isDeadLock(breaker)) {
-        if (sameLock(readLock(breaking), breaker)) removeLock(breaking);
-      } else {
-        await sleep(START_LOCK_TICK_MS);
-      }
-      continue;
-    }
-    if (!createLock(breaking)) continue;
-    // The very file judged dead, not a fresh lock with the same pid: a starter that inherited the
-    // dead holder's pid takes one after breaking this one itself.
+    const aside = `${lockPath}.stale-${process.pid}`;
     try {
-      if (sameLock(readLock(lockPath), seen)) removeLock(lockPath);
-    } finally {
-      releaseLock(breaking);
+      renameSync(lockPath, aside);
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") continue;
+      throw error;
     }
+    const moved = readLock(aside);
+    if (moved !== null && (moved.pid !== held.pid || moved.token !== held.token)) {
+      // EEXIST: a third start took the path meanwhile. ENOENT: the holder released, from aside.
+      try {
+        linkSync(aside, lockPath);
+      } catch (error) {
+        if (errorCode(error) !== "EEXIST" && errorCode(error) !== "ENOENT") throw error;
+      }
+    }
+    rmSync(aside, { force: true });
   }
 }
 
-/** A lock file as one read of one inode: its holder (pid null when it holds none) and identity. */
-type Lock = { pid: number | null; token: string; ino: number; ctimeMs: number };
+/** Whether the lock at `lockPath` is this start's: its own pid and token. */
+function holdsLock(lockPath: string, token: string): boolean {
+  const lock = readLock(lockPath);
+  return lock !== null && lock.pid === process.pid && lock.token === token;
+}
 
-function isDeadLock(lock: Lock): boolean {
-  if (lock.pid === null || lock.pid === process.pid || !isProcessAlive(lock.pid)) return true;
-  // A token that cannot be read now is unknown, not a mismatch; only another token is.
+/** A lock file's content: the holder's pid (null when the file holds none) and its start token. */
+type Lock = { pid: number | null; token: string };
+
+/**
+ * Dead, or alive as another process: its start token reads as another one. A token empty in the
+ * lock or unreadable now is unknown on that side, never a mismatch; such a lock is stale only
+ * when its pid is dead. A lock with no pid at all is a released one a breaker linked back.
+ */
+function isStaleLock(lock: Lock): boolean {
+  if (lock.pid === null || !isProcessAlive(lock.pid)) return true;
+  if (lock.token === "") return false;
   const now = processStart(lock.pid);
   return now !== null && now !== lock.token;
 }
 
 /**
- * Creates the lock file with the pid and token already in it: a private file is linked into
- * place, which fails with EEXIST when the lock is held. A create followed by a write would show an
- * empty lock in between, which a breaker reads as dead.
+ * Creates the lock file with the pid and token already in it and returns a descriptor on it, or
+ * null when the lock is held: a private draft is linked into place, which fails with EEXIST. A
+ * create followed by a write would show an empty lock in between. The draft is a fresh file: one a
+ * starter with this pid left linked to the lock it took, killed before removing it, would
+ * otherwise be the lock, and writing it would turn that stale lock into a live-looking one.
  */
-function createLock(path: string): boolean {
+function createLock(path: string, token: string): number | null {
   const draft = `${path}.${process.pid}.draft`;
-  writeFileSync(draft, `${process.pid} ${START_TOKEN}`, { mode: 0o600 });
+  rmSync(draft, { force: true });
+  const fd = openSync(draft, "w", 0o600);
   try {
+    writeSync(fd, `${process.pid} ${token}`);
     linkSync(draft, path);
-    return true;
+    return fd;
   } catch (error) {
+    closeSync(fd);
     if (errorCode(error) !== "EEXIST") throw error;
-    return false;
+    return null;
   } finally {
-    removeLock(draft);
+    rmSync(draft, { force: true });
   }
 }
 
-/** The lock file's content and identity, or null when it is gone. */
 function readLock(path: string): Lock | null {
-  let fd: number;
+  let text: string;
   try {
-    fd = openSync(path, "r");
+    text = readFileSync(path, "utf-8");
   } catch (error) {
     if (errorCode(error) === "ENOENT") return null;
     throw error;
   }
-  try {
-    const stat = fstatSync(fd);
-    const [first = "", token = ""] = readFileSync(fd, "utf-8").trim().split(" ", 2);
-    const pid = Number(first);
-    return {
-      pid: /^\d+$/.test(first) && Number.isSafeInteger(pid) && pid > 0 ? pid : null,
-      token,
-      ino: stat.ino,
-      ctimeMs: stat.ctimeMs,
-    };
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function sameLock(a: Lock | null, b: Lock): boolean {
-  return a !== null && a.ino === b.ino && a.ctimeMs === b.ctimeMs && a.pid === b.pid;
-}
-
-/** Removes the lock while it is still this process's: a lock broken under a stalled start is a successor's. */
-function releaseLock(path: string): void {
-  if (readLock(path)?.pid === process.pid) removeLock(path);
-}
-
-function removeLock(path: string): void {
-  try {
-    unlinkSync(path);
-  } catch (error) {
-    if (errorCode(error) !== "ENOENT") throw error;
-  }
+  const [first = "", token = ""] = text.trim().split(" ", 2);
+  const pid = Number(first);
+  return { pid: /^\d+$/.test(first) && Number.isSafeInteger(pid) && pid > 0 ? pid : null, token };
 }
 
 function flatten(text: string): string {
@@ -944,7 +972,12 @@ async function runDaemon(
   const log = (line: string) => appendFileSync(files.log, `${new Date().toISOString()} ${line}\n`);
   // The socket first: only its holder may read or repair the state and the log, or a second daemon
   // starting while the first has saved a poll it has not yet appended would append it too.
-  const server = await bindControlSocket(files.socket, log);
+  // This start's own token, in the lock it takes: the process start, else the session's inbox.
+  const startToken =
+    processStart(process.pid) ?? (owner.inbox === null ? "" : (inboxToken(owner.inbox) ?? ""));
+  // gh is required only of the daemon that will poll: a second start without it finds the first
+  // daemon serving and exits 0 like any other second start, instead of hiding it behind exit 2.
+  const server = await bindControlSocket(files.socket, startToken, log, requireGh);
   if (server === null) {
     console.log(`another pr-events daemon already serves ${describeOwner(owner)}; exiting`);
     return 0;
@@ -1537,7 +1570,18 @@ async function runDaemon(
         } else if ("number" in command.target) {
           dropPr(prKey(command.target));
         } else {
-          delete state.commits[commitKey(command.target.repo, command.target.sha)];
+          // The sha as given, or the one watched commit of that repository it is a prefix of.
+          const { repo, sha } = command.target;
+          const keys = Object.keys(state.commits).filter((key) =>
+            key.startsWith(commitKey(repo, sha)),
+          );
+          if (keys.length > 1) {
+            return {
+              ok: false,
+              error: `${repo}@${sha} names ${keys.length} watched commits: ${keys.map((key) => key.slice(repo.length + 1, repo.length + 1 + MIN_SHA_PREFIX)).join(", ")}; give more of the sha`,
+            };
+          }
+          for (const key of keys) delete state.commits[key as CommitKey];
         }
         saveState(files, state);
         return { ok: true, watched: watchedCount() };
@@ -1632,7 +1676,6 @@ async function cmdDaemon(dir: string, args: string[]): Promise<number> {
   if (interval < MIN_INTERVAL_SECONDS) {
     usage(`--interval must be at least ${MIN_INTERVAL_SECONDS} seconds, got: ${interval}`);
   }
-  requireGh();
   return runDaemon(owner, filesOf(dir, owner), interval);
 }
 

@@ -159,7 +159,7 @@ A daemon killed between saving a poll's state and appending its log lines comple
 pr-events.mts daemon [--interval <s>] [--id <name>] [--pid <pid>]
 pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]
 pr-events.mts watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]
-pr-events.mts unwatch <owner/repo>#<n> | <owner/repo>@<sha> | --all [--id <name>]
+pr-events.mts unwatch <owner/repo>#<n> | <owner/repo>@<sha-prefix> | --all [--id <name>]
 pr-events.mts wait [--since <id>] [--timeout <s>] [--id <name>]
 pr-events.mts poll | status | stop [--id <name>]
 ```
@@ -171,7 +171,7 @@ pr-events.mts poll | status | stop [--id <name>]
 | 3 | no daemon answers for this session: stderr names the socket and the exact background command that starts one |
 | 4 | `wait` only: the timeout passed with no newer line |
 
-`poll` runs one poll now, for tests and debugging. `--interval` has a floor of 60 s.
+`poll` runs one poll now, for tests and debugging. `--interval` has a floor of 60 s. `unwatch` takes a commit as `status` prints it, `<owner/repo>@<sha>` with the first 12 or more characters of the sha; a prefix two watched commits share is refused by name.
 
 ## Without a Claude Code Inbox
 

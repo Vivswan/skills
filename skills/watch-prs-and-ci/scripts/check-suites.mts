@@ -28,6 +28,7 @@ const MAX_SNAPSHOT_ROUNDS = 5;
 // `Failed:     0` (dotnet), and the failing step's tail carries its failure line in any wording.
 const ERROR_LINE = /\b(?:error|Error|ERROR|FAIL|FAILED)\b/;
 const EXIT_CODE_LINE = /Process completed with exit code \d+/;
+const ANNOTATION_LINE = /##\[error\]|::error/;
 const MAX_EXCERPT_LINES = 40;
 const STEP_TAIL_LINES = 20;
 // `gh run view --log-failed` renders `<job>\t<step>\t<line>`, the line still carrying its timestamp.
@@ -245,7 +246,16 @@ export function excerptFailedLog(stream: string): string {
       parsed.push({ step, text: raw });
     }
   }
-  const matching = parsed.filter(
+  // The steps the runner annotated (`##[error]`, `::error`, the exit-code line among them) are the
+  // failing ones; a match counts only there, so a passing step's `Error count: 0` does not stand in
+  // for the failing step's own lines, and a failing step whose exit code lands on a later post step
+  // still keeps its own annotation.
+  const failingSteps = new Set(
+    parsed.filter((line) => ANNOTATION_LINE.test(line.text)).map((line) => line.step),
+  );
+  const candidates =
+    failingSteps.size > 0 ? parsed.filter((line) => failingSteps.has(line.step)) : parsed;
+  const matching = candidates.filter(
     (line) => ERROR_LINE.test(line.text) && !EXIT_CODE_LINE.test(line.text),
   );
   let kept: LogLine[];

@@ -870,6 +870,21 @@ describe("pr-events.mts", () => {
       "gh not found on PATH",
     );
     expect(existsSync(s.socketPath())).toBe(false);
+    expect(existsSync(`${s.socketPath().slice(0, -".sock".length)}.lock`)).toBe(false);
+  }, 30000);
+
+  test("a second start without gh finds the running daemon and exits 0: gh is required only by the daemon that will poll", async () => {
+    const s = new Scenario("nogh-running");
+    const box = await s.inbox("a");
+    const daemon = await s.start({ inbox: box.path });
+    const second = s.run(["daemon"], { inbox: box.path, env: { PATH: emptyBinDir } });
+    expect(second.code).toBe(0);
+    expect(second.stdout).toContain("already serves");
+    expect(second.stderr).not.toContain("gh not found");
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(
+      `daemon: running (pid ${daemon.pid})`,
+    );
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("CLAUDE_CODE_TMPDIR is a runtime directory ahead of the OS temp dir, which does not read it", async () => {
@@ -1770,6 +1785,140 @@ describe("pr-events.mts", () => {
     expect(await daemon.exited).toBe(0);
   }, 30000);
 
+  test("a live holder that never releases is waited on for the start wait, then the start exits 2 naming the lock and its holder", async () => {
+    const s = new Scenario("hung-lock");
+    const box = await s.inbox("a");
+    const lock = `${s.socketPath().slice(0, -".sock".length)}.lock`;
+    writeFileSync(lock, `${process.pid} 111`);
+    const daemon = Bun.spawn([process.execPath, SCRIPT, "daemon"], {
+      env: s.env({ inbox: box.path, env: { PR_EVENTS_PROC: fakeProc("111").dir } }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    started.push(daemon);
+    expect(await Promise.race([daemon.exited, Bun.sleep(9000).then(() => "still waiting")])).toBe(
+      2,
+    );
+    expect(await new Response(daemon.stderr as ReadableStream).text()).toContain(
+      `another start holds ${lock}: pid ${process.pid}; if it is hung, stop it and start again`,
+    );
+    expect(readFileSync(lock, "utf-8")).toBe(`${process.pid} 111`);
+    unlinkSync(lock);
+  }, 30000);
+
+  test("a live holder whose lock carries no token is waited on, not broken: an empty token is unknown, never a mismatch", async () => {
+    const s = new Scenario("empty-token-lock");
+    const box = await s.inbox("a");
+    const lock = `${s.socketPath().slice(0, -".sock".length)}.lock`;
+    writeFileSync(lock, `${process.pid} `);
+    const daemon = Bun.spawn([process.execPath, SCRIPT, "daemon"], {
+      env: s.env({ inbox: box.path, env: { PR_EVENTS_PROC: fakeProc("111").dir } }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    started.push(daemon);
+    await Bun.sleep(1500);
+    expect(daemon.exitCode).toBeNull();
+    expect(readFileSync(lock, "utf-8")).toBe(`${process.pid} `);
+    expect(existsSync(s.socketPath())).toBe(false);
+    unlinkSync(lock);
+    const deadline = Date.now() + 5000;
+    while (!s.log().includes(`pr-events daemon ${daemon.pid} for`) && Date.now() < deadline) {
+      await Bun.sleep(20);
+    }
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(
+      `daemon: running (pid ${daemon.pid})`,
+    );
+    s.stop({ inbox: box.path });
+    expect(await daemon.exited).toBe(0);
+  }, 30000);
+
+  test("a lock with no pid is a released one a breaker linked back: broken on sight, no wait", async () => {
+    const s = new Scenario("tombstone-lock");
+    const box = await s.inbox("a");
+    const lock = `${s.socketPath().slice(0, -".sock".length)}.lock`;
+    writeFileSync(lock, "");
+    const startedAt = Date.now();
+    const daemon = await s.start({ inbox: box.path });
+    expect(daemon.exitCode).toBeNull();
+    expect(Date.now() - startedAt).toBeLessThan(2500);
+    expect(existsSync(lock)).toBe(false);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("two starts racing to break one stale lock leave one daemon, one socket, and no lock", async () => {
+    // Both judge the lock stale; the rename aside lets one break it, and the other finds the path
+    // gone and starts over, so neither removes the fresh lock the winner takes.
+    const s = new Scenario("race-lock");
+    const box = await s.inbox("a");
+    const gone = Bun.spawn(["true"], { stdout: "ignore", stderr: "ignore" });
+    await gone.exited;
+    const lock = `${s.socketPath().slice(0, -".sock".length)}.lock`;
+    writeFileSync(lock, `${gone.pid} 111`);
+    deadSocketFile(s.socketPath());
+    const daemons = await Promise.all([s.start({ inbox: box.path }), s.start({ inbox: box.path })]);
+    const codes = await Promise.all(
+      daemons.map((d) => Promise.race([d.exited, Bun.sleep(3000).then(() => null)])),
+    );
+    expect(codes.filter((code) => code === 0)).toHaveLength(1);
+    expect(codes.filter((code) => code === null)).toHaveLength(1);
+    const alive = daemons[codes.indexOf(null)] as Daemon;
+    const socket = statSync(s.socketPath()).ino;
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(
+      `daemon: running (pid ${alive.pid})`,
+    );
+    expect(statSync(s.socketPath()).ino).toBe(socket);
+    expect(existsSync(lock)).toBe(false);
+    expect(existsSync(`${lock}.stale-${daemons[0]?.pid}`)).toBe(false);
+    expect(existsSync(`${lock}.stale-${daemons[1]?.pid}`)).toBe(false);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a start stopped while it holds the lock, bound or not yet listening, holds a second start back until it goes on; one daemon serves", async () => {
+    const s = new Scenario("preempted-start");
+    const box = await s.inbox("a");
+    const lock = `${s.socketPath().slice(0, -".sock".length)}.lock`;
+    const first = Bun.spawn([process.execPath, SCRIPT, "daemon"], {
+      env: s.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    started.push(first);
+    // The lock names its holder; a start holds it for milliseconds, so the test spins to catch it.
+    const mine = (): boolean =>
+      readOr(() => readFileSync(lock, "utf-8"), "").startsWith(`${first.pid} `);
+    const deadline = Date.now() + 5000;
+    while (!mine() && first.exitCode === null && Date.now() < deadline) {
+      /* spin */
+    }
+    first.kill("SIGSTOP");
+    const caught = mine();
+    const second = Bun.spawn([process.execPath, SCRIPT, "daemon"], {
+      env: s.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    started.push(second);
+    await Bun.sleep(1000);
+    if (caught) {
+      // The holder is alive and its token reads the same: the second start waits, binding nothing.
+      expect(second.exitCode).toBeNull();
+      expect(s.log()).not.toContain(`pr-events daemon ${second.pid} for`);
+      expect(mine()).toBe(true);
+    }
+    first.kill("SIGCONT");
+    expect(await Promise.race([second.exited, Bun.sleep(8000).then(() => "still waiting")])).toBe(
+      0,
+    );
+    expect(await new Response(second.stdout as ReadableStream).text()).toContain("already serves");
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(
+      `daemon: running (pid ${first.pid})`,
+    );
+    expect(existsSync(lock)).toBe(false);
+    s.stop({ inbox: box.path });
+    expect(await first.exited).toBe(0);
+  }, 30000);
+
   test("an owner start token that cannot be read is unknown, logged once, and never a mismatch", async () => {
     // A /proc that turns unreadable mid-session must not read as a replaced owner.
     const s = new Scenario("token-unreadable");
@@ -1861,9 +2010,36 @@ describe("pr-events.mts", () => {
     const status = s.run(["status"], { inbox: box.path }).stdout;
     expect(status).toContain("commits: 1");
     expect(status).toContain(`${REPO}@${HEAD_B.slice(0, 12)}`);
-    const short = s.run(["unwatch", `${REPO}@${SHORT_A}`], { inbox: box.path });
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("unwatch takes the 12-character sha prefix status prints, refuses one two watched commits share by name, and a shorter one as usage", async () => {
+    const s = new Scenario("unwatch-prefix");
+    const box = await s.inbox("a");
+    s.fixtures({ "suites-1": suites([["ci", "in_progress", null]]) });
+    await s.start({ inbox: box.path });
+    const headA2 = `${"a".repeat(12)}${"c".repeat(28)}`;
+    for (const sha of [HEAD_A, headA2, HEAD_B]) {
+      expect(s.run(["watch-commit", REPO, sha, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    }
+    const shared = s.run(["unwatch", `${REPO}@${SHORT_A}`], { inbox: box.path });
+    expect(shared.code).toBe(2);
+    expect(shared.stderr).toContain(
+      `${REPO}@${SHORT_A} names 2 watched commits: ${SHORT_A}, ${SHORT_A}; give more of the sha`,
+    );
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("commits: 3");
+    const one = s.run(["unwatch", `${REPO}@${headA2.slice(0, 13)}`], { inbox: box.path });
+    expect(one.code).toBe(0);
+    expect(one.stdout).toContain(`unwatched ${REPO}@${SHORT_A}`);
+    const status = s.run(["status"], { inbox: box.path }).stdout;
+    expect(status).toContain("commits: 2");
+    expect(status).toContain(`${REPO}@${HEAD_B.slice(0, 12)}`);
+    expect(s.run(["unwatch", `${REPO}@${HEAD_B.slice(0, 12)}`], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("commits: 1");
+    const short = s.run(["unwatch", `${REPO}@${HEAD_A.slice(0, 11)}`], { inbox: box.path });
     expect(short.code).toBe(2);
-    expect(short.stderr).toContain("full 40-character lowercase sha");
+    expect(short.stderr).toContain("lowercase sha of 12 to 40 characters after @");
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("commits: 1");
     s.stop({ inbox: box.path });
   }, 30000);
 
