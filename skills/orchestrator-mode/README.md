@@ -44,7 +44,7 @@ npx skills add Vivswan/skills -g --skill verify-with-controls
 - [`references/spawn-briefs.md`](./references/spawn-briefs.md): what every spawn brief must contain
 - [`references/fleet-monitor.md`](./references/fleet-monitor.md): the monitor's script wiring and liveness judgment
 - [`references/landing.md`](./references/landing.md): the two landing gates (direct commits, and PRs with per-track independent or stacked bases)
-- [`scripts/`](./scripts): the fleet instruments, `sweep.mts`, `probe.mts`, `ledger.mts`, and `baseline.mts`. Run with bun. Node 24.3+ also works, and older node exits 0 without doing the work because it lacks a working `import.meta.main`.
+- [`scripts/`](./scripts): the fleet instruments, `sweep.mts`, `probe.mts`, `ledger.mts`, and `baseline.mts`. Run with bun; the first three also run on Node 24.3+, but `baseline.mts` installs its one dependency, `diff`, from the skill's `bun.lock` into a shared per-user cache on first run and needs bun.
 
 ## Plugin-Ready Layout
 
