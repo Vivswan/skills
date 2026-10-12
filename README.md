@@ -65,7 +65,7 @@ graph LR
   rrd["/reply-and-review-discipline"]
   rdr["/rubber-duck-review"]
   pld["/pr-landing-discipline"]
-  pn["/project-naming"]
+  pnm["/project-naming"]
   nis["/no-invalid-states"]
   nt["/never-twice"]
   vwc["/verify-with-controls"]
@@ -104,8 +104,8 @@ graph LR
   cs --> nis
   nt --> nis
   om --> vwc
-  pn --> vwc
-  pn --> om
+  pnm --> vwc
+  pnm --> om
   csm --> nw
   csm --> wt
   om --> wt
@@ -121,7 +121,7 @@ graph LR
   click rrd "./skills/reply-and-review-discipline/SKILL.md"
   click rdr "./skills/rubber-duck-review/SKILL.md"
   click pld "./skills/pr-landing-discipline/SKILL.md"
-  click pn "./skills/project-naming/SKILL.md"
+  click pnm "./skills/project-naming/SKILL.md"
   click nis "./skills/no-invalid-states/SKILL.md"
   click nt "./skills/never-twice/SKILL.md"
   click vwc "./skills/verify-with-controls/SKILL.md"

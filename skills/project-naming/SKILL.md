@@ -85,17 +85,18 @@ tarnix  free  free                free    free  free                  free      
 
 - Two controls run with every batch: per column, a name known to be taken there (the registry's own `nic` host for DNS, a word with a flagged sense for Wiktionary), and one random string that must be free everywhere. A column that answers either wrongly is reported on stderr as a failed instrument and the exit code is 1. Do not read that column.
 - `unknown` is not `free`. A rate-limited arXiv or a 5xx stays `unknown` in the table; rerun later or drop the column with `--no-arxiv`.
+- arXiv allows one request every three seconds, and the script spaces its own that far. Lanes run with `--no-arxiv`; the lead runs the arXiv column once, over the merged shortlist, in step 6.
 - GitHub counts an exact-name repository as taken from 20 stars. Pass `GH_TOKEN` or be logged into `gh` for the search rate limit.
 - `--json` prints the rows and the control verdicts as one object for a lane report.
 
 ### 5. Meaning check
 
-The script's Wiktionary column reads every sense in every language from the page's wikitext and flags a register label (vulgar, offensive, slur, derogatory) on any of them; the Urban Dictionary column reads exact entries only. That covers the exact spelling. Sound-alikes and transliterations are judgment, done on the names that survived step 4:
+The script's Wiktionary column reads every sense in every language from the page's wikitext and flags a register label (vulgar, offensive, slur, derogatory) on any of them; the Urban Dictionary column reads exact entries only. That covers the exact spelling. Near-homophones and transliterations are judgment, done on the names that survived step 4:
 
 ```text
 for each survivor:
   say it aloud in Spanish, Portuguese, French, Italian, German, Hindi, Turkish,
-    Arabic, Japanese, Mandarin, Russian, Korean: what word is it one sound away from?
+    Arabic, Japanese, Mandarin, Russian, Korean: which word is it one sound away from?
   is it a drug, a perfume, a car, a company, an ML method? (one web search: "<name>" AI OR company OR app)
 verdict per name: SERIOUS (the word named), MILD (the word named), NONE, each with its source
 ```

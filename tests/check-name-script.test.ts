@@ -60,6 +60,8 @@ function fakeIo(
       throw error;
     },
     githubToken: null,
+    timeoutMs: 5_000,
+    arxivGapMs: 0,
   };
 }
 
@@ -149,6 +151,43 @@ describe("check-name.mts cells", () => {
     const row = await checkName(io, OPTIONS, "lumera");
     expect(cell(row.cells, "crates").status).toBe("unknown");
     expect(detail(cell(row.cells, "crates"))).toContain("ECONNRESET");
+  });
+
+  test("an endpoint that accepts the connection and never answers is an unknown cell after the timeout, not a hung table", async () => {
+    const base = fakeIo(() => undefined);
+    const io: Io = {
+      ...base,
+      timeoutMs: 50,
+      fetch: (input, init) =>
+        new URL(input).hostname === "api.urbandictionary.com"
+          ? new Promise((_, reject) => {
+              init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+            })
+          : base.fetch(input, init),
+    };
+    const row = await checkName(io, OPTIONS, "lumera");
+    expect(cell(row.cells, "urban").status).toBe("unknown");
+    expect(detail(cell(row.cells, "urban"))).toContain("urban");
+    expect(cell(row.cells, "pypi")).toEqual({ status: "free" });
+  });
+
+  test("arXiv lookups run one at a time across the rows of a process", async () => {
+    let inFlight = 0;
+    let overlap = 0;
+    const base = fakeIo(() => undefined);
+    const io: Io = {
+      ...base,
+      fetch: async (input, init) => {
+        if (new URL(input).hostname !== "export.arxiv.org") return base.fetch(input, init);
+        inFlight++;
+        if (inFlight > 1) overlap++;
+        await Bun.sleep(5);
+        inFlight--;
+        return base.fetch(input, init);
+      },
+    };
+    await Promise.all(["lumera", "tarnix", "quillo"].map((n) => checkName(io, WITH_ARXIV, n)));
+    expect(overlap).toBe(0);
   });
 
   test("a Hugging Face 307 is a handle that exists under another casing, so taken", async () => {
@@ -296,7 +335,7 @@ describe("check-name.mts cells", () => {
     const flagged = await checkName(io({ status: 429 }), OPTIONS, "ruder");
     expect(cell(flagged.cells, "wiktionary")).toEqual({
       status: "taken",
-      detail: `${WIKTIONARY_FLAG}Spanish: wanker (other casing unknown(wiktionary HTTP 429))`,
+      detail: `${WIKTIONARY_FLAG}Spanish: wanker (another casing unknown(wiktionary HTTP 429))`,
     });
     const harmlessIo = fakeIo((url) => {
       if (url.hostname !== "en.wiktionary.org") return undefined;
@@ -309,7 +348,15 @@ describe("check-name.mts cells", () => {
     });
   });
 
-  test("Wiktionary is asked for the capitalised page too, where proper nouns live, and told to follow redirects", async () => {
+  test("Wiktionary is asked for the spelling as given, the lowercase and the capitalised page, and told to follow redirects", async () => {
+    const asGiven = fakeIo((url) => {
+      if (url.hostname !== "en.wiktionary.org") return undefined;
+      return url.searchParams.get("page") === "iLume"
+        ? wikitextReply("==English==\n===Proper noun===\n# A brand.\n")
+        : MISSING_PAGE;
+    });
+    const mixed = await checkName(asGiven, OPTIONS, "iLume");
+    expect(cell(mixed.cells, "wiktionary")).toEqual({ status: "taken", detail: "word in English" });
     const io = fakeIo((url) => {
       if (url.hostname !== "en.wiktionary.org") return undefined;
       // An alternative spelling is a redirect page; MediaWiki resolves it only when asked.
@@ -489,11 +536,15 @@ describe("check-name.mts output", () => {
     const none = Bun.spawnSync([process.execPath, SCRIPT], { stdout: "pipe", stderr: "pipe" });
     expect(none.exitCode).toBe(2);
     expect(none.stderr.toString()).toContain("usage:");
-    const bad = Bun.spawnSync([process.execPath, SCRIPT, "lumera", "two words"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(bad.exitCode).toBe(2);
-    expect(bad.stderr.toString()).toContain("two words");
+    // A space, a trailing dash, and a 40th character: each refused by some registry, so none
+    // may be read as free there.
+    for (const name of ["two words", "example-", `a${"b".repeat(39)}`]) {
+      const bad = Bun.spawnSync([process.execPath, SCRIPT, "lumera", name], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(bad.exitCode, name).toBe(2);
+      expect(bad.stderr.toString(), name).toContain(name);
+    }
   });
 });

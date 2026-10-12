@@ -28,7 +28,14 @@ export type Io = {
   /** Resolves a hostname to at least one address, or throws (ENOTFOUND for an unregistered name). */
   resolve: (host: string) => Promise<unknown>;
   githubToken: string | null;
+  /** A request past this is an `unknown` cell, so one stalled endpoint cannot hold the table. */
+  timeoutMs: number;
+  /** arXiv asks for one request every three seconds; its lookups are serialised this far apart. */
+  arxivGapMs: number;
 };
+
+export const REQUEST_TIMEOUT_MS = 20_000;
+export const ARXIV_GAP_MS = 3_000;
 
 export type Options = {
   domains: string[];
@@ -86,8 +93,20 @@ const unknown = (detail: string): Cell => ({ status: "unknown", detail });
 async function get(io: Io, url: string, headers: Record<string, string> = {}): Promise<Response> {
   return io.fetch(url, {
     redirect: "manual",
+    signal: AbortSignal.timeout(io.timeoutMs),
     headers: { "user-agent": USER_AGENT, accept: "application/json", ...headers },
   });
+}
+
+let arxivTurn: Promise<void> = Promise.resolve();
+
+function arxivSerialised<T>(io: Io, work: () => Promise<T>): Promise<T> {
+  const mine = arxivTurn.then(work);
+  arxivTurn = mine.then(
+    () => Bun.sleep(io.arxivGapMs),
+    () => Bun.sleep(io.arxivGapMs),
+  );
+  return mine;
 }
 
 /** 404 is free and 200 is taken; anything else is a reading the caller cannot use. */
@@ -182,7 +201,11 @@ async function githubRepo(io: Io, name: string): Promise<Cell> {
 }
 
 /** Papers whose title carries the name. The export API rate-limits after a few dozen calls. */
-async function arxiv(io: Io, name: string): Promise<Cell> {
+function arxiv(io: Io, name: string): Promise<Cell> {
+  return arxivSerialised(io, () => arxivLookup(io, name));
+}
+
+async function arxivLookup(io: Io, name: string): Promise<Cell> {
   const query = encodeURIComponent(`ti:"${name}"`);
   const url = `https://export.arxiv.org/api/query?search_query=${query}&max_results=0`;
   try {
@@ -287,12 +310,12 @@ async function wiktionaryPage(io: Io, title: string): Promise<WikiReading | Cell
   return reading;
 }
 
-/** Every sense in every language, on the lowercase and the capitalised page (proper nouns live on
- * the latter). A word is a word even when harmless, so a language list is a `taken` cell. A flag
- * found on one page stands even when the other page could not be read. */
+/** Every sense in every language, on the page spelled as given, the lowercase page, and the
+ * capitalised page (proper nouns live there). A word is a word even when harmless, so a language
+ * list is a `taken` cell. A flag found on one page stands even when another could not be read. */
 export async function wiktionary(io: Io, name: string): Promise<Cell> {
   const lower = name.toLowerCase();
-  const titles = [lower, lower.charAt(0).toUpperCase() + lower.slice(1)];
+  const titles = [...new Set([name, lower, lower.charAt(0).toUpperCase() + lower.slice(1)])];
   const languages: string[] = [];
   const flags: string[] = [];
   let failed: Cell | null = null;
@@ -306,7 +329,7 @@ export async function wiktionary(io: Io, name: string): Promise<Cell> {
     flags.push(...reading.flags);
   }
   if (flags.length > 0) {
-    const note = failed ? ` (other casing ${renderCell(failed)})` : "";
+    const note = failed ? ` (another casing ${renderCell(failed)})` : "";
     return taken(`${WIKTIONARY_FLAG}${[...new Set(flags)].join(" | ")}${note}`);
   }
   if (failed) return failed;
@@ -486,10 +509,12 @@ async function main(): Promise<number> {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
-  const bad = names.find((name) => !/^[A-Za-z][A-Za-z0-9-]*$/.test(name));
+  // The strictest common rule, GitHub's handle: letters and digits, single dashes between them,
+  // 39 characters at most. A name outside it reads free on a registry that would refuse it.
+  const bad = names.find((name) => !/^[A-Za-z](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/.test(name));
   if (bad) {
     process.stderr.write(
-      `name must be letters, digits, and dashes, starting with a letter: ${bad}\n`,
+      `name must be letters and digits with single dashes between, starting with a letter, at most 39 characters: ${bad}\n`,
     );
     return 2;
   }
@@ -501,6 +526,8 @@ async function main(): Promise<number> {
     fetch: (url, init) => fetch(url, init),
     resolve: (host) => dns.lookup(host),
     githubToken: githubTokenFromEnvironment(),
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    arxivGapMs: ARXIV_GAP_MS,
   };
   const result = await run(io, options, names);
   if (parsed.values.json) {
