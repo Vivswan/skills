@@ -445,6 +445,11 @@ describe("pr-events.mts", () => {
     const pinned = s.run(["watch", PR7, "--mode", "bypass", "--pid", "1"], { inbox: box.path });
     expect(pinned.code).toBe(2);
     expect(pinned.stderr).toContain("--pid applies to the file sink");
+    for (const id of ["constructor", "__proto__", "a/b"]) {
+      const bad = s.run(["watch", PR7, "--mode", "bypass", "--sink", "file", "--id", id]);
+      expect(bad.code).toBe(2);
+      expect(bad.stderr).toContain("--id must be a name");
+    }
     expect(s.ghCalls()).toHaveLength(0);
     expect(await box.frames(0)).toHaveLength(0);
     expect(existsSync(s.socketPath())).toBe(false);
@@ -864,7 +869,7 @@ describe("pr-events.mts", () => {
     expect(parseFrame(frames[0] as string).from_mode).toBe("prompting");
     const status = s.run(["status"]).stdout;
     expect(status).toContain("subscribers: 1");
-    expect(status).toContain(`${a.path} delivery=pruned: inbox gone`);
+    expect(status).toContain(`${a.path} pruned=inbox gone`);
     s.stop();
   }, 30000);
 
@@ -935,7 +940,14 @@ describe("pr-events.mts", () => {
       "rows-2": rows({ rollup: "SUCCESS" }, { number: 8, rollup: "SUCCESS" }),
       "suites-1": suites([["ci", "completed", "success"]]),
     });
-    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    // Spawned asynchronously: the fake inbox samples the log at the moment the daemon connects,
+    // which a spawnSync would postpone until the CLI had exited.
+    const watch = Bun.spawn([process.execPath, SCRIPT, "watch", PR7, "--mode", "bypass"], {
+      env: s.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await watch.exited).toBe(0);
     expect(await box.frames(1)).toHaveLength(1);
     expect(box.walAtConnect).toEqual([[1]]);
     expect(s.run(["watch", `${REPO}#8`, "--mode", "bypass"], { inbox: dead }).code).toBe(0);
@@ -945,7 +957,8 @@ describe("pr-events.mts", () => {
     ]);
     const status = s.run(["status"]).stdout;
     expect(status).toContain("subscribers: 1");
-    expect(status).toContain(`${dead} delivery=failed: ECONNREFUSED (#2 at `);
+    expect(status).toContain(`${dead} pruned=inbox refused (ECONNREFUSED) at `);
+    expect(status).toContain("delivery=failed: ECONNREFUSED (#2 at ");
     s.stop();
   }, 30000);
 
@@ -1015,7 +1028,7 @@ describe("pr-events.mts", () => {
     expect(s.run(["poll"]).code).toBe(0);
     const status = s.run(["status"]).stdout;
     expect(status).toContain("subscribers: 0");
-    expect(status).toContain("probe delivery=pruned: lease lapsed");
+    expect(status).toContain("probe pruned=lease lapsed");
     s.stop();
   }, 40000);
 

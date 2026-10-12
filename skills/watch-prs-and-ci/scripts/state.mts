@@ -87,17 +87,31 @@ export interface Delivery {
   outcome: string;
 }
 
+export interface Pruned {
+  at: string;
+  reason: string;
+}
+
 export interface State {
   subscriptions: Record<string, Subscription>;
   rows: Record<PrKey, SavedRow>;
   pendingCommits: Record<CommitKey, PendingCommit>;
-  /** Last delivery per sink address, kept after a prune so `status` can say why a subscriber went. */
+  /** Last delivery per sink address, kept after a prune so `status` can show how the last one went. */
   deliveries: Record<string, Delivery>;
+  /** Why a former subscriber was dropped, beside its last delivery. */
+  pruned: Record<string, Pruned>;
   lastEventId: number;
 }
 
 export function emptyState(): State {
-  return { subscriptions: {}, rows: {}, pendingCommits: {}, deliveries: {}, lastEventId: 0 };
+  return {
+    subscriptions: {},
+    rows: {},
+    pendingCommits: {},
+    deliveries: {},
+    pruned: {},
+    lastEventId: 0,
+  };
 }
 
 export const STATE_FILE = "state.json";

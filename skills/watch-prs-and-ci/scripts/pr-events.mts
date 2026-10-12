@@ -228,6 +228,7 @@ function unwrap(reply: Reply): Reply & { ok: true } {
 const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const TARGET_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
+const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function parseTarget(target: string | undefined): PrRef {
   if (target === undefined) usage("missing <owner/repo>#<n>");
@@ -276,8 +277,9 @@ function parseSink(values: { sink?: string; id?: string; pid?: string }): SinkCh
     return { sink, address: inbox, pid: pidOf(inbox) };
   }
   if (!values.id) usage("the file sink needs --id <name>, the name `wait --id` reads back with");
-  if (values.id.includes("/") || values.id.includes("\n")) {
-    usage("--id must not contain / or newlines");
+  // Ids key plain objects that come back from JSON, so a name an object inherits cannot be one.
+  if (!ID_PATTERN.test(values.id) || values.id in Object.prototype) {
+    usage(`--id must be a name of letters, digits, . _ or -, not ${values.id}`);
   }
   return { sink, address: values.id, pid };
 }
@@ -465,13 +467,13 @@ async function cmdStatus(dir: string): Promise<number> {
       `  ${sub.sink} ${sub.address} mode=${sub.mode} ${describeLiveness(sub.liveness)} prs=${prs} commits=${commits} delivery=${describeDelivery(state.deliveries[sub.address])}`,
     );
   }
-  const pruned = Object.entries(state.deliveries).filter(
-    ([address]) => !state.subscriptions[address],
-  );
+  const pruned = Object.entries(state.pruned);
   if (pruned.length > 0) {
     lines.push(`former subscribers: ${pruned.length}`);
-    for (const [address, delivery] of pruned) {
-      lines.push(`  ${address} delivery=${describeDelivery(delivery)}`);
+    for (const [address, { reason, at }] of pruned) {
+      lines.push(
+        `  ${address} pruned=${reason} at ${at} delivery=${describeDelivery(state.deliveries[address])}`,
+      );
     }
   }
   const rows = Object.entries(state.rows);
@@ -756,11 +758,7 @@ async function runDaemon(
 
   const dropSubscription = (sub: Subscription, reason: string): void => {
     delete state.subscriptions[sub.address];
-    state.deliveries[sub.address] = {
-      eventId: state.lastEventId,
-      at: new Date().toISOString(),
-      outcome: `pruned: ${reason}`,
-    };
+    state.pruned[sub.address] = { at: new Date().toISOString(), reason };
     log(`pruned ${sub.sink} ${sub.address}: ${reason}`);
   };
 
@@ -785,8 +783,9 @@ async function runDaemon(
     for (const key of Object.keys(state.pendingCommits)) {
       if (subscribersOfCommit(key).length === 0) delete state.pendingCommits[key];
     }
-    for (const [address, delivery] of Object.entries(state.deliveries)) {
-      if (!state.subscriptions[address] && Date.parse(delivery.at) + LEASE_MS <= now) {
+    for (const [address, { at }] of Object.entries(state.pruned)) {
+      if (Date.parse(at) + LEASE_MS <= now) {
+        delete state.pruned[address];
         delete state.deliveries[address];
       }
     }
@@ -998,10 +997,7 @@ async function runDaemon(
           const code = errorCode(error) ?? errorText(error);
           state.deliveries[address] = { eventId: event.id, at, outcome: `failed: ${code}` };
           log(`delivery of #${event.id} to ${address} failed: ${code}`);
-          if (isNobodyListening(error)) {
-            delete state.subscriptions[address];
-            log(`pruned socket ${address}: inbox refused`);
-          }
+          if (isNobodyListening(error)) dropSubscription(sub, `inbox refused (${code})`);
         }
       }
     }
@@ -1153,6 +1149,7 @@ async function runDaemon(
       addPendingCommit(target.repo, target.sha);
     }
     state.subscriptions[sink.address] = sub;
+    delete state.pruned[sink.address];
     saveState(dir, state);
     checkIdle();
     log(`watch ${sink.sink} ${sink.address} (${mode}): ${describeTarget(target)}`);
