@@ -146,6 +146,16 @@ interface CommentSpec {
   body: string;
   /** Defaults to the comment's position in its fixture, from 901; the daemon's cursor is by id. */
   id?: number;
+  /** For an inline comment, the fullDatabaseId of the review that published it. */
+  review?: string;
+}
+
+interface ReviewSpec {
+  id: string;
+  login: string;
+  at: string;
+  state: string;
+  body: string;
 }
 
 interface ThreadSpec {
@@ -162,6 +172,7 @@ function commentNode(spec: CommentSpec, id: number) {
     author: { login: spec.login },
     body: spec.body,
     url: `https://github.com/${REPO}/pull/7#discussion_r${id}`,
+    ...(spec.review === undefined ? {} : { pullRequestReview: { fullDatabaseId: spec.review } }),
   };
 }
 
@@ -177,6 +188,7 @@ function detail(spec: {
   comments?: CommentSpec[];
   /** The startCursor of the comments page when the PR has older comments. */
   commentsBefore?: string;
+  reviews?: ReviewSpec[];
   threads?: ThreadSpec[];
   commitAuthor?: string;
 }): string {
@@ -193,7 +205,16 @@ function detail(spec: {
             (spec.comments ?? []).map((c) => commentNode(c, c.id ?? nextId())),
             spec.commentsBefore,
           ),
-          reviews: connection([]),
+          reviews: connection(
+            (spec.reviews ?? []).map((review) => ({
+              fullDatabaseId: review.id,
+              submittedAt: review.at,
+              state: review.state,
+              author: { login: review.login },
+              body: review.body,
+              url: `https://github.com/${REPO}/pull/7#pullrequestreview-${review.id}`,
+            })),
+          ),
           reviewThreads: {
             nodes: (spec.threads ?? []).map((thread, i) => ({
               id: `thread-${i}`,
@@ -650,6 +671,57 @@ describe("pr-events.mts", () => {
     expect(content).not.toContain("my own reply");
     expect(content).not.toContain("first");
     expect(s.events().map((e) => e.kind)).toEqual(["ci", "comment"]);
+    s.stop();
+  }, 30000);
+
+  test("the page's specimen is the rendered text, byte for byte: inline comments headlined under the review that published them, aligned", async () => {
+    // The page promises the shape; a renderer that listed the two inline comments as "2 new
+    // comments" or dropped the review wrapper would leave the specimen describing an event the
+    // daemon never sends.
+    const page = readFileSync(join(ROOT, "skills", "watch-prs-and-ci", "SKILL.md"), "utf-8");
+    const block = /```text\n<cross-session-message[^\n]*\n([\s\S]*?)<\/cross-session-message>/.exec(
+      page,
+    );
+    expect(block).not.toBeNull();
+    const specimen = (block as RegExpExecArray)[1]?.trimEnd().split("\n") as string[];
+    const [headline, first, second, url, closing] = specimen;
+    expect(specimen).toHaveLength(5);
+    const reviewer = /new review by (\S+) \(COMMENTED\)/.exec(headline as string)?.[1] as string;
+    const inline = (line: string) => {
+      const match = /^ {2}(\S+):(\d+) +(.*)$/.exec(line) as RegExpMatchArray;
+      return { path: match[1] as string, line: Number(match[2]), body: match[3] as string };
+    };
+    const [a, b] = [inline(first as string), inline(second as string)];
+    const s = new Scenario("specimen");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": rows({ rollup: "SUCCESS", threads: 2, updatedAt: T2 }),
+      "detail-2": detail({
+        reviews: [{ id: "77", login: reviewer, at: T2, state: "COMMENTED", body: "" }],
+        threads: [a, b].map((comment) => ({
+          path: comment.path,
+          line: comment.line,
+          total: 1,
+          comments: [{ login: reviewer, at: T2, body: comment.body, review: "77" }],
+        })),
+      }),
+      "viewer-1": VIEWER,
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    const frames = await box.frames(2);
+    expect(parseFrame(frames[1] as string).message.content).toBe(
+      [
+        (headline as string).replace("PR octocat/repo#12", `PR ${PR7}`),
+        first,
+        second,
+        (url as string).replace("octocat/repo/pull/12", `${REPO}/pull/7`),
+        closing,
+      ].join("\n"),
+    );
+    expect(s.events().map((e) => e.kind)).toEqual(["ci", "review"]);
     s.stop();
   }, 30000);
 

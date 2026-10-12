@@ -622,26 +622,59 @@ function clip(text: string): string {
   return text.length > MAX_BODY_CHARS ? `${text.slice(0, MAX_BODY_CHARS)}...` : text;
 }
 
-function describeActivities(activities: Activity[]): { kind: "comment" | "review"; text: string } {
-  const reviews = activities.filter((activity) => activity.kind === "review");
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The event text for one poll's new activity, or null when none of it says anything. An inline
+ * comment is headlined under the review that published it, so the review GitHub wraps a batch of
+ * inline comments in reads as one review with its comment count; such a wrapper with no new
+ * inline comment and no body is dropped. The page's specimen is this text, byte for byte.
+ */
+function describeActivities(
+  activities: Activity[],
+): { kind: "comment" | "review"; text: string } | null {
   const comments = activities.filter((activity) => activity.kind !== "review");
-  const summary = reviews.map(
-    (review) => `new review by ${review.author} (${review.reviewState ?? "COMMENTED"})`,
+  const inlineOf = (review: Activity) =>
+    comments.filter((comment) => comment.reviewId === review.id);
+  const reviews = activities.filter(
+    (activity) =>
+      activity.kind === "review" &&
+      (activity.body !== "" ||
+        activity.reviewState !== "COMMENTED" ||
+        inlineOf(activity).length > 0),
   );
-  if (comments.length > 0) {
-    const authors = [...new Set(comments.map((comment) => comment.author))].join(", ");
-    summary.push(`${comments.length} new comment${comments.length === 1 ? "" : "s"} by ${authors}`);
+  const headlined = new Set(reviews.flatMap((review) => inlineOf(review).map((c) => c.id)));
+  const loose = comments.filter((comment) => !headlined.has(comment.id));
+  const summary = reviews.map((review) => {
+    const inline = inlineOf(review).length;
+    const headline = `new review by ${review.author} (${review.reviewState})`;
+    return inline === 0 ? headline : `${headline}, ${plural(inline, "review comment")}`;
+  });
+  if (loose.length > 0) {
+    const authors = [...new Set(loose.map((comment) => comment.author))].join(", ");
+    summary.push(`${plural(loose.length, "new comment")} by ${authors}`);
   }
-  const lines = [summary.join(", ")];
-  for (const activity of activities) {
+  if (summary.length === 0) return null;
+  const rows: [string, string][] = [];
+  for (const activity of [
+    ...reviews.flatMap((review) => [review, ...inlineOf(review)]),
+    ...loose,
+  ]) {
     const body = clip(flatten(activity.body));
     if (body === "") continue;
     const where =
       activity.path !== undefined
         ? `${activity.path}${typeof activity.line === "number" ? `:${activity.line}` : ""}`
         : activity.author;
-    lines.push(`  ${where}  ${body}`);
+    rows.push([where, body]);
   }
+  const width = Math.max(0, ...rows.map(([where]) => where.length));
+  const lines = [
+    summary.join(", "),
+    ...rows.map(([where, body]) => `  ${where.padEnd(width)}  ${body}`),
+  ];
   return { kind: reviews.length > 0 ? "review" : "comment", text: lines.join("\n") };
 }
 
@@ -905,10 +938,8 @@ async function runDaemon(
         ...row.seenActivity.slice(-1),
         detail.activities.map((activity) => activity.id),
       ];
-      if (activities.length > 0) {
-        const { kind, text } = describeActivities(activities);
-        emitted.push(emit({ ...base, kind, text }, targets));
-      }
+      const described = describeActivities(activities);
+      if (described !== null) emitted.push(emit({ ...base, ...described }, targets));
       for (const gap of detail.gaps) {
         emitted.push(emit({ ...base, kind: "trouble", text: `${gap}; read the PR` }, targets));
       }

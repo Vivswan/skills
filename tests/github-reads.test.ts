@@ -272,7 +272,10 @@ function row(spec: Partial<Row> = {}): Row {
   };
 }
 
-/** `at` is the publication instant; `created` (default: the same) is the draft's creation. */
+/**
+ * `at` is the publication instant; `created` (default: the same) is the draft's creation;
+ * `review` is the fullDatabaseId of the review that published an inline comment.
+ */
 type CommentSpec = {
   id: number;
   at: string;
@@ -280,6 +283,7 @@ type CommentSpec = {
   login: string | null;
   body: string;
   url: string;
+  review?: string;
 };
 
 function commentNode(spec: CommentSpec): unknown {
@@ -290,6 +294,7 @@ function commentNode(spec: CommentSpec): unknown {
     author: spec.login === null ? null : { login: spec.login },
     body: spec.body,
     url: spec.url,
+    ...(spec.review === undefined ? {} : { pullRequestReview: { fullDatabaseId: spec.review } }),
   };
 }
 
@@ -931,11 +936,11 @@ describe("rowChanged", () => {
 describe("readPrDetail", () => {
   test("threads are paged past the first page, unresolved counts sum across pages, and a thread's first comment is told from a reply by position", () => {
     // Thread B is five comments long and the query fetches its last three: all replies, drafted
-    // at 09:50 and published when their review was submitted, so their activity instant is the
-    // publication. Thread C on page 2 is two long and fully fetched: a review-comment then a
-    // reply. The empty-bodied COMMENTED review wrapping inline comments and the unsubmitted
-    // PENDING review are not activity; the issue comments, reviews, and commit author come from
-    // the first page only.
+    // at 09:50 and published when review 2 was submitted, so their activity instant is the
+    // publication and they name that review. Thread C on page 2 is two long and fully fetched: a
+    // review-comment then a reply. The empty-bodied COMMENTED review 2 is activity, for the
+    // renderer to headline its inline comments under; the unsubmitted PENDING review is not. The
+    // issue comments, reviews, and commit author come from the first page only.
     const s = scenario({
       "detail-1.json": detailPage({
         comments: [
@@ -1009,6 +1014,7 @@ describe("readPrDetail", () => {
                 login: "work-bot",
                 body: "three",
                 url: "https://example.com/t2-3",
+                review: "2",
               },
               {
                 id: 24,
@@ -1017,6 +1023,7 @@ describe("readPrDetail", () => {
                 login: "octocat",
                 body: "four",
                 url: "https://example.com/t2-4",
+                review: "2",
               },
               {
                 id: 25,
@@ -1025,6 +1032,7 @@ describe("readPrDetail", () => {
                 login: "work-bot",
                 body: "five",
                 url: "https://example.com/t2-5",
+                review: "2",
               },
             ],
           },
@@ -1090,6 +1098,7 @@ describe("readPrDetail", () => {
         url: "https://example.com/t2-3",
         path: "src/b.ts",
         line: null,
+        reviewId: "review:2",
       },
       {
         id: "review-comment:24",
@@ -1100,6 +1109,7 @@ describe("readPrDetail", () => {
         url: "https://example.com/t2-4",
         path: "src/b.ts",
         line: null,
+        reviewId: "review:2",
       },
       {
         id: "review-comment:25",
@@ -1110,6 +1120,7 @@ describe("readPrDetail", () => {
         url: "https://example.com/t2-5",
         path: "src/b.ts",
         line: null,
+        reviewId: "review:2",
       },
       {
         id: "review-comment:31",
@@ -1155,6 +1166,15 @@ describe("readPrDetail", () => {
         body: "LGTM",
         url: "https://example.com/r1",
         reviewState: "APPROVED",
+      },
+      {
+        id: "review:2",
+        kind: "review",
+        at: "2026-03-01T10:08:00Z",
+        author: "work-bot",
+        body: "",
+        url: "https://example.com/r2",
+        reviewState: "COMMENTED",
       },
     ];
     expect(detail).toEqual({

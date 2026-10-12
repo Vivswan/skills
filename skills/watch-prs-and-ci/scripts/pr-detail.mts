@@ -21,6 +21,8 @@ export type Activity = {
   path?: string;
   line?: number | null;
   reviewState?: string;
+  /** For an inline comment, the `id` of the review that published it. */
+  reviewId?: string;
 };
 
 export type PrDetail = {
@@ -32,6 +34,7 @@ export type PrDetail = {
 };
 
 const COMMENT_FIELDS = "databaseId publishedAt createdAt author { login } body url";
+const REVIEW_COMMENT_FIELDS = `${COMMENT_FIELDS} pullRequestReview { fullDatabaseId }`;
 const REVIEW_FIELDS = "fullDatabaseId submittedAt state author { login } body url";
 const BACK_PAGE_INFO = "pageInfo { hasPreviousPage startCursor }";
 
@@ -45,7 +48,7 @@ const DETAIL_QUERY = `query PrDetail($owner: String!, $name: String!, $number: I
       reviewThreads(first: 100, after: $cursor) {
         nodes {
           id isResolved path line
-          comments(last: 3) { totalCount nodes { ${COMMENT_FIELDS} } ${BACK_PAGE_INFO} }
+          comments(last: 3) { totalCount nodes { ${REVIEW_COMMENT_FIELDS} } ${BACK_PAGE_INFO} }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -73,7 +76,7 @@ const OLDER_REVIEWS_QUERY = `query OlderReviews($owner: String!, $name: String!,
 const OLDER_THREAD_COMMENTS_QUERY = `query OlderThreadComments($id: ID!, $cursor: String!) {
   node(id: $id) {
     ... on PullRequestReviewThread {
-      comments(last: 20, before: $cursor) { nodes { ${COMMENT_FIELDS} } ${BACK_PAGE_INFO} }
+      comments(last: 20, before: $cursor) { nodes { ${REVIEW_COMMENT_FIELDS} } ${BACK_PAGE_INFO} }
     }
   }
 }`;
@@ -147,29 +150,31 @@ function commentActivity(
   if (thread !== undefined) {
     activity.path = thread.path;
     activity.line = thread.line;
+    const review = get(node, "pullRequestReview");
+    if (review !== null && review !== undefined) {
+      activity.reviewId = reviewId(review, `${what} pullRequestReview`);
+    }
   }
   return activity;
 }
 
-// A review's content is its state and body. GitHub wraps every batch of inline comments in a
-// COMMENTED review with an empty body, which says nothing the thread comments do not, so those
-// are dropped; a PENDING review (no submittedAt) is the viewer's own unsubmitted draft.
+// A PENDING review (no submittedAt) is the viewer's own unsubmitted draft. The empty COMMENTED
+// review GitHub wraps a batch of inline comments in stays: the renderer headlines the batch under
+// it, and drops it when no inline comment of its own is new.
 function reviewActivities(nodes: unknown[]): Activity[] {
   const activities: Activity[] = [];
   for (const node of nodes) {
     const submittedAt = get(node, "submittedAt");
     if (typeof submittedAt !== "string") continue;
-    const state = requireString(get(node, "state"), "review state");
-    const body = typeof get(node, "body") === "string" ? (get(node, "body") as string) : "";
-    if (state === "COMMENTED" && body === "") continue;
+    const body = get(node, "body");
     activities.push({
       id: reviewId(node, "review"),
       kind: "review",
       at: submittedAt,
       author: loginOf(node),
-      body,
+      body: typeof body === "string" ? body : "",
       url: requireString(get(node, "url"), "review url"),
-      reviewState: state,
+      reviewState: requireString(get(node, "state"), "review state"),
     });
   }
   return activities;
