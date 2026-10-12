@@ -172,20 +172,22 @@ Codex, the Copilot CLI, a shell, or a Claude Code session with no `CLAUDE_CODE_M
 ```bash
 bun "<skill-dir>/scripts/pr-events.mts" daemon --id codex-12
 bun "<skill-dir>/scripts/pr-events.mts" watch octocat/repo#12 --id codex-12
-bun "<skill-dir>/scripts/pr-events.mts" wait --id codex-12 --since 0 --timeout 3600 > /tmp/pr-events-wait.out 2>&1
+bun "<skill-dir>/scripts/pr-events.mts" wait --id codex-12 --since 0 --timeout 3600 > /tmp/pr-events-wait-codex-12.out 2>&1
 ```
 
 A file-sink daemon runs until `stop`. `--pid <pid>` ends it with that process instead: pass the agent's own pid, never `$$` from a one-shot shell, which becomes the daemon's own pid when the shell execs it (the daemon refuses its own pid).
 
-Run `wait` as a background command and read the file when it exits. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 4 is the timeout with nothing new: re-arm, or escalate to the user.
+Run `wait` as a background command and read the file when it exits; the file carries the `--id`, so two agents on one machine never read each other's. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 4 is the timeout with nothing new: re-arm, or escalate to the user.
 
 Every event line has the same shape, whichever sink reads it:
 
 ```json
-{"id":17,"at":"2026-10-12T14:03:20Z","repo":"octocat/repo","pr":12,"kind":"review","text":"...","url":"https://github.com/octocat/repo/pull/12"}
+{"id":17,"at":"2026-10-12T14:03:20Z","repo":"octocat/repo","pr":12,"sha":"1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b","url":"https://github.com/octocat/repo/pull/12","kind":"review","text":"..."}
 ```
 
-`kind` is one of `comment`, `review`, `ci`, `head`, `merged`, `closed`, `trouble`. Every line is addressed to the daemon's one owner, and `status` shows how the last delivery to a session went. A held or refused delivery leaves the line in the log, so nothing is lost.
+`kind` is one of `comment`, `review`, `ci`, `head`, `merged`, `closed`, `trouble`. `sha` is the PR head the event was read on, the merge commit on a `merged` line, the judged commit on a `watch-commit` line, and `null` with `pr` on a daemon-wide `trouble` line.
+
+Every line is addressed to the daemon's one owner, and `status` shows how the last delivery to a session went. A held or refused delivery leaves the line in the log, so nothing is lost.
 
 ## Polling Budget
 
