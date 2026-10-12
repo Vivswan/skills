@@ -54,10 +54,15 @@ export function renderCell(cell: Cell): string {
 
 const USER_AGENT = "check-name.mts (project-naming skill; https://github.com/Vivswan/skills)";
 
-async function get(io: Io, url: string, headers: Record<string, string> = {}): Promise<Response> {
+async function get(
+  io: Io,
+  url: string,
+  headers: Record<string, string> = {},
+  timeoutMs = io.timeoutMs,
+): Promise<Response> {
   return io.fetch(url, {
     redirect: "manual",
-    signal: AbortSignal.timeout(io.timeoutMs),
+    signal: AbortSignal.timeout(timeoutMs),
     headers: { "user-agent": USER_AGENT, accept: "application/json", ...headers },
   });
 }
@@ -173,31 +178,130 @@ async function githubRepo(io: Io, name: string): Promise<Cell> {
   );
 }
 
-let arxivTurn: Promise<void> = Promise.resolve();
-let arxivLastDone = 0;
-
-/** The gap is waited before a lookup, never after one, so the last lookup ends the process. */
-function arxivSerialised<T>(io: Io, work: () => Promise<T>): Promise<T> {
-  const mine = arxivTurn.then(async () => {
-    const wait = arxivLastDone + io.arxivGapMs - Date.now();
-    if (wait > 0) await Bun.sleep(wait);
-    try {
-      return await work();
-    } finally {
-      arxivLastDone = Date.now();
-    }
-  });
-  arxivTurn = mine.then(
-    () => undefined,
-    () => undefined,
+/** Formulae and casks are separate indexes; a name is taken when either has it. */
+async function homebrew(io: Io, name: string): Promise<Cell> {
+  const lower = name.toLowerCase();
+  const readings = await Promise.all([
+    lookup404(io, `https://formulae.brew.sh/api/formula/${lower}.json`, "homebrew formula"),
+    lookup404(io, `https://formulae.brew.sh/api/cask/${lower}.json`, "homebrew cask"),
+  ]);
+  return (
+    readings.find((cell) => cell.status === "taken") ??
+    readings.find((cell) => cell.status === "unknown") ??
+    free
   );
-  return mine;
 }
+
+/** A name Docker Hub would refuse cannot be claimed there, so its 404 is not a free name. The
+ * users endpoint answers an organization's name with a 308 to the orgs endpoint. */
+async function dockerHub(io: Io, name: string): Promise<Cell> {
+  const lower = name.toLowerCase();
+  if (!/^[a-z0-9]{4,30}$/.test(lower)) {
+    return unknown("docker hub ids are 4 to 30 lowercase letters and digits");
+  }
+  try {
+    const response = await get(io, `https://hub.docker.com/v2/users/${lower}/`);
+    if (response.status === 404) return free;
+    if (response.status === 200) return taken("docker hub user");
+    if ([301, 302, 307, 308].includes(response.status)) return taken("docker hub organization");
+    return unknown(`docker hub HTTP ${response.status}`);
+  } catch (error) {
+    return unknown(`docker hub ${String(error)}`);
+  }
+}
+
+type SolrReply = { response?: { numFound?: number } };
+
+/** search.maven.org answers in under a second or holds the request for 30 seconds and more, at
+ * random and more often after a burst. So the lookups run one at a time, and a held request is
+ * abandoned early and asked again, up to MAVEN_ATTEMPTS times, before the cell is unknown. */
+const MAVEN_ATTEMPT_MS = 5_000;
+const MAVEN_ATTEMPTS = 3;
+
+/** Artifact ids are case-sensitive, so the spelling as given and the lowercase form (the
+ * convention) are both asked for. The count alone decides, so no documents are requested. */
+async function mavenCentral(io: Io, name: string): Promise<Cell> {
+  const readings: Cell[] = [];
+  for (const spelling of new Set([name, name.toLowerCase()])) {
+    readings.push(await mavenQueue(0, () => mavenLookup(io, spelling)));
+  }
+  return (
+    readings.find((cell) => cell.status === "taken") ??
+    readings.find((cell) => cell.status === "unknown") ??
+    free
+  );
+}
+
+async function mavenLookup(io: Io, spelling: string): Promise<Cell> {
+  const query = encodeURIComponent(`a:${spelling}`);
+  const url = `https://search.maven.org/solrsearch/select?q=${query}&rows=0&wt=json`;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await get(io, url, {}, Math.min(io.timeoutMs, MAVEN_ATTEMPT_MS));
+      if (response.status !== 200) return unknown(`maven HTTP ${response.status}`);
+      const body = (await response.json()) as SolrReply;
+      const count = body.response?.numFound;
+      if (typeof count !== "number") return unknown("maven reply had no numFound");
+      return count === 0 ? free : taken(`${count} maven artifact(s)`);
+    } catch (error) {
+      if (attempt >= MAVEN_ATTEMPTS || (error as { name?: string }).name !== "TimeoutError") {
+        return unknown(`maven ${String(error)}`);
+      }
+    }
+  }
+}
+
+type AtprotoError = { message?: string };
+
+/** A handle under bsky.social. The resolver answers a free handle with HTTP 400 "Unable to resolve
+ * handle"; any other 400 is a handle it refused to look at, not a free one. */
+async function bluesky(io: Io, name: string): Promise<Cell> {
+  const handle = `${name.toLowerCase()}.bsky.social`;
+  const url = `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`;
+  try {
+    const response = await get(io, url);
+    if (response.status === 200) return taken("bluesky handle");
+    if (response.status === 400) {
+      const body = (await response.json()) as AtprotoError;
+      if (body.message === "Unable to resolve handle") return free;
+      return unknown(`bluesky ${body.message ?? "HTTP 400"}`);
+    }
+    return unknown(`bluesky HTTP ${response.status}`);
+  } catch (error) {
+    return unknown(`bluesky ${String(error)}`);
+  }
+}
+
+/** One lookup at a time against a host that punishes bursts, `gapMs` apart. The gap is waited
+ * before a lookup, never after one, so the last lookup ends the process. */
+function serialQueue(): <T>(gapMs: number, work: () => Promise<T>) => Promise<T> {
+  let turn: Promise<void> = Promise.resolve();
+  let lastDone = 0;
+  return (gapMs, work) => {
+    const mine = turn.then(async () => {
+      const wait = lastDone + gapMs - Date.now();
+      if (wait > 0) await Bun.sleep(wait);
+      try {
+        return await work();
+      } finally {
+        lastDone = Date.now();
+      }
+    });
+    turn = mine.then(
+      () => undefined,
+      () => undefined,
+    );
+    return mine;
+  };
+}
+
+const arxivQueue = serialQueue();
+const mavenQueue = serialQueue();
 
 /** Papers whose title carries the name. The export API rate-limits after a few dozen calls, and
  * answers `max_results=0` with HTTP 500, so one entry is asked for and only the count is read. */
 function arxiv(io: Io, name: string): Promise<Cell> {
-  return arxivSerialised(io, () => arxivLookup(io, name));
+  return arxivQueue(io.arxivGapMs, () => arxivLookup(io, name));
 }
 
 async function arxivLookup(io: Io, name: string): Promise<Cell> {
@@ -405,6 +509,30 @@ export const REGISTRIES: readonly RegistryEntry[] = [
   ),
   {
     kind: "registry",
+    id: "homebrew",
+    label: "Homebrew formula or cask",
+    // wget: a formula, read 200 on 2026-10-12.
+    takenControl: "wget",
+    lookup: homebrew,
+  },
+  {
+    kind: "registry",
+    id: "docker",
+    label: "Docker Hub user or organization",
+    // library: the official images organization, read 308 on 2026-10-12.
+    takenControl: "library",
+    lookup: dockerHub,
+  },
+  {
+    kind: "registry",
+    id: "maven",
+    label: "Maven Central artifact id",
+    // junit: 31 artifacts on 2026-10-12.
+    takenControl: "junit",
+    lookup: mavenCentral,
+  },
+  {
+    kind: "registry",
     id: "hf",
     label: "Hugging Face user or organization",
     takenControl: "google",
@@ -423,6 +551,14 @@ export const REGISTRIES: readonly RegistryEntry[] = [
     label: `GitHub repository with ${GITHUB_STARS_TAKEN}+ stars`,
     takenControl: "linux",
     lookup: githubRepo,
+  },
+  {
+    kind: "registry",
+    id: "bluesky",
+    label: "Bluesky handle under bsky.social",
+    // jay.bsky.social: resolved on 2026-10-12.
+    takenControl: "jay",
+    lookup: bluesky,
   },
   {
     kind: "registry",

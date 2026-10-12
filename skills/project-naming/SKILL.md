@@ -36,7 +36,7 @@ Ask before generating anything. The owner's answers are the brief; a lane withou
 Which two or three existing names do you like the SOUND of? (any product, any field)
 What killed the last name, in your words?
 What must this project be able to grow into?
-Where will the name be claimed? (PyPI, npm, crates, Hugging Face, GitHub, which domains, arXiv)
+Where will the name be claimed? (PyPI, npm, crates, Homebrew, Docker Hub, Maven, Hugging Face, GitHub, Bluesky, which domains, arXiv)
 Which languages do your users read?
 ```
 
@@ -47,7 +47,7 @@ Turn the answers into one page every lane reads. The owner approves it before an
 ```text
 exemplars:   <the names the owner likes>, scored 1 to 5 by closeness
 grows into:  <scope in one line>
-claims:      pypi npm hf github dns:com,ai
+claims:      pypi npm docker hf github dns:com,ai
 languages:   <the languages the users read, from the interview>
 hard gate:   the table under Conditions, plus anything the owner added
 soft scores: exemplar closeness, elegance, room to grow
@@ -85,14 +85,16 @@ bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,dns-com <name>   
 One row per name, one column per registry; the registries live in one table in `scripts/registries.mts`, and `--list-registries` prints it. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`:
 
 ```text
-name    pypi  npm                 crates  hf    github-user           github-repo  arxiv  dns-com                     dns-ai  wiktionary                   urban
-lumera  free  taken(npm package)  free    free  taken(github handle)  free         free   taken(lumera.com resolves)  free    taken(word in Italian,Latin)  free
-tarnix  free  free                free    free  free                  free         free   free                        free    free                         taken(1 entry: ...)
+name    pypi  npm                 crates  homebrew                 docker                   maven  hf    github-user           github-repo  bluesky                 arxiv  dns-com                     dns-ai  wiktionary                   urban
+lumera  free  taken(npm package)  free    free                     taken(docker hub user)   free   free  taken(github handle)  free         taken(bluesky handle)   free   taken(lumera.com resolves)  free    taken(word in Italian,Latin)  free
+tarnix  free  free                free    taken(homebrew formula)  free                     free   free  free                  free         free                    free   free                        free    free                         taken(1 entry: ...)
 ```
 
 - Two controls run with every batch: per column, a name known to be taken there (the registry's own `nic` host for DNS, a word with a flagged sense for Wiktionary), and one random string that must be free everywhere. A column that answers either wrongly is reported on stderr as a failed instrument and the exit code is 1. Do not read that column.
 - `unknown` is not `free`. A rate-limited arXiv or a 5xx stays `unknown` in the table; rerun later or drop the column with `--no-arxiv`.
 - arXiv allows one request every three seconds, and the script spaces its own that far. Lanes run with `--no-arxiv`; the lead runs the arXiv column once, over the merged shortlist, in step 6.
+- Maven Central's search holds some requests for half a minute and more, so the script runs its lookups one at a time and asks again after a short wait; an `unknown(maven TimeoutError ...)` cell is three holds in a row, rerun later.
+- Docker Hub ids are 4 to 30 lowercase letters and digits; a name outside that reads `unknown` there because Docker would refuse it, not because it is free.
 - GitHub counts an exact-name repository as taken from 20 stars. Pass `GH_TOKEN` or be logged into `gh` for the search rate limit.
 - `--json` prints the rows and the control verdicts as one object for a lane report.
 
@@ -165,7 +167,9 @@ Rejected by default unless the brief says otherwise: acronyms, the letters x q k
 
 ## What the script does not check
 
-Trademark registers, app stores, social handles, and registered-but-unresolved domains. The decision record names them under "not checked" every time, so the owner knows what a later claim may still hit.
+Trademark registers, app stores, social handles other than Bluesky, and registered-but-unresolved domains. The decision record names them under "not checked" every time, so the owner knows what a later claim may still hit.
+
+Go modules: a module path is a URL (`github.com/<owner>/<name>`), so a bare name is not claimable there, and pkg.go.dev serves its search as HTML only. The GitHub columns cover the repository the path would point at.
 
 ## Related
 

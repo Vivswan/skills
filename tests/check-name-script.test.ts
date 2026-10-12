@@ -30,10 +30,16 @@ function wikitextReply(wikitext: string): Reply {
 }
 const MISSING_PAGE: Reply = { status: 200, body: { error: { code: "missingtitle" } } };
 
+const BLUESKY_FREE: Reply = { status: 400, body: { message: "Unable to resolve handle" } };
+
 /** Every registry answers `free` unless the handler says otherwise: a 404 for the lookups that
- * use one, an empty result for the searches, a missing page for Wiktionary. */
+ * use one, an empty result for the searches, a missing page for Wiktionary, the resolver's
+ * "unable to resolve" for Bluesky. */
 function defaultReply(url: URL): Reply {
   if (url.pathname === "/search/repositories") return { status: 200, body: { items: [] } };
+  if (url.hostname === "search.maven.org")
+    return { status: 200, body: { response: { numFound: 0 } } };
+  if (url.hostname === "public.api.bsky.app") return BLUESKY_FREE;
   if (url.hostname === "api.urbandictionary.com") return { status: 200, body: { list: [] } };
   if (url.hostname === "en.wiktionary.org") return MISSING_PAGE;
   if (url.hostname === "export.arxiv.org") {
@@ -96,6 +102,10 @@ function allTakenIo(resolving: string[]): Io {
     if (url.hostname === "api.urbandictionary.com") {
       return { status: 200, body: { list: [{ word: named, definition: "slang", thumbs_up: 3 }] } };
     }
+    if (url.hostname === "search.maven.org") {
+      return { status: 200, body: { response: { numFound: 4 } } };
+    }
+    if (url.hostname === "hub.docker.com") return { status: 308 };
     return { status: 200, body: {} };
   }, resolving);
 }
@@ -136,6 +146,167 @@ describe("check-name.mts cells", () => {
     expect(cell(row.cells, "crates")).toEqual({ status: "free" });
   });
 
+  test("Homebrew: a formula or a cask takes the name, both 404 is free, and an unreadable index with no hit is unknown", async () => {
+    const brew = (formula: number, cask: number) =>
+      fakeIo((url) => {
+        if (url.hostname !== "formulae.brew.sh") return undefined;
+        return { status: url.pathname.startsWith("/api/cask/") ? cask : formula };
+      });
+    const cases: [number, number, Cell][] = [
+      [404, 404, { status: "free" }],
+      [200, 404, { status: "taken", detail: "homebrew formula" }],
+      [404, 200, { status: "taken", detail: "homebrew cask" }],
+      [200, 503, { status: "taken", detail: "homebrew formula" }],
+      [503, 404, { status: "unknown", detail: "homebrew formula HTTP 503" }],
+    ];
+    for (const [formula, cask, expected] of cases) {
+      const row = await checkName(brew(formula, cask), OPTIONS, "Lumera");
+      expect(cell(row.cells, "homebrew"), `${formula}/${cask}`).toEqual(expected);
+    }
+  });
+
+  test("Docker Hub: 200 is a user, a redirect is an organization, 404 is free, and a dashed name is unknown since Docker refuses it", async () => {
+    const hub = (status: number) =>
+      fakeIo((url) => (url.hostname === "hub.docker.com" ? { status } : undefined));
+    const cases: [number, Cell][] = [
+      [200, { status: "taken", detail: "docker hub user" }],
+      [308, { status: "taken", detail: "docker hub organization" }],
+      [404, { status: "free" }],
+      [500, { status: "unknown", detail: "docker hub HTTP 500" }],
+    ];
+    for (const [status, expected] of cases) {
+      const row = await checkName(hub(status), OPTIONS, "Lumera");
+      expect(cell(row.cells, "docker"), String(status)).toEqual(expected);
+    }
+    // A dashed name and a 31-letter one pass the CLI's GitHub-shaped rule but Docker refuses
+    // both, so their 404 must not read as free.
+    for (const refused of ["lu-mera", "a".repeat(31)]) {
+      const row = await checkName(hub(404), OPTIONS, refused);
+      expect(cell(row.cells, "docker"), refused).toEqual({
+        status: "unknown",
+        detail: "docker hub ids are 4 to 30 lowercase letters and digits",
+      });
+    }
+  });
+
+  test("Maven Central: the artifact count decides, zero is free, and a reply without the count or a non-200 is unknown", async () => {
+    const maven = (reply: Reply) =>
+      fakeIo((url) => {
+        if (url.hostname !== "search.maven.org") return undefined;
+        expect(url.searchParams.get("q")).toBe("a:lumera");
+        return reply;
+      });
+    // Artifact ids are case-sensitive: an id published in mixed case is missed by the lowercase
+    // query alone, so the spelling as given is asked for too.
+    const mixedCase = fakeIo((url) => {
+      if (url.hostname !== "search.maven.org") return undefined;
+      const hit = url.searchParams.get("q") === "a:JLargeArrays";
+      return { status: 200, body: { response: { numFound: hit ? 1 : 0 } } };
+    });
+    const mixed = await checkName(mixedCase, OPTIONS, "JLargeArrays");
+    expect(cell(mixed.cells, "maven")).toEqual({ status: "taken", detail: "1 maven artifact(s)" });
+    const cases: [Reply, Cell][] = [
+      [
+        { status: 200, body: { response: { numFound: 3 } } },
+        { status: "taken", detail: "3 maven artifact(s)" },
+      ],
+      [{ status: 200, body: { response: { numFound: 0 } } }, { status: "free" }],
+      [
+        { status: 200, body: {} },
+        { status: "unknown", detail: "maven reply had no numFound" },
+      ],
+      [{ status: 503 }, { status: "unknown", detail: "maven HTTP 503" }],
+    ];
+    for (const [reply, expected] of cases) {
+      const row = await checkName(maven(reply), OPTIONS, "lumera");
+      expect(cell(row.cells, "maven"), String(reply.status)).toEqual(expected);
+    }
+  });
+
+  test("a Maven request that stalls is abandoned and asked again; the third stall is the unknown cell", async () => {
+    const stalling = (stalls: number) => {
+      let attempts = 0;
+      const base = fakeIo(() => undefined);
+      const io: Io = {
+        ...base,
+        timeoutMs: 50,
+        fetch: (input, init) => {
+          if (new URL(input).hostname !== "search.maven.org") return base.fetch(input, init);
+          attempts++;
+          if (attempts > stalls) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ response: { numFound: 2 } }), { status: 200 }),
+            );
+          }
+          return new Promise((_, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          });
+        },
+      };
+      return { io, attempts: () => attempts };
+    };
+    const recovered = stalling(2);
+    const row = await checkName(recovered.io, OPTIONS, "lumera");
+    expect(cell(row.cells, "maven")).toEqual({ status: "taken", detail: "2 maven artifact(s)" });
+    expect(recovered.attempts()).toBe(3);
+    const held = stalling(3);
+    const gaveUp = await checkName(held.io, OPTIONS, "lumera");
+    expect(cell(gaveUp.cells, "maven").status).toBe("unknown");
+    expect(detail(cell(gaveUp.cells, "maven"))).toContain("TimeoutError");
+    expect(held.attempts()).toBe(3);
+    // A hold after the headers (the body never arrives) is the same stall and is retried too.
+    let bodyAttempts = 0;
+    const base = fakeIo(() => undefined);
+    const bodyStall: Io = {
+      ...base,
+      timeoutMs: 50,
+      fetch: async (input, init) => {
+        if (new URL(input).hostname !== "search.maven.org") return base.fetch(input, init);
+        bodyAttempts++;
+        if (bodyAttempts > 1) {
+          return new Response(JSON.stringify({ response: { numFound: 1 } }), { status: 200 });
+        }
+        const stream = new ReadableStream({
+          start(controller) {
+            init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+          },
+        });
+        return new Response(stream, { status: 200 });
+      },
+    };
+    const afterBodyStall = await checkName(bodyStall, OPTIONS, "lumera");
+    expect(cell(afterBodyStall.cells, "maven")).toEqual({
+      status: "taken",
+      detail: "1 maven artifact(s)",
+    });
+    expect(bodyAttempts).toBe(2);
+  });
+
+  test("Bluesky: 200 is taken, the resolver's 'unable to resolve' 400 is free, and any other 400 or status is unknown", async () => {
+    const bsky = (reply: Reply) =>
+      fakeIo((url) => {
+        if (url.hostname !== "public.api.bsky.app") return undefined;
+        expect(url.searchParams.get("handle")).toBe("lumera.bsky.social");
+        return reply;
+      });
+    const cases: [Reply, Cell][] = [
+      [
+        { status: 200, body: { did: "did:plc:example" } },
+        { status: "taken", detail: "bluesky handle" },
+      ],
+      [BLUESKY_FREE, { status: "free" }],
+      [
+        { status: 400, body: { message: "Invalid handle" } },
+        { status: "unknown", detail: "bluesky Invalid handle" },
+      ],
+      [{ status: 502 }, { status: "unknown", detail: "bluesky HTTP 502" }],
+    ];
+    for (const [reply, expected] of cases) {
+      const row = await checkName(bsky(reply), OPTIONS, "Lumera");
+      expect(cell(row.cells, "bluesky"), JSON.stringify(reply)).toEqual(expected);
+    }
+  });
+
   test("a fetch that throws is unknown with the error named, not free", async () => {
     const io = withReply(
       fakeIo(() => undefined),
@@ -167,23 +338,26 @@ describe("check-name.mts cells", () => {
     expect(cell(row.cells, "pypi")).toEqual({ status: "free" });
   });
 
-  test("arXiv lookups run one at a time across the rows of a process", async () => {
-    let inFlight = 0;
-    let overlap = 0;
+  test("arXiv and Maven Central lookups each run one at a time across the rows of a process", async () => {
+    const inFlight: Record<string, number> = {};
+    const overlap: Record<string, number> = {};
     const base = fakeIo(() => undefined);
     const io: Io = {
       ...base,
       fetch: async (input, init) => {
-        if (new URL(input).hostname !== "export.arxiv.org") return base.fetch(input, init);
-        inFlight++;
-        if (inFlight > 1) overlap++;
+        const host = new URL(input).hostname;
+        if (host !== "export.arxiv.org" && host !== "search.maven.org") {
+          return base.fetch(input, init);
+        }
+        inFlight[host] = (inFlight[host] ?? 0) + 1;
+        if ((inFlight[host] ?? 0) > 1) overlap[host] = (overlap[host] ?? 0) + 1;
         await Bun.sleep(5);
-        inFlight--;
+        inFlight[host] = (inFlight[host] ?? 0) - 1;
         return base.fetch(input, init);
       },
     };
     await Promise.all(["lumera", "tarnix", "quillo"].map((n) => checkName(io, WITH_ARXIV, n)));
-    expect(overlap).toBe(0);
+    expect(overlap).toEqual({});
   });
 
   test("a Hugging Face 307 is a handle that exists under another casing, so taken", async () => {
@@ -433,9 +607,13 @@ describe("check-name.mts controls", () => {
         "pypi",
         "npm",
         "crates",
+        "homebrew",
+        "docker",
+        "maven",
         "hf",
         "github-user",
         "github-repo",
+        "bluesky",
         "arxiv",
         "dns-com",
         "wiktionary",
@@ -573,10 +751,10 @@ describe("check-name.mts output", () => {
     ]);
     const [header, row] = tsv.trimEnd().split("\n");
     expect(header).toBe(
-      "name\tpypi\tnpm\tcrates\thf\tgithub-user\tgithub-repo\tdns-com\twiktionary\turban",
+      "name\tpypi\tnpm\tcrates\thomebrew\tdocker\tmaven\thf\tgithub-user\tgithub-repo\tbluesky\tdns-com\twiktionary\turban",
     );
     expect(row).toBe(
-      "lumera\tfree\ttaken(npm package)\tunknown(crate HTTP 500)\tunknown(missing)\tunknown(missing)\tunknown(missing)\tunknown(missing)\tunknown(missing)\tunknown(missing)",
+      `lumera\tfree\ttaken(npm package)\tunknown(crate HTTP 500)${"\tunknown(missing)".repeat(10)}`,
     );
   });
 
