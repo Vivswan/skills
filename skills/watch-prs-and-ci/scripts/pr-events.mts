@@ -1017,13 +1017,13 @@ async function runDaemon(
           from_mode: sub.mode,
           msg_id: `pr-events-${event.id}-${randomUUID()}`,
         };
-        const at = new Date().toISOString();
+        const delivery = { eventId: event.id, at: new Date().toISOString(), msgId: frame.msg_id };
         try {
           await deliver(address, frame);
-          state.deliveries[address] = { eventId: event.id, at, outcome: "sent" };
+          state.deliveries[address] = { ...delivery, outcome: "sent" };
         } catch (error) {
           const code = errorCode(error) ?? errorText(error);
-          state.deliveries[address] = { eventId: event.id, at, outcome: `failed: ${code}` };
+          state.deliveries[address] = { ...delivery, outcome: `failed: ${code}` };
           log(`delivery of #${event.id} to ${address} failed: ${code}`);
           if (isNobodyListening(error)) dropSubscription(sub, `inbox refused (${code})`);
         }
@@ -1250,6 +1250,26 @@ async function runDaemon(
     }
   };
 
+  // The receiver of a delivery reports what became of it to the frame's `from`, this socket:
+  // `{"type":"peer_message_status","orig_msg_id":"<msg_id>","state":"held"|...}`, no reply expected.
+  const recordDeliveryStatus = (frame: { orig_msg_id?: unknown; state?: unknown }): void => {
+    if (typeof frame.orig_msg_id !== "string" || typeof frame.state !== "string") {
+      log("control: ignored a peer_message_status frame without orig_msg_id and state");
+      return;
+    }
+    const entry = Object.entries(state.deliveries).find(
+      ([, delivery]) => delivery.msgId === frame.orig_msg_id,
+    );
+    if (entry === undefined) {
+      log(`control: peer_message_status for an unknown delivery ${frame.orig_msg_id}; ignored`);
+      return;
+    }
+    const [address, delivery] = entry;
+    delivery.outcome = frame.state;
+    saveState(dir, state);
+    log(`delivery of #${delivery.eventId} to ${address}: ${frame.state}`);
+  };
+
   const handleLine = async (line: string, socket: Socket): Promise<void> => {
     let parsed: unknown;
     try {
@@ -1259,9 +1279,14 @@ async function runDaemon(
       socket.end();
       return;
     }
-    const frame = parsed as Partial<Command> & { type?: unknown };
+    const frame = parsed as Partial<Command> & {
+      type?: unknown;
+      orig_msg_id?: unknown;
+      state?: unknown;
+    };
     if (typeof frame !== "object" || frame === null || typeof frame.cmd !== "string") {
-      log(`control: ignored a frame of type ${String(frame?.type ?? "unknown")}`);
+      if (frame?.type === "peer_message_status") recordDeliveryStatus(frame);
+      else log(`control: ignored a frame of type ${String(frame?.type ?? "unknown")}`);
       socket.end();
       return;
     }

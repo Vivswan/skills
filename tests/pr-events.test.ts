@@ -262,8 +262,21 @@ function eventIds(walPath: string): number[] {
     .map((line) => (JSON.parse(line) as { id: number }).id);
 }
 
-/** A fake Claude Code inbox at <dir>/<this pid>.sock: a live pid, so the liveness rule keeps it. */
-function inbox(dir: string, walPath: string): Promise<Inbox> {
+/** One JSON line to a Unix socket, the way an inbox reports a delivery's state to its sender. */
+function sendLine(socketPath: string, frame: unknown): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(socketPath, () => socket.end(`${JSON.stringify(frame)}\n`));
+    socket.on("error", reject);
+    socket.on("close", () => resolve());
+  });
+}
+
+/**
+ * A fake Claude Code inbox at <dir>/<this pid>.sock: a live pid, so the liveness rule keeps it.
+ * With `reportState`, every frame received is answered to its `from` with a peer_message_status
+ * frame in that state, as a session does for a held or refused delivery.
+ */
+function inbox(dir: string, walPath: string, reportState?: string): Promise<Inbox> {
   const path = join(dir, `${process.pid}.sock`);
   const connections: string[] = [];
   const walAtConnect: number[][] = [];
@@ -275,7 +288,19 @@ function inbox(dir: string, walPath: string): Promise<Inbox> {
       socket.on("data", (chunk: string) => {
         bytes += chunk;
       });
-      socket.on("close", () => connections.push(bytes));
+      socket.on("close", () => {
+        connections.push(bytes);
+        if (reportState === undefined) return;
+        const frame = JSON.parse(bytes.split("\n")[0] as string) as {
+          from: string;
+          msg_id: string;
+        };
+        void sendLine(frame.from.replace(/^uds:/, ""), {
+          type: "peer_message_status",
+          orig_msg_id: frame.msg_id,
+          state: reportState,
+        });
+      });
     });
     server.once("error", reject);
     server.listen(path, () =>
@@ -372,10 +397,10 @@ class Scenario {
     };
   }
 
-  async inbox(name: string): Promise<Inbox> {
+  async inbox(name: string, reportState?: string): Promise<Inbox> {
     const dir = join(this.dir, name);
     mkdirSync(dir);
-    const box = await inbox(dir, join(this.dir, "events.jsonl"));
+    const box = await inbox(dir, join(this.dir, "events.jsonl"), reportState);
     this.inboxes.push(box);
     return box;
   }
@@ -1237,6 +1262,45 @@ describe("pr-events.mts", () => {
     expect(status).toContain(`${dead} pruned=inbox refused (ECONNREFUSED) at `);
     expect(status).toContain("delivery=failed: ECONNREFUSED (#2 at ");
     s.stop();
+  }, 30000);
+
+  test("a held delivery reported back by the inbox is what status shows; a report for an unknown message is logged and changes nothing", async () => {
+    // The page promises `status` shows a held delivery, and a session that holds a frame says so
+    // only by a peer_message_status frame to the daemon's control socket; a daemon that ignored
+    // frames without `cmd` would show the delivery as sent for good.
+    const s = new Scenario("held");
+    const box = await s.inbox("a", "held");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+    });
+    expect(s.run(["watch", PR7, "--mode", "prompting"], { inbox: box.path }).code).toBe(0);
+    expect(await box.frames(1)).toHaveLength(1);
+    const deadline = Date.now() + 3000;
+    let status = s.run(["status"]).stdout;
+    while (!status.includes("delivery=held") && Date.now() < deadline) {
+      await Bun.sleep(50);
+      status = s.run(["status"]).stdout;
+    }
+    expect(status).toContain(`socket ${box.path} mode=prompting`);
+    expect(status).toContain("delivery=held (#1 at ");
+    await sendLine(s.socketPath(), {
+      type: "peer_message_status",
+      orig_msg_id: "pr-events-1-not-ours",
+      state: "released",
+    });
+    while (!s.log().includes("unknown delivery") && Date.now() < deadline) await Bun.sleep(50);
+    expect(s.log()).toContain(
+      "peer_message_status for an unknown delivery pr-events-1-not-ours; ignored",
+    );
+    expect(s.run(["status"]).stdout).toContain("delivery=held (#1 at ");
+    s.stop();
+    expect(
+      JSON.parse(readFileSync(join(s.dir, "state.json"), "utf-8")).deliveries[box.path],
+    ).toMatchObject({
+      eventId: 1,
+      outcome: "held",
+    });
   }, 30000);
 
   test("a WAL tail cut mid-line does not swallow the next event appended", () => {

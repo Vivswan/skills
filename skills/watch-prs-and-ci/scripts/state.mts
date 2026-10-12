@@ -90,6 +90,9 @@ export interface PendingCommit {
 export interface Delivery {
   eventId: number;
   at: string;
+  /** The frame's msg_id; the receiver's status report names it. */
+  msgId: string;
+  /** `sent`, `failed: <code>`, or the state the receiver reported back: held, released, denied, expired, refused, dropped. */
   outcome: string;
 }
 
