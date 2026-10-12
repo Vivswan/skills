@@ -6,6 +6,8 @@
  * throw CheckFailure (via fail) on a violation.
  */
 
+import { isBuiltin } from "node:module";
+import { isDeepStrictEqual } from "node:util";
 import type { Frontmatter } from "./lib";
 import { errorMessage, fail, isRecord, KEBAB_CASE } from "./lib";
 
@@ -88,6 +90,194 @@ export function checkMarketplacePluginVersionBan(
           " source of truth is marketplace.json metadata.version (see docs/authoring.md > Validation Checklist)",
       );
     }
+  }
+}
+
+export const SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
+
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+] as const;
+
+const DEPENDENCIES_DOC = "docs/authoring.md > Dependencies";
+
+export interface SkillDependencyLayout {
+  /** The skill's display path, e.g. skills/working-text. */
+  readonly skillPath: string;
+  /** Display paths of every package.json under the skill, node_modules excluded. */
+  readonly manifestPaths: readonly string[];
+  /** Display paths of every node_modules directory under the skill. */
+  readonly nodeModulesPaths: readonly string[];
+  /** The parsed skills/<name>/package.json, when the skill root carries one. */
+  readonly manifest: Record<string, unknown> | undefined;
+  /** The parsed skills/<name>/bun.lock, when present. */
+  readonly lock: Record<string, unknown> | undefined;
+  /** The root package.json devDependencies: where tsc resolves every skill import. */
+  readonly rootDevDependencies: Record<string, unknown>;
+}
+
+// Why a lockfile per skill and a root pin of the same version: bun's auto-install ignores a package.json pin, and an
+// inline `pkg@1.2.3` specifier breaks once a second version of the package was ever fetched on the machine, so a
+// skill's dependencies install from its own bun.lock into a shared cache (the bootstrap in docs/authoring.md) while
+// tsc resolves the same bare import against the root node_modules.
+export function checkSkillDependencies(
+  layout: SkillDependencyLayout,
+): ReadonlySet<string> | undefined {
+  const { skillPath, manifest } = layout;
+  for (const path of layout.nodeModulesPaths) {
+    fail(
+      `${path}: node_modules under a skill folder; dependencies install into the shared cache, never` +
+        ` here (${DEPENDENCIES_DOC})`,
+    );
+  }
+  const rootManifest = `${skillPath}/package.json`;
+  for (const path of layout.manifestPaths) {
+    if (path !== rootManifest) {
+      fail(
+        `${path}: a skill's package.json sits at ${rootManifest}, nowhere deeper (${DEPENDENCIES_DOC})`,
+      );
+    }
+  }
+  if (manifest === undefined) {
+    if (layout.lock !== undefined) {
+      fail(
+        `${skillPath}/bun.lock: a lockfile with no package.json beside it; commit both or neither`,
+      );
+    }
+    return undefined;
+  }
+  const declared = new Set<string>();
+  for (const field of DEPENDENCY_FIELDS) {
+    const entries = manifest[field];
+    if (entries === undefined) continue;
+    if (!isRecord(entries)) {
+      fail(`${rootManifest}: ${field} must be an object of package name to exact version`);
+    }
+    for (const [name, version] of Object.entries(entries)) {
+      if (typeof version !== "string" || !SEMVER.test(version)) {
+        fail(
+          `${rootManifest}: ${field} entry '${name}' is ${JSON.stringify(version)} -- a skill pins an` +
+            ` exact version only (1.2.3; no range, tag, git or file specifier), see ${DEPENDENCIES_DOC}`,
+        );
+      }
+      const rootVersion = layout.rootDevDependencies[name];
+      if (rootVersion !== version) {
+        const rootState =
+          rootVersion === undefined ? "do not list it" : `pin ${JSON.stringify(rootVersion)}`;
+        fail(
+          `${rootManifest}: ${field} entry '${name}' is ${version} but the root package.json` +
+            ` devDependencies ${rootState} -- tsc resolves skill imports from the root node_modules, so` +
+            ` both pins stay identical (${DEPENDENCIES_DOC})`,
+        );
+      }
+      declared.add(name);
+    }
+  }
+  if (declared.size === 0) {
+    fail(
+      `${rootManifest}: declares no dependency; a skill without dependencies ships neither package.json` +
+        ` nor bun.lock (${DEPENDENCIES_DOC})`,
+    );
+  }
+  if (layout.lock === undefined) {
+    fail(
+      `${skillPath}/bun.lock: missing beside a package.json with dependencies; run` +
+        ` bun install --lockfile-only --cwd ${skillPath} and commit it (${DEPENDENCIES_DOC})`,
+    );
+  }
+  // A bumped pin with a stale lock lands in a fresh bootstrap directory where `--frozen-lockfile` refuses it at
+  // the consumer's first run; this is the author's earlier warning. Pins are compared as one name-to-version map
+  // across the fields, since bun records a package named in both dependencies and optionalDependencies once.
+  const workspaces = isRecord(layout.lock.workspaces) ? layout.lock.workspaces : undefined;
+  const locked = workspaces !== undefined && isRecord(workspaces[""]) ? workspaces[""] : {};
+  const declaredPins = mergedPins(manifest);
+  const lockedPins = mergedPins(locked);
+  if (!isDeepStrictEqual(declaredPins, lockedPins)) {
+    fail(
+      `${skillPath}/bun.lock: records ${JSON.stringify(lockedPins)} but package.json declares` +
+        ` ${JSON.stringify(declaredPins)}; run bun install --lockfile-only --cwd ${skillPath} and commit it`,
+    );
+  }
+  return declared;
+}
+
+function mergedPins(fields: Record<string, unknown>): Record<string, unknown> {
+  const pins: Record<string, unknown> = {};
+  for (const field of DEPENDENCY_FIELDS) {
+    const entries = fields[field];
+    if (isRecord(entries)) Object.assign(pins, entries);
+  }
+  return pins;
+}
+
+export interface SkillDependencyScope {
+  readonly skillPath: string;
+  /** Package names the skill's package.json declares; undefined when the skill has none. */
+  readonly declared: ReadonlySet<string> | undefined;
+}
+
+/** `bun` and `bun:*` are the runtime's own modules; isBuiltin covers `node:*` and the bare builtin names. */
+function isRuntimeModule(specifier: string): boolean {
+  return /^bun(?::|$)/.test(specifier) || isBuiltin(specifier);
+}
+
+/** The package a specifier names: `@scope/name/sub` -> `@scope/name`, `name/sub` -> `name`. */
+function packageName(specifier: string): string {
+  const segments = specifier.split("/");
+  return specifier.startsWith("@") ? segments.slice(0, 2).join("/") : (segments[0] ?? specifier);
+}
+
+// bun's own transpiler is what a consumer runs, so the requests left after it erases types are the runtime truth:
+// `import type`, all-type specifier lists, `typeof import()` and ambient `declare module` bodies vanish (tsc owns
+// them), while every form that loads a module, through parentheses, `as const`, `!`, a template or a folded
+// concatenation, comes back as one path. A computed `import(Bun.resolveSync(name, DEPS_DIR))`, the bootstrap's
+// own form, has no literal path and is left alone. autoImportJSX makes the import bun synthesizes for JSX
+// (react/jsx-dev-runtime) visible to the scanner, since a consumer's run loads it like any other package.
+const TRANSPILERS = {
+  ts: new Bun.Transpiler({ loader: "ts" }),
+  tsx: new Bun.Transpiler({ loader: "tsx", autoImportJSX: true }),
+};
+
+export function checkSkillScriptImports(
+  displayPath: string,
+  sourceText: string,
+  scope: SkillDependencyScope,
+): void {
+  const transpiler = /\.[jt]sx$/.test(displayPath) ? TRANSPILERS.tsx : TRANSPILERS.ts;
+  let runtime: string;
+  try {
+    runtime = transpiler.transformSync(sourceText);
+  } catch (error) {
+    fail(`${displayPath}: does not parse: ${errorMessage(error)}`);
+  }
+  for (const { kind, path } of transpiler.scanImports(runtime)) {
+    if (/^(?:\.|\/|file:|data:)/.test(path) || isRuntimeModule(path)) continue;
+    if (scope.declared === undefined) {
+      fail(
+        `${displayPath}: imports '${path}' but ${scope.skillPath} has no package.json -- a dependency` +
+          ` ships ${scope.skillPath}/package.json + bun.lock and loads through the bootstrap (${DEPENDENCIES_DOC})`,
+      );
+    }
+    if (!scope.declared.has(packageName(path))) {
+      fail(
+        `${displayPath}: imports '${path}', which ${scope.skillPath}/package.json does not declare` +
+          ` (${DEPENDENCIES_DOC})`,
+      );
+    }
+    if (kind === "dynamic-import") {
+      fail(
+        `${displayPath}: import("${path}") resolves from the user's project, not the skill's` +
+          ` dependencies -- import(Bun.resolveSync("${path}", DEPS_DIR)) per the template (${DEPENDENCIES_DOC})`,
+      );
+    }
+    fail(
+      `${displayPath}: static import of '${path}' runs before the bootstrap installs it -- load it` +
+        ` with the typed dynamic import from the template (${DEPENDENCIES_DOC})`,
+    );
   }
 }
 

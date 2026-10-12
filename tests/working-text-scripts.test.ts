@@ -1,7 +1,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import {
   importSpecifiers,
@@ -90,12 +100,17 @@ interface Outcome {
   stderr: string;
 }
 
-function run(script: string, args: string[], cwd: string): Outcome {
+function run(
+  script: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string> = {},
+): Outcome {
   const result = Bun.spawnSync([process.execPath, script, ...args], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, NO_COLOR: "1", ...env },
   });
   return {
     status: result.exitCode,
@@ -338,25 +353,40 @@ describe("importSpecifiers", () => {
   });
 });
 
-describe("without oxc-parser", () => {
-  test("every script exits 2 with the one-line install hint", () => {
-    // A repository that copied the scripts but did not add the dependency:
-    // its own node_modules stops bun's auto-install.
-    const root = join(scratch, "no-parser");
+describe("dependency bootstrap", () => {
+  // The scripts' one dependency installs from the skill's bun.lock into XDG_CACHE_HOME/skills-deps, so
+  // a consumer's project never gains a node_modules. The fake bun pins where the install is sent and
+  // that the skill folder stays untouched; the stale lock pins that --frozen-lockfile is what refuses
+  // a lock disagreeing with package.json; the manifest-less copy pins the one-line hint.
+  const SKILL_DIR = join(ROOT, "skills", "working-text");
+  const SCRIPT_NAMES = [
+    "arch-lint.mts",
+    "render-architecture-map.mts",
+    "check-architecture-page.mts",
+  ];
+
+  function copiedSkill(name: string, files: readonly string[]): string {
+    const root = join(scratch, name);
+    for (const script of SCRIPT_NAMES) cpSync(join(SCRIPTS, script), join(root, "scripts", script));
+    for (const file of files) cpSync(join(SKILL_DIR, file), join(root, file));
     writeTree(root, {
-      "package.json": '{ "name": "x", "type": "module" }\n',
-      "node_modules/.keep": "",
       "architecture.yml": "layers:\n  a: [src/a.ts]\n",
       "src/a.ts": "export const a = 1;\n",
     });
-    for (const script of [
-      "arch-lint.mts",
-      "render-architecture-map.mts",
-      "check-architecture-page.mts",
-    ]) {
-      cpSync(join(SCRIPTS, script), join(root, "scripts", script));
-    }
-    const hint = "working-text scripts need oxc-parser: bun add -d oxc-parser\n";
+    return root;
+  }
+
+  function depsDirFor(root: string, cacheHome: string): string {
+    const hash = createHash("sha256")
+      .update(readFileSync(join(root, "package.json")))
+      .update(readFileSync(join(root, "bun.lock")))
+      .digest("hex");
+    return join(cacheHome, "skills-deps", `${basename(root)}-${hash.slice(0, 12)}`);
+  }
+
+  test("scripts copied without the skill's package.json and bun.lock exit 2 with the one-line hint", () => {
+    const root = copiedSkill("no-manifest", []);
+    const hint = "no-manifest scripts need the skill's package.json and bun.lock beside scripts/\n";
     expect(run(join(root, "scripts", "arch-lint.mts"), [], root)).toEqual({
       status: 2,
       stdout: "",
@@ -368,6 +398,62 @@ describe("without oxc-parser", () => {
     expect(
       run(join(root, "scripts", "check-architecture-page.mts"), ["--page", "x.md"], root),
     ).toEqual({ status: 2, stdout: "", stderr: hint });
+  });
+
+  test("the install is sent to XDG_CACHE_HOME/skills-deps/<skill>-<lock hash>, never into the skill folder", () => {
+    const root = copiedSkill("shared-cache", ["package.json", "bun.lock"]);
+    const cacheHome = join(scratch, "shared-cache-home");
+    const binDir = join(scratch, "fake-bin");
+    const argvFile = join(scratch, "fake-bun-argv.txt");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "bun"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$FAKE_BUN_ARGV"\n');
+    chmodSync(join(binDir, "bun"), 0o755);
+    const depsDir = depsDirFor(root, cacheHome);
+
+    const out = run(join(root, "scripts", "arch-lint.mts"), [], root, {
+      XDG_CACHE_HOME: cacheHome,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      FAKE_BUN_ARGV: argvFile,
+    });
+
+    expect(readFileSync(argvFile, "utf8").split("\n").filter(Boolean)).toEqual([
+      "install",
+      "--frozen-lockfile",
+      "--cwd",
+      depsDir,
+    ]);
+    // The fake installed nothing, so the copied manifests are all the directory holds and the import fails.
+    expect(readdirSync(depsDir).sort()).toEqual(["bun.lock", "package.json"]);
+    expect(readdirSync(root).sort()).toEqual([
+      "architecture.yml",
+      "bun.lock",
+      "package.json",
+      "scripts",
+      "src",
+    ]);
+    expect(out).toEqual({
+      status: 2,
+      stdout: "",
+      stderr: `shared-cache scripts need oxc-parser: bun install --frozen-lockfile --cwd ${depsDir}\n`,
+    });
+  });
+
+  test("a lock that disagrees with package.json is refused, exit 2 with the command to run", () => {
+    const root = copiedSkill("stale-lock", ["package.json", "bun.lock"]);
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "stale-lock-dependencies", private: true, dependencies: {} }),
+    );
+    const cacheHome = join(scratch, "stale-cache-home");
+    const out = run(join(root, "scripts", "arch-lint.mts"), [], root, {
+      XDG_CACHE_HOME: cacheHome,
+    });
+    expect(out.status).toBe(2);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/lockfile had changes, but lockfile is frozen/);
+    expect(out.stderr).toEndWith(
+      `stale-lock dependencies did not install; run: bun install --frozen-lockfile --cwd ${depsDirFor(root, cacheHome)}\n`,
+    );
   });
 });
 
