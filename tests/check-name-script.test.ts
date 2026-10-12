@@ -2,17 +2,21 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import {
-  type Cell,
   checkName,
-  GITHUB_STARS_TAKEN,
-  type Io,
+  columns,
   type Options,
   renderTsv,
   run,
   runControls,
-  takenControlFor,
-  WIKTIONARY_FLAG,
 } from "../skills/project-naming/scripts/check-name.mts";
+import {
+  type Cell,
+  GITHUB_STARS_TAKEN,
+  type Io,
+  REGISTRIES,
+  type Registry,
+  WIKTIONARY_FLAG,
+} from "../skills/project-naming/scripts/registries.mts";
 
 // check-name.mts is driven through an injected fetch and resolver: every registry reply here is
 // hand-written and no test reaches the network. Each test names the reply shape it pins.
@@ -67,17 +71,9 @@ function fakeIo(
 
 /** Each column's taken control reads taken there; every other name reads free. */
 function allTakenIo(resolving: string[]): Io {
-  const controls = [
-    "pypi",
-    "npm",
-    "crates",
-    "hf",
-    "github-user",
-    "github-repo",
-    "arxiv",
-    "wiktionary",
-    "urban",
-  ].map(takenControlFor);
+  const controls = REGISTRIES.filter((entry) => entry.kind === "registry").map(
+    (entry) => entry.takenControl,
+  );
   return fakeIo((url) => {
     const path = decodeURIComponent(url.pathname + url.search).toLowerCase();
     const named = controls.find((control) => path.includes(control));
@@ -112,8 +108,8 @@ function withReply(base: Io, hostname: string, reply: () => Response): Io {
   };
 }
 
-const OPTIONS: Options = { domains: ["com"], arxiv: false };
-const WITH_ARXIV: Options = { domains: ["com"], arxiv: true };
+const OPTIONS: Options = { table: REGISTRIES, domains: ["com"], arxiv: false, registries: null };
+const WITH_ARXIV: Options = { ...OPTIONS, arxiv: true };
 const RANDOM = "zqplmwtrkvbn";
 
 function cell(row: Record<string, Cell>, column: string): Cell {
@@ -511,6 +507,58 @@ describe("check-name.mts controls", () => {
   });
 });
 
+describe("check-name.mts registry table", () => {
+  // A registry that exists only in this test: the table is the one place a column is defined, so
+  // an entry added there must reach the columns, the header, and the control rows with no other
+  // change. A column that needed a second edit elsewhere would be missing from one of them.
+  const extra: Registry = {
+    kind: "registry",
+    id: "extra",
+    label: "a registry added by the test",
+    takenControl: "occupied",
+    lookup: async (_io, name) =>
+      name === "occupied" ? { status: "taken", detail: "extra entry" } : { status: "free" },
+  };
+  const extended: Options = { ...OPTIONS, table: [...REGISTRIES, extra] };
+
+  test("an entry added to the table is a column, a header field, and a control row with no other change", async () => {
+    expect(columns(extended).map((c) => c.id)).toEqual([
+      ...columns(OPTIONS).map((c) => c.id),
+      "extra",
+    ]);
+    const row = await checkName(
+      fakeIo(() => undefined),
+      extended,
+      "lumera",
+    );
+    expect(cell(row.cells, "extra")).toEqual({ status: "free" });
+    const tsv = renderTsv(extended, [row]);
+    expect(tsv.split("\n")[0]?.endsWith("\turban\textra")).toBe(true);
+    const failures = await runControls(allTakenIo(["nic.com"]), extended, RANDOM);
+    expect(failures).toEqual([]);
+    const blind: Options = {
+      ...extended,
+      table: [...REGISTRIES, { ...extra, lookup: async () => ({ status: "free" }) }],
+    };
+    expect(await runControls(allTakenIo(["nic.com"]), blind, RANDOM)).toEqual([
+      { column: "extra", control: "occupied", expected: "taken", got: { status: "free" } },
+    ]);
+  });
+
+  test("--registries narrows the columns, the controls, and the header to the ids named, dns ids included", async () => {
+    const subset: Options = { ...WITH_ARXIV, registries: ["npm", "dns-com"] };
+    expect(columns(subset).map((c) => c.id)).toEqual(["npm", "dns-com"]);
+    const failures = await runControls(
+      fakeIo(() => undefined),
+      subset,
+      RANDOM,
+    );
+    expect(failures.map((f) => f.column)).toEqual(["npm", "dns-com"]);
+    const tsv = renderTsv(subset, []);
+    expect(tsv).toBe("name\tnpm\tdns-com\n");
+  });
+});
+
 describe("check-name.mts output", () => {
   test("the TSV carries one row per name with every cell spelled out, so an empty cell cannot pass as free", () => {
     const tsv = renderTsv(OPTIONS, [
@@ -536,6 +584,23 @@ describe("check-name.mts output", () => {
     const none = Bun.spawnSync([process.execPath, SCRIPT], { stdout: "pipe", stderr: "pipe" });
     expect(none.exitCode).toBe(2);
     expect(none.stderr.toString()).toContain("usage:");
+    // An id the table lacks, and an empty id (which would otherwise select no column at all and
+    // print an empty row as a clean run), are refused before any lookup.
+    for (const selection of ["npm,gopher", "", ",npm"]) {
+      const refused = Bun.spawnSync(
+        [process.execPath, SCRIPT, "--registries", selection, "lumera"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(refused.exitCode, selection).toBe(2);
+      expect(refused.stderr.toString(), selection).toContain("--registries");
+    }
+    // A valid selection that --no-arxiv then empties would print a clean row with no cells.
+    const emptied = Bun.spawnSync(
+      [process.execPath, SCRIPT, "--registries", "arxiv", "--no-arxiv", "lumera"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(emptied.exitCode).toBe(2);
+    expect(emptied.stderr.toString()).toContain("no column");
     // A space, a trailing dash, and a 40th character: each refused by some registry, so none
     // may be read as free there.
     for (const name of ["two words", "example-", `a${"b".repeat(39)}`]) {

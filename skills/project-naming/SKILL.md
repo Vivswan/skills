@@ -78,9 +78,11 @@ The rejection round (step 7) sits between runs: rewrite the brief, rerun only th
 
 ```bash
 bun "<skill-dir>/scripts/check-name.mts" <name> <name> ...        # domains default to com, ai, dev; --domain <tld> replaces that list
+bun "<skill-dir>/scripts/check-name.mts" --list-registries        # the live column table: id, label, taken control
+bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,dns-com <name>   # only the columns the brief claims
 ```
 
-One row per name, one column per registry. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`:
+One row per name, one column per registry; the registries live in one table in `scripts/registries.mts`, and `--list-registries` prints it. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`:
 
 ```text
 name    pypi  npm                 crates  hf    github-user           github-repo  arxiv  dns-com                     dns-ai  wiktionary                   urban
