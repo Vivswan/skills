@@ -381,7 +381,6 @@ async function arxivLookup(io: Io, name: string): Promise<Cell> {
   }
 }
 
-/** Every top-level domain registry runs its own nic host. */
 /** The zone apex, in zone-file notation, which no candidate spells (a name starts with a
  * letter). No host under an arbitrary zone is guaranteed an address (nic.uk and nic.ca have none,
  * nic.co.uk does not exist), where a zone a registry delegates has name servers by definition,
