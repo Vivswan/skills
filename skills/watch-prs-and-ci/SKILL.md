@@ -126,7 +126,7 @@ The runtime directory, tried in this order. Each must be creatable as a private 
 
 | Tried | When |
 | --- | --- |
-| `$PR_EVENTS_DIR` | set |
+| `$PR_EVENTS_DIR` | set, as an absolute path |
 | `$XDG_RUNTIME_DIR/pr-events` | `XDG_RUNTIME_DIR` set |
 | `$CLAUDE_CODE_TMPDIR/pr-events-<uid>` | `CLAUDE_CODE_TMPDIR` set |
 | `<os tmpdir>/pr-events-<uid>` | the OS temp dir, honouring `TMPDIR` |

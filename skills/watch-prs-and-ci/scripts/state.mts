@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { PrKey, Row } from "./pr-rows.mts";
 
 export type EventKind = "comment" | "review" | "ci" | "head" | "merged" | "closed" | "trouble";
@@ -136,12 +136,20 @@ export class RuntimeDirError extends Error {}
 /**
  * One private directory per user, the ladder Claude Code uses for its own sockets. A candidate that
  * exists but belongs to someone else is skipped, never shared: the sockets inside it are open inboxes.
- * The override is made absolute so the daemon and the CLI name the same directory from any cwd.
+ * The override must be absolute: the daemon and the CLI are started from different directories,
+ * and a relative one would name two sockets.
  */
 export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   const uid = process.getuid?.() ?? 0;
   const candidates: string[] = [];
-  if (env.PR_EVENTS_DIR) candidates.push(resolve(env.PR_EVENTS_DIR));
+  if (env.PR_EVENTS_DIR) {
+    if (!isAbsolute(env.PR_EVENTS_DIR)) {
+      throw new RuntimeDirError(
+        `PR_EVENTS_DIR must be an absolute path, got: ${env.PR_EVENTS_DIR}`,
+      );
+    }
+    candidates.push(env.PR_EVENTS_DIR);
+  }
   if (env.XDG_RUNTIME_DIR) candidates.push(join(env.XDG_RUNTIME_DIR, "pr-events"));
   // Claude Code's own temp root, which os.tmpdir() does not read.
   if (env.CLAUDE_CODE_TMPDIR) candidates.push(join(env.CLAUDE_CODE_TMPDIR, `pr-events-${uid}`));

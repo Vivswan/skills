@@ -606,6 +606,11 @@ describe("pr-events.mts", () => {
     const long = s.run(["daemon", "--id", "x".repeat(120)]);
     expect(long.code).toBe(2);
     expect(long.stderr).toContain("longer than the 104 bytes a Unix socket allows");
+    // The daemon and the CLI start from different directories; a relative override would name
+    // two sockets, and the CLI would ask for a second daemon.
+    const relative = s.run(["watch", PR7], { inbox: box.path, env: { PR_EVENTS_DIR: "runtime" } });
+    expect(relative.code).toBe(2);
+    expect(relative.stderr).toContain("PR_EVENTS_DIR must be an absolute path");
     expect(s.ghCalls()).toHaveLength(0);
     expect(await box.frames(0)).toHaveLength(0);
     expect(existsSync(s.socketPath())).toBe(false);
