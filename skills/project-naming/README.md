@@ -20,7 +20,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/project-naming
 
 - Interviews the owner first: the names they like the sound of become the brief every search lane scores against
 - Runs one lane per naming style in parallel, each checking its best candidates by machine
-- Ships `scripts/check-name.mts`: one row per name, one column per registry from the table in `scripts/registries.mts` (package indexes, code hosts, DNS, arXiv, Wiktionary with offensive senses flagged, Urban Dictionary); `--list-registries` prints the live table, and a taken control plus a random free control run with every batch
+- Ships `scripts/check-name.mts`: one row per name, one column per registry in the table in `scripts/registries.mts` (package indexes, code hosts, one DNS column per domain, dictionaries, a typosquat column, a say column); `--list-registries` prints the live table, and a taken control plus a random free control run with every batch
 - Presents one ranked table with a verdict per name (CLEAR, MINOR with the collision named, TAKEN); a name never appears without its row
 - Treats "none of these" as the normal second round, re-verifies the winner the same day, and records what was not checked
 

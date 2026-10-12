@@ -46,6 +46,7 @@ Turn the answers into one page every lane reads. The owner approves it before an
 
 ```text
 exemplars:   <the names the owner likes>, scored 1 to 5 by closeness
+vector:      <per exemplar: letters, syllables, stress, open or closed vowels, Latinate or Germanic, hard letters>
 grows into:  <scope in one line>
 claims:      pypi npm docker hf github dns:com,ai
 languages:   <the languages the users read, from the interview>
@@ -54,6 +55,13 @@ soft scores: exemplar closeness, elegance, room to grow
 ```
 
 The hard gate is general. The owner's taste lives in the exemplars, so a different owner gets a different search from the same skill.
+
+The vector decomposes each exemplar once, so every lane scores closeness against the same six facts instead of its own impression. An example, for an owner who likes `vercel` and `linear`:
+
+```text
+vercel:  6 letters, 2 syllables, stress on the first, closed vowels, Latinate, no hard letters
+linear:  6 letters, 3 syllables, stress on the first, open vowels, Latinate, no hard letters
+```
 
 ### 3. Lanes
 
@@ -128,6 +136,11 @@ All lanes merge into one ranked table. A name never reaches the owner without it
 - CLEAR: free on every claimed registry, meaning NONE.
 - MINOR: one collision the owner can accept knowingly, named in the cell.
 - TAKEN: fails the hard gate; shown only when the owner asked to see what was ruled out.
+
+Two more checks run on each finalist before the table goes out, and their results join the `say it` and `meaning` cells:
+
+- **Say it to a stranger.** Spell the name, letter by letter, to a fresh agent with no context, and ask it to pronounce the name and spell it back. A pronunciation that differs from the row's `say it` cell, or a spelling that differs from the name, is MILD, with the stranger's reading quoted.
+- **Look at it.** Write the name four ways: lowercase, Title Case, as a terminal command (`<name> --help`), and as a short icon label. A form that misreads (a lowercase `l` for an `I`, a word that splits wrong in Title Case) is named in the row.
 
 ### 7. Rejection round
 
