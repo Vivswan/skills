@@ -197,6 +197,8 @@ Every event line has the same shape, whichever sink reads it:
 
 Every line is addressed to the daemon's one owner, and `status` shows how the last delivery to a session went. A held or refused delivery leaves the line in the log, so nothing is lost.
 
+In a fleet, the lead's inbox is not the sink: the user's client renders inbox frames as the user's own messages. A relay subagent runs a file-sink daemon as its background task and forwards each event by message; its brief and routing table are the `/orchestrator-mode` skill's.
+
 ## Polling Budget
 
 GitHub throttles in separate buckets: the core REST bucket, a secondary bucket for the Actions REST endpoints (`gh run list`, `gh run watch`, `gh run view`) on top of it, and GraphQL's own.
