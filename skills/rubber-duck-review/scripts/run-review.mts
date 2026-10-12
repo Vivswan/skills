@@ -34,11 +34,12 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TOOLS = ["codex", "claude", "copilot"] as const;
@@ -415,13 +416,21 @@ function withoutGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * config and credentials; the trust write lands there and dies with it. */
 const CODEX_HOME_FILES = ["config.toml", "auth.json"];
 const CODEX_AUTH_FILE = "auth.json";
+/** codex writes each review's transcript (its session rollout) under this
+ * directory of its home. Those are the user's review logs, so the scratch
+ * home links it to the user's own directory instead of holding a copy that
+ * dies with the review. Everything else codex writes (its sqlite state, the
+ * trust block) stays scratch. */
+const CODEX_SESSIONS_DIR = "sessions";
 
+/** Absolute, since the sessions link below is read from inside the scratch home, not from the cwd. */
 function realCodexHome(): string {
-  return process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  return resolve(process.env.CODEX_HOME ?? join(homedir(), ".codex"));
 }
 
-/** Fills `home` (already created) with the user's config and credentials, each only when it exists. */
-/** Returns the credentials bytes as copied, so a later refresh is told apart from them. */
+/** Fills `home` (already created) with the user's config and credentials, each only when it exists,
+ * and links its sessions directory to the user's, created if missing.
+ * Returns the credentials bytes as copied, so a later refresh is told apart from them. */
 function fillCodexHome(home: string): Buffer | null {
   const real = realCodexHome();
   let auth: Buffer | null = null;
@@ -431,6 +440,9 @@ function fillCodexHome(home: string): Buffer | null {
     copyFileSync(source, join(home, name));
     if (name === CODEX_AUTH_FILE) auth = readFileSync(join(home, name));
   }
+  const realSessions = join(real, CODEX_SESSIONS_DIR);
+  mkdirSync(realSessions, { recursive: true });
+  symlinkSync(realSessions, join(home, CODEX_SESSIONS_DIR));
   return auth;
 }
 
@@ -1191,9 +1203,9 @@ function main(): void {
   }
   const scratch = scratchPaths(captureDir ?? mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
   // Snapshot the prompt into the scratch dir (in capture mode this rewrites
-  // the snapshot the parent already made): every review artifact, including
-  // any code excerpts in the prompt, lives and dies with the capture. The
-  // caller's own prompt file stays theirs.
+  // the snapshot the parent already made): everything the launcher writes,
+  // including any code excerpts in the prompt, lives and dies with the
+  // capture. The caller's own prompt file stays theirs.
   const promptSnapshot = join(scratch.dir, "prompt.txt");
   writeFileSync(promptSnapshot, prompt);
   const delivery = stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, prompt);

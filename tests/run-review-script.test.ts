@@ -4,6 +4,7 @@ import {
   closeSync,
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -106,6 +107,10 @@ if [ -n "\${STUB_HOME_REPORT:-}" ]; then
   echo '[projects."'"$PWD"'"]' >> "\${CODEX_HOME:-/nonexistent}/config.toml" 2>/dev/null || true
   # codex's token refresh, which must persist for the user
   if [ -n "\${STUB_REFRESH_AUTH:-}" ]; then printf '%s' "\${STUB_REFRESH_AUTH}" > "\${CODEX_HOME:-/nonexistent}/auth.json"; fi
+  # codex's session rollout, the review's transcript, which must persist for the user
+  if [ -n "\${STUB_ROLLOUT:-}" ]; then
+    mkdir -p "\${CODEX_HOME:-/nonexistent}/sessions/2026/10/11" && printf '%s' "\${STUB_ROLLOUT}" > "\${CODEX_HOME:-/nonexistent}/sessions/2026/10/11/rollout-example.jsonl"
+  fi
   # a parallel review refreshing the user's own file while this one runs
   if [ -n "\${STUB_REAL_AUTH_WRITE:-}" ]; then printf '%s' "\${STUB_REAL_AUTH_WRITE}" > "\${STUB_REAL_AUTH_PATH}"; fi
 fi
@@ -845,10 +850,88 @@ describe("run-review.mts", () => {
     const [seenHome, seenConfig, seenFiles] = readFileSync(homeReport, "utf-8").split("\n");
     expect(seenHome).toMatch(/\/rubber-duck-[^/]+\/codex-home$/);
     expect(seenConfig).toBe('model = "example"');
-    expect(seenFiles?.trim().split(/\s+/).sort()).toEqual(["auth.json", "config.toml"]);
+    expect(seenFiles?.trim().split(/\s+/).sort()).toEqual(["auth.json", "config.toml", "sessions"]);
     // The stub appended a trust block to the config it saw; the user's file is byte-identical.
     expect(readFileSync(join(home, "config.toml"), "utf-8")).toBe('model = "example"\n');
     expect(r.homeLeft).toBe(false);
+  });
+
+  test("the review's transcript codex writes under the scratch home's sessions lands in the user's own sessions directory and survives the cleanup", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    // An earlier review's transcript already in the user's directory must not be touched.
+    mkdirSync(join(home, "sessions", "2026", "10", "10"), { recursive: true });
+    const earlier = join(home, "sessions", "2026", "10", "10", "rollout-earlier.jsonl");
+    writeFileSync(earlier, '{"earlier":true}\n');
+    const homeReport = join(binDir, "home-report-sessions");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_ROLLOUT: '{"review":true}',
+        CODEX_HOME: home,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(r.homeLeft).toBe(false);
+    expect(lstatSync(join(home, "sessions")).isDirectory()).toBe(true);
+    expect(
+      readFileSync(join(home, "sessions", "2026", "10", "11", "rollout-example.jsonl"), "utf-8"),
+    ).toBe('{"review":true}');
+    expect(readFileSync(earlier, "utf-8")).toBe('{"earlier":true}\n');
+  });
+
+  test("a CODEX_HOME given as a relative path still receives the transcript: the link is read from inside the scratch home, not from the cwd", () => {
+    const repo = fixtureRepo();
+    const homeReport = join(binDir, "home-report-sessions-relative");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_ROLLOUT: '{"relative":true}',
+        CODEX_HOME: ".codex-home",
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(
+      readFileSync(
+        join(repo, ".codex-home", "sessions", "2026", "10", "11", "rollout-example.jsonl"),
+        "utf-8",
+      ),
+    ).toBe('{"relative":true}');
+  });
+
+  test("a codex home without a sessions directory yet gets one, so the first review's transcript has a place to land", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    const homeReport = join(binDir, "home-report-sessions-fresh");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_ROLLOUT: '{"first":true}',
+        CODEX_HOME: join(home, "fresh"),
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(
+      readFileSync(
+        join(home, "fresh", "sessions", "2026", "10", "11", "rollout-example.jsonl"),
+        "utf-8",
+      ),
+    ).toBe('{"first":true}');
   });
 
   test("a token refresh codex writes into the scratch auth.json goes back to the user's home; the config does not", () => {

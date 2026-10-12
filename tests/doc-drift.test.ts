@@ -240,6 +240,10 @@ const SURFACES: Record<string, Surface> = {
         script: "CODEX_HOME: codexHome",
       },
       {
+        doc: "The scratch home's `sessions` directory is a link to the user's own",
+        script: "symlinkSync(realSessions, join(home, CODEX_SESSIONS_DIR));",
+      },
+      {
         doc: 'the report and the launch record carry `sandbox: "copy"`',
         script: "...(sandbox === undefined ? {} : { sandbox }),",
       },
