@@ -111,6 +111,8 @@ function resolveOwner(
   env: NodeJS.ProcessEnv = process.env,
 ): Owner {
   const pid = parsePositiveInt(values.pid, "--pid") ?? null;
+  // `--pid $$` from a shell that execs the daemon as its last command names the daemon itself.
+  if (pid === process.pid) usage("--pid names this very process; pass the agent's own pid");
   if (values.id !== undefined) {
     if (!ID_PATTERN.test(values.id)) {
       usage(`--id must be a name of letters, digits, . _ or -, not ${values.id}`);

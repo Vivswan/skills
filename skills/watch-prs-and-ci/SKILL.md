@@ -163,13 +163,15 @@ pr-events.mts poll | status | stop [--id <name>]
 
 ## Without a Claude Code Inbox
 
-Codex, the Copilot CLI, a shell, or a Claude Code session with no `CLAUDE_CODE_MESSAGING_SOCKET` names a file-sink daemon with `--id` and reads the log instead of receiving messages. Start the daemon as that agent's own background job, naming the process it should end with, then block on `wait`:
+Codex, the Copilot CLI, a shell, or a Claude Code session with no `CLAUDE_CODE_MESSAGING_SOCKET` names a file-sink daemon with `--id` and reads the log instead of receiving messages. Start the daemon as that agent's own background job, then block on `wait`:
 
 ```bash
-bun "<skill-dir>/scripts/pr-events.mts" daemon --id codex-12 --pid $$
+bun "<skill-dir>/scripts/pr-events.mts" daemon --id codex-12
 bun "<skill-dir>/scripts/pr-events.mts" watch octocat/repo#12 --id codex-12
 bun "<skill-dir>/scripts/pr-events.mts" wait --id codex-12 --since 0 --timeout 3600 > /tmp/pr-events-wait.out 2>&1
 ```
+
+A file-sink daemon runs until `stop`. `--pid <pid>` ends it with that process instead: pass the agent's own pid, never `$$` from a one-shot shell, which becomes the daemon's own pid when the shell execs it (the daemon refuses its own pid).
 
 Run `wait` as a background command and read the file when it exits. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 4 is the timeout with nothing new: re-arm, or escalate to the user.
 
