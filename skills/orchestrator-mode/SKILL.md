@@ -143,9 +143,9 @@ The per-mode procedures, including the stacked-chain loop and the worktree rules
 
   After a MERGE, the SHA judged is the PR's MERGE COMMIT on the mainline, never `git rev-parse HEAD` in the worktree: HEAD still names the topic tip, and the squash or merge commit exists only on the mainline. A subscribed PR's merge event carries it; for a direct landing, `git fetch <base-remote> <mainline> && git rev-parse FETCH_HEAD` names it, from the remote the push went to.
 
-  Where installed, the `/watch-prs-and-ci` skill defines the subscription (the mode assertion, the gate workflows, the merge follow-through, the event texts).
+  Where installed, the `/watch-prs-and-ci` skill defines the subscription (the pushed head, the gate workflows, the merge follow-through, the event texts).
 
-  One poller per user per machine, never one per session: the daemon's sustained interval is at least 60 s, and no session polls beside it. When the mainline's runs share a concurrency group key, subscribe only the newest mainline tip (a newer push cancels an older tip's pending run, so that tip gets no verdict).
+  One daemon per session, started by that session as a background task and gone when the session is: its sustained interval is at least 60 s, and no session polls beside its own daemon. When the mainline's runs share a concurrency group key, subscribe only the newest mainline tip (a newer push cancels an older tip's pending run, so that tip gets no verdict).
 
   Production: parallel watchers at gh's default 3 s refresh drained GitHub's 5000-requests-per-hour REST bucket and blinded every CI verdict for 45 minutes.
 - **Every rebase gets the shared-file content check** ("the rebase is the risk, not the intent"): a clean replay can silently drop a prior landing's lines in files both tracks edit, with no conflict marker to warn anyone. The check is executable, not a prose token recipe: `scripts/baseline.mts pin`/`check` for whole-file ownership, `scripts/probe.mts tokens` for specific-line claims in shared files. Wiring in `references/fleet-monitor.md`, Verifying a Landing.
@@ -157,7 +157,7 @@ After each landing on the mainline, and again over the combined delta once all s
 At phase boundaries (a wave finishing, a landing), stop subagents whose work is delivered and delete completed tasks, so the visible lists show only live work.
 
 - **Before stopping an agent**, check nothing still owes output, and copy handoff facts a later step needs into a still-open task first.
-- **Long-lived service agents** (the fleet monitor) stay up until their exit condition. The PR and CI daemon is not one: it is a detached process the `/watch-prs-and-ci` skill owns, never a subagent.
+- **Long-lived service agents** (the fleet monitor) stay up until their exit condition. The PR and CI daemon is not one: it is a background task of the session, owned by the `/watch-prs-and-ci` skill, never a subagent, and it exits with the session; its messages render in the session as plain text.
 - **Worktree handovers, removals, and fan-out file ownership** have destructive failure modes. Follow the `/worktree-hygiene` skill for those rules.
 
 ## Harness Variations
