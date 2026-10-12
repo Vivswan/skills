@@ -89,7 +89,7 @@ The rejection round (step 7) sits between runs: rewrite the brief, rerun only th
 ```bash
 bun "<skill-dir>/scripts/check-name.mts" <name> <name> ...        # domains default to com, ai, dev; --domain <tld> replaces that list
 bun "<skill-dir>/scripts/check-name.mts" --list-registries        # the live column table: id, label, taken control
-bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,dns-com,typosquat,say <name>   # the columns the brief claims, plus the gate columns
+bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,dns-com,say,typosquat,wiktionary,urban <name>   # the columns the brief claims, plus the four gate columns
 ```
 
 One row per name, one column per registry; the registries live in one table in `scripts/registries.mts`, and `--list-registries` prints it. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`, except the `say` column's `note(<reading>)`:
@@ -101,6 +101,7 @@ tarnix  free  free                free    taken(homebrew formula tarnix)  free  
 numpi   free  free                free    free                            free                    free   free  free                  free         free                   free   free                        free    free                          free                 taken(1 edit from numpy on claimed pypi (top 5000 by downloads))  note(ok(2s))
 ```
 
+- `--registries` runs the columns named and no other, so the gate columns `say`, `typosquat`, `wiktionary`, and `urban` always ride along with the claimed ones: the hard gate reads the first two, and step 5 reads the two meaning columns, on every name.
 - Two controls run with every batch: per registry column, a name known to be taken there (the registry's own `nic` host for DNS, a word with a flagged sense for Wiktionary), and one random string that must be free everywhere. A column that answers either wrongly is reported on stderr as a failed instrument and the exit code is 1. Do not read that column.
 - `unknown` is not `free`. A rate-limited arXiv or a 5xx stays `unknown` in the table; rerun later or drop the column with `--no-arxiv`.
 - arXiv allows one request every three seconds, and the script spaces its own that far. Lanes run with `--no-arxiv`; the lead runs the arXiv column once, over the merged shortlist, in step 6.
