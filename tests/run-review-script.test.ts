@@ -384,12 +384,17 @@ function run(args: string[], env: Record<string, string> = {}, path?: string, cw
   // Every review run keeps its scratch dir for inspection: a success names
   // the capture in its report, a failure in its message. Sweep both.
   const kept = /(?:output|stderr) kept at ([^)\n]+)/.exec(stderr)?.[1];
-  if (kept) rmSync(dirname(kept), { recursive: true, force: true });
-  let report: Report | null = null;
   // Copy mode keeps its repository snapshot at <scratch>/repo only while the
-  // reviewer runs; read whether one survived before the sweep below.
+  // reviewer runs; read whether one survived before the sweeps below.
   let copyLeft = false;
   let homeLeft = false;
+  let captureKept = false;
+  if (kept) {
+    captureKept = existsSync(kept);
+    copyLeft = existsSync(join(dirname(kept), "repo"));
+    rmSync(dirname(kept), { recursive: true, force: true });
+  }
+  let report: Report | null = null;
   if (result.exitCode === 0 && stdout.startsWith("{")) {
     report = JSON.parse(stdout) as Report;
     expect(existsSync(report.capture)).toBe(true);
@@ -404,6 +409,7 @@ function run(args: string[], env: Record<string, string> = {}, path?: string, cw
     promptCopy,
     copyLeft,
     homeLeft,
+    captureKept,
     /** The parsed JSON report of a successful review, or a throw. */
     report(): Report {
       if (report === null) throw new Error(`no report on stdout: ${stdout}\n${stderr}`);
@@ -780,6 +786,24 @@ describe("run-review.mts", () => {
     expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
     expect(porcelain(repo)).toBe(before);
     expect(r.stderr).toContain(BWRAP_LINE);
+  });
+
+  // A removal that only ran on the success path would leave one full checkout
+  // behind per failed review, and a failed review is the one most often rerun.
+  test("a failed verdict in copy mode keeps the capture its failure names and still removes the snapshot copy", () => {
+    const repo = fixtureRepo();
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_MODE: "prose" },
+      undefined,
+      repo,
+    );
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (not a verdict: final message is not JSON; output kept at",
+    });
+    expect(r.captureKept).toBe(true);
+    expect(r.copyLeft).toBe(false);
   });
 
   test("copy mode drops every GIT_* variable, so the reviewer's git reads the copy, not the checkout", () => {
