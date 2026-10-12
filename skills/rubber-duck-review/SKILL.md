@@ -141,7 +141,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - `capture`: the full reviewer stream, kept for 24 hours. Read it when a finding or the summary looks off and you want the exact reviewer message.
 - **Exit 1** (`review FAILED - relaunch`): that is no review at all, never a clean pass. Relaunch it.
 
-  It means the stream was empty, cut mid-turn, truncated on its final line, contained error events, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. While the captured stream still exists, its path is in the failure message if you want to inspect why.
+  It means the stream was empty, cut mid-turn, truncated on its final line, contained an error event with no verdict after it, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. While the captured stream still exists, its path is in the failure message if you want to inspect why.
 - **Exit 2**: fix the invocation or install the missing reviewer binary. Nothing was reviewed.
 - After a `--background` launch, wait for the verdict in a background shell so the harness wakes you when it lands. Never poll `review.status` or the output path by hand:
   ```bash

@@ -136,16 +136,13 @@ gh pr create --draft --title "<type(scope): subject>" --body-file - <<'EOF'
 EOF
 ```
 
-When the sandbox refuses the heredoc (an agent worktree can reject one whose text contains git commands, and captured output often does), stage the body in a directory `mktemp` minted, at the literal path it printed, and remove that directory in the same command that publishes, whatever `gh` returns:
+When the sandbox refuses the heredoc (an agent worktree can reject one whose text contains git commands, and captured output often does), stage the body in a directory `mktemp` minted, at the literal path it printed, one plain command per step. The same sandboxes refuse a `trap` or a variable chained into the publish command, so the removal is its own last command, run whatever `gh` returned:
 
 ```bash
-# 1. Mint the directory; a harness that starts a fresh shell per tool call loses $body_dir, so copy the printed path by hand:
-mktemp -d "${TMPDIR:-/tmp}/pr-body-XXXXXX"   # prints e.g. /tmp/pr-body-Kq3mZp
-# 2. Write the body to <that path>/body.md with the harness's file-writing tool.
-# 3. Then, in one shell call, publish and remove the directory on every exit, success or failure:
-body_dir="/tmp/pr-body-Kq3mZp"
-trap 'rm -rf "$body_dir"' EXIT
-gh pr create --draft --title "<type(scope): subject>" --body-file "$body_dir/body.md"
+mktemp -d /tmp/pr-body-XXXXXX                                                                   # 1. prints e.g. /tmp/pr-body-Kq3mZp; copy the printed path by hand
+# 2. write the body to /tmp/pr-body-Kq3mZp/body.md with the harness's file-writing tool
+gh pr create --draft --title "<type(scope): subject>" --body-file /tmp/pr-body-Kq3mZp/body.md   # 3. one command
+rm -rf /tmp/pr-body-Kq3mZp                                                                      # 4. its own command, whatever gh returned
 ```
 
 ## Re-read Before the Human Reads

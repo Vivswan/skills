@@ -9,6 +9,7 @@
  *   predictable prompt path      -> one agent overwrites another's: prepare mints a private dir
  *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
+ *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
  *
  * Exit codes (tests/doc-drift.test.ts pins them to SKILL.md; change both together):
  *   0  verdict printed, or a --background launch started (its verdict comes via --extract)
@@ -550,6 +551,10 @@ function extractVerdict(tool: Tool, raw: string): Extraction {
           verdict = item.text.trim() === "" ? "" : parseVerdictText(item.text);
           toolCallsBeforeVerdict = toolCallsThisTurn;
           awaitingTurnEnd = true;
+          // A stream reconnect ("stream disconnected ... retrying") is an error event the
+          // reviewer recovered from; a message landing after it is the verdict. An error with
+          // no message after it, or a turn.failed, still fails the capture.
+          errorEvent = null;
         }
       }
       if (event.type === "turn.completed" || event.type === "turn.failed") {

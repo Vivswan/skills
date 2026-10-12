@@ -83,7 +83,7 @@ The agent reviews under the user's account, so publishing is the user's act: the
 
 4. **Carry the answer for the PR**, through every revision of the pending review. A `/rubber-duck-review` pass on this PR expands only the `## Review Criteria` sections the user chose here, not every installed one: that skill's every-section rule is for the user's own change, and this choice scopes it. Then read the PR's linked document and the code, and only then write.
 
-**Stage:** one JSON body, the head commit inside it, no `event` field. `commit_id` belongs in the file: with `--input`, a `-f` field goes to the URL query string. The heredoc is quoted, since comment bodies carry backticks an unquoted one would run as commands, so the SHA goes in afterwards. The file lives in a `mktemp` directory, removed in the same shell call like the `/pr-and-issue-discipline` skill's PR-body fallback.
+**Stage:** one JSON body, the head commit inside it, no `event` field. `commit_id` belongs in the file: with `--input`, a `-f` field goes to the URL query string. The heredoc is quoted, since comment bodies carry backticks an unquoted one would run as commands, so the SHA goes in afterwards. The file lives in a `mktemp` directory, removed when the staging is done, like the `/pr-and-issue-discipline` skill's PR-body fallback.
 
 A finding that spans several lines is anchored on its whole range with `start_line` and `line`; `start_side` and `side` name the diff side the lines are on, `RIGHT` for lines in the new file, `LEFT` for a removed range. A single-line anchor only when one line is the whole finding.
 

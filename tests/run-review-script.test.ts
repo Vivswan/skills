@@ -171,6 +171,21 @@ case "\${STUB_MODE:-ok}" in
     echo '{"type":"thread.started","thread_id":"t1"}'
     echo '{"type":"error","message":"stream disconnected before completion"}'
     ;;
+  reconnect)
+    echo '{"type":"thread.started","thread_id":"t1"}'
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '{"type":"error","message":"stream disconnected before completion; retrying 1/5"}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  errorafter)
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    echo '{"type":"error","message":"stream disconnected after the verdict"}'
+    ;;
   blank)
     echo '${CODEX_TOOL_LINE}'
     echo '${codexMessage("")}'
@@ -632,6 +647,19 @@ describe("run-review.mts", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("error_during_execution");
+  });
+
+  test("a reconnect error event followed by a verdict is a recovered stream: the verdict counts", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "reconnect" });
+    expect(r.code).toBe(0);
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
+    expect(r.report().trajectory.map((row) => row.event)).toContain("error");
+  });
+
+  test("an error event after the last verdict still fails the capture", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "errorafter" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("stream disconnected after the verdict");
   });
 
   test("an error event exits 1 even though the reviewer exited 0", () => {
