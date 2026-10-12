@@ -45,6 +45,8 @@ const DEPS_DIR = join(
   "skills-deps",
   `${SKILL}-${DEPS_HASH}`,
 );
+// One shell word, so the printed recovery command runs as printed whatever the path holds.
+const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
 if (!existsSync(join(DEPS_DIR, "node_modules"))) {
   mkdirSync(DEPS_DIR, { recursive: true });
   for (const file of ["package.json", "bun.lock"]) {
@@ -56,7 +58,7 @@ if (!existsSync(join(DEPS_DIR, "node_modules"))) {
   if (install.status !== 0) {
     process.stderr.write(install.stderr ?? "");
     console.error(
-      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR}`,
+      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
     );
     process.exit(2);
   }
@@ -70,7 +72,7 @@ export const parseSync: typeof ParseSync = await (async () => {
     return oxc.parseSync;
   } catch {
     console.error(
-      `${SKILL} scripts need oxc-parser: bun install --frozen-lockfile --cwd ${DEPS_DIR}`,
+      `${SKILL} scripts need oxc-parser: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
     );
     process.exit(2);
   }

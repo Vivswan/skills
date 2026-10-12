@@ -89,19 +89,21 @@ const DEPS_HASH = createHash("sha256")
   .digest("hex")
   .slice(0, 12);
 const DEPS_DIR = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "skills-deps", `${SKILL}-${DEPS_HASH}`);
+// One shell word, so the printed recovery command runs as printed whatever the path holds.
+const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
 if (!existsSync(join(DEPS_DIR, "node_modules"))) {
   mkdirSync(DEPS_DIR, { recursive: true });
   for (const file of ["package.json", "bun.lock"]) copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
   const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], { encoding: "utf8" });
   if (install.status !== 0) {
     process.stderr.write(install.stderr ?? "");
-    console.error(`${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR}`);
+    console.error(`${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`);
     process.exit(2);
   }
 }
 // Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
 if (!existsSync(join(DEPS_DIR, "node_modules", "yaml"))) {
-  console.error(`${SKILL} scripts need yaml: bun install --frozen-lockfile --cwd ${DEPS_DIR}`);
+  console.error(`${SKILL} scripts need yaml: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`);
   process.exit(2);
 }
 const yaml: typeof import("yaml") = await import(Bun.resolveSync("yaml", DEPS_DIR));

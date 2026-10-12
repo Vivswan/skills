@@ -402,7 +402,8 @@ describe("dependency bootstrap", () => {
 
   test("the install is sent to XDG_CACHE_HOME/skills-deps/<skill>-<lock hash>, never into the skill folder", () => {
     const root = copiedSkill("shared-cache", ["package.json", "bun.lock"]);
-    const cacheHome = join(scratch, "shared-cache-home");
+    // A cache root with a space: the printed recovery command must survive being pasted back into a shell.
+    const cacheHome = join(scratch, "shared cache home");
     const binDir = join(scratch, "fake-bin");
     const argvFile = join(scratch, "fake-bun-argv.txt");
     mkdirSync(binDir, { recursive: true });
@@ -434,7 +435,7 @@ describe("dependency bootstrap", () => {
     expect(out).toEqual({
       status: 2,
       stdout: "",
-      stderr: `shared-cache scripts need oxc-parser: bun install --frozen-lockfile --cwd ${depsDir}\n`,
+      stderr: `shared-cache scripts need oxc-parser: bun install --frozen-lockfile --cwd '${depsDir}'\n`,
     });
   });
 
@@ -444,7 +445,7 @@ describe("dependency bootstrap", () => {
       join(root, "package.json"),
       JSON.stringify({ name: "stale-lock-dependencies", private: true, dependencies: {} }),
     );
-    const cacheHome = join(scratch, "stale-cache-home");
+    const cacheHome = join(scratch, "stale cache home");
     const out = run(join(root, "scripts", "arch-lint.mts"), [], root, {
       XDG_CACHE_HOME: cacheHome,
     });
@@ -452,7 +453,7 @@ describe("dependency bootstrap", () => {
     expect(out.stdout).toBe("");
     expect(out.stderr).toMatch(/lockfile had changes, but lockfile is frozen/);
     expect(out.stderr).toEndWith(
-      `stale-lock dependencies did not install; run: bun install --frozen-lockfile --cwd ${depsDirFor(root, cacheHome)}\n`,
+      `stale-lock dependencies did not install; run: bun install --frozen-lockfile --cwd '${depsDirFor(root, cacheHome)}'\n`,
     );
   });
 });
