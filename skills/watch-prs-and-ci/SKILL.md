@@ -159,7 +159,7 @@ A daemon killed between saving a poll's state and appending its log lines comple
 pr-events.mts daemon [--interval <s>] [--id <name>] [--pid <pid>]
 pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]
 pr-events.mts watch-commit <owner/repo> <sha> [--expect-workflow <name>]... [--id <name>]
-pr-events.mts unwatch <owner/repo>#<n> | --all [--id <name>]
+pr-events.mts unwatch <owner/repo>#<n> | <owner/repo>@<sha> | --all [--id <name>]
 pr-events.mts wait [--since <id>] [--timeout <s>] [--id <name>]
 pr-events.mts poll | status | stop [--id <name>]
 ```
