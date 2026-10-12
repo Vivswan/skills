@@ -3,6 +3,7 @@
 // the table.
 
 import { type Cell, free, get, type Io, renderCell, taken, unknown } from "./cells.mts";
+import { type Note, sayAsSpelled } from "./say.mts";
 import { typosquat } from "./typosquat.mts";
 
 export type Registry = {
@@ -27,7 +28,17 @@ export type DomainFamily = {
   forTld: (tld: string) => Registry;
 };
 
-export type RegistryEntry = Registry | DomainFamily;
+/** A column that reads the name itself and answers a note: no registry, so no control. */
+export type NoteColumn = {
+  kind: "note";
+  id: string;
+  label: string;
+  lookup: (io: Io, name: string) => Promise<Note>;
+};
+
+export type Column = Registry | NoteColumn;
+
+export type RegistryEntry = Registry | DomainFamily | NoteColumn;
 
 async function lookup404(io: Io, url: string, label: string): Promise<Cell> {
   try {
@@ -566,5 +577,11 @@ export const REGISTRIES: readonly RegistryEntry[] = [
     // One letter short of the PyPI control, requests.
     takenControl: "reqests",
     lookup: typosquat,
+  },
+  {
+    kind: "note",
+    id: "say",
+    label: "said as spelled: syllables, hard letters, doubled letters, clusters, two readings",
+    lookup: async (_io, name) => sayAsSpelled(name),
   },
 ];

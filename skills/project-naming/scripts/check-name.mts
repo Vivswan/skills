@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
-// One row per candidate name, one column per registry in registries.mts: is it free there, does any
-// language already own the word, and does slang? Every cell is `free`, `taken(<why>)`, or
-// `unknown(<why>)`; a lookup that failed never reads as free. Two controls run with every batch:
-// per column, a name known to be taken there, and one random string that must be free everywhere.
-// A column that answers either control wrongly is reported as a failed instrument and is not
-// evidence.
+// One row per candidate name, one column per entry in registries.mts: is it free there, does any
+// language already own the word, does slang, is it one typo from a popular package, and can it be
+// said as spelled? A registry cell is `free`, `taken(<why>)`, or `unknown(<why>)`, and a lookup
+// that failed never reads as free; the say column is a `note(<reading>)`. Two controls run with
+// every batch: per registry column, a name known to be taken there, and one random string that
+// must be free everywhere. A column that answers either control wrongly is reported as a failed
+// instrument and is not evidence.
 //
 // Exit codes:
 //   0  every row printed and every control answered as expected
@@ -17,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { type Cell, type Io, renderCell, unknown } from "./cells.mts";
-import { REGISTRIES, type Registry, type RegistryEntry } from "./registries.mts";
+import { type Column, REGISTRIES, type RegistryEntry } from "./registries.mts";
 
 const USAGE =
   "usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--no-arxiv] [--json] <name>...\n" +
@@ -36,11 +37,11 @@ export type Options = {
   registries: string[] | null;
 };
 
-export function allColumns(table: readonly RegistryEntry[], domains: string[]): Registry[] {
+export function allColumns(table: readonly RegistryEntry[], domains: string[]): Column[] {
   return table.flatMap((entry) => (entry.kind === "domains" ? domains.map(entry.forTld) : [entry]));
 }
 
-export function columns(options: Options): Registry[] {
+export function columns(options: Options): Column[] {
   return allColumns(options.table, options.domains).filter(
     (column) =>
       (options.arxiv || column.id !== "arxiv") &&
@@ -72,13 +73,14 @@ export type ControlVerdict = {
   got: Cell;
 };
 
-/** One taken-control lookup per column (its own control name), and one random-name row. */
+/** One taken-control lookup per registry column (its own control name), and one random-name row.
+ * A note column reads the name itself and has nothing to be right or wrong about. */
 export async function runControls(
   io: Io,
   options: Options,
   freeControl: string,
 ): Promise<ControlVerdict[]> {
-  const cols = columns(options);
+  const cols = columns(options).filter((column) => column.kind === "registry");
   const [takenCells, freeRow] = await Promise.all([
     Promise.all(cols.map((column) => column.lookup(io, column.takenControl))),
     checkName(io, options, freeControl),
@@ -111,7 +113,10 @@ export function renderTsv(options: Options, rows: Row[]): string {
 
 export function renderRegistries(table: readonly RegistryEntry[]): string {
   const lines = ["id\tlabel\ttaken control"];
-  for (const entry of table) lines.push([entry.id, entry.label, entry.takenControl].join("\t"));
+  for (const entry of table) {
+    const control = entry.kind === "note" ? "-" : entry.takenControl;
+    lines.push([entry.id, entry.label, control].join("\t"));
+  }
   return `${lines.join("\n")}\n`;
 }
 

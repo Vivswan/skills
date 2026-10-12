@@ -17,6 +17,7 @@ import {
   type Registry,
   WIKTIONARY_FLAG,
 } from "../skills/project-naming/scripts/registries.mts";
+import { sayAsSpelled } from "../skills/project-naming/scripts/say.mts";
 import { oneEditApart } from "../skills/project-naming/scripts/typosquat.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
@@ -761,8 +762,34 @@ describe("check-name.mts typosquat column", () => {
   });
 });
 
+describe("check-name.mts say column", () => {
+  test("a name is ok with its syllable count, or flagged with each reason a reader would stumble on", () => {
+    const cases: [string, string][] = [
+      ["lumera", "ok(3s)"],
+      ["Tarnix", "flag(2s; hard x)"],
+      ["villa", "flag(2s; doubled ll)"],
+      ["strand", "flag(1s; cluster str)"],
+      ["chime", "flag(1s; two readings ch,trailing e)"],
+      ["gina", "flag(2s; two readings g before i)"],
+      ["bough", "flag(1s; two readings ough)"],
+      ["boughgh", "flag(1s; cluster ghgh; two readings ough,gh)"],
+      ["eougha", "flag(2s; two readings ough)"],
+      ["coughh", "flag(1s; doubled hh; cluster ghh; two readings ough)"],
+      ["bread", "flag(1s; two readings ea)"],
+      ["table", "ok(2s)"],
+      ["vale", "flag(1s; two readings trailing e)"],
+      ["my-name", "flag(2s; two readings trailing e)"],
+      ["al1luma", "ok(3s)"],
+      ["quokka", "flag(2s; hard q,k; doubled kk)"],
+    ];
+    for (const [name, expected] of cases) {
+      expect(sayAsSpelled(name), name).toEqual({ status: "note", detail: expected });
+    }
+  });
+});
+
 describe("check-name.mts controls", () => {
-  test("every column, DNS and arXiv included, has a taken control that fails when the instrument reads free", async () => {
+  test("every registry column, DNS and arXiv included, has a taken control that fails when the instrument reads free; the say note has none", async () => {
     const failures = await runControls(
       fakeIo(() => undefined),
       WITH_ARXIV,
@@ -789,6 +816,9 @@ describe("check-name.mts controls", () => {
     );
     expect(failures.every((f) => f.expected === "taken")).toBe(true);
     expect(failures.find((f) => f.column === "dns-com")?.control).toBe("nic");
+    // The say column is a note on every name, the random one included, so it is no instrument
+    // and never a failure.
+    expect(failures.map((f) => f.column)).not.toContain("say");
   });
 
   test("a resolver blind to every host fails the DNS taken control while the HTTP controls pass", async () => {
@@ -878,7 +908,7 @@ describe("check-name.mts registry table", () => {
     );
     expect(cell(row.cells, "extra")).toEqual({ status: "free" });
     const tsv = renderTsv(extended, [row]);
-    expect(tsv.split("\n")[0]?.endsWith("\ttyposquat\textra")).toBe(true);
+    expect(tsv.split("\n")[0]?.endsWith("\tsay\textra")).toBe(true);
     const failures = await runControls(allTakenIo(["nic.com"]), extended, RANDOM);
     expect(failures).toEqual([]);
     const blind: Options = {
@@ -913,15 +943,16 @@ describe("check-name.mts output", () => {
           pypi: { status: "free" },
           npm: { status: "taken", detail: "npm package" },
           crates: { status: "unknown", detail: "crate HTTP 500" },
+          say: { status: "note", detail: "ok(3s)" },
         },
       },
     ]);
     const [header, row] = tsv.trimEnd().split("\n");
     expect(header).toBe(
-      "name\tpypi\tnpm\tcrates\thomebrew\tdocker\tmaven\thf\tgithub-user\tgithub-repo\tbluesky\tdns-com\twiktionary\turban\ttyposquat",
+      "name\tpypi\tnpm\tcrates\thomebrew\tdocker\tmaven\thf\tgithub-user\tgithub-repo\tbluesky\tdns-com\twiktionary\turban\ttyposquat\tsay",
     );
     expect(row).toBe(
-      `lumera\tfree\ttaken(npm package)\tunknown(crate HTTP 500)${"\tunknown(missing)".repeat(11)}`,
+      `lumera\tfree\ttaken(npm package)\tunknown(crate HTTP 500)${"\tunknown(missing)".repeat(11)}\tnote(ok(3s))`,
     );
   });
 

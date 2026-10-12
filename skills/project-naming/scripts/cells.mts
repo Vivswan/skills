@@ -1,9 +1,11 @@
-// The vocabulary every column speaks: a lookup that failed never reads as free.
+// The vocabulary every column speaks: a lookup that failed never reads as free, and a note is a
+// reading with no free or taken in it.
 
 export type Cell =
   | { status: "free" }
   | { status: "taken"; detail: string }
-  | { status: "unknown"; detail: string };
+  | { status: "unknown"; detail: string }
+  | { status: "note"; detail: string };
 
 export type Io = {
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
