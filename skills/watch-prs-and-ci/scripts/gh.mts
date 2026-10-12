@@ -3,7 +3,7 @@
 
 import { spawnSync } from "node:child_process";
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+export const DEFAULT_TIMEOUT_MS = 60_000;
 
 /** A gh call or response-shape failure. The caller decides whether it retries. */
 export class GhError extends Error {

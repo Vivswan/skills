@@ -87,6 +87,7 @@ if [ "$1 $2" = "api graphql" ]; then
 fi
 if [ "$*" = "run view $3 --log-failed --repo octocat/repo" ]; then
   [ ! -f "\${STUB_DIR}/log-$3.txt" ] || cat "\${STUB_DIR}/log-$3.txt"
+  [ ! -f "\${STUB_DIR}/log-$3.sleep" ] || sleep 5
   [ ! -f "\${STUB_DIR}/log-$3.stderr" ] || cat "\${STUB_DIR}/log-$3.stderr" >&2
   exit "$(cat "\${STUB_DIR}/log-$3.exit" 2>/dev/null || echo 0)"
 fi
@@ -641,6 +642,16 @@ describe("failedJobLog", () => {
       [...lines.slice(-79), "warning after the log"].join("\n"),
     );
     expect(s.calls()).toEqual(["run view 7 --log-failed --repo octocat/repo"]);
+    expect(s.violations()).toBe("");
+  });
+
+  test("a hung log fetch is cut off at the timeout, keeping what gh printed and noting the cut", () => {
+    // The excerpt is informational, so a hung gh must not stall the caller: spawnSync reports
+    // the kill as an ETIMEDOUT error with the partial stdout still attached.
+    const s = scenario({ "log-7.txt": "first line\nsecond line\n", "log-7.sleep": "" });
+    expect(failedJobLog("octocat/repo", 7, 300)).toBe(
+      "first line\nsecond line\ngh run view 7 --log-failed: no answer within 300 ms",
+    );
     expect(s.violations()).toBe("");
   });
 });

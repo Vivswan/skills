@@ -4,7 +4,15 @@
 // while GraphQL keeps answering.
 
 import { spawnSync } from "node:child_process";
-import { GhError, get, gh, parseJson, requireNumber, requireString } from "./gh.mts";
+import {
+  DEFAULT_TIMEOUT_MS,
+  GhError,
+  get,
+  gh,
+  parseJson,
+  requireNumber,
+  requireString,
+} from "./gh.mts";
 
 // Heavy retriggering stacks hundreds of suites on one SHA; a re-run between two page fetches can
 // hide a re-queued suite from both, so a multi-page snapshot is judged only once two reads agree.
@@ -197,8 +205,13 @@ export function judgeRuns(runs: Run[], expected: string[]): Verdict {
 // excerpt and never changes a verdict. --log-failed exits non-zero for runs with no failed step.
 // The shell merges both streams, so the excerpt keeps gh's interleaving; the unbounded buffer keeps
 // the final lines of a log past spawnSync's 1 MiB default, which piped capture lost. The repository
-// is named: gh would otherwise resolve it from the working directory, which is not the run's.
-export function failedJobLog(repo: string, runId: number): string {
+// is named: gh would otherwise resolve it from the working directory, which is not the run's. The
+// spawn is bounded because the caller is a poll loop that a hung gh would stall.
+export function failedJobLog(
+  repo: string,
+  runId: number,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): string {
   const result = spawnSync(
     "sh",
     ["-c", 'exec gh run view "$1" --log-failed --repo "$2" 2>&1', "sh", String(runId), repo],
@@ -206,8 +219,15 @@ export function failedJobLog(repo: string, runId: number): string {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "inherit"],
       maxBuffer: Number.POSITIVE_INFINITY,
+      timeout: timeoutMs,
     },
   );
   const text = (result.stdout ?? "").replace(/\n$/, "");
-  return text.split("\n").slice(-LOG_TAIL_LINES).join("\n");
+  const lines = text === "" ? [] : text.split("\n");
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    const why = code === "ETIMEDOUT" ? `no answer within ${timeoutMs} ms` : result.error.message;
+    lines.push(`gh run view ${runId} --log-failed: ${why}`);
+  }
+  return lines.slice(-LOG_TAIL_LINES).join("\n");
 }
