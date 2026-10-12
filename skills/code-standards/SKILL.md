@@ -227,7 +227,7 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - A test manufactured for a deletion with no behavior of its own in place of a census in the PR body or landing report.
 - A fixture recorded from real data, a provenance comment saying so, or a tool that measures real data with a default output path or one inside the repository.
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
-- Code built for a need no current caller has: an option, flag, parameter, hook, or abstraction with one caller, no second in the change, and no variation the change already needs; or hardening for a path nothing reaches (recorded, not built).
+- Code built for a need no current caller has: an option, flag, parameter, hook, or abstraction with fewer than two callers and no variation the change already needs; or hardening for a path nothing reaches (recorded, not built).
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Hand-rolled code, added, moved, touched, reused, or depended on, whose whole job a good library or a tool already in the repository does; the finding names the library and what it covers. A change in a library-shaped category whose record (the brief, then the PR body or the landing report) names no library and no search.
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
