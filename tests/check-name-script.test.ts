@@ -534,6 +534,27 @@ describe("check-name.mts cells", () => {
     });
   });
 
+  test("a GitHub search 200 whose body is not the result list (no items, items not a list, an item without a name or a star count) is unknown, never free and never a thrown run", async () => {
+    const malformed: unknown[] = [
+      null,
+      {},
+      { items: "none" },
+      { items: [{}] },
+      { items: [{ name: "lumera" }] },
+      { items: [{ name: 7, stargazers_count: 100 }] },
+    ];
+    for (const body of malformed) {
+      const io = fakeIo((url) =>
+        url.pathname === "/search/repositories" ? { status: 200, body } : undefined,
+      );
+      const row = await checkName(io, OPTIONS, "lumera");
+      expect(cell(row.cells, "github-repo").status, JSON.stringify(body)).toBe("unknown");
+      expect(detail(cell(row.cells, "github-repo")), JSON.stringify(body)).toContain(
+        "github search reply malformed",
+      );
+    }
+  });
+
   test("Wiktionary is read from wikitext, sense by sense: a {{lb}} register label flags the word, ordinary text does not", async () => {
     const io = fakeIo((url) => {
       if (url.hostname !== "en.wiktionary.org") return undefined;
@@ -639,7 +660,7 @@ describe("check-name.mts cells", () => {
     expect(cell(row.cells, "wiktionary")).toEqual({ status: "taken", detail: "word in English" });
   });
 
-  test("Urban Dictionary's fuzzy hits are ignored; an exact entry is taken with its top definition", async () => {
+  test("Urban Dictionary's fuzzy hits are ignored; an exact entry is taken with its top definition; a 200 without the list is unknown, never free", async () => {
     const io = fakeIo((url) => {
       if (url.hostname !== "api.urbandictionary.com") return undefined;
       if (url.searchParams.get("term") === "lumera") {
@@ -665,6 +686,16 @@ describe("check-name.mts cells", () => {
       status: "taken",
       detail: "2 entries: the [popular] one",
     });
+    for (const body of [null, {}, { list: "none" }]) {
+      const noList = fakeIo((url) =>
+        url.hostname === "api.urbandictionary.com" ? { status: 200, body } : undefined,
+      );
+      const row = await checkName(noList, OPTIONS, "lumera");
+      expect(cell(row.cells, "urban"), JSON.stringify(body)).toEqual({
+        status: "unknown",
+        detail: "urban reply malformed: no list",
+      });
+    }
   });
 
   test("DNS: a resolving host is taken, ENOTFOUND is free, any other failure is unknown", async () => {

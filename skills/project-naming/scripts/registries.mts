@@ -121,10 +121,36 @@ export const GITHUB_STARS_TAKEN = 20;
 /** GitHub search serves at most 1000 results; past that an exact-name hit cannot be ruled out. */
 const GITHUB_SEARCH_PAGES = 10;
 
-type GithubSearch = {
-  incomplete_results?: boolean;
-  items?: { name: string; stargazers_count: number }[];
-};
+type GithubItem = { name: string; stargazers_count: number };
+type GithubSearch = { incomplete_results: boolean; items: GithubItem[] };
+
+/** The reply in the search's shape, or what is wrong with it: a 200 that is not the shape must
+ * not read as an empty result. */
+function githubSearch(body: unknown): GithubSearch | string {
+  if (typeof body !== "object" || body === null) return "not an object";
+  const { incomplete_results, items } = body as Record<string, unknown>;
+  if (!Array.isArray(items)) return "no items list";
+  for (const item of items as Record<string, unknown>[]) {
+    if (typeof item?.name !== "string") return "an item has no name";
+    if (typeof item.stargazers_count !== "number") return "an item has no stargazers_count";
+  }
+  return { incomplete_results: incomplete_results === true, items: items as GithubItem[] };
+}
+
+async function githubSearchPage(io: Io, url: string): Promise<GithubSearch | Cell> {
+  let body: unknown;
+  try {
+    const response = await get(io, url, githubHeaders(io));
+    if (response.status !== 200) return unknown(`github search HTTP ${response.status}`);
+    body = await response.json();
+  } catch (error) {
+    return unknown(`github search ${String(error)}`);
+  }
+  const search = githubSearch(body);
+  if (typeof search === "string") return unknown(`github search reply malformed: ${search}`);
+  if (search.incomplete_results) return unknown("github search reported incomplete results");
+  return search;
+}
 
 /** The search matches the name as a substring, sorted by stars, so the first exact-name hit is the
  * best-starred one and decides the cell. Pages are read until that hit, or until the stars fall
@@ -134,16 +160,9 @@ async function githubRepo(io: Io, name: string): Promise<Cell> {
   const query = encodeURIComponent(`${name} in:name fork:true`);
   for (let page = 1; page <= GITHUB_SEARCH_PAGES; page++) {
     const url = `https://api.github.com/search/repositories?q=${query}&sort=stars&order=desc&per_page=100&page=${page}`;
-    let body: GithubSearch;
-    try {
-      const response = await get(io, url, githubHeaders(io));
-      if (response.status !== 200) return unknown(`github search HTTP ${response.status}`);
-      body = (await response.json()) as GithubSearch;
-    } catch (error) {
-      return unknown(`github search ${String(error)}`);
-    }
-    if (body.incomplete_results) return unknown("github search reported incomplete results");
-    const items = body.items ?? [];
+    const search = await githubSearchPage(io, url);
+    if ("status" in search) return search;
+    const { items } = search;
     const exact = items.find((item) => item.name.toLowerCase() === name.toLowerCase());
     if (exact) {
       if (exact.stargazers_count >= GITHUB_STARS_TAKEN) {
@@ -514,8 +533,9 @@ async function urban(io: Io, name: string): Promise<Cell> {
   try {
     const response = await get(io, url);
     if (response.status !== 200) return unknown(`urban HTTP ${response.status}`);
-    const body = (await response.json()) as { list?: UrbanEntry[] };
-    const exact = (body.list ?? []).filter(
+    const list = ((await response.json()) as { list?: unknown } | null)?.list;
+    if (!Array.isArray(list)) return unknown("urban reply malformed: no list");
+    const exact = (list as UrbanEntry[]).filter(
       (entry) => (entry.word ?? "").toLowerCase() === name.toLowerCase(),
     );
     if (exact.length === 0) return free;
