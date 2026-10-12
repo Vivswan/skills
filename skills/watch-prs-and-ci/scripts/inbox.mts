@@ -42,9 +42,13 @@ export function fenceQuoted(rows: string[]): string[] {
   return [`${fence}${FENCE_LABEL}`, ...rows, fence];
 }
 
-/** A value inside a double-quoted attribute: a runtime directory can carry a quote. */
+/** A value inside a double-quoted attribute: a runtime directory can carry a quote or a bracket. */
 function attribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 /**

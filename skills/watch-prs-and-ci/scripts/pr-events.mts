@@ -5,7 +5,16 @@
 
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { appendFileSync, chmodSync, existsSync, unlinkSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
@@ -54,6 +63,7 @@ import {
   readEventsSince,
   runtimeDir,
   type SavedRow,
+  SOCKET_SUFFIX,
   type State,
   type SubscribedKind,
   saveState,
@@ -590,31 +600,125 @@ async function liveDaemon(files: OwnerFiles, pid: number): Promise<number | null
 /**
  * Binding the control socket is the single-instance rule for a session: a bind refused by a daemon
  * that answers means this one is the second, and it leaves; a socket file nobody answers on was
- * left by a daemon that died and is replaced.
+ * left by a daemon that died and is replaced. The probe and the replacement are one critical
+ * section under a lock file beside the socket: two starts in the same second, the ordinary case
+ * after a `watch` exited 3, would otherwise both see the stale file refuse, both unlink, and both
+ * bind, the second unlink taking the first's live socket.
  */
 async function bindControlSocket(
   path: string,
   log: (line: string) => void,
 ): Promise<Server | null> {
+  const stem = path.slice(0, -SOCKET_SUFFIX.length);
   for (;;) {
-    const server = createServer();
+    const bound = await tryListen(path);
+    if (bound !== null) return bound;
+    const release = await acquireStartLock(`${stem}.lock`);
     try {
-      server.listen(path);
-      await once(server, "listening");
-      chmodSync(path, 0o600);
-      return server;
-    } catch (error) {
-      if (errorCode(error) !== "EADDRINUSE") throw error;
-    }
-    try {
-      (await connectOnce(path)).destroy();
-      log(`another daemon answers on ${path}; exiting`);
-      return null;
-    } catch (error) {
-      if (errorCode(error) !== "ECONNREFUSED") throw error;
+      const found = lstatSync(path, { throwIfNoEntry: false });
+      if (found === undefined) continue;
+      if (!found.isSocket()) throw new ToolingError(`${path} is not a socket; remove it`);
+      try {
+        (await connectOnce(path)).destroy();
+        log(`another daemon answers on ${path}; exiting`);
+        return null;
+      } catch (error) {
+        if (errorCode(error) !== "ECONNREFUSED") throw error;
+      }
+      // Still the file that refused: one replaced meanwhile is a live daemon's, not stale.
+      const now = lstatSync(path, { throwIfNoEntry: false });
+      if (now === undefined || now.ino !== found.ino || now.ctimeMs !== found.ctimeMs) continue;
       log(`replacing the stale control socket ${path}`);
       unlinkSync(path);
+      const replaced = await tryListen(path);
+      if (replaced !== null) return replaced;
+    } finally {
+      release();
     }
+  }
+}
+
+/** The server listening on `path`, or null when the address is in use. */
+async function tryListen(path: string): Promise<Server | null> {
+  const server = createServer();
+  try {
+    server.listen(path);
+    await once(server, "listening");
+    chmodSync(path, 0o600);
+    return server;
+  } catch (error) {
+    if (errorCode(error) !== "EADDRINUSE") throw error;
+    return null;
+  }
+}
+
+// A start holds the lock for milliseconds. Waiting past this on a live holder is a hung start,
+// and giving up beats a silent hang; a breaker's lock this old was left by a breaker that died.
+const START_LOCK_WAIT_MS = 5_000;
+const START_LOCK_TICK_MS = 25;
+
+/**
+ * Takes the exclusive lock file, created atomically with the holder's pid; returns its release. A
+ * holder that died (SIGKILL skips the release), or this very pid from an earlier incarnation, is
+ * broken by one starter at a time under a second lock, so a breaker never removes the fresh lock
+ * another starter took in between.
+ */
+async function acquireStartLock(lockPath: string): Promise<() => void> {
+  const deadline = Date.now() + START_LOCK_WAIT_MS;
+  for (;;) {
+    if (createLock(lockPath)) return () => removeLock(lockPath);
+    const holder = lockHolder(lockPath);
+    if (holder === null) continue;
+    // No pid in the file is a dead lock, never pid 0: a signal to 0 asks about the process group.
+    if (holder !== 0 && holder !== process.pid && isProcessAlive(holder)) {
+      if (Date.now() >= deadline) {
+        throw new ToolingError(`${lockPath} is held by pid ${holder}; another start is hung`);
+      }
+      await sleep(START_LOCK_TICK_MS);
+      continue;
+    }
+    const breaking = `${lockPath}.breaking`;
+    const breakerAge =
+      Date.now() - (statSync(breaking, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
+    if (breakerAge > START_LOCK_WAIT_MS) removeLock(breaking);
+    if (!createLock(breaking)) {
+      await sleep(START_LOCK_TICK_MS);
+      continue;
+    }
+    try {
+      if (lockHolder(lockPath) === holder) removeLock(lockPath);
+    } finally {
+      removeLock(breaking);
+    }
+  }
+}
+
+function createLock(path: string): boolean {
+  try {
+    writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
+    return true;
+  } catch (error) {
+    if (errorCode(error) !== "EEXIST") throw error;
+    return false;
+  }
+}
+
+/** The pid in a lock file, or null when the file is gone or holds no pid (a dead lock either way). */
+function lockHolder(path: string): number | null {
+  try {
+    const pid = Number(readFileSync(path, "utf-8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : 0;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function removeLock(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
   }
 }
 
@@ -983,8 +1087,13 @@ async function runDaemon(
       for (const described of describeActivities(activities)) {
         if (wanted(described.kind)) emitted.push(emit({ ...base, ...described }));
       }
+      // The subject of a gap (a thread's path) is the author's: it goes in the fence, flattened.
       for (const gap of detail.gaps) {
-        emitted.push(emit({ ...base, kind: "trouble", text: `${gap}; read the PR` }));
+        const text = [
+          "activity backlog past the paging cap; read the PR",
+          ...fenceQuoted([`  ${flatten(gap)}`]),
+        ].join("\n");
+        emitted.push(emit({ ...base, kind: "trouble", text }));
       }
     }
     if (headMoved && watch.head !== current.headRefOid && wanted("head")) {
