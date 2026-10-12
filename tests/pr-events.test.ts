@@ -38,6 +38,7 @@ case "$1" in
     case "$*" in
       *"checkSuites("*) serve suites "$(next suites)";;
       *"reviewThreads(first:"*) serve detail "$(next detail)";;
+      *"query OlderComments("*) serve older "$(next older)";;
       *"pullRequest(number:"*) serve rows "$(next rows)";;
       *viewer*) serve viewer "$(next viewer)";;
       *) echo "unexpected graphql: $*" >> "\${STUB_VIOLATIONS}"; exit 64;;
@@ -155,8 +156,18 @@ function commentNode(spec: CommentSpec, id: number) {
   };
 }
 
+/** A connection page as GitHub renders it; `before` is the startCursor when older nodes exist. */
+function connection(nodes: unknown[], before?: string) {
+  return {
+    nodes,
+    pageInfo: { hasPreviousPage: before !== undefined, startCursor: before ?? null },
+  };
+}
+
 function detail(spec: {
   comments?: CommentSpec[];
+  /** The startCursor of the comments page when the PR has older comments. */
+  commentsBefore?: string;
   threads?: ThreadSpec[];
   commitAuthor?: string;
 }): string {
@@ -169,18 +180,20 @@ function detail(spec: {
     data: {
       repository: {
         pullRequest: {
-          comments: {
-            nodes: (spec.comments ?? []).map((c) => commentNode(c, c.id ?? nextId())),
-          },
-          reviews: { nodes: [] },
+          comments: connection(
+            (spec.comments ?? []).map((c) => commentNode(c, c.id ?? nextId())),
+            spec.commentsBefore,
+          ),
+          reviews: connection([]),
           reviewThreads: {
-            nodes: (spec.threads ?? []).map((thread) => ({
+            nodes: (spec.threads ?? []).map((thread, i) => ({
+              id: `thread-${i}`,
               isResolved: false,
               path: thread.path,
               line: thread.line,
               comments: {
                 totalCount: thread.total,
-                nodes: thread.comments.map((c) => commentNode(c, c.id ?? nextId())),
+                ...connection(thread.comments.map((c) => commentNode(c, c.id ?? nextId()))),
               },
             })),
             pageInfo: { hasNextPage: false, endCursor: null },
@@ -188,6 +201,22 @@ function detail(spec: {
           commits: {
             nodes: [{ commit: { author: { user: { login: spec.commitAuthor ?? "dev" } } } }],
           },
+        },
+      },
+    },
+  });
+}
+
+/** An OlderComments reply: the page of issue comments before a cursor. */
+function olderComments(comments: CommentSpec[], before?: string): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          comments: connection(
+            comments.map((c, i) => commentNode(c, c.id ?? 800 + i)),
+            before,
+          ),
         },
       },
     },
@@ -962,6 +991,74 @@ describe("pr-events.mts", () => {
     expect(s.run(["poll"]).stdout).toContain("0 event(s)");
     expect(headlines(await box.frames(2))).toEqual([GREEN_A, `PR ${PR7}: 1 new comment by bob`]);
     expect(s.events().map((e) => e.id)).toEqual([1, 2]);
+    s.stop();
+  }, 30000);
+
+  test("stop, 21 comments land, watch again: all 21 arrive in one event, the oldest included", async () => {
+    // The detail read's window is the last 20 comments; the 21st oldest is beyond it and, with
+    // the window alone, would never be reported.
+    const s = new Scenario("backlog");
+    const box = await s.inbox("a");
+    const opening = { login: "dev", at: T1, body: "opening", id: 900 };
+    const missed = Array.from({ length: 21 }, (_, i) => ({
+      login: "bob",
+      at: T2,
+      body: `missed ${i + 1}`,
+      id: 901 + i,
+    }));
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS", comments: 1, updatedAt: T1 }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "detail-1": detail({ comments: [opening] }),
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    s.stop();
+    s.fixtures({
+      "rows-2": rows({ rollup: "SUCCESS", comments: 22, updatedAt: T2 }),
+      "detail-2": detail({ comments: missed.slice(1), commentsBefore: "c902" }),
+      "older-1": olderComments([opening, missed[0] as CommentSpec]),
+      "viewer-1": VIEWER,
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    const frames = await box.frames(2);
+    const content = parseFrame(frames[1] as string).message.content.split("\n");
+    expect(content[0]).toBe(`PR ${PR7}: 21 new comments by bob`);
+    expect(content[1]).toBe("  bob  missed 1");
+    expect(content[21]).toBe("  bob  missed 21");
+    expect(s.events().map((e) => e.kind)).toEqual(["ci", "comment"]);
+    expect(s.run(["poll"]).stdout).toContain("0 event(s)");
+    s.stop();
+  }, 30000);
+
+  test("a backlog past the paging cap is a trouble event beside the comments that were read", async () => {
+    const s = new Scenario("gap");
+    const box = await s.inbox("a");
+    const older: Record<string, string> = {};
+    for (let page = 1; page <= 9; page += 1) {
+      older[`older-${page}`] = olderComments(
+        [{ login: "bob", at: T2, body: `older ${page}`, id: 800 - page }],
+        `c${800 - page}`,
+      );
+    }
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS", comments: 1, updatedAt: T1 }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": rows({ rollup: "SUCCESS", comments: 500, updatedAt: T2 }),
+      "detail-2": detail({
+        comments: [{ login: "bob", at: T2, body: "newest", id: 800 }],
+        commentsBefore: "c800",
+      }),
+      ...older,
+      "viewer-1": VIEWER,
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass"], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"]).stdout).toContain("2 event(s)");
+    expect(headlines(await box.frames(3))).toEqual([
+      GREEN_A,
+      `PR ${PR7}: 10 new comments by bob`,
+      `PR ${PR7}: issue comments: more than 10 pages since the last one reported; the older ones are not reported; read the PR`,
+    ]);
+    expect(s.ghCalls().filter((call) => call.includes("query OlderComments("))).toHaveLength(9);
     s.stop();
   }, 30000);
 

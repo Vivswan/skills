@@ -57,7 +57,7 @@ serve() {
 }
 if [ "$1 $2" = "api graphql" ]; then
   shift 2
-  query=""; owner=""; name=""; oid=""; number=""; cursor=""
+  query=""; owner=""; name=""; oid=""; number=""; cursor=""; id=""
   while [ "$#" -gt 0 ]; do
     case "$1 $2" in
       "-f query="*) query="\${2#query=}";;
@@ -65,6 +65,7 @@ if [ "$1 $2" = "api graphql" ]; then
       "-f name="*) name="\${2#name=}";;
       "-f oid="*) oid="\${2#oid=}";;
       "-f cursor="*) cursor="\${2#cursor=}";;
+      "-f id="*) id="\${2#id=}";;
       "-F number="*) number="\${2#number=}";;
       *) violate "graphql arg: $1 $2"; exit 64;;
     esac
@@ -77,6 +78,15 @@ if [ "$1 $2" = "api graphql" ]; then
     *'reviewThreads(first:'*)
       [ "$owner/$name/$oid/$number" = "octocat/repo//7" ] || { violate "detail target: $owner/$name/$oid/$number"; exit 64; }
       serve detail "$(next detail)";;
+    *'query OlderComments('*)
+      [ "$owner/$name/$oid/$number" = "octocat/repo//7" ] && [ -n "$cursor" ] || { violate "older comments target: $owner/$name/$oid/$number before $cursor"; exit 64; }
+      serve older-comments "$(next older-comments)";;
+    *'query OlderReviews('*)
+      [ "$owner/$name/$oid/$number" = "octocat/repo//7" ] && [ -n "$cursor" ] || { violate "older reviews target: $owner/$name/$oid/$number before $cursor"; exit 64; }
+      serve older-reviews "$(next older-reviews)";;
+    *'query OlderThreadComments('*)
+      [ -n "$id" ] && [ -n "$cursor" ] && [ -z "$owner$name$oid$number" ] || { violate "older thread comments target: $id before $cursor"; exit 64; }
+      serve older-thread "$(next older-thread)";;
     *'pullRequest(number:'*)
       [ -z "$owner$name$oid$number$cursor" ] || { violate "rows query must inline its targets: $owner/$name/$oid/$number/$cursor"; exit 64; }
       serve rows "$(next rows)";;
@@ -284,11 +294,14 @@ function commentNode(spec: CommentSpec): unknown {
 }
 
 type ThreadSpec = {
+  id?: string;
   isResolved: boolean;
   path: string;
   line: number | null;
   total: number;
   comments: CommentSpec[];
+  /** The startCursor of the fetched comments when the thread has older ones. */
+  before?: string;
 };
 
 type ReviewSpec = {
@@ -300,9 +313,30 @@ type ReviewSpec = {
   url: string;
 };
 
+/** A connection page as GitHub renders it; `before` is the startCursor when older nodes exist. */
+function connection(nodes: unknown[], before?: string): unknown {
+  return {
+    nodes,
+    pageInfo: { hasPreviousPage: before !== undefined, startCursor: before ?? null },
+  };
+}
+
+function reviewNode(review: ReviewSpec): unknown {
+  return {
+    fullDatabaseId: review.id,
+    submittedAt: review.submittedAt,
+    state: review.state,
+    author: { login: review.login },
+    body: review.body,
+    url: review.url,
+  };
+}
+
 function detailPage(spec: {
   comments?: CommentSpec[];
+  commentsBefore?: string;
   reviews?: ReviewSpec[];
+  reviewsBefore?: string;
   threads: ThreadSpec[];
   nextCursor?: string | null;
   commitAuthor?: string | null;
@@ -311,23 +345,18 @@ function detailPage(spec: {
     data: {
       repository: {
         pullRequest: {
-          comments: { nodes: (spec.comments ?? []).map(commentNode) },
-          reviews: {
-            nodes: (spec.reviews ?? []).map((review) => ({
-              fullDatabaseId: review.id,
-              submittedAt: review.submittedAt,
-              state: review.state,
-              author: { login: review.login },
-              body: review.body,
-              url: review.url,
-            })),
-          },
+          comments: connection((spec.comments ?? []).map(commentNode), spec.commentsBefore),
+          reviews: connection((spec.reviews ?? []).map(reviewNode), spec.reviewsBefore),
           reviewThreads: {
             nodes: spec.threads.map((thread) => ({
+              id: thread.id ?? `thread-${thread.path}`,
               isResolved: thread.isResolved,
               path: thread.path,
               line: thread.line,
-              comments: { totalCount: thread.total, nodes: thread.comments.map(commentNode) },
+              comments: {
+                totalCount: thread.total,
+                ...(connection(thread.comments.map(commentNode), thread.before) as object),
+              },
             })),
             pageInfo: {
               hasNextPage: (spec.nextCursor ?? null) !== null,
@@ -351,6 +380,28 @@ function detailPage(spec: {
         },
       },
     },
+  });
+}
+
+/** An OlderComments or OlderReviews reply: the connection under the pull request. */
+function olderPage(
+  field: "comments" | "reviews",
+  nodes: CommentSpec[] | ReviewSpec[],
+  before?: string,
+): string {
+  const rendered =
+    field === "comments"
+      ? (nodes as CommentSpec[]).map(commentNode)
+      : (nodes as ReviewSpec[]).map(reviewNode);
+  return JSON.stringify({
+    data: { repository: { pullRequest: { [field]: connection(rendered, before) } } },
+  });
+}
+
+/** An OlderThreadComments reply: the connection under the thread node. */
+function olderThreadPage(comments: CommentSpec[], before?: string): string {
+  return JSON.stringify({
+    data: { node: { comments: connection(comments.map(commentNode), before) } },
   });
 }
 
@@ -1018,7 +1069,7 @@ describe("readPrDetail", () => {
         commitAuthor: null,
       }),
     });
-    const detail = readPrDetail({ repo: "octocat/repo", number: 7 });
+    const detail = readPrDetail({ repo: "octocat/repo", number: 7 }, null);
     const expected: Activity[] = [
       {
         id: "review-comment:11",
@@ -1110,6 +1161,7 @@ describe("readPrDetail", () => {
       lastCommitAuthor: "octocat",
       unresolvedThreads: 2,
       activities: expected,
+      gaps: [],
     });
     const calls = s.calls();
     expect(calls).toHaveLength(2);
@@ -1123,9 +1175,107 @@ describe("readPrDetail", () => {
     const s = scenario({
       "detail-1.json": JSON.stringify({ data: { repository: { pullRequest: null } } }),
     });
-    expect(() => readPrDetail({ repo: "octocat/repo", number: 7 })).toThrow(
+    expect(() => readPrDetail({ repo: "octocat/repo", number: 7 }, null)).toThrow(
       new GhError("GraphQL response has no pullRequest (wrong repo or PR number?)"),
     );
+    expect(s.violations()).toBe("");
+  });
+
+  const PR7 = { repo: "octocat/repo", number: 7 };
+  const comment = (id: number, minute: number, body = `c${id}`): CommentSpec => ({
+    id,
+    at: `2026-03-01T10:${String(minute).padStart(2, "0")}:00Z`,
+    login: "work-bot",
+    body,
+    url: `https://example.com/c${id}`,
+  });
+  const review = (id: string, minute: number): ReviewSpec => ({
+    id,
+    submittedAt: `2026-03-01T10:${String(minute).padStart(2, "0")}:00Z`,
+    state: "APPROVED",
+    login: "work-bot",
+    body: `r${id}`,
+    url: `https://example.com/r${id}`,
+  });
+
+  test("each connection pages back from the newest until a reported id appears: 21 missed comments and a 5-reply thread arrive whole, the reviews stop at their first page", () => {
+    // The fixed windows (comments last 20, thread comments last 3) are what the daemon reads on
+    // every poll; after a stop that missed 21 comments, the 21st oldest is beyond the window and
+    // would never be reported. The reviews page carries a reported id, so it is not paged.
+    const missed = Array.from({ length: 21 }, (_, i) => comment(101 + i, 10 + i));
+    const replies = Array.from({ length: 5 }, (_, i) => comment(201 + i, 40 + i, `t${201 + i}`));
+    const s = scenario({
+      "detail-1.json": detailPage({
+        comments: missed.slice(1),
+        commentsBefore: "c102",
+        reviews: [review("1", 1), review("2", 2)],
+        reviewsBefore: "r1",
+        threads: [
+          {
+            id: "T1",
+            isResolved: false,
+            path: "src/a.ts",
+            line: 3,
+            total: 6,
+            comments: replies.slice(2),
+            before: "t203",
+          },
+        ],
+        commitAuthor: "octocat",
+      }),
+      "older-comments-1.json": olderPage("comments", [comment(100, 9), missed[0] as CommentSpec]),
+      "older-thread-1.json": olderThreadPage([comment(200, 39, "t200"), ...replies.slice(0, 2)]),
+    });
+    const seen = new Set(["comment:100", "review:1", "review-comment:200"]);
+    const detail = readPrDetail(PR7, seen);
+    expect(detail.gaps).toEqual([]);
+    expect(detail.activities.map((activity) => activity.id)).toEqual([
+      "review-comment:200",
+      ...replies.map((reply) => `review-comment:${reply.id}`),
+      "comment:100",
+      ...missed.map((c) => `comment:${c.id}`),
+      "review:1",
+      "review:2",
+    ]);
+    expect(detail.activities[0]?.kind).toBe("review-comment");
+    expect(detail.activities[1]?.kind).toBe("reply");
+    const calls = s.calls();
+    expect(calls).toHaveLength(3);
+    expect(calls[1]).toContain("query OlderThreadComments(");
+    expect(calls[1]).toContain("-f id=T1 -f cursor=t203");
+    expect(calls[2]).toContain("query OlderComments(");
+    expect(calls[2]).toContain("-f owner=octocat -f name=repo -F number=7 -f cursor=c102");
+    expect(s.violations()).toBe("");
+  });
+
+  test("a connection with no reported id after 10 pages stops with a gap line, never silently; a first sighting pages nothing", () => {
+    // Without the cap a PR with thousands of comments would be read whole on every restart; without
+    // the gap line the oldest missed comments would be dropped without a word.
+    const fixtures: Record<string, string> = {
+      "detail-1.json": detailPage({
+        comments: [comment(300, 30)],
+        commentsBefore: "c300",
+        threads: [],
+      }),
+    };
+    for (let page = 1; page <= 9; page += 1) {
+      fixtures[`older-comments-${page}.json`] = olderPage(
+        "comments",
+        [comment(300 - page, 30 - page)],
+        `c${300 - page}`,
+      );
+    }
+    const s = scenario(fixtures);
+    const detail = readPrDetail(PR7, new Set(["comment:1"]));
+    expect(detail.gaps).toEqual([
+      "issue comments: more than 10 pages since the last one reported; the older ones are not reported",
+    ]);
+    expect(detail.activities.map((activity) => activity.id)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `comment:${291 + i}`),
+    );
+    expect(s.calls()).toHaveLength(10);
+    expect(readPrDetail(PR7, null).gaps).toEqual([]);
+    expect(s.calls()).toHaveLength(11);
     expect(s.violations()).toBe("");
   });
 });
@@ -1147,6 +1297,7 @@ describe("newActivity", () => {
     const detail = {
       lastCommitAuthor: null,
       unresolvedThreads: 0,
+      gaps: [],
       activities: [
         activity("comment:1", "2026-03-01T10:00:02Z", "work-bot"),
         activity("comment:2", "2026-03-01T10:00:00Z", "octocat"),

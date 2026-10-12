@@ -877,9 +877,9 @@ async function runDaemon(
     let detail: ReturnType<typeof readPrDetail> | null = null;
     // A first sighting reads the detail too: what is on the PR now is the baseline, by id.
     if (!saved || changes.activity) {
-      detail = readPrDetail(ref);
-      const seen = new Set(row.seenActivity.flat());
-      const activities = saved ? newActivity(detail, seen, viewerLoginCached()) : [];
+      const seen = saved ? new Set(row.seenActivity.flat()) : null;
+      detail = readPrDetail(ref, seen);
+      const activities = seen ? newActivity(detail, seen, viewerLoginCached()) : [];
       row.seenActivity = [
         ...row.seenActivity.slice(-1),
         detail.activities.map((activity) => activity.id),
@@ -888,9 +888,12 @@ async function runDaemon(
         const { kind, text } = describeActivities(activities);
         emitted.push(emit({ ...base, kind, text }, targets));
       }
+      for (const gap of detail.gaps) {
+        emitted.push(emit({ ...base, kind: "trouble", text: `${gap}; read the PR` }, targets));
+      }
     }
     if (headMoved && !recordedHeads.has(current.headRefOid)) {
-      detail ??= readPrDetail(ref);
+      detail ??= readPrDetail(ref, null);
       emitted.push(
         emit(
           {
