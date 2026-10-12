@@ -976,6 +976,7 @@ describe("pr-events.mts", () => {
     ]);
     const status = s.run(["status"]).stdout;
     expect(status).toContain("subscribers: 1");
+    expect(status).toContain("prs: 1");
     expect(status).toContain(`${dead} pruned=inbox refused (ECONNREFUSED) at `);
     expect(status).toContain("delivery=failed: ECONNREFUSED (#2 at ");
     s.stop();

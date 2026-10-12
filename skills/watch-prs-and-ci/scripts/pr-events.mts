@@ -761,6 +761,7 @@ async function runDaemon(
 
   const dropSubscription = (sub: Subscription, reason: string): void => {
     delete state.subscriptions[sub.address];
+    dropUnheldTargets(state);
     state.pruned[sub.address] = { at: new Date().toISOString(), reason };
     log(`pruned ${sub.sink} ${sub.address}: ${reason}`);
   };
@@ -780,7 +781,6 @@ async function runDaemon(
       const reason = prunedReason(sub, now);
       if (reason !== null) dropSubscription(sub, reason);
     }
-    dropUnheldTargets(state);
     for (const [address, { at }] of Object.entries(state.pruned)) {
       if (Date.parse(at) + LEASE_MS <= now) {
         delete state.pruned[address];
@@ -1168,6 +1168,7 @@ async function runDaemon(
         if (sub) {
           if (command.pr === null) delete state.subscriptions[command.address];
           else delete sub.prs[prKey(command.pr)];
+          dropUnheldTargets(state);
           prune();
           saveState(dir, state);
           checkIdle();

@@ -152,7 +152,6 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   );
 }
 
-/** Drops the rows and pending commits no subscriber holds. */
 export function dropUnheldTargets(state: State): void {
   const subs = Object.values(state.subscriptions);
   for (const key of Object.keys(state.rows)) {
