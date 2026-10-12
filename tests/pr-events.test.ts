@@ -1,8 +1,17 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { connect, createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
+import { loadState, ownerFiles } from "../skills/watch-prs-and-ci/scripts/state.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
 // Contract tests for the PR-events daemon. A stub gh on PATH dispatches each GraphQL query on the
@@ -1028,6 +1037,34 @@ describe("pr-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a rollup that catches up with a verdict the suites already settled is not a second verdict", async () => {
+    // The suites settle before the rollup does; the rollup's later flip to SUCCESS on the same
+    // head re-armed the judgment and the same green went out twice.
+    const s = new Scenario("rollup-catchup");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "PENDING" }),
+      "suites-1": suites([["ci", "in_progress", null]]),
+      "rows-2": rows({ rollup: "PENDING" }),
+      "suites-2": suites([["ci", "completed", "success"]]),
+      // The catch-up poll reads no suites, so the third suites read belongs to the poll after it.
+      "rows-3": rows({ rollup: "SUCCESS" }),
+      // A rerun failing on the same head is a new result, not the rollup catching up.
+      "rows-4": rows({ rollup: "FAILURE" }),
+      "suites-3": suites([["ci", "completed", "failure", 9]]),
+      "log-9.txt": "##[error]ci failed",
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(1))).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci`]);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.ghCalls().filter((call) => call.includes("checkSuites(")).length).toBe(2);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))[1]).toBe(`PR ${PR7}: CI red on ${SHORT_A}`);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a reply inside an existing thread (thread count unchanged) is a comment event with path:line; the viewer's own is not", async () => {
     const s = new Scenario("reply");
     const box = await s.inbox("a");
@@ -1729,6 +1766,121 @@ describe("pr-events.mts", () => {
     expect(judged).toEqual([HEAD_A, HEAD_B, HEAD_A, HEAD_B, HEAD_B]);
     expect(s.log()).toContain("appended #1 to the log from the saved state");
     expect(s.run(["status"], { inbox: box.path }).stdout).toContain("commits: 0");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("the log ahead of the state on restart settles the target whose verdict it carries, even when a later line is a trouble notice", async () => {
+    // A daemon killed after appending a commit's green but before saving the state that drops the
+    // commit left it pending; the restart judged and delivered the same green again. The newest
+    // log line being a trouble notice must not hide the verdict before it.
+    const s = new Scenario("log-ahead");
+    const box = await s.inbox("a");
+    // The watch's own read sees the gate still queued, so the commit is saved pending; the poll
+    // after it reads the gate green and appends the verdict.
+    s.fixtures({
+      "suites-1": suites([["ci", "queued", null]]),
+      "suites-2": suites([["ci", "completed", "success"]]),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    const pending = readFileSync(s.file("state.json"), "utf-8");
+    expect(JSON.parse(pending).commits).toHaveProperty(`${REPO}@${HEAD_A}`);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(await box.frames(1)).toHaveLength(1);
+    s.stop({ inbox: box.path });
+    expect(s.events().map((e) => [e.id, e.sha, e.kind])).toEqual([[1, HEAD_A, "ci"]]);
+    // The state as it was before the poll: the commit pending, no event counted.
+    writeFileSync(s.file("state.json"), pending);
+    appendFileSync(
+      s.file("events.jsonl"),
+      `${JSON.stringify({ id: 2, at: T1, repo: "daemon", pr: null, sha: null, kind: "trouble", text: "polling failed", url: "" })}\n`,
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.events().map((e) => e.id)).toEqual([1, 2]);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("commits: 0");
+    const judged = s
+      .ghCalls()
+      .filter((call) => call.includes("checkSuites("))
+      .map((call) => /-f oid=([0-9a-f]+)/.exec(call)?.[1]);
+    expect(judged).toEqual([HEAD_A, HEAD_A]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a logged verdict settles only the target it names: a commit watch's green leaves a PR watch on the same sha pending", () => {
+    // A PR requiring another gate shares the sha; settling it from the commit's line would skip
+    // its judgment and the absent gate's trouble notice.
+    const s = new Scenario("log-ahead-target");
+    const files = ownerFiles(s.dir, { key: "probe", inbox: null, pid: null });
+    const pendingRow = {
+      repo: REPO,
+      number: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      isDraft: false,
+      state: "OPEN",
+      mergedAt: null,
+      mergeCommitOid: null,
+      headRefOid: HEAD_A,
+      updatedAt: T1,
+      issueComments: 0,
+      reviewThreads: 0,
+      latestReview: null,
+      rollupState: "SUCCESS",
+      ci: { pending: true, grace: { missingPolls: 0, registered: [] } },
+      seenActivity: [],
+      mergeCommitPolls: 0,
+    };
+    writeFileSync(
+      files.state,
+      JSON.stringify({
+        lastEventId: 0,
+        commits: {
+          [`${REPO}@${HEAD_A}`]: {
+            repo: REPO,
+            sha: HEAD_A,
+            expected: ["ci"],
+            grace: { missingPolls: 0, registered: [] },
+          },
+        },
+        rows: { [`${REPO}#7`]: pendingRow },
+      }),
+    );
+    const line = (id: number, pr: number | null) =>
+      `${JSON.stringify({ id, at: T1, repo: REPO, pr, sha: HEAD_A, kind: "ci", text: "CI green", url: "" })}\n`;
+    writeFileSync(files.events, line(1, null));
+    const afterCommitLine = loadState(files).state;
+    expect(Object.keys(afterCommitLine.commits)).toEqual([]);
+    expect(afterCommitLine.rows[`${REPO}#7`]?.ci.pending).toBe(true);
+    appendFileSync(files.events, line(2, 7));
+    const afterPrLine = loadState(files).state;
+    expect(afterPrLine.rows[`${REPO}#7`]?.ci.pending).toBe(false);
+  });
+
+  test("the first frame after a restart waits the full gap from the daemon's own start, so a stale saved clock cannot put two frames inside one second", async () => {
+    // A daemon killed between its frame leaving and its record being saved restores the earlier
+    // record's time; counted from that, the next frame could follow the real one within the second.
+    const s = new Scenario("stale-clock");
+    const box = await s.inbox("a");
+    s.fixtures({ "suites-1": suites([["ci", "completed", "success"]]) });
+    writeFileSync(
+      s.file("state.json"),
+      JSON.stringify({
+        delivery: { eventIds: [1], at: T1, msgId: "pr-events-1-old", outcome: "sending" },
+        lastEventId: 1,
+      }),
+    );
+    const startedAt = Date.now();
+    await s.start({ inbox: box.path });
+    // Spawned asynchronously, so the fake inbox stamps the arrival as it happens, not after the
+    // watch returns.
+    const watch = Bun.spawn([process.execPath, SCRIPT, "watch-commit", REPO, HEAD_A, ...GATE_CI], {
+      env: s.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await box.frames(1)).toHaveLength(1);
+    expect(await watch.exited).toBe(0);
+    expect((box.arrivedAt[0] as number) - startedAt).toBeGreaterThanOrEqual(1000);
     s.stop({ inbox: box.path });
   }, 30000);
 

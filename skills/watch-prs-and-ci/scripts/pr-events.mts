@@ -23,6 +23,7 @@ import { type Activity, newActivity, readPrDetail, viewerLogin } from "./pr-deta
 import { type PrKey, type PrRef, prKey, type Row, readRows, rowChanged } from "./pr-rows.mts";
 import {
   appendEvents,
+  type CiOutcome,
   type CommitKey,
   commitKey,
   type EventInput,
@@ -32,6 +33,7 @@ import {
   nextEvent,
   type Owner,
   type OwnerFiles,
+  outcomeOfVerdict,
   ownerFiles,
   type PrEvent,
   RuntimeDirError,
@@ -638,6 +640,14 @@ type Scope = PrKey | CommitKey | null;
 /** How a poll judges a target's CI: with the settling bookkeeping, for terminal verdicts only, or not at all. */
 type Judging = "settling" | "terminal" | "none";
 
+function isTerminalRollup(state: string | null): boolean {
+  return state === "SUCCESS" || state === "FAILURE" || state === "ERROR";
+}
+
+function rollupAgreesWith(state: string | null, outcome: CiOutcome): boolean {
+  return outcome === "green" ? state === "SUCCESS" : state === "FAILURE" || state === "ERROR";
+}
+
 function judgingOf(scope: Scope, key: PrKey | CommitKey): Judging {
   if (scope === null) return "settling";
   return scope === key ? "terminal" : "none";
@@ -817,7 +827,16 @@ async function runDaemon(
         }),
       );
     }
-    if (saved && (changes.head || changes.rollup)) {
+    // A rollup that only catches up with the verdict already delivered (the suites settled while
+    // the rollup still read pending, and it now reads the same way) is not news; any other move on
+    // the head, a failure after a delivered green included, is judged again.
+    const rollupCatchingUp =
+      changes.rollup &&
+      saved !== undefined &&
+      !saved.ci.pending &&
+      !isTerminalRollup(saved.rollupState) &&
+      rollupAgreesWith(current.rollupState, saved.ci.outcome);
+    if (saved && (changes.head || (changes.rollup && !rollupCatchingUp))) {
       // A rollup move on the same head keeps the grace already spent waiting for its gate.
       const grace = !changes.head && saved.ci.pending ? saved.ci.grace : freshGrace();
       row.ci = { pending: true, grace };
@@ -880,7 +899,7 @@ async function runDaemon(
         emitted,
         judging === "settling",
       );
-      if (verdict) row.ci = { pending: false };
+      if (verdict) row.ci = { pending: false, outcome: outcomeOfVerdict(verdict.text) };
     }
   };
 
@@ -901,13 +920,13 @@ async function runDaemon(
 
   // One message per poll, and a second's gap between messages: the receiver drops a second frame
   // from one sender within the same second.
-  // The clock survives a restart: a daemon started right after the last one stopped would otherwise
-  // send its first message within a second of the previous one. The delivery is recorded as
-  // `sending` before the frame goes out, so a daemon that dies mid-send still leaves the send time;
-  // the newest event's time is the floor under that.
+  // The clock survives a restart: the saved send time and the newest event's time are floors, and
+  // so is this daemon's own start, since a daemon killed after its frame left but before its
+  // record was saved would otherwise restore a stale clock and send again within the second.
   let lastDeliveryAt = Math.max(
     state.delivery ? Date.parse(state.delivery.at) : 0,
     newestEventAt === null ? 0 : Date.parse(newestEventAt),
+    Date.now(),
   );
   const deliverDigest = async (emitted: PrEvent[]): Promise<void> => {
     if (owner.inbox === null || emitted.length === 0) return;
@@ -920,9 +939,9 @@ async function runDaemon(
       from_name: FROM_NAME,
       msg_id: `pr-events-${(emitted[0] as PrEvent).id}-${randomUUID()}`,
     };
-    // The record saved before the send carries an estimate of its time; the clock is stamped after
-    // that write, right before the frame goes out, and the record is corrected once it is sent.
-    // Stamped earlier, the write's own time would eat into the gap before the next frame.
+    // The record is saved before the send with a provisional time; the clock is stamped after that
+    // write, right before the frame goes out, so the write cannot eat into the next frame's gap.
+    // A crash between the two restores the provisional time, which the start floor above covers.
     state.delivery = {
       eventIds: emitted.map((event) => event.id),
       at: new Date().toISOString(),

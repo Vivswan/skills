@@ -67,7 +67,14 @@ export interface CommitWatch {
   grace: Grace;
 }
 
-export type RowCi = { pending: true; grace: Grace } | { pending: false };
+/** What a settled verdict said, so a rollup that only catches up with it is told from a new result. */
+export type CiOutcome = "green" | "red";
+
+export type RowCi = { pending: true; grace: Grace } | { pending: false; outcome: CiOutcome };
+
+export function outcomeOfVerdict(text: string): CiOutcome {
+  return text.startsWith("CI green") ? "green" : "red";
+}
 
 export interface SavedRow extends Row {
   ci: RowCi;
@@ -209,8 +216,24 @@ function readSavedState(files: OwnerFiles): State | null {
 // a log left by an earlier daemon carries past the saved state.
 export function loadState(files: OwnerFiles): LoadedState {
   const state = readSavedState(files) ?? emptyState();
-  const logged = readEventsSince(files, 0).at(-1);
+  const log = readEventsSince(files, 0);
+  const logged = log.at(-1);
   const unlogged = state.lastPoll.filter((event) => event.id > (logged?.id ?? 0));
+  // The log ahead of the state is the other crash: a verdict appended, the daemon gone before the
+  // state that drops its target was saved. The log carries the verdict, so the target is settled.
+  // A line names its one target: a commit watch (no pr) or a PR; another watch on the same sha
+  // may require other gates, so it keeps its own judgment.
+  for (const event of log) {
+    if (event.id <= state.lastEventId || event.kind !== "ci" || event.sha === null) continue;
+    if (event.pr === null) {
+      delete state.commits[commitKey(event.repo, event.sha)];
+      continue;
+    }
+    const row = state.rows[`${event.repo}#${event.pr}`];
+    if (row && row.headRefOid === event.sha && row.ci.pending) {
+      row.ci = { pending: false, outcome: outcomeOfVerdict(event.text) };
+    }
+  }
   const newest = unlogged.at(-1) ?? logged;
   state.lastEventId = Math.max(state.lastEventId, newest?.id ?? 0);
   return { state, unlogged, newestEventAt: newest?.at ?? null };
