@@ -19,6 +19,9 @@ export type Io = {
   /** GitHub allows 30 searches a minute per token, 10 with none, and every lane on the machine
    * shares the token; the searches are serialised this far apart. */
   githubSearchGapMs: number;
+  /** crates.io asks for one request a second from anything automated; its lookups and the pages
+   * of its ranking are serialised this far apart. */
+  cratesGapMs: number;
   /** Where the typosquat column keeps the day's popular-name lists, or null for no cache. */
   cacheDir: string | null;
 };
@@ -50,4 +53,27 @@ export const unknown = (detail: string): Cell => ({ status: "unknown", detail })
 export function renderCell(cell: Cell): string {
   if (cell.status === "free") return "free";
   return `${cell.status}(${cell.detail})`;
+}
+
+/** One lookup at a time against a host that punishes bursts, `gapMs` apart. The gap is waited
+ * before a lookup, never after one, so the last lookup ends the process. */
+export function serialQueue(): <T>(gapMs: number, work: () => Promise<T>) => Promise<T> {
+  let turn: Promise<void> = Promise.resolve();
+  let lastDone = 0;
+  return (gapMs, work) => {
+    const mine = turn.then(async () => {
+      const wait = lastDone + gapMs - Date.now();
+      if (wait > 0) await Bun.sleep(wait);
+      try {
+        return await work();
+      } finally {
+        lastDone = Date.now();
+      }
+    });
+    turn = mine.then(
+      () => undefined,
+      () => undefined,
+    );
+    return mine;
+  };
 }

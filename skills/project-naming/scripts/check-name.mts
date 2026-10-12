@@ -32,6 +32,8 @@ export const ARXIV_GAP_MS = 3_000;
 /** GitHub's search limit is 30 a minute with a token and 10 without. */
 export const GITHUB_SEARCH_GAP_MS = 2_000;
 export const GITHUB_SEARCH_GAP_ANONYMOUS_MS = 6_000;
+/** crates.io's crawler policy: one request a second. */
+export const CRATES_GAP_MS = 1_000;
 
 export type Options = {
   table: readonly RegistryEntry[];
@@ -79,10 +81,12 @@ export function claimed(options: Options): Claimed {
   return (id) => options.registries === null || options.registries.includes(id);
 }
 
+/** The availability columns `--registries` names, or all of them, and the gate columns always:
+ * a selective run never skips the pronunciation, typosquat, and meaning checks. */
 export function columns(options: Options): Column[] {
   const isClaimed = claimed(options);
   return allColumns(options.table, options.domains).filter(
-    (column) => (options.arxiv || column.id !== "arxiv") && isClaimed(column.id),
+    (column) => (options.arxiv || column.id !== "arxiv") && (column.gate || isClaimed(column.id)),
   );
 }
 
@@ -151,10 +155,11 @@ export function renderTsv(options: Options, rows: Row[]): string {
 }
 
 export function renderRegistries(table: readonly RegistryEntry[]): string {
-  const lines = ["id\tlabel\ttaken control"];
+  const lines = ["id\tlabel\ttaken control\tgate"];
   for (const entry of table) {
     const control = entry.kind === "note" ? "-" : entry.takenControl;
-    lines.push([entry.id, entry.label, control].join("\t"));
+    const gate = entry.kind !== "domains" && entry.gate ? "yes" : "-";
+    lines.push([entry.id, entry.label, control, gate].join("\t"));
   }
   return `${lines.join("\n")}\n`;
 }
@@ -240,8 +245,8 @@ async function main(): Promise<number> {
     arxiv: !(parsed.values["no-arxiv"] as boolean | undefined),
     registries: selected,
   };
-  if (columns(options).length === 0) {
-    process.stderr.write("--registries and --no-arxiv together leave no column to check\n");
+  if (selected && !columns(options).some((column) => selected.includes(column.id))) {
+    process.stderr.write("--registries and --no-arxiv together leave no column of the selection\n");
     return 2;
   }
   const githubToken = githubTokenFromEnvironment();
@@ -252,6 +257,7 @@ async function main(): Promise<number> {
     timeoutMs: REQUEST_TIMEOUT_MS,
     arxivGapMs: ARXIV_GAP_MS,
     githubSearchGapMs: githubToken ? GITHUB_SEARCH_GAP_MS : GITHUB_SEARCH_GAP_ANONYMOUS_MS,
+    cratesGapMs: CRATES_GAP_MS,
     cacheDir: join(tmpdir(), "check-name-cache"),
   };
   const result = await run(io, options, names);

@@ -2,10 +2,19 @@
 // Each registry's popular names come from one public list, read through cache.mts.
 
 import { cached, stringList } from "./cache.mts";
-import { type Cell, type Claimed, free, type Io, taken, unknown } from "./cells.mts";
+import { type Cell, type Claimed, free, type Io, serialQueue, taken, unknown } from "./cells.mts";
 
 /** The top of each download ranking; names past this are not what a typo lands on. */
 export const RANKING_TOP = 5_000;
+
+/** crates.io publishes no ranking file, and its search is not the ranking: a search for the name
+ * returns what matches the name, not the popular crate one edit away. So its crate list sorted
+ * by downloads is read whole, 100 a page (the most it serves), this many pages. */
+export const CRATES_PAGES = 20;
+
+/** Every request to crates.io, the per-name lookups and the ranking pages alike: its crawler
+ * policy asks for one request a second and a User-Agent that says who is asking. */
+export const cratesQueue = serialQueue();
 
 /** True when `b` is one insertion, deletion, substitution, or adjacent transposition from `a`.
  * Hand-rolled: shipped skill scripts run from the installed folder on node built-ins alone, and
@@ -92,7 +101,34 @@ function quotedNames(moduleText: string): string[] {
   return names;
 }
 
-function sources(io: Io, lower: string): Promise<Source>[] {
+function cratesPage(page: number): string {
+  return `https://crates.io/api/v1/crates?sort=downloads&per_page=100&page=${page}`;
+}
+
+/** The ranking page by page, in turn, each kept a day: a page that could not be read fails the
+ * list, since the names past it were never compared. */
+async function cratesRanking(io: Io): Promise<Source> {
+  const names: string[] = [];
+  for (let page = 1; page <= CRATES_PAGES; page++) {
+    const loaded = await cached(io, {
+      url: cratesPage(page),
+      extract: (text) =>
+        nonEmpty(
+          stringsOf(text, ["crates"], (crate) => (crate as { name?: unknown }).name),
+          "crates",
+        ),
+      revive: nonEmptyStringList,
+      through: (work) => cratesQueue(io.cratesGapMs, work),
+    });
+    if ("error" in loaded) {
+      return { registry: "crates", error: `crates ranking page ${page} ${loaded.error}` };
+    }
+    names.push(...loaded.value);
+  }
+  return { registry: "crates", names, basis: `top ${CRATES_PAGES * 100} by downloads` };
+}
+
+function sources(io: Io): Promise<Source>[] {
   const ranking = `top ${RANKING_TOP} by downloads`;
   return [
     source(
@@ -117,14 +153,7 @@ function sources(io: Io, lower: string): Promise<Source>[] {
       (text) => quotedNames(text).slice(0, RANKING_TOP),
       nonEmptyStringList,
     ),
-    source(
-      io,
-      "crates",
-      "crates search",
-      `https://crates.io/api/v1/crates?q=${encodeURIComponent(lower)}&per_page=100&sort=downloads`,
-      "the 100 most downloaded crates the search returns for it",
-      (text) => stringsOf(text, ["crates"], (crate) => (crate as { name?: unknown }).name),
-    ),
+    cratesRanking(io),
   ];
 }
 
@@ -135,7 +164,7 @@ export async function typosquat(io: Io, name: string, claimed: Claimed): Promise
   const lower = name.toLowerCase();
   const hits: string[] = [];
   const failures: string[] = [];
-  for (const found of await Promise.all(sources(io, lower))) {
+  for (const found of await Promise.all(sources(io))) {
     const registry = `${claimed(found.registry) ? "claimed" : "unclaimed"} ${found.registry}`;
     if ("error" in found) {
       failures.push(`${registry} lookup failed (${found.error})`);

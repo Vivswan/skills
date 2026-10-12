@@ -10,11 +10,12 @@ import {
   get,
   type Io,
   renderCell,
+  serialQueue,
   taken,
   unknown,
 } from "./cells.mts";
 import { type Note, sayAsSpelled } from "./say.mts";
-import { typosquat } from "./typosquat.mts";
+import { cratesQueue, typosquat } from "./typosquat.mts";
 
 export type Registry = {
   kind: "registry";
@@ -25,6 +26,8 @@ export type Registry = {
   takenControl: string;
   /** What the control must read; any taken cell unless the column exists to see something finer. */
   controlHolds?: (cell: Cell) => boolean;
+  /** Runs on every name whatever `--registries` selects: the page's gates read these columns. */
+  gate?: true;
   lookup: (io: Io, name: string, claimed: Claimed) => Promise<Cell>;
 };
 
@@ -43,6 +46,7 @@ export type NoteColumn = {
   kind: "note";
   id: string;
   label: string;
+  gate?: true;
   lookup: (io: Io, name: string) => Promise<Note>;
 };
 
@@ -53,6 +57,9 @@ export type RegistryEntry = Registry | DomainFamily | NoteColumn;
 async function lookup404(io: Io, url: string, label: string): Promise<Cell> {
   try {
     const response = await get(io, url);
+    // The status is the answer; the body is released so the request is over, not left open, and
+    // a release that fails changes nothing.
+    await response.body?.cancel().catch(() => undefined);
     if (response.status === 404) return free;
     if (response.status === 200) return taken(label);
     return unknown(`${label} HTTP ${response.status}`);
@@ -99,29 +106,6 @@ async function huggingFace(io: Io, name: string): Promise<Cell> {
     readings.find((cell) => cell.status === "unknown") ??
     free
   );
-}
-
-/** One lookup at a time against a host that punishes bursts, `gapMs` apart. The gap is waited
- * before a lookup, never after one, so the last lookup ends the process. */
-function serialQueue(): <T>(gapMs: number, work: () => Promise<T>) => Promise<T> {
-  let turn: Promise<void> = Promise.resolve();
-  let lastDone = 0;
-  return (gapMs, work) => {
-    const mine = turn.then(async () => {
-      const wait = lastDone + gapMs - Date.now();
-      if (wait > 0) await Bun.sleep(wait);
-      try {
-        return await work();
-      } finally {
-        lastDone = Date.now();
-      }
-    });
-    turn = mine.then(
-      () => undefined,
-      () => undefined,
-    );
-    return mine;
-  };
 }
 
 const arxivQueue = serialQueue();
@@ -437,31 +421,103 @@ export const WIKTIONARY_FLAG = "FLAG ";
 
 type WikitextReply = { parse?: { wikitext?: string }; error?: { code?: string } };
 
-/** Wikitext to a readable gloss: links keep their shown text, label templates go, any other
- * template keeps its last unnamed argument (`{{synonym of|en|penis}}` reads "penis"). */
+/** The label templates: on a sense line `lb` and its aliases, the older `context` and `cx` among
+ * them; on a headword line `tlb` and `term-label`. */
+const SENSE_LABEL = ["lb", "lbl", "label", "context", "cx"];
+const TERM_LABEL = ["tlb", "term-label"];
+
+type Template = { start: number; end: number; args: string[] };
+
+/** Each template on the line with one of the names, with its top-level arguments: a `|` or `}}`
+ * inside a nested template, a linked label or a `sort={{...}}`, belongs to that template. */
+function templates(line: string, names: readonly string[]): Template[] {
+  const found: Template[] = [];
+  const opener = new RegExp(`\\{\\{(?:${names.join("|")})\\|`, "g");
+  for (let match = opener.exec(line); match; match = opener.exec(line)) {
+    const start = match.index;
+    const args: string[] = [];
+    let depth = 1;
+    let argStart = start + match[0].length;
+    let i = argStart;
+    while (i < line.length && depth > 0) {
+      if (line.startsWith("{{", i)) {
+        depth++;
+        i += 2;
+      } else if (line.startsWith("}}", i)) {
+        depth--;
+        if (depth === 0) args.push(line.slice(argStart, i));
+        i += 2;
+      } else {
+        if (line[i] === "|" && depth === 1) {
+          args.push(line.slice(argStart, i));
+          argStart = i + 1;
+        }
+        i++;
+      }
+    }
+    if (depth > 0) break;
+    found.push({ start, end: i, args: args.map((arg) => arg.trim()) });
+    opener.lastIndex = i;
+  }
+  return found;
+}
+
+function withoutTemplates(line: string, names: readonly string[]): string {
+  let out = "";
+  let from = 0;
+  for (const template of templates(line, names)) {
+    out += line.slice(from, template.start);
+    from = template.end;
+  }
+  return out + line.slice(from);
+}
+
+/** A named argument starts with its name and `=`; a nested template's own `=` is not one. */
+function isNamed(arg: string): boolean {
+  return /^[^{}|=]+=/.test(arg);
+}
+
+/** The text a template reads as: its last unnamed argument (`{{synonym of|en|penis}}` reads
+ * "penis", `{{l|en|slang}}` as a label reads "slang"). */
+function templateText(inner: string): string {
+  const unnamed = inner
+    .split("|")
+    .filter((arg) => !isNamed(arg))
+    .slice(1);
+  return unnamed[unnamed.length - 1] ?? "";
+}
+
+/** Every template replaced by its text, the innermost first, so a template around a gloss reads
+ * as the gloss with the templates inside it already read. */
+function templatesAsText(text: string): string {
+  let out = text;
+  while (/\{\{[^{}]*\}\}/.test(out)) {
+    out = out.replace(/\{\{([^{}]*)\}\}/g, (_, inner: string) => templateText(inner));
+  }
+  return out;
+}
+
+/** Wikitext to a readable gloss: label templates go, links keep their shown text, then any other
+ * template keeps its last unnamed argument. Links first, so a piped link inside a template is
+ * not read as an argument boundary. */
 function plainGloss(line: string): string {
-  return line
-    .replace(/^#+\s*/, "")
-    .replace(/\{\{(?:lb|lbl|label|tlb|term-label)\|[^}]*\}\}/g, "")
-    .replace(/\{\{([^}]*)\}\}/g, (_, inner: string) => {
-      const unnamed = inner
-        .split("|")
-        .slice(1)
-        .filter((arg) => !arg.includes("="));
-      return unnamed[unnamed.length - 1] ?? "";
-    })
-    .replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, "$2")
+  const unlabelled = withoutTemplates(line.replace(/^#+\s*/, ""), [...SENSE_LABEL, ...TERM_LABEL]);
+  return templatesAsText(unlabelled.replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, "$2"))
     .replace(/'{2,}/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-/** The arguments of the label templates on one line: `{{lb|<lang>|a|b}}` and its aliases `label`
- * and `lbl` on a sense line, `{{tlb|<lang>|a|b}}` or `{{term-label|...}}` on a headword line. */
+/** The labels the templates on one line carry: their unnamed arguments after the language, which
+ * is the first unless the legacy `lang=` argument names it. A named argument is never a label. */
 function registerLabels(line: string): string[] {
   const labels: string[] = [];
-  for (const match of line.matchAll(/\{\{(?:lb|lbl|label|tlb|term-label)\|[^|}]*\|([^}]*)\}\}/g)) {
-    for (const label of (match[1] ?? "").split("|")) labels.push(label.trim().toLowerCase());
+  for (const { args } of templates(line, [...SENSE_LABEL, ...TERM_LABEL])) {
+    const languageNamed = args.some((arg) => /^lang\s*=/.test(arg));
+    const unnamed = args.filter((arg) => !isNamed(arg));
+    for (const label of languageNamed ? unnamed : unnamed.slice(1)) {
+      labels.push(templatesAsText(label).toLowerCase());
+    }
   }
   return labels;
 }
@@ -510,7 +566,7 @@ async function wiktionaryPage(io: Io, title: string): Promise<WikiReading | Cell
       continue;
     }
     // A term label beside the headword applies to the whole term, every sense included.
-    const term = offensiveLabels(line.replace(/\{\{(?:lb|lbl|label)\|[^}]*\}\}/g, ""));
+    const term = offensiveLabels(withoutTemplates(line, SENSE_LABEL));
     if (term.length > 0) reading.flags.push(`${language}: term labelled ${term.join(", ")}`);
   }
   return reading;
@@ -585,13 +641,17 @@ export const REGISTRIES: readonly RegistryEntry[] = [
     "npm package",
     (lower) => `https://registry.npmjs.org/${lower}`,
   ),
-  packageRegistry(
-    "crates",
-    "crates.io crate",
-    "serde",
-    "crate",
-    (lower) => `https://crates.io/api/v1/crates/${lower}`,
-  ),
+  {
+    kind: "registry",
+    id: "crates",
+    label: "crates.io crate",
+    takenControl: "serde",
+    // One request a second to crates.io, the typosquat ranking's pages in the same line.
+    lookup: (io, name) =>
+      cratesQueue(io.cratesGapMs, () =>
+        lookup404(io, `https://crates.io/api/v1/crates/${name.toLowerCase()}`, "crate"),
+      ),
+  },
   {
     kind: "registry",
     id: "homebrew",
@@ -668,6 +728,7 @@ export const REGISTRIES: readonly RegistryEntry[] = [
   {
     kind: "registry",
     id: "wiktionary",
+    gate: true,
     label: "Wiktionary word, any language, offensive senses flagged",
     // The control word's offensive senses are what the column exists to see, so a label-less
     // reading of it is a failed instrument too.
@@ -678,6 +739,7 @@ export const REGISTRIES: readonly RegistryEntry[] = [
   {
     kind: "registry",
     id: "urban",
+    gate: true,
     label: "Urban Dictionary exact entry",
     takenControl: "yeet",
     lookup: urban,
@@ -685,14 +747,22 @@ export const REGISTRIES: readonly RegistryEntry[] = [
   {
     kind: "registry",
     id: "typosquat",
+    gate: true,
     label: "one edit from a popular package on PyPI, npm, or crates",
-    // The PyPI control, requests, with its last letter changed.
-    takenControl: "requestz",
+    // regex, popular on all three registries, with its last letter changed: a list that misses
+    // it is a failed instrument, where a control on one list would pass with the other two blind.
+    takenControl: "regez",
+    controlHolds: (cell) =>
+      cell.status === "taken" &&
+      ["pypi", "npm", "crates"].every((registry) =>
+        new RegExp(` on (?:un)?claimed ${registry} \\(`).test(cell.detail),
+      ),
     lookup: typosquat,
   },
   {
     kind: "note",
     id: "say",
+    gate: true,
     label: "said as spelled: syllables, hard letters, doubled letters, clusters, two readings",
     lookup: async (_io, name) => sayAsSpelled(name),
   },

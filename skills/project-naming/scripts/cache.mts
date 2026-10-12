@@ -27,6 +27,9 @@ export type CacheSource<T> = {
   revive: (stored: unknown) => T | null;
   /** The request's bound, where the body is too large for the Io's one-name bound. */
   timeoutMs?: number;
+  /** The queue the request goes through, body included, for a host that wants its requests one
+   * at a time; a value read from disk goes through nothing. */
+  through?: <T>(work: () => Promise<T>) => Promise<T>;
 };
 
 const inFlight = new WeakMap<Io, Map<string, Promise<Loaded<unknown>>>>();
@@ -51,9 +54,17 @@ async function load<T>(io: Io, source: CacheSource<T>): Promise<Loaded<T>> {
   if (fromDisk !== null) return { value: fromDisk };
   let text: string;
   try {
-    const response = await get(io, source.url, {}, source.timeoutMs ?? io.timeoutMs);
-    if (response.status !== 200) return { error: `HTTP ${response.status}` };
-    text = await response.text();
+    const request = async (): Promise<{ text: string } | { status: number }> => {
+      const response = await get(io, source.url, {}, source.timeoutMs ?? io.timeoutMs);
+      if (response.status === 200) return { text: await response.text() };
+      // Released, not left open: the queue behind this request waits for the body too. The status
+      // is the error whether or not the release succeeds.
+      await response.body?.cancel().catch(() => undefined);
+      return { status: response.status };
+    };
+    const reply = await (source.through ? source.through(request) : request());
+    if ("status" in reply) return { error: `HTTP ${reply.status}` };
+    text = reply.text;
   } catch (error) {
     return { error: String(error) };
   }

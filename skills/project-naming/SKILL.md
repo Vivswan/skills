@@ -88,8 +88,8 @@ The rejection round (step 7) sits between runs: rewrite the brief, rerun only th
 
 ```bash
 bun "<skill-dir>/scripts/check-name.mts" <name> <name> ...        # domains default to com, ai, dev; --domain <tld> replaces that list
-bun "<skill-dir>/scripts/check-name.mts" --list-registries        # the live column table: id, label, taken control
-bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,docker,hf,github-user,dns-com,dns-ai,say,typosquat,wiktionary,urban <name>   # the brief's claims except github-repo, plus the four gate columns
+bun "<skill-dir>/scripts/check-name.mts" --list-registries        # the live column table: id, label, taken control, gate
+bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,docker,hf,github-user,dns-com,dns-ai <name>   # the brief's claims except github-repo; the four gate columns run regardless
 ```
 
 One row per name, one column per registry; the registries live in one table in `scripts/registries.mts`, and `--list-registries` prints it. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`, except the `say` column's `note(<reading>)`:
@@ -101,7 +101,7 @@ tarnix  free  free                free    taken(homebrew formula tarnix)  free  
 numpi   free  free                free    free                            free                    free   free  free                  free         free                   free   free                        free    free                          free                 taken(1 edit from numpy on claimed pypi (top 5000 by downloads))  note(ok(2s))
 ```
 
-- `--registries` runs the columns named and no other, so the gate columns `say`, `typosquat`, `wiktionary`, and `urban` always ride along with the claimed ones: the hard gate reads the first two, and step 5 reads the two meaning columns, on every name.
+- `--registries` selects the availability columns; the gate columns `say`, `typosquat`, `wiktionary`, and `urban` run on every name whatever it names, so a selective run cannot skip them: the hard gate reads the first two, and step 5 reads the two meaning columns, on every name.
 - Two controls run with every batch: per registry column, a name known to be taken there (the registry's own `nic` host for DNS, a word with a flagged sense for Wiktionary), and one random string that must be free everywhere. A column that answers either wrongly is reported on stderr as a failed instrument and the exit code is 1. Do not read that column.
 - `unknown` is not `free`. A rate-limited arXiv or a 5xx stays `unknown` in the table; rerun later or drop the column with `--no-arxiv`.
 - arXiv allows one request every three seconds, and the script spaces its own that far. Lanes run with `--no-arxiv`; the lead runs the arXiv column once, over the merged shortlist, in step 6.
@@ -112,8 +112,9 @@ numpi   free  free                free    free                            free  
 - Lanes leave `github-repo` out of `--registries`; the lead runs that column once, over the merged shortlist, in step 6, as with arXiv.
 - Homebrew's per-name pages answer an entry's own name only (`python` is an alias of `python@3.15` and has no page), so the script reads the formula and cask indexes whole, kept a day in the same cache as the typosquat lists. The cell names the formula or cask, and `via alias`, `via old name`, or `via old token` when the name is one of those.
 - The `typosquat` column is one edit (a letter added, dropped, changed, or two swapped) from a popular package. The cell names the package, the registry as `claimed` or `unclaimed` (`--registries` names the claimed ones; without it every registry is claimed), and the list it came from. The lists are kept a day under the OS temp dir in `check-name-cache`.
-- A list that could not be read is named in the same cell beside any hit (`taken(1 edit from lumeras on unclaimed pypi (...); claimed crates lookup failed (crates search HTTP 503))`), and is the cell when nothing hit. A hit list with a failed source is not complete: rerun before reading it as the only collision.
-- Those lists: PyPI's top 5000 by downloads (the public top-pypi-packages JSON); npm's top 5000 by downloads from the npm-high-impact dataset (npm publishes no ranking and its search is not fuzzy); the 100 most downloaded crates the crates.io search returns.
+- A list that could not be read is named in the same cell beside any hit (`taken(1 edit from lumeras on unclaimed pypi (...); claimed crates lookup failed (crates ranking page 1 HTTP 503))`), and is the cell when nothing hit. A hit list with a failed source is not complete: rerun before reading it as the only collision.
+- Those lists: PyPI's top 5000 by downloads (the public top-pypi-packages JSON); npm's top 5000 by downloads from the npm-high-impact dataset (npm publishes no ranking and its search is not fuzzy); crates.io's top 2000 by downloads, read from its crate list 100 a page (it publishes no ranking file, and its search returns what matches the name, not the popular crate one edit away).
+- crates.io asks automated clients for one request a second, so the script spaces its crate lookups and the ranking's twenty pages that far: a cold cache costs about twenty seconds once a day, and a 20-name batch about as long again on the `crates` column.
 - The `say` column reads the spelling alone, so it is a `note`, never free or taken, and runs no control: `ok(<syllables>s)` or `flag(<syllables>s; <reasons>)`. The "said as spelled" row under Conditions names each reason.
 - `--json` prints the rows and the control verdicts as one object for a lane report.
 
