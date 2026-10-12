@@ -23,7 +23,7 @@ body:
         - reply-and-review-discipline
         - rubber-duck-review
         - verify-with-controls
-        - watch-ci-after-push
+        - watch-prs-and-ci
         - worktree-hygiene
         - unslop
         - frontend-design

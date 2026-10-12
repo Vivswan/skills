@@ -26,7 +26,7 @@
     "./skills/reply-and-review-discipline",
     "./skills/rubber-duck-review",
     "./skills/verify-with-controls",
-    "./skills/watch-ci-after-push",
+    "./skills/watch-prs-and-ci",
     "./skills/worktree-hygiene"
   ]
 }
