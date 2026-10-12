@@ -5,8 +5,8 @@
  * Replaces hand-minted substring tokens (which go falsely red when a reflow
  * splits a token across lines or a locale words things differently, and
  * falsely green when a bad merge resurrects a deleted line) with exact pinned
- * copies compared via `git diff --no-index`, so every change is a visible
- * diff instead of a bare count.
+ * copies compared byte for byte and rendered as a unified diff, so every
+ * change is a visible diff instead of a bare count.
  *
  * Usage:
  *   baseline pin <baseline-dir> <tree-root> <file...>
@@ -18,13 +18,13 @@
  * Baseline layout: <baseline-dir>/manifest.json plus exact copies under
  * <baseline-dir>/content/<relative-path>, so a pinned file named
  * manifest.json can never collide with the manifest itself.
- *
- * Zero npm dependencies: node builtins only, run with bun.
  */
 
-import { execFile } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -34,16 +34,63 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+// The diff library installs once per manifest-and-lock pair into a shared per-user cache, never into the skill
+// folder or the user's project; hashing both files makes a bumped pin, or a lock left stale behind one,
+// a fresh directory where `--frozen-lockfile` decides. Install output stays off stdout, which the
+// check's callers parse.
+const SKILL_DIR = join(import.meta.dir, "..");
+const SKILL = basename(SKILL_DIR);
+if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
+  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
+  process.exit(2);
+}
+const DEPS_HASH = createHash("sha256")
+  .update(readFileSync(join(SKILL_DIR, "package.json")))
+  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
+  .digest("hex")
+  .slice(0, 12);
+const DEPS_DIR = join(
+  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
+  "skills-deps",
+  `${SKILL}-${DEPS_HASH}`,
+);
+// One shell word, so the printed recovery command runs as printed whatever the path holds.
+const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
+if (!existsSync(join(DEPS_DIR, "node_modules"))) {
+  mkdirSync(DEPS_DIR, { recursive: true });
+  for (const file of ["package.json", "bun.lock"]) {
+    copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
+  }
+  const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], {
+    encoding: "utf8",
+  });
+  if (install.status !== 0) {
+    process.stderr.write(install.stderr ?? "");
+    console.error(
+      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+    );
+    process.exit(2);
+  }
+}
+// Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
+if (!existsSync(join(DEPS_DIR, "node_modules", "diff"))) {
+  console.error(
+    `${SKILL} scripts need diff: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+  );
+  process.exit(2);
+}
+const jsdiff: typeof import("diff") = await import(Bun.resolveSync("diff", DEPS_DIR));
+
 const MANIFEST_NAME = "manifest.json";
 const CONTENT_DIR = "content";
-// Same bound as sweep.mts: a git diff on a stalled mount must fail loudly
-// (through the throw below, rendered as an ok:false summary) instead of
-// hanging the check with no output.
-const COMMAND_TIMEOUT_MS = 15_000;
+// The verdict is the byte comparison; the unified diff only renders it. jsdiff's line diff is quadratic
+// in the changed lines (5,000 lines rewritten end to end: about 8 s; 10,000: over 30 s), so without a
+// bound a regenerated large file stalls the check for minutes. Past it the finding stays drifted and
+// says the diff was abandoned.
+const DIFF_TIMEOUT_MS = 10_000;
 
 const USAGE = [
   "usage:",
@@ -54,8 +101,8 @@ const USAGE = [
   "      previous baseline is left untouched and every file is reported as",
   "      pinned or not.",
   "  baseline check <baseline-dir> <tree-root>",
-  "      Compare every manifest entry against the tree via git diff",
-  "      --no-index. Reports per file: identical | drifted (with the diff)",
+  "      Compare every manifest entry against the tree byte for byte.",
+  "      Reports per file: identical | drifted (with the unified diff)",
   "      | missing-in-tree | missing-baseline. Exits 1 unless all identical.",
 ].join("\n");
 
@@ -104,52 +151,41 @@ interface DiffResult {
   readonly diff: string;
 }
 
-/**
- * Environment for the git call with every GIT_* variable dropped and config
- * files disabled: an inherited GIT_EXTERNAL_DIFF or a diff.external setting
- * could silently corrupt the diff, and this tool's product is trustworthy
- * verification. The prefix match is case-insensitive because Windows
- * environment names are (git_config_count would otherwise survive and Git
- * would honor it there).
- */
-export function scrubbedGitEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !key.toUpperCase().startsWith("GIT_")) env[key] = value;
-  }
-  env.GIT_CONFIG_GLOBAL = "/dev/null";
-  env.GIT_CONFIG_SYSTEM = "/dev/null";
-  return env;
-}
+// ignoreBOM keeps a leading U+FEFF in the string: the default strips it, and a pinned copy that differs
+// from the tree only by its BOM would then render as a drift with an empty diff.
+const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-async function gitDiffNoIndex(baselineFile: string, treeFile: string): Promise<DiffResult> {
+function compareFiles(baselineFile: string, treeFile: string): DiffResult {
+  const pinned = readFileSync(baselineFile);
+  const current = readFileSync(treeFile);
+  if (pinned.equals(current)) return { identical: true, diff: "" };
+  let pinnedText: string;
+  let currentText: string;
   try {
-    await execFileAsync(
-      "git",
-      ["diff", "--no-index", "--no-color", "--no-ext-diff", "--", baselineFile, treeFile],
-      { maxBuffer: 64 * 1024 * 1024, timeout: COMMAND_TIMEOUT_MS, env: scrubbedGitEnv() },
-    );
-    return { identical: true, diff: "" };
-  } catch (error) {
-    const failure = error as {
-      code?: number | string;
-      killed?: boolean;
-      signal?: string | null;
-      stdout?: string;
-      stderr?: string;
+    pinnedText = UTF8.decode(pinned);
+    currentText = UTF8.decode(current);
+  } catch {
+    return {
+      identical: false,
+      diff: `binary files differ: ${pinned.length} bytes pinned, ${current.length} bytes in the tree`,
     };
-    // git diff exits 1 when the files differ; that is the drift signal,
-    // not an operational failure.
-    if (failure.code === 1 && typeof failure.stdout === "string") {
-      return { identical: false, diff: failure.stdout };
-    }
-    // A timeout kill leaves no exit code and often no stderr; name it, so the
-    // summary reads as a stalled measurement rather than an empty mystery.
-    const detail = failure.killed
-      ? `timed out after ${COMMAND_TIMEOUT_MS}ms (killed with ${failure.signal ?? "a signal"})`
-      : failure.stderr || String(error);
-    throw new Error(`git diff --no-index failed for ${baselineFile} vs ${treeFile}: ${detail}`);
   }
+  const patch = jsdiff.createTwoFilesPatch(
+    baselineFile,
+    treeFile,
+    pinnedText,
+    currentText,
+    undefined,
+    undefined,
+    { context: 3, timeout: DIFF_TIMEOUT_MS, headerOptions: jsdiff.FILE_HEADERS_ONLY },
+  );
+  return {
+    identical: false,
+    diff:
+      patch ??
+      `files differ (${pinned.length} bytes pinned, ${current.length} bytes in the tree); ` +
+        `the unified diff was abandoned after ${DIFF_TIMEOUT_MS}ms`,
+  };
 }
 
 interface PinReport {
@@ -374,7 +410,7 @@ function readManifest(baselineDir: string): string[] | string {
   return files;
 }
 
-async function check(baselineDir: string, treeRoot: string): Promise<number> {
+function check(baselineDir: string, treeRoot: string): number {
   refuseOverlappingRoots(baselineDir, treeRoot);
   const manifest = readManifest(baselineDir);
   if (typeof manifest === "string") {
@@ -401,10 +437,9 @@ async function check(baselineDir: string, treeRoot: string): Promise<number> {
         detail: `pinned at ${baselineFile} but absent from the tree at ${treeFile}`,
       });
     } else {
-      // Dereference both sides: pin snapshots the CONTENT a symlink points
-      // at, but git diff --no-index compares the link value itself (mode
-      // 120000), which would false-drift every symlinked tree file.
-      const result = await gitDiffNoIndex(realpathSync(baselineFile), realpathSync(treeFile));
+      // readFileSync follows a symlinked tree file to its target, so the
+      // comparison is of the content pin copied, never of the link value.
+      const result = compareFiles(baselineFile, treeFile);
       findings.push(
         result.identical
           ? { path, status: "identical", detail: `matches pinned copy at ${baselineFile}` }
@@ -425,7 +460,7 @@ async function check(baselineDir: string, treeRoot: string): Promise<number> {
   return ok ? 0 : 1;
 }
 
-async function main(): Promise<number> {
+function main(): number {
   const [command, ...rest] = process.argv.slice(2);
   if (command === "pin") {
     const [baselineDir, treeRoot, ...files] = rest;
@@ -449,7 +484,7 @@ async function main(): Promise<number> {
 // importing the exported helpers (unit tests) runs nothing.
 if (import.meta.main) {
   try {
-    process.exitCode = await main();
+    process.exitCode = main();
   } catch (error) {
     if (error instanceof UsageError) {
       note(`error: ${error.message}`);
