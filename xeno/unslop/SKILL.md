@@ -1,6 +1,6 @@
 ---
 name: unslop
-description: Cut AI tells from any writing. Must always apply.
+description: Cut AI tells from any writing.
 
 # Modified from upstream by the xeno sync of Vivswan/skills: disable-model-invocation removed
 ---
