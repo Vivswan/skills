@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -98,6 +99,13 @@ fi
 if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then policy=danger-full-access; else policy=read-only; fi
 if [ "$1 $2 $3 $4 $5" != "exec --json --sandbox $policy --output-schema" ] || [ "$#" -ne 7 ]; then
   violate "codex argv: $*"; exit 64
+fi
+if [ -n "\${STUB_HOME_REPORT:-}" ]; then
+  { echo "\${CODEX_HOME:-unset}"; cat "\${CODEX_HOME:-/nonexistent}/config.toml" 2>/dev/null || echo "(no config)"; ls "\${CODEX_HOME:-/nonexistent}" 2>/dev/null | tr '\\n' ' '; echo; } > "\${STUB_HOME_REPORT}"
+  # codex's trust write, as the real binary does it: it must land in the scratch home, never the user's
+  echo '[projects."'"$PWD"'"]' >> "\${CODEX_HOME:-/nonexistent}/config.toml" 2>/dev/null || true
+  # codex's token refresh, which must persist for the user
+  if [ -n "\${STUB_REFRESH_AUTH:-}" ]; then printf '%s' "\${STUB_REFRESH_AUTH}" > "\${CODEX_HOME:-/nonexistent}/auth.json"; fi
 fi
 if [ -n "\${STUB_CWD_REPORT:-}" ]; then
   { echo "$PWD"; git rev-parse --show-toplevel; git --no-pager diff --cached --name-only; } > "\${STUB_CWD_REPORT}"
@@ -351,10 +359,12 @@ function run(args: string[], env: Record<string, string> = {}, path?: string, cw
   // Copy mode keeps its repository snapshot at <scratch>/repo only while the
   // reviewer runs; read whether one survived before the sweep below.
   let copyLeft = false;
+  let homeLeft = false;
   if (result.exitCode === 0 && stdout.startsWith("{")) {
     report = JSON.parse(stdout) as Report;
     expect(existsSync(report.capture)).toBe(true);
     copyLeft = existsSync(join(dirname(report.capture), "repo"));
+    homeLeft = existsSync(join(dirname(report.capture), "codex-home"));
     rmSync(dirname(report.capture), { recursive: true, force: true });
   }
   return {
@@ -363,6 +373,7 @@ function run(args: string[], env: Record<string, string> = {}, path?: string, cw
     stderr,
     promptCopy,
     copyLeft,
+    homeLeft,
     /** The parsed JSON report of a successful review, or a throw. */
     report(): Report {
       if (report === null) throw new Error(`no report on stdout: ${stdout}\n${stderr}`);
@@ -771,6 +782,97 @@ describe("run-review.mts", () => {
       stdout: "pipe",
     });
     expect(kept.stdout.toString().trim()).toBe(repo);
+  });
+
+  test("copy mode runs codex under a scratch CODEX_HOME holding copies of the user's config and credentials, so codex's trust write never reaches the user's file", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    writeFileSync(join(home, "auth.json"), '{"token":"example"}\n');
+    const homeReport = join(binDir, "home-report-copy");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_HOME_REPORT: homeReport, CODEX_HOME: home },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    const [seenHome, seenConfig, seenFiles] = readFileSync(homeReport, "utf-8").split("\n");
+    expect(seenHome).toMatch(/\/rubber-duck-[^/]+\/codex-home$/);
+    expect(seenConfig).toBe('model = "example"');
+    expect(seenFiles?.trim().split(/\s+/).sort()).toEqual(["auth.json", "config.toml"]);
+    // The stub appended a trust block to the config it saw; the user's file is byte-identical.
+    expect(readFileSync(join(home, "config.toml"), "utf-8")).toBe('model = "example"\n');
+    expect(r.homeLeft).toBe(false);
+  });
+
+  test("a token refresh codex writes into the scratch auth.json goes back to the user's home; the config does not", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
+    const homeReport = join(binDir, "home-report-refresh");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_REFRESH_AUTH: '{"token":"refreshed"}',
+        CODEX_HOME: home,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe('{"token":"refreshed"}');
+    expect(readFileSync(join(home, "config.toml"), "utf-8")).toBe('model = "example"\n');
+    expect(r.homeLeft).toBe(false);
+  });
+
+  test.skipIf(process.getuid?.() === 0)(
+    "a credentials file the launcher cannot read fails the review cleanly, copy and scratch home removed",
+    () => {
+      const repo = fixtureRepo();
+      const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+      fixtureDirs.push(home);
+      writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+      writeFileSync(join(home, "auth.json"), "{}\n");
+      chmodSync(join(home, "auth.json"), 0o000);
+      // A foreground spawn failure removes its whole scratch dir, so the proof of cleanup is
+      // that the run left no new rubber-duck-* directory behind in the temp dir.
+      const scratchDirs = () =>
+        new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("rubber-duck-")));
+      const before = scratchDirs();
+      try {
+        const r = run(
+          ["codex", promptFile],
+          { STUB_SANDBOX: "bwrap", CODEX_HOME: home },
+          undefined,
+          repo,
+        );
+        expectFailure(r, { code: 1, stderr: "spawn failed: Error: scratch codex home failed" });
+        expect([...scratchDirs()].filter((name) => !before.has(name))).toEqual([]);
+      } finally {
+        chmodSync(join(home, "auth.json"), 0o600);
+      }
+    },
+  );
+
+  test("read-only mode leaves CODEX_HOME alone", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    const homeReport = join(binDir, "home-report-readonly");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_HOME_REPORT: homeReport, CODEX_HOME: home },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(readFileSync(homeReport, "utf-8").split("\n")[0]).toBe(home);
   });
 
   test("the sandbox probe passing keeps codex read-only: no copy, no fallback line", () => {

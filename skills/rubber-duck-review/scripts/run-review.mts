@@ -21,8 +21,10 @@ import type { Dirent } from "node:fs";
 import {
   chmodSync,
   closeSync,
+  copyFileSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
@@ -30,10 +32,11 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -404,6 +407,49 @@ function withoutGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return stripped;
 }
 
+/** codex marks the directory it is launched in as a trusted project by
+ * writing a block into its config file, and a copy has a fresh path every
+ * review, so the user's own config would grow by one block per run. The
+ * reviewer therefore gets a scratch CODEX_HOME holding copies of the user's
+ * config and credentials; the trust write lands there and dies with it. */
+const CODEX_HOME_FILES = ["config.toml", "auth.json"];
+const CODEX_AUTH_FILE = "auth.json";
+
+function realCodexHome(): string {
+  return process.env.CODEX_HOME ?? join(homedir(), ".codex");
+}
+
+/** Fills `home` (already created) with the user's config and credentials, each only when it exists. */
+function fillCodexHome(home: string): void {
+  const real = realCodexHome();
+  for (const name of CODEX_HOME_FILES) {
+    const source = join(real, name);
+    if (statSync(source, { throwIfNoEntry: false })?.isFile()) {
+      copyFileSync(source, join(home, name));
+    }
+  }
+}
+
+/** codex refreshes expiring login tokens into auth.json and expects the
+ * refreshed file to persist, so a changed scratch copy goes back to the
+ * user's home by write-then-rename. The config never goes back: its only
+ * change is the trust block the scratch home exists to absorb. */
+function returnRefreshedAuth(home: string, warn: (line: string) => void): void {
+  const scratchAuth = join(home, CODEX_AUTH_FILE);
+  const realAuth = join(realCodexHome(), CODEX_AUTH_FILE);
+  if (!statSync(scratchAuth, { throwIfNoEntry: false })?.isFile()) return;
+  if (!statSync(realAuth, { throwIfNoEntry: false })?.isFile()) return;
+  try {
+    const refreshed = readFileSync(scratchAuth);
+    if (refreshed.equals(readFileSync(realAuth))) return;
+    const pending = `${realAuth}.rubber-duck-tmp`;
+    writeFileSync(pending, refreshed, { mode: 0o600 });
+    renameSync(pending, realAuth);
+  } catch (error) {
+    warn(`refreshed codex credentials not returned to ${realAuth}: ${String(error)}`);
+  }
+}
+
 /** A kill of this process reaches the reviewer, so neither it nor its copy
  * outlives the launcher. Installed before the probe and the snapshot: a
  * signal during those synchronous steps is held until they return, by which
@@ -735,10 +781,16 @@ function runReviewer(
     writeAllSync(errFd, Buffer.from(`${line}\n`));
     process.stderr.write(`${line}\n`);
   };
-  // The copy, when there is one, dies with the review on every path below.
+  // The copy and the scratch codex home, when there are any, die with the
+  // review on every path below: the home holds copied credentials.
   let copy: string | null = null;
+  let codexHome: string | null = null;
   const closeFds = () => {
     if (copy !== null) removeTree(copy, warn);
+    if (codexHome !== null) {
+      returnRefreshedAuth(codexHome, warn);
+      removeTree(codexHome, warn);
+    }
     closeSync(outFd);
     closeSync(errFd);
     if (stdinFd !== null) closeSync(stdinFd);
@@ -755,7 +807,17 @@ function runReviewer(
     }
     copy = snapshot.copy;
     cwd = snapshot.cwd;
-    env = withoutGitEnv(process.env);
+    // Assigned before it is filled, so a copy that fails midway is still removed.
+    codexHome = join(scratch.dir, "codex-home");
+    try {
+      mkdirSync(codexHome);
+      fillCodexHome(codexHome);
+    } catch (error) {
+      closeFds();
+      hooks.onSpawnError(new Error(`scratch codex home failed: ${String(error)}`));
+      return null;
+    }
+    env = { ...withoutGitEnv(process.env), CODEX_HOME: codexHome };
     args = delivery.args("danger-full-access");
     hooks.onFallback?.(
       `codex sandbox unavailable (${launch.reason}): reviewing an unsandboxed snapshot copy at ${copy}`,
