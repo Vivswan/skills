@@ -822,6 +822,61 @@ describe("excerptFailedLog", () => {
       ["test / Unit:", "  Error: expected 1, received 2"].join("\n"),
     ],
     [
+      "a cleanup step that itself fails without an error word keeps its own tail: a passing step's zero error count is a summary, not an error line",
+      [
+        row("test", "Probe", "Error count: 0", 1),
+        row(
+          "test",
+          "Post Checkout",
+          "fatal: could not lock config file .git/config: Permission denied",
+          2,
+        ),
+        row("test", "Post Checkout", "##[error]Process completed with exit code 128.", 3),
+        ...windDown,
+      ],
+      [
+        "test / Post Checkout:",
+        "  fatal: could not lock config file .git/config: Permission denied",
+        "  ##[error]Process completed with exit code 128.",
+      ].join("\n"),
+    ],
+    [
+      "an assertion line that begins with a zero is an error line, not a zero count: only a count ending the line is a summary",
+      [
+        row("test", "Unit", "Error: 0 == 1", 1),
+        row("test", "Unit", "##[error]Process completed with exit code 1.", 2),
+        row("test", "Cleanup", "::error::cleanup failed", 3),
+        ...windDown,
+      ],
+      ["test / Unit:", "  Error: 0 == 1", "test / Cleanup:", "  ::error::cleanup failed"].join(
+        "\n",
+      ),
+    ],
+    [
+      "an annotated step with no error line beside a passing step's error word in another job: the failing step's tail, whatever the job is called",
+      [
+        row("CI / Post checks", "Probe", "Error count: 0", 1),
+        row("CI / Post checks", "Unit", "1 test failed", 2),
+        row("CI / Post checks", "Unit", "##[error]Process completed with exit code 1.", 3),
+        ...windDown,
+      ],
+      [
+        "CI / Post checks / Unit:",
+        "  1 test failed",
+        "  ##[error]Process completed with exit code 1.",
+      ].join("\n"),
+    ],
+    [
+      "an exit code landing on a cleanup step while the job's own step printed the error unannotated: that error line is the excerpt",
+      [
+        row("test", "Unit", "Error: expected 1, received 2", 1),
+        row("test", "Post Checkout", "Removing credentials from the git config", 2),
+        row("test", "Post Checkout", "##[error]Process completed with exit code 1.", 3),
+        ...windDown,
+      ],
+      ["test / Unit:", "  Error: expected 1, received 2"].join("\n"),
+    ],
+    [
       "a failing step annotated by the runner keeps its own error line when the exit code lands on a later post step",
       [
         row("test", "Unit action", "##[error]Error: expected 1, received 2", 1),
