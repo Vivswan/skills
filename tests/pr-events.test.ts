@@ -436,12 +436,15 @@ describe("pr-events.mts", () => {
     s.stop();
   }, 30000);
 
-  test("watch without --mode exits 2 before any daemon, gh call, or frame", async () => {
+  test("watch without --mode, or with --pid on an inbox, exits 2 before any daemon, gh call, or frame", async () => {
     const s = new Scenario("nomode");
     const box = await s.inbox("a");
     const r = s.run(["watch", PR7], { inbox: box.path });
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("--mode is required");
+    const pinned = s.run(["watch", PR7, "--mode", "bypass", "--pid", "1"], { inbox: box.path });
+    expect(pinned.code).toBe(2);
+    expect(pinned.stderr).toContain("--pid applies to the file sink");
     expect(s.ghCalls()).toHaveLength(0);
     expect(await box.frames(0)).toHaveLength(0);
     expect(existsSync(s.socketPath())).toBe(false);
@@ -756,6 +759,24 @@ describe("pr-events.mts", () => {
     expect(events[2]?.text).toContain("no run registered for main-gate");
     expect(events[3]?.text).toBe(`CI green on ${SHORT_C}: main-gate, pr-gate`);
     expect(s.run(["status"]).stdout).toContain("pending commits: 0");
+    s.stop();
+  }, 30000);
+
+  test("a failed PR-row read does not stop the pending commits from being judged", () => {
+    const s = new Scenario("rows-down");
+    const sink = ["--sink", "file", "--id", "a"];
+    s.fixtures({
+      // Suites calls 1 to 3 belong to the two watches (the PR twice, the commit once); with the
+      // rows read failing, the explicit poll's only suites call, the fourth, is the commit's.
+      "rows-1": rows({ rollup: "PENDING" }),
+      "suites-1": suites([["ci", "queued", null]]),
+      "suites-4": suites([["ci", "completed", "success"]]),
+    });
+    expect(s.run(["watch", PR7, "--mode", "bypass", ...sink]).code).toBe(0);
+    expect(s.run(["watch-commit", REPO, MERGE_C, "--mode", "bypass", ...sink]).code).toBe(0);
+    writeFileSync(join(s.stubDir, "fail-rows"), "");
+    expect(s.run(["poll"]).stdout).toContain("1 event(s)");
+    expect(s.events().map((e) => [e.kind, e.sha])).toEqual([["ci", MERGE_C]]);
     s.stop();
   }, 30000);
 

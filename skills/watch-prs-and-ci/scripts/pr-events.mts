@@ -80,7 +80,7 @@ const USAGE = [
   `  daemon [--interval <s>, at least ${MIN_INTERVAL_SECONDS}] [--idle-seconds <s>, default ${DEFAULT_IDLE_SECONDS}]`,
   "sink options: [--sink socket|file] [--id <name>] [--pid <pid>]",
   "  socket (default when CLAUDE_CODE_MESSAGING_SOCKET is set): events arrive as messages in that inbox",
-  "  file (needs --id): events are read back with `wait`, which renews a 24 h lease; --pid prunes on that pid's death instead",
+  "  file (needs --id): events are read back with `wait`, which renews a 24 h lease; --pid <pid> prunes on that pid's death instead",
 ].join("\n");
 
 class UsageError extends Error {}
@@ -271,7 +271,9 @@ function parseSink(values: { sink?: string; id?: string; pid?: string }): SinkCh
         "the socket sink needs CLAUDE_CODE_MESSAGING_SOCKET (a Claude Code session's inbox); outside one, pass --sink file --id <name>",
       );
     }
-    return { sink, address: inbox, pid: pid ?? pidOf(inbox) };
+    if (pid !== null)
+      usage("--pid applies to the file sink; an inbox is named by its session's pid");
+    return { sink, address: inbox, pid: pidOf(inbox) };
   }
   if (!values.id) usage("the file sink needs --id <name>, the name `wait --id` reads back with");
   if (values.id.includes("/") || values.id.includes("\n")) {
@@ -1043,15 +1045,15 @@ async function runDaemon(
           }
         }
       }
-      for (const key of Object.keys(state.pendingCommits)) {
-        try {
-          processCommit(key, emitted);
-        } catch (error) {
-          noteGhError(key, error);
-        }
-      }
     } catch (error) {
       noteGhError("rows", error);
+    }
+    for (const key of Object.keys(state.pendingCommits)) {
+      try {
+        processCommit(key, emitted);
+      } catch (error) {
+        noteGhError(key, error);
+      }
     }
     const everyone = subscribers();
     const daemonWide = { repo: "", pr: null, sha: null, url: "", kind: "trouble" as const };

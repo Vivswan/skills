@@ -1,9 +1,11 @@
 // The subscriber side of a Claude Code inbox: one connection per message carrying one JSON line,
 // the liveness rule for a socket named by its session's pid, and the text an event becomes.
 
+import { once } from "node:events";
 import { lstatSync } from "node:fs";
 import { connect } from "node:net";
 import { basename } from "node:path";
+import { finished } from "node:stream/promises";
 import type { Mode, PrEvent } from "./state.mts";
 
 export interface InboxFrame {
@@ -20,27 +22,24 @@ export const CLOSING_LINE = "automated notice from pr-events; no reply needed";
 
 // A delivery is complete once the line is flushed and the write side closed; whether the receiver
 // reads it is its own business, and its status report, if any, goes to the `from` socket. The
-// timer only bounds a connect or flush that never returns.
+// timeout only bounds a connect or flush that never returns.
 const DELIVER_TIMEOUT_MS = 5_000;
 
-export function deliver(socketPath: string, frame: InboxFrame): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const socket = connect(socketPath);
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.destroy();
-      if (error) reject(error);
-      else resolve();
-    };
-    const timer = setTimeout(() => {
-      finish(Object.assign(new Error(`no answer from ${socketPath}`), { code: "ETIMEDOUT" }));
-    }, DELIVER_TIMEOUT_MS);
-    socket.once("connect", () => socket.end(`${JSON.stringify(frame)}\n`, () => finish()));
-    socket.once("error", (error) => finish(error));
-  });
+export async function deliver(socketPath: string, frame: InboxFrame): Promise<void> {
+  const socket = connect(socketPath);
+  const signal = AbortSignal.timeout(DELIVER_TIMEOUT_MS);
+  try {
+    await once(socket, "connect", { signal });
+    socket.end(`${JSON.stringify(frame)}\n`);
+    await finished(socket, { readable: false, signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw Object.assign(new Error(`no answer from ${socketPath}`), { code: "ETIMEDOUT" });
+    }
+    throw error;
+  } finally {
+    socket.destroy();
+  }
 }
 
 /**
