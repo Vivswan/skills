@@ -13,16 +13,11 @@
 
 import { spawnSync } from "node:child_process";
 import { promises as dns } from "node:dns";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
-import {
-  type Cell,
-  type Io,
-  REGISTRIES,
-  type Registry,
-  type RegistryEntry,
-  renderCell,
-  unknown,
-} from "./registries.mts";
+import { type Cell, type Io, renderCell, unknown } from "./cells.mts";
+import { REGISTRIES, type Registry, type RegistryEntry } from "./registries.mts";
 
 const USAGE =
   "usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--no-arxiv] [--json] <name>...\n" +
@@ -203,6 +198,7 @@ async function main(): Promise<number> {
     githubToken: githubTokenFromEnvironment(),
     timeoutMs: REQUEST_TIMEOUT_MS,
     arxivGapMs: ARXIV_GAP_MS,
+    cacheDir: join(tmpdir(), "check-name-cache"),
   };
   const result = await run(io, options, names);
   if (parsed.values.json) {

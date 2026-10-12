@@ -79,15 +79,16 @@ The rejection round (step 7) sits between runs: rewrite the brief, rerun only th
 ```bash
 bun "<skill-dir>/scripts/check-name.mts" <name> <name> ...        # domains default to com, ai, dev; --domain <tld> replaces that list
 bun "<skill-dir>/scripts/check-name.mts" --list-registries        # the live column table: id, label, taken control
-bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,dns-com <name>   # only the columns the brief claims
+bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,dns-com,typosquat <name>   # the columns the brief claims, plus the gate columns
 ```
 
 One row per name, one column per registry; the registries live in one table in `scripts/registries.mts`, and `--list-registries` prints it. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`:
 
 ```text
-name    pypi  npm                 crates  homebrew                 docker                   maven  hf    github-user           github-repo  bluesky                 arxiv  dns-com                     dns-ai  wiktionary                   urban
-lumera  free  taken(npm package)  free    free                     taken(docker hub user)   free   free  taken(github handle)  free         taken(bluesky handle)   free   taken(lumera.com resolves)  free    taken(word in Italian,Latin)  free
-tarnix  free  free                free    taken(homebrew formula)  free                     free   free  free                  free         free                    free   free                        free    free                         taken(1 entry: ...)
+name    pypi  npm                 crates  homebrew                 docker                   maven  hf    github-user           github-repo  bluesky                 arxiv  dns-com                     dns-ai  wiktionary                   urban                typosquat
+lumera  free  taken(npm package)  free    free                     taken(docker hub user)   free   free  taken(github handle)  free         taken(bluesky handle)   free   taken(lumera.com resolves)  free    taken(word in Italian,Latin)  free                 free
+tarnix  free  free                free    taken(homebrew formula)  free                     free   free  free                  free         free                    free   free                        free    free                         taken(1 entry: ...)  free
+numpi   free  free                free    free                     free                     free   free  free                  free         free                    free   free                        free    free                         free                 taken(1 edit from numpy on pypi (top 5000 by downloads))
 ```
 
 - Two controls run with every batch: per column, a name known to be taken there (the registry's own `nic` host for DNS, a word with a flagged sense for Wiktionary), and one random string that must be free everywhere. A column that answers either wrongly is reported on stderr as a failed instrument and the exit code is 1. Do not read that column.
@@ -96,6 +97,8 @@ tarnix  free  free                free    taken(homebrew formula)  free         
 - Maven Central's search holds some requests for half a minute and more, so the script runs its lookups one at a time and asks again after a short wait; an `unknown(maven TimeoutError ...)` cell is three holds in a row, rerun later.
 - Docker Hub ids are 4 to 30 lowercase letters and digits; a name outside that reads `unknown` there because Docker would refuse it, not because it is free.
 - GitHub counts an exact-name repository as taken from 20 stars. Pass `GH_TOKEN` or be logged into `gh` for the search rate limit.
+- The `typosquat` column is one edit (a letter added, dropped, changed, or two swapped) from a popular package. The cell names the package, the registry, and the list it came from. The lists are kept a day under the OS temp dir in `check-name-cache`.
+- Those lists: PyPI's top 5000 by downloads (the public top-pypi-packages JSON); npm's top 5000 by downloads from the npm-high-impact dataset (npm publishes no ranking and its search is not fuzzy); the 100 most downloaded crates the crates.io search returns.
 - `--json` prints the rows and the control verdicts as one object for a lane report.
 
 ### 5. Meaning check
@@ -153,7 +156,7 @@ A name fails the hard gate on any one row:
 | no neighbour | an AI company, product, or ML method already uses it (web search) |
 | no bad meaning | a SERIOUS meaning finding in any language |
 | no wrong signal | the name means something, and that something is not what the project is |
-| not a typosquat | one letter from a popular package on a claimed registry |
+| not a typosquat | the `typosquat` column names a package on a registry the brief claims; a hit on an unclaimed registry is a MINOR note |
 
 Meaning is either plain at a glance or absent. A name that means nothing passes; a name that means the wrong thing fails; a name whose meaning the reader must decode (a pun, a reference, a chain of hops) is rejected by default.
 

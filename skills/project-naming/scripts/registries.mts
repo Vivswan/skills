@@ -1,23 +1,9 @@
 // The table of registries check-name.mts reads. Adding a registry is adding one entry to
 // REGISTRIES: its column, its control row, the TSV header, and `--list-registries` follow from
-// the table. Every cell is `free`, `taken(<why>)`, or `unknown(<why>)`; a lookup that failed never
-// reads as free.
+// the table.
 
-export type Cell =
-  | { status: "free" }
-  | { status: "taken"; detail: string }
-  | { status: "unknown"; detail: string };
-
-export type Io = {
-  fetch: (url: string, init?: RequestInit) => Promise<Response>;
-  /** Resolves a hostname to at least one address, or throws (ENOTFOUND for an unregistered name). */
-  resolve: (host: string) => Promise<unknown>;
-  githubToken: string | null;
-  /** A request past this is an `unknown` cell, so one stalled endpoint cannot hold the table. */
-  timeoutMs: number;
-  /** arXiv asks for one request every three seconds; its lookups are serialised this far apart. */
-  arxivGapMs: number;
-};
+import { type Cell, free, get, type Io, renderCell, taken, unknown } from "./cells.mts";
+import { typosquat } from "./typosquat.mts";
 
 export type Registry = {
   kind: "registry";
@@ -42,30 +28,6 @@ export type DomainFamily = {
 };
 
 export type RegistryEntry = Registry | DomainFamily;
-
-export const free: Cell = { status: "free" };
-export const taken = (detail: string): Cell => ({ status: "taken", detail });
-export const unknown = (detail: string): Cell => ({ status: "unknown", detail });
-
-export function renderCell(cell: Cell): string {
-  if (cell.status === "free") return "free";
-  return `${cell.status}(${cell.detail})`;
-}
-
-const USER_AGENT = "check-name.mts (project-naming skill; https://github.com/Vivswan/skills)";
-
-async function get(
-  io: Io,
-  url: string,
-  headers: Record<string, string> = {},
-  timeoutMs = io.timeoutMs,
-): Promise<Response> {
-  return io.fetch(url, {
-    redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: { "user-agent": USER_AGENT, accept: "application/json", ...headers },
-  });
-}
 
 async function lookup404(io: Io, url: string, label: string): Promise<Cell> {
   try {
@@ -596,5 +558,13 @@ export const REGISTRIES: readonly RegistryEntry[] = [
     label: "Urban Dictionary exact entry",
     takenControl: "yeet",
     lookup: urban,
+  },
+  {
+    kind: "registry",
+    id: "typosquat",
+    label: "one edit from a popular package on PyPI, npm, or crates",
+    // One letter short of the PyPI control, requests.
+    takenControl: "reqests",
+    lookup: typosquat,
   },
 ];

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
+import type { Cell, Io } from "../skills/project-naming/scripts/cells.mts";
 import {
   checkName,
   columns,
@@ -10,18 +12,19 @@ import {
   runControls,
 } from "../skills/project-naming/scripts/check-name.mts";
 import {
-  type Cell,
   GITHUB_STARS_TAKEN,
-  type Io,
   REGISTRIES,
   type Registry,
   WIKTIONARY_FLAG,
 } from "../skills/project-naming/scripts/registries.mts";
+import { oneEditApart } from "../skills/project-naming/scripts/typosquat.mts";
+import { tempDirs } from "./helpers/temp-dirs";
 
 // check-name.mts is driven through an injected fetch and resolver: every registry reply here is
 // hand-written and no test reaches the network. Each test names the reply shape it pins.
 
 const SCRIPT = join(ROOT, "skills", "project-naming", "scripts", "check-name.mts");
+const temp = tempDirs();
 
 type Reply = { status: number; body?: unknown; text?: string };
 
@@ -32,6 +35,11 @@ const MISSING_PAGE: Reply = { status: 200, body: { error: { code: "missingtitle"
 
 const BLUESKY_FREE: Reply = { status: 400, body: { message: "Unable to resolve handle" } };
 
+/** The shape npm-high-impact ships: a JS module exporting one array of quoted names. */
+function npmModule(names: string[]): string {
+  return `export const topDownload = [\n${names.map((name) => `  '${name}'`).join(",\n")}\n]\n`;
+}
+
 /** Every registry answers `free` unless the handler says otherwise: a 404 for the lookups that
  * use one, an empty result for the searches, a missing page for Wiktionary, the resolver's
  * "unable to resolve" for Bluesky. */
@@ -40,6 +48,9 @@ function defaultReply(url: URL): Reply {
   if (url.hostname === "search.maven.org")
     return { status: 200, body: { response: { numFound: 0 } } };
   if (url.hostname === "public.api.bsky.app") return BLUESKY_FREE;
+  if (url.hostname === "hugovk.dev") return { status: 200, body: { rows: [] } };
+  if (url.hostname === "cdn.jsdelivr.net") return { status: 200, text: npmModule(["filler-name"]) };
+  if (url.pathname === "/api/v1/crates") return { status: 200, body: { crates: [] } };
   if (url.hostname === "api.urbandictionary.com") return { status: 200, body: { list: [] } };
   if (url.hostname === "en.wiktionary.org") return MISSING_PAGE;
   if (url.hostname === "export.arxiv.org") {
@@ -72,6 +83,7 @@ function fakeIo(
     githubToken: null,
     timeoutMs: 5_000,
     arxivGapMs: 0,
+    cacheDir: null,
   };
 }
 
@@ -81,6 +93,10 @@ function allTakenIo(resolving: string[]): Io {
     (entry) => entry.takenControl,
   );
   return fakeIo((url) => {
+    // The typosquat control is one letter short of the PyPI control, which the ranking carries.
+    if (url.hostname === "hugovk.dev") {
+      return { status: 200, body: { rows: [{ project: "requests" }] } };
+    }
     const path = decodeURIComponent(url.pathname + url.search).toLowerCase();
     const named = controls.find((control) => path.includes(control));
     if (!named) return undefined;
@@ -595,6 +611,156 @@ describe("check-name.mts cells", () => {
   });
 });
 
+describe("check-name.mts typosquat column", () => {
+  test("one edit apart means one insertion, deletion, substitution, or adjacent transposition; exact and two-edit names are not", () => {
+    const cases: [string, string, boolean][] = [
+      ["requezts", "requests", true],
+      ["reqests", "requests", true],
+      ["requeststs", "requests", false],
+      ["requestss", "requests", true],
+      ["reqeusts", "requests", true],
+      ["requests", "requests", false],
+      ["reqeust", "requests", false],
+      ["stseuqer", "requests", false],
+      ["a", "", true],
+      ["ab", "ba", true],
+    ];
+    for (const [a, b, expected] of cases) expect(oneEditApart(a, b), `${a} ~ ${b}`).toBe(expected);
+  });
+
+  function sourcesIo(pypi: string[], npm: string[], crates: string[]): Io {
+    return fakeIo((url) => {
+      if (url.hostname === "hugovk.dev") {
+        return { status: 200, body: { rows: pypi.map((project) => ({ project })) } };
+      }
+      if (url.hostname === "cdn.jsdelivr.net") {
+        return { status: 200, text: npmModule([...npm, "filler-name"]) };
+      }
+      if (url.pathname === "/api/v1/crates") {
+        return { status: 200, body: { crates: crates.map((name) => ({ name })) } };
+      }
+      return undefined;
+    });
+  }
+
+  test("a hit names the package, the registry, and the basis; every source hit is listed; an exact match is the registry column's business, not a typo", async () => {
+    const io = sourcesIo(["requests", "Requezt"], ["request"], ["requests"]);
+    const row = await checkName(io, OPTIONS, "requezts");
+    expect(cell(row.cells, "typosquat")).toEqual({
+      status: "taken",
+      detail:
+        "1 edit from requests on pypi (top 5000 by downloads); 1 edit from requests on crates (the 100 most downloaded crates the search returns for it)",
+    });
+    const exact = await checkName(sourcesIo(["requests"], [], []), OPTIONS, "Requests");
+    expect(cell(exact.cells, "typosquat")).toEqual({ status: "free" });
+  });
+
+  test("npm names are read from the npm-high-impact module's quoted strings, scoped packages included", async () => {
+    const row = await checkName(sourcesIo([], ["@types/node", "react"], []), OPTIONS, "Reactt");
+    expect(cell(row.cells, "typosquat")).toEqual({
+      status: "taken",
+      detail: "1 edit from react on npm (top 5000 by downloads)",
+    });
+  });
+
+  test("a 200 whose body is not the list (an error object, an entry without a name, an empty module) is a source that could not be read, never an empty list", async () => {
+    const malformed: [string, Reply][] = [
+      ["hugovk.dev", { status: 200, body: { message: "unavailable" } }],
+      ["hugovk.dev", { status: 200, body: { rows: [{ project: 7 }] } }],
+      ["hugovk.dev", { status: 200, text: "not json" }],
+      ["cdn.jsdelivr.net", { status: 200, text: "export const topDownload = []\n" }],
+      ["cdn.jsdelivr.net", { status: 200, body: { error: "Cannot load 'react' ranking" } }],
+      ["crates.io", { status: 200, body: { crates: "none" } }],
+    ];
+    for (const [host, reply] of malformed) {
+      const io = withReply(sourcesIo([], [], []), host, () => {
+        const text = reply.text ?? JSON.stringify(reply.body);
+        return new Response(text, { status: reply.status });
+      });
+      const row = await checkName(io, OPTIONS, "lumera");
+      expect(cell(row.cells, "typosquat").status, `${host} ${JSON.stringify(reply)}`).toBe(
+        "unknown",
+      );
+      expect(detail(cell(row.cells, "typosquat"))).toContain("reply unreadable");
+      // A hit on another source still stands over the unreadable one.
+      const stands = withReply(sourcesIo(["requests"], [], []), host, () => {
+        const text = reply.text ?? JSON.stringify(reply.body);
+        return new Response(text, { status: reply.status });
+      });
+      const hit = await checkName(stands, OPTIONS, "reqests");
+      expect(cell(hit.cells, "typosquat").status, host).toBe(
+        host === "hugovk.dev" ? "unknown" : "taken",
+      );
+    }
+  });
+
+  test("a source that cannot be read is unknown when nothing else hit, and is overridden by a hit elsewhere", async () => {
+    const down = withReply(
+      sourcesIo([], [], []),
+      "hugovk.dev",
+      () => new Response("", { status: 503 }),
+    );
+    const row = await checkName(down, OPTIONS, "lumera");
+    expect(cell(row.cells, "typosquat")).toEqual({
+      status: "unknown",
+      detail: "top-pypi-packages HTTP 503",
+    });
+    const hitElsewhere = withReply(
+      sourcesIo([], ["lumeras"], []),
+      "hugovk.dev",
+      () => new Response("", { status: 503 }),
+    );
+    const stands = await checkName(hitElsewhere, OPTIONS, "lumera");
+    expect(cell(stands.cells, "typosquat").status).toBe("taken");
+  });
+
+  test("the PyPI ranking is fetched once per process and read from the cache directory for a day, after which it is fetched again", async () => {
+    const scratch = temp.dir("check-name-cache-");
+    const cacheDir = join(scratch, "cache");
+    let fetches = 0;
+    const counting = (): Io => {
+      const base = sourcesIo(["requests"], [], []);
+      return {
+        ...base,
+        cacheDir,
+        fetch: (input, init) => {
+          if (new URL(input).hostname === "hugovk.dev") fetches++;
+          return base.fetch(input, init);
+        },
+      };
+    };
+    const first = counting();
+    await Promise.all(["lumera", "tarnix"].map((name) => checkName(first, OPTIONS, name)));
+    expect(fetches).toBe(1);
+    // A malformed reply is not cached: the next process asks again.
+    const broken = withReply(
+      { ...sourcesIo([], [], []), cacheDir: join(scratch, "broken") },
+      "hugovk.dev",
+      () => new Response("not json", { status: 200 }),
+    );
+    await checkName(broken, OPTIONS, "lumera");
+    expect(readdirSync(join(scratch, "broken"))).toHaveLength(2);
+    // A cache directory that cannot be made (its path is a file) costs the fetch, not the cell.
+    writeFileSync(join(scratch, "blocked"), "");
+    const unwritable = { ...sourcesIo(["requests"], [], []), cacheDir: join(scratch, "blocked") };
+    const stillRead = await checkName(unwritable, OPTIONS, "reqests");
+    expect(cell(stillRead.cells, "typosquat").status).toBe("taken");
+    const row = await checkName(counting(), OPTIONS, "reqests");
+    expect(fetches).toBe(1);
+    expect(cell(row.cells, "typosquat").status).toBe("taken");
+    // A day later every file is stale: the ranking is fetched again, and a stale entry no lookup
+    // refreshes (a search for a name this run never asks about) leaves with the purge.
+    const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    writeFileSync(join(cacheDir, "orphan.json"), "{}");
+    for (const entry of readdirSync(cacheDir)) utimesSync(join(cacheDir, entry), stale, stale);
+    await checkName(counting(), OPTIONS, "lumera");
+    expect(fetches).toBe(2);
+    const left = readdirSync(cacheDir);
+    expect(left).not.toContain("orphan.json");
+    expect(left.length).toBeGreaterThan(0);
+  });
+});
+
 describe("check-name.mts controls", () => {
   test("every column, DNS and arXiv included, has a taken control that fails when the instrument reads free", async () => {
     const failures = await runControls(
@@ -618,6 +784,7 @@ describe("check-name.mts controls", () => {
         "dns-com",
         "wiktionary",
         "urban",
+        "typosquat",
       ].sort(),
     );
     expect(failures.every((f) => f.expected === "taken")).toBe(true);
@@ -711,7 +878,7 @@ describe("check-name.mts registry table", () => {
     );
     expect(cell(row.cells, "extra")).toEqual({ status: "free" });
     const tsv = renderTsv(extended, [row]);
-    expect(tsv.split("\n")[0]?.endsWith("\turban\textra")).toBe(true);
+    expect(tsv.split("\n")[0]?.endsWith("\ttyposquat\textra")).toBe(true);
     const failures = await runControls(allTakenIo(["nic.com"]), extended, RANDOM);
     expect(failures).toEqual([]);
     const blind: Options = {
@@ -751,10 +918,10 @@ describe("check-name.mts output", () => {
     ]);
     const [header, row] = tsv.trimEnd().split("\n");
     expect(header).toBe(
-      "name\tpypi\tnpm\tcrates\thomebrew\tdocker\tmaven\thf\tgithub-user\tgithub-repo\tbluesky\tdns-com\twiktionary\turban",
+      "name\tpypi\tnpm\tcrates\thomebrew\tdocker\tmaven\thf\tgithub-user\tgithub-repo\tbluesky\tdns-com\twiktionary\turban\ttyposquat",
     );
     expect(row).toBe(
-      `lumera\tfree\ttaken(npm package)\tunknown(crate HTTP 500)${"\tunknown(missing)".repeat(10)}`,
+      `lumera\tfree\ttaken(npm package)\tunknown(crate HTTP 500)${"\tunknown(missing)".repeat(11)}`,
     );
   });
 
