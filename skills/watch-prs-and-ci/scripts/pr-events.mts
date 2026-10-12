@@ -913,7 +913,6 @@ async function runDaemon(
     if (owner.inbox === null || emitted.length === 0) return;
     const gap = lastDeliveryAt + MIN_DELIVERY_GAP_MS - Date.now();
     if (gap > 0) await sleep(gap);
-    lastDeliveryAt = Date.now();
     const frame: InboxFrame = {
       type: "user",
       message: { role: "user", content: renderDigest(emitted) },
@@ -921,13 +920,18 @@ async function runDaemon(
       from_name: FROM_NAME,
       msg_id: `pr-events-${(emitted[0] as PrEvent).id}-${randomUUID()}`,
     };
+    // The record saved before the send carries an estimate of its time; the clock is stamped after
+    // that write, right before the frame goes out, and the record is corrected once it is sent.
+    // Stamped earlier, the write's own time would eat into the gap before the next frame.
     state.delivery = {
       eventIds: emitted.map((event) => event.id),
-      at: new Date(lastDeliveryAt).toISOString(),
+      at: new Date().toISOString(),
       msgId: frame.msg_id,
       outcome: "sending",
     };
     saveState(files, state);
+    lastDeliveryAt = Date.now();
+    state.delivery.at = new Date(lastDeliveryAt).toISOString();
     try {
       await deliver(owner.inbox, frame);
       state.delivery.outcome = "sent";
