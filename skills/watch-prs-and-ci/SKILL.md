@@ -29,7 +29,7 @@ https://github.com/octocat/repo/pull/12
 automated notice from pr-events; no reply needed
 ```
 
-No turn was spent on "nothing changed yet". The daemon is the session's own child: its messages render as plain text, and it exits on its own when the session does.
+No turn was spent on "nothing changed yet". The daemon is the session's own child: its messages arrive at once, wrapped in the peer envelope naming `pr-events` as the sender, and it exits on its own when the session does.
 
 ## When to Apply
 

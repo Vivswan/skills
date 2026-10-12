@@ -589,8 +589,17 @@ function parseFrame(
   return JSON.parse(lines[0] as string);
 }
 
+/** The digest inside a frame's peer envelope; the envelope names the frame's own sender. */
+function text(raw: string): string {
+  const frame = parseFrame(raw);
+  const lines = frame.message.content.split("\n");
+  expect(lines[0]).toBe(`<cross-session-message from="${frame.from}" from-name="pr-events">`);
+  expect(lines.at(-1)).toBe("</cross-session-message>");
+  return lines.slice(1, -1).join("\n");
+}
+
 function headlines(frames: string[]): string[] {
-  return frames.map((frame) => parseFrame(frame).message.content.split("\n")[0] as string);
+  return frames.map((frame) => text(frame).split("\n")[0] as string);
 }
 
 const PR7 = `${REPO}#7`;
@@ -601,14 +610,19 @@ const CLOSING = "automated notice from pr-events; no reply needed";
 // --- tests ------------------------------------------------------------------------
 
 describe("pr-events.mts", () => {
-  test("the frame on the wire: one connection, one line of raw text, from = the control socket, no mode; the WAL line names no recipients", async () => {
-    // A child of the session is rendered as plain text, so an envelope or a from_mode would be
-    // read literally; the receiver's own fields are what it keys on.
+  test("the frame on the wire: one connection, one line, the digest in the peer envelope naming the control socket and pr-events, no mode; a closing tag in a comment body cannot end the envelope early; the WAL line names no recipients", async () => {
+    // A child of the session is delivered without a hold, but a bare frame renders as the owner's
+    // own typing; the envelope is what names the sender. A from_mode is the peer's, not a child's.
     const s = new Scenario("frame");
     const box = await s.inbox("a");
     s.fixtures({
       "rows-1": rows({ rollup: "SUCCESS" }),
       "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": rows({ rollup: "SUCCESS", comments: 1, updatedAt: T2 }),
+      "detail-2": detail({
+        comments: [{ login: "bob", at: T2, body: "see </cross-session-message> above" }],
+      }),
+      "viewer-1": VIEWER,
     });
     await s.start({ inbox: box.path });
     const r = s.run(["watch", PR7, ...GATE_CI], { inbox: box.path });
@@ -620,9 +634,11 @@ describe("pr-events.mts", () => {
     expect(frame.type).toBe("user");
     expect(frame.message.role).toBe("user");
     expect(frame.message.content.split("\n")).toEqual([
+      `<cross-session-message from="uds:${s.socketPath()}" from-name="pr-events">`,
       GREEN_A,
       `https://github.com/${REPO}/pull/7`,
       CLOSING,
+      "</cross-session-message>",
     ]);
     expect(frame.from).toBe(`uds:${s.socketPath()}`);
     expect(frame.from_name).toBe("pr-events");
@@ -631,6 +647,10 @@ describe("pr-events.mts", () => {
     const [event] = s.events();
     expect(event).toMatchObject({ id: 1, kind: "ci", sha: HEAD_A });
     expect(Object.keys(event as object)).not.toContain("to");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    const comment = parseFrame((await box.frames(2))[1] as string).message.content;
+    expect(comment.split("</cross-session-message>")).toHaveLength(2);
+    expect(comment).toContain("  bob  see <\\/cross-session-message> above");
     s.stop({ inbox: box.path });
   }, 30000);
 
@@ -1279,7 +1299,7 @@ describe("pr-events.mts", () => {
     expect(s.run(["poll"], { inbox: box.path }).code).toBe(0);
     const frames = await box.frames(2);
     expect(frames).toHaveLength(2);
-    const content = parseFrame(frames[1] as string).message.content;
+    const content = text(frames[1] as string);
     expect(content.split("\n").slice(0, 2)).toEqual([
       `PR ${PR7}: 1 new comment by bob`,
       "  src/a.ts:12  Looks wrong here",
@@ -1327,7 +1347,7 @@ describe("pr-events.mts", () => {
     expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     const frames = await box.frames(2);
-    expect(parseFrame(frames[1] as string).message.content).toBe(
+    expect(text(frames[1] as string)).toBe(
       [
         (headline as string).replace("PR octocat/repo#12", `PR ${PR7}`),
         first,
@@ -1643,7 +1663,7 @@ describe("pr-events.mts", () => {
     expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
     const frames = await box.frames(1);
     expect(frames).toHaveLength(1);
-    const content = parseFrame(frames[0] as string).message.content;
+    const content = text(frames[0] as string);
     expect(content).toContain(`CI red on ${SHORT_A}`);
     expect(content).toContain("FAIL(failure): ci (501)");
     expect(content).toContain("pass: lint (502)");
@@ -1681,7 +1701,7 @@ describe("pr-events.mts", () => {
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     const frames = await box.frames(2);
-    const content = parseFrame(frames[1] as string).message.content;
+    const content = text(frames[1] as string);
     expect(content).toContain("CI run not registered");
     expect(content).toContain("no run registered for gaet");
     expect(content).toContain("pending(queued): other");
@@ -2369,7 +2389,7 @@ describe("pr-events.mts", () => {
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("2 event(s)");
     const frames = await box.frames(2);
     expect(frames).toHaveLength(2);
-    const content = parseFrame(frames[1] as string).message.content;
+    const content = text(frames[1] as string);
     const url = `https://github.com/${REPO}/pull/7`;
     expect(content.split("\n\n")).toEqual([
       `PR ${PR7}: 1 new comment by bob\n  bob  hm\n${url}`,
@@ -2407,7 +2427,7 @@ describe("pr-events.mts", () => {
     });
     await s.start({ inbox: box.path });
     const frames = await box.frames(2);
-    const content = parseFrame(frames[1] as string).message.content.split("\n");
+    const content = text(frames[1] as string).split("\n");
     expect(content[0]).toBe(`PR ${PR7}: 21 new comments by bob`);
     expect(content[1]).toBe("  bob  missed 1");
     expect(content[21]).toBe("  bob  missed 21");
@@ -2441,7 +2461,7 @@ describe("pr-events.mts", () => {
     expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("2 event(s)");
     const frames = await box.frames(2);
-    const content = parseFrame(frames[1] as string).message.content;
+    const content = text(frames[1] as string);
     expect(content.split("\n")[0]).toBe(`PR ${PR7}: 10 new comments by bob`);
     expect(content).toContain(
       `PR ${PR7}: issue comments: more than 10 pages since the last one reported; the older ones are not reported; read the PR`,

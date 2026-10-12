@@ -1,6 +1,7 @@
 // The sending side of a Claude Code inbox: one connection per message carrying one JSON line, the
 // pid a session's inbox is named by, and the text a poll's events become. The daemon is a child of
-// the session it serves, so its frames render as plain text with no envelope and no permission hold.
+// the session it serves, so its frames are delivered with no permission hold; the peer envelope
+// around the text is what names the sender, since a bare frame renders as the owner's own typing.
 
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
@@ -19,6 +20,17 @@ export interface InboxFrame {
 
 export const FROM_NAME = "pr-events";
 export const CLOSING_LINE = "automated notice from pr-events; no reply needed";
+const ENVELOPE_END = "</cross-session-message>";
+
+/**
+ * The text in the peer envelope the receiving session renders with the sender's name; `from` is
+ * the frame's own. A closing tag inside the text (a PR comment can quote one) is escaped, so the
+ * envelope ends where the text does.
+ */
+export function envelope(from: string, text: string): string {
+  const body = text.replaceAll(ENVELOPE_END, "<\\/cross-session-message>");
+  return `<cross-session-message from="${from}" from-name="${FROM_NAME}">\n${body}\n${ENVELOPE_END}`;
+}
 
 // A delivery is complete once the line is flushed and the write side closed; whether the receiver
 // reads it is its own business, and its status report, if any, goes to the `from` socket. The

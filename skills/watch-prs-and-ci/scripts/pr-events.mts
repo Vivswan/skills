@@ -13,6 +13,7 @@ import { discoverRuns, failedJobLog, judgeRuns, type Run, selectLatest } from ".
 import { AbortedRead, GhError, guardReads } from "./gh.mts";
 import {
   deliver,
+  envelope,
   FROM_NAME,
   type InboxFrame,
   isProcessAlive,
@@ -986,10 +987,11 @@ async function runDaemon(
     if (owner.inbox === null || emitted.length === 0) return;
     const gap = lastDeliveryAt + MIN_DELIVERY_GAP_MS - Date.now();
     if (gap > 0) await sleep(gap);
+    const from = `uds:${files.socket}`;
     const frame: InboxFrame = {
       type: "user",
-      message: { role: "user", content: renderDigest(emitted) },
-      from: `uds:${files.socket}`,
+      message: { role: "user", content: envelope(from, renderDigest(emitted)) },
+      from,
       from_name: FROM_NAME,
       msg_id: `pr-events-${(emitted[0] as PrEvent).id}-${randomUUID()}`,
     };
