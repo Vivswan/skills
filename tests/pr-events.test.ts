@@ -624,7 +624,9 @@ function attribute(value: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+    .replaceAll(">", "&gt;")
+    .replaceAll("\r", "&#13;")
+    .replaceAll("\n", "&#10;");
 }
 
 /**
@@ -734,10 +736,10 @@ describe("pr-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a quote or an angle bracket in the runtime directory is escaped in the envelope's from attribute; the frame's own from carries the path as it is", async () => {
+  test("a quote, an angle bracket, or a line break in the runtime directory is escaped in the envelope's from attribute; the frame's own from carries the path as it is", async () => {
     const s = new Scenario("quoted-dir");
     const box = await s.inbox("a");
-    const dir = join(s.dir, 'a"b<c>d');
+    const dir = join(s.dir, 'a"b<c>d\ne');
     const env = { PR_EVENTS_DIR: dir };
     s.fixtures({
       "rows-1": rows({ rollup: "SUCCESS" }),
@@ -756,7 +758,7 @@ describe("pr-events.mts", () => {
     const frame = parseFrame((await box.frames(1))[0] as string);
     expect(frame.from).toBe(`uds:${socket}`);
     expect(frame.message.content.split("\n")[0]).toBe(
-      `<cross-session-message from="uds:${join(s.dir, "a&quot;b&lt;c&gt;d", `${process.pid}.sock`)}" from-name="pr-events">`,
+      `<cross-session-message from="uds:${join(s.dir, "a&quot;b&lt;c&gt;d&#10;e", `${process.pid}.sock`)}" from-name="pr-events">`,
     );
     expect(s.run(["stop"], { inbox: box.path, env }).code).toBe(0);
     expect(await daemon.exited).toBe(0);
