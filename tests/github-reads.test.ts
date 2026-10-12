@@ -125,8 +125,9 @@ afterAll(() => {
 function readOr(path: string, fallback: string): string {
   try {
     return readFileSync(path, "utf-8");
-  } catch {
-    return fallback;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return fallback;
+    throw error;
   }
 }
 

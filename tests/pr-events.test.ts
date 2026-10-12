@@ -1139,6 +1139,12 @@ describe("pr-events.mts", () => {
       .filter((call) => call.includes("checkSuites("))
       .map((call) => /-f oid=([0-9a-f]+)/.exec(call)?.[1]);
     expect(suiteOids).toEqual([HEAD_A, MERGE_C, MERGE_C]);
+    // A log reader gets the whole merge commit from the line, not the twelve characters of the text.
+    expect(s.events().map((e) => [e.kind, e.sha])).toEqual([
+      ["ci", HEAD_A],
+      ["merged", MERGE_C],
+      ["ci", MERGE_C],
+    ]);
     const status = s.run(["status"], { inbox: box.path }).stdout;
     expect(status).toContain("prs: 0");
     expect(status).toContain("commits: 0");

@@ -79,7 +79,7 @@ Each message holds one poll's events, each with the PR's URL, and the closing li
 | `review` | `PR octocat/repo#12: new review by octocat (CHANGES_REQUESTED), 2 review comments`, then the review body and each of its comments with `path:line` (The Specimen above) | the same, per the `/pr-landing-discipline` skill |
 | `ci` | `PR octocat/repo#12: CI green on 1a2b3c4d5e6f: checks, lint`, or `CI red on 1a2b3c4d5e6f` with one line per run and the failed-step log tail of each failed run | green: carry on; red: fix from the excerpt, push, and the next verdict arrives on its own |
 | `head` | `PR octocat/repo#12: head moved to 1a2b3c4d5e6f by octocat` | a head you did not record with `--head`: someone else pushed, or your own push without a fresh `watch --head`; pull before touching the branch |
-| `merged` | `PR octocat/repo#12: merged at 2026-10-12T14:03:20Z; mainline commit 9f8e7d6c5b4a is now watched for CI` | stop babysitting; the `ci` event for the merge commit follows |
+| `merged` | `PR octocat/repo#12: merged at 2026-10-12T14:03:20Z; mainline commit 9f8e7d6c5b4a is now watched for CI`; the log line's `sha` is the whole merge commit | stop babysitting; the `ci` event for the merge commit follows |
 | `closed` | `PR octocat/repo#12: closed without merging` | stop babysitting |
 | `trouble` | `polling failed 3 times in a row (...); not a verdict`, `CI run not registered on 1a2b3c4d5e6f after 2 polls; not a verdict` with `no run registered for checks` under it, `issue comments: more than 10 pages since the last one reported; the older ones are not reported; read the PR`, or `merged at ...; no merge commit reported after 5 polls, so its mainline CI is not watched` | tooling trouble, never a red or green pipeline; Gotchas below |
 

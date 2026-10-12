@@ -800,9 +800,12 @@ async function runDaemon(
         dropPr(key);
         return;
       }
+      // The line's sha is the merge commit, whole: the text shows it short, and a log reader
+      // watching the mainline needs all of it.
       emitted.push(
         emit({
           ...base,
+          sha: oid,
           kind: "merged",
           text: `merged at ${mergedAt}; mainline commit ${oid.slice(0, 12)} is now watched for CI`,
         }),
