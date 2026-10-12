@@ -6,12 +6,12 @@ import type { PrRef } from "./pr-rows.mts";
 
 // 100 threads per page; a PR with more than 5000 is a broken measurement.
 const MAX_THREAD_PAGES = 50;
-// Each connection is read newest-first until an id the daemon has already reported appears; a
+// Each connection is read newest-first until an id an earlier read already fetched appears; a
 // daemon stopped for long enough to miss this many pages reports the gap instead of the rest.
 const MAX_BACK_PAGES = 10;
 
 export type Activity = {
-  /** `<kind class>:<GitHub database id>`; the daemon's cursor is the set of these it has reported. */
+  /** `<kind class>:<GitHub database id>`; the daemon's cursor is the set of these its reads have fetched. */
   id: string;
   kind: "comment" | "review" | "review-comment" | "reply";
   at: string;
@@ -28,7 +28,7 @@ export type Activity = {
 export type PrDetail = {
   lastCommitAuthor: string | null;
   unresolvedThreads: number;
-  /** What the read fetched, cut below the newest id already reported: the candidates for news. */
+  /** What the read fetched, cut below the newest id already seen: the candidates for news. */
   activities: Activity[];
   /** Every id the read fetched, the cut ones included: what the daemon has now seen. */
   fetchedIds: string[];
@@ -200,7 +200,7 @@ function threadActivities(
   );
 }
 
-/** The daemon's cursor: the ids it has reported. `null` at a first sighting, where nothing is news. */
+/** The daemon's cursor: the ids its earlier reads fetched. `null` at a first sighting, where nothing is news. */
 export type Seen = ReadonlySet<string> | null;
 
 class DetailReader {
@@ -234,7 +234,7 @@ class DetailReader {
     return variables;
   }
 
-  // The seen set holds two reads' fetched ids, so a node older than the newest reported one on the
+  // The seen set holds two reads' fetched ids, so a node older than the newest seen one on the
   // stopping page is history the set has forgotten, not news: a back page is wider than a
   // thread's window, and would otherwise resurface comments from before the baseline. Every
   // fetched id still counts as seen, so a cut page does not narrow the next read's set.
