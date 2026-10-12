@@ -70,10 +70,14 @@ One lane per style, run in parallel (the `/orchestrator-mode` skill, where insta
 
 Drop a lane the brief rules out. Add a lane when the owner's exemplars share a style the table lacks.
 
+Where the harness has a pipeline or workflow tool, steps 3 to 6 are one run, not prose between agents. Each lane returns rows in a fixed shape (name, say it, the three scores, registries, meaning verdict, verdict) plus what it dropped. A lane with no survivor reruns once with a tightened prompt. The merge dedupes against the brief's rejected list and runs the arXiv column once.
+
+The rejection round (step 7) sits between runs: rewrite the brief, rerun only the lanes it changed. A lane report that travels as a message gets cut; rows in a schema do not.
+
 ### 4. Machine check
 
 ```bash
-bun "<skill-dir>/scripts/check-name.mts" --domain com --domain ai <name> <name> ...
+bun "<skill-dir>/scripts/check-name.mts" <name> <name> ...        # domains default to com, ai, dev; --domain <tld> replaces that list
 ```
 
 One row per name, one column per registry. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`:

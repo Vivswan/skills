@@ -210,14 +210,15 @@ async function githubRepo(io: Io, name: string): Promise<Cell> {
   );
 }
 
-/** Papers whose title carries the name. The export API rate-limits after a few dozen calls. */
+/** Papers whose title carries the name. The export API rate-limits after a few dozen calls, and
+ * answers `max_results=0` with HTTP 500, so one entry is asked for and only the count is read. */
 function arxiv(io: Io, name: string): Promise<Cell> {
   return arxivSerialised(io, () => arxivLookup(io, name));
 }
 
 async function arxivLookup(io: Io, name: string): Promise<Cell> {
   const query = encodeURIComponent(`ti:"${name}"`);
-  const url = `https://export.arxiv.org/api/query?search_query=${query}&max_results=0`;
+  const url = `https://export.arxiv.org/api/query?search_query=${query}&max_results=1`;
   try {
     const response = await get(io, url, { accept: "application/atom+xml" });
     if (response.status === 429) return unknown("arxiv rate-limited; retry later");
