@@ -420,28 +420,44 @@ function realCodexHome(): string {
 }
 
 /** Fills `home` (already created) with the user's config and credentials, each only when it exists. */
-function fillCodexHome(home: string): void {
+/** Returns the credentials bytes as copied, so a later refresh is told apart from them. */
+function fillCodexHome(home: string): Buffer | null {
   const real = realCodexHome();
+  let auth: Buffer | null = null;
   for (const name of CODEX_HOME_FILES) {
     const source = join(real, name);
-    if (statSync(source, { throwIfNoEntry: false })?.isFile()) {
-      copyFileSync(source, join(home, name));
-    }
+    if (!statSync(source, { throwIfNoEntry: false })?.isFile()) continue;
+    copyFileSync(source, join(home, name));
+    if (name === CODEX_AUTH_FILE) auth = readFileSync(join(home, name));
   }
+  return auth;
 }
 
 /** codex refreshes expiring login tokens into auth.json and expects the
- * refreshed file to persist, so a changed scratch copy goes back to the
- * user's home by write-then-rename. The config never goes back: its only
- * change is the trust block the scratch home exists to absorb. */
-function returnRefreshedAuth(home: string, warn: (line: string) => void): void {
+ * refreshed file to persist, so a scratch copy that changed goes back to the
+ * user's home by write-then-rename. Only when the user's file still holds the
+ * bytes this review copied: a parallel review that refreshed first must not
+ * be rolled back by an unchanged or older copy. The config never goes back:
+ * its only change is the trust block the scratch home exists to absorb. */
+function returnRefreshedAuth(
+  home: string,
+  original: Buffer | null,
+  warn: (line: string) => void,
+): void {
+  if (original === null) return;
   const scratchAuth = join(home, CODEX_AUTH_FILE);
   const realAuth = join(realCodexHome(), CODEX_AUTH_FILE);
   if (!statSync(scratchAuth, { throwIfNoEntry: false })?.isFile()) return;
   if (!statSync(realAuth, { throwIfNoEntry: false })?.isFile()) return;
   try {
     const refreshed = readFileSync(scratchAuth);
-    if (refreshed.equals(readFileSync(realAuth))) return;
+    if (refreshed.equals(original)) return;
+    if (!readFileSync(realAuth).equals(original)) {
+      warn(
+        `codex credentials changed elsewhere during the review; the scratch refresh is not returned to ${realAuth}`,
+      );
+      return;
+    }
     const pending = `${realAuth}.rubber-duck-tmp`;
     writeFileSync(pending, refreshed, { mode: 0o600 });
     renameSync(pending, realAuth);
@@ -785,10 +801,11 @@ function runReviewer(
   // review on every path below: the home holds copied credentials.
   let copy: string | null = null;
   let codexHome: string | null = null;
+  let originalAuth: Buffer | null = null;
   const closeFds = () => {
     if (copy !== null) removeTree(copy, warn);
     if (codexHome !== null) {
-      returnRefreshedAuth(codexHome, warn);
+      returnRefreshedAuth(codexHome, originalAuth, warn);
       removeTree(codexHome, warn);
     }
     closeSync(outFd);
@@ -811,7 +828,7 @@ function runReviewer(
     codexHome = join(scratch.dir, "codex-home");
     try {
       mkdirSync(codexHome);
-      fillCodexHome(codexHome);
+      originalAuth = fillCodexHome(codexHome);
     } catch (error) {
       closeFds();
       hooks.onSpawnError(new Error(`scratch codex home failed: ${String(error)}`));

@@ -106,6 +106,8 @@ if [ -n "\${STUB_HOME_REPORT:-}" ]; then
   echo '[projects."'"$PWD"'"]' >> "\${CODEX_HOME:-/nonexistent}/config.toml" 2>/dev/null || true
   # codex's token refresh, which must persist for the user
   if [ -n "\${STUB_REFRESH_AUTH:-}" ]; then printf '%s' "\${STUB_REFRESH_AUTH}" > "\${CODEX_HOME:-/nonexistent}/auth.json"; fi
+  # a parallel review refreshing the user's own file while this one runs
+  if [ -n "\${STUB_REAL_AUTH_WRITE:-}" ]; then printf '%s' "\${STUB_REAL_AUTH_WRITE}" > "\${STUB_REAL_AUTH_PATH}"; fi
 fi
 if [ -n "\${STUB_CWD_REPORT:-}" ]; then
   { echo "$PWD"; git rev-parse --show-toplevel; git --no-pager diff --cached --name-only; } > "\${STUB_CWD_REPORT}"
@@ -831,6 +833,56 @@ describe("run-review.mts", () => {
     expect(r.homeLeft).toBe(false);
   });
 
+  test("a parallel review's refresh of the user's auth.json is not rolled back by a review whose scratch copy never changed", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
+    const homeReport = join(binDir, "home-report-parallel");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_REAL_AUTH_PATH: join(home, "auth.json"),
+        STUB_REAL_AUTH_WRITE: '{"token":"refreshed-by-the-other-review"}',
+        CODEX_HOME: home,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe(
+      '{"token":"refreshed-by-the-other-review"}',
+    );
+  });
+
+  test("a scratch refresh is not returned over credentials another review changed meanwhile; the run warns instead", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
+    const homeReport = join(binDir, "home-report-conflict");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_REFRESH_AUTH: '{"token":"mine"}',
+        STUB_REAL_AUTH_PATH: join(home, "auth.json"),
+        STUB_REAL_AUTH_WRITE: '{"token":"theirs"}',
+        CODEX_HOME: home,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe('{"token":"theirs"}');
+    expect(r.stderr).toContain("codex credentials changed elsewhere during the review");
+  });
+
   test.skipIf(process.getuid?.() === 0)(
     "a credentials file the launcher cannot read fails the review cleanly, copy and scratch home removed",
     () => {
@@ -840,15 +892,17 @@ describe("run-review.mts", () => {
       writeFileSync(join(home, "config.toml"), 'model = "example"\n');
       writeFileSync(join(home, "auth.json"), "{}\n");
       chmodSync(join(home, "auth.json"), 0o000);
-      // A foreground spawn failure removes its whole scratch dir, so the proof of cleanup is
-      // that the run left no new rubber-duck-* directory behind in the temp dir.
+      // A foreground spawn failure removes its whole scratch dir, so the proof of cleanup is an
+      // empty private TMPDIR afterwards (shared tmp would show other sessions' reviews).
+      const privateTmp = mkdtempSync(join(tmpdir(), "run-review-cleanup-"));
+      fixtureDirs.push(privateTmp);
       const scratchDirs = () =>
-        new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("rubber-duck-")));
+        new Set(readdirSync(privateTmp).filter((name) => name.startsWith("rubber-duck-")));
       const before = scratchDirs();
       try {
         const r = run(
           ["codex", promptFile],
-          { STUB_SANDBOX: "bwrap", CODEX_HOME: home },
+          { STUB_SANDBOX: "bwrap", CODEX_HOME: home, TMPDIR: privateTmp },
           undefined,
           repo,
         );
