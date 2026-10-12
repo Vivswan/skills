@@ -27,7 +27,7 @@ export interface PrEvent {
   kind: EventKind;
   text: string;
   url: string;
-  /** On a `ci` line: the GitHub Actions runs the verdict rests on, `id:status:conclusion` sorted and comma-joined. */
+  /** On a `ci` line: the GitHub Actions runs the verdict rests on, `id:status:conclusion:updatedAt` sorted and comma-joined. */
   runs?: string;
 }
 
@@ -74,7 +74,7 @@ export type CiOutcome = "green" | "red";
 
 /**
  * A settled judgment: what it said, and a fingerprint of the GitHub Actions runs it judged (id,
- * status, conclusion), so a later re-judgment that sees the same runs says nothing new. A head
+ * status, conclusion, last change), so a later re-judgment that sees the same runs says nothing new. A head
  * being judged again after a verdict (a rollup move) carries that verdict's runs as `priorRuns`
  * for as many polls as the re-judgment stays pending; null when nothing was delivered on the head.
  */

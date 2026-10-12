@@ -185,7 +185,7 @@ Every event line has the same shape, whichever sink reads it:
 {"id":17,"at":"2026-10-12T14:03:20Z","repo":"octocat/repo","pr":12,"sha":"1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b","url":"https://github.com/octocat/repo/pull/12","kind":"review","text":"..."}
 ```
 
-`kind` is one of `comment`, `review`, `ci`, `head`, `merged`, `closed`, `trouble`. `sha` is the PR head the event was read on, the merge commit on a `merged` line, the judged commit on a `watch-commit` line, and `null` with `pr` on a daemon-wide `trouble` line. A `ci` line adds `runs`: the Actions runs the verdict rests on, as `id:status:conclusion`.
+`kind` is one of `comment`, `review`, `ci`, `head`, `merged`, `closed`, `trouble`. `sha` is the PR head the event was read on, the merge commit on a `merged` line, the judged commit on a `watch-commit` line, and `null` with `pr` on a daemon-wide `trouble` line. A `ci` line adds `runs`: the Actions runs the verdict rests on, as `id:status:conclusion:updatedAt`.
 
 Every line is addressed to the daemon's one owner, and `status` shows how the last delivery to a session went. A held or refused delivery leaves the line in the log, so nothing is lost.
 

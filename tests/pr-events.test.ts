@@ -86,6 +86,7 @@ const SHORT_C = MERGE_C.slice(0, 12);
 const T1 = "2026-01-01T00:00:00Z";
 const T2 = "2026-01-01T01:00:00Z";
 const T3 = "2026-01-01T02:00:00Z";
+const T4 = "2026-01-01T03:00:00Z";
 
 // --- fixtures, in the shapes the GraphQL API renders them --------------------
 
@@ -125,17 +126,17 @@ function rows(...specs: RowSpec[]): string {
   return JSON.stringify({ data: { r0: prs } });
 }
 
-/** [workflow name, status, conclusion, run id, workflow id (default: derived from the name)] */
-type RunSpec = [string, string, string | null, number?, number?];
+/** [workflow name, status, conclusion, run id, workflow id (default: derived from the name), updated at] */
+type RunSpec = [string, string, string | null, number?, number?, string?];
 
 function suites(runs: RunSpec[]): string {
-  const nodes = runs.map(([name, status, conclusion, id, workflowId], i) => ({
+  const nodes = runs.map(([name, status, conclusion, id, workflowId, updatedAt], i) => ({
     status,
     conclusion,
     app: { slug: "github-actions" },
     workflowRun: {
       databaseId: id ?? 100 + i,
-      updatedAt: T1,
+      updatedAt: updatedAt ?? T1,
       workflow: {
         databaseId: workflowId ?? [...name].reduce((sum, c) => sum + c.charCodeAt(0), 0),
         name,
@@ -1144,7 +1145,7 @@ describe("pr-events.mts", () => {
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     expect(headlines(await box.frames(1))).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci`]);
-    expect(s.events()[0]?.runs).toBe("1:completed:success");
+    expect(s.events()[0]?.runs).toBe(`1:completed:success:${T1}`);
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
@@ -1178,7 +1179,7 @@ describe("pr-events.mts", () => {
     expect(await box.frames(1)).toHaveLength(1);
     s.stop({ inbox: box.path });
     expect(s.events().map((e) => [e.id, e.kind, e.runs])).toEqual([
-      [1, "ci", "1:completed:success"],
+      [1, "ci", `1:completed:success:${T1}`],
     ]);
     writeFileSync(s.file("state.json"), pending);
     await s.start({ inbox: box.path });
@@ -1186,6 +1187,32 @@ describe("pr-events.mts", () => {
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     expect(headlines(await box.frames(2))[1]).toBe(`PR ${PR7}: CI red on ${SHORT_A}`);
     expect(s.events().map((e) => e.id)).toEqual([1, 2]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a rerun that completes again under the same run id is a new verdict: the run's updated time is part of the runs it rests on", async () => {
+    // GitHub keeps a rerun's id and bumps its attempt; a flaky gate rerun to the same conclusion
+    // used to settle silently, and the owner waiting on the rerun never heard.
+    const s = new Scenario("rerun-same-id");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success", 1, undefined, T1]]),
+      "rows-2": rows({ rollup: "PENDING" }),
+      "suites-2": suites([["ci", "in_progress", null, 1, undefined, T2]]),
+      "rows-3": rows({ rollup: "SUCCESS" }),
+      "suites-3": suites([["ci", "completed", "success", 1, undefined, T3]]),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    expect(headlines(await box.frames(1))).toEqual([`PR ${PR7}: CI green on ${SHORT_A}: ci`]);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))[1]).toBe(`PR ${PR7}: CI green on ${SHORT_A}: ci`);
+    expect(s.events().map((e) => e.runs)).toEqual([
+      `1:completed:success:${T1}`,
+      `1:completed:success:${T3}`,
+    ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
@@ -2083,6 +2110,15 @@ describe("pr-events.mts", () => {
       "rows-3": rows({ rollup: "FAILURE", updatedAt: T3, comments: 1 }),
       "detail-2": detail({ comments: [{ login: "bob", at: T3, body: "again" }] }),
       "viewer-1": VIEWER,
+      // The restarted daemon's own poll sees nothing new; the poll after it brings one comment.
+      "rows-4": rows({ rollup: "FAILURE", updatedAt: T3, comments: 1 }),
+      "rows-5": rows({ rollup: "FAILURE", updatedAt: T4, comments: 2 }),
+      "detail-3": detail({
+        comments: [
+          { login: "bob", at: T3, body: "again" },
+          { login: "bob", at: T4, body: "and once more" },
+        ],
+      }),
     });
     await s.start({ id: "probe" });
     expect(s.run(["watch", PR7, ...GATE_CI, ...id]).code).toBe(0);
@@ -2106,9 +2142,64 @@ describe("pr-events.mts", () => {
     const unblocked = (await new Response(blocking.stdout).text()).trim().split("\n");
     expect(JSON.parse(unblocked[0] as string)).toMatchObject({ id: 3, kind: "comment" });
     expect(unblocked[1]).toBe("cursor: 3");
+    // A wait already running notices the stop: it used to reread the unchanged log until its
+    // timeout and exit 4, half an hour later, where the reader expected the no-daemon exit.
+    const orphaned = Bun.spawn(
+      [process.execPath, SCRIPT, "wait", "--since", "3", "--timeout", "20", ...id],
+      { env: s.env(), stdout: "pipe", stderr: "pipe" },
+    );
+    await Bun.sleep(300);
+    const stoppedAt = Date.now();
     s.stop({ id: "probe" });
+    expect(await orphaned.exited).toBe(3);
+    expect(Date.now() - stoppedAt).toBeLessThan(5000);
+    expect(await new Response(orphaned.stdout).text()).toContain("cursor: 3");
     expect(s.run(["wait", "--since", "3", "--timeout", "1", ...id]).code).toBe(3);
-  }, 40000);
+    // An event appended in the same second the daemon stops is read before the stop is declared:
+    // the reader gets the line and the cursor past it, not exit 3 with the old cursor.
+    await s.start({ id: "probe" });
+    const lastWords = Bun.spawn(
+      [process.execPath, SCRIPT, "wait", "--since", "3", "--timeout", "20", ...id],
+      { env: s.env(), stdout: "pipe", stderr: "pipe" },
+    );
+    await Bun.sleep(300);
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    s.stop({ id: "probe" });
+    expect(await lastWords.exited).toBe(0);
+    const last = (await new Response(lastWords.stdout).text()).trim().split("\n");
+    expect(JSON.parse(last[0] as string)).toMatchObject({ id: 4, kind: "comment" });
+    expect(last[1]).toBe("cursor: 4");
+    // A daemon replaced under a running wait is asked who it is once, and followed by pid from
+    // then on: it used to be probed with a connect every tick, which queue in the backlog of a
+    // daemon inside a long gh read until the kernel refuses them and the wait exits 3 on a live
+    // daemon. The test stands in as the replacement, answering status with its own live pid.
+    await s.start({ id: "probe" });
+    const followed = Bun.spawn(
+      [process.execPath, SCRIPT, "wait", "--since", "4", "--timeout", "20", ...id],
+      { env: s.env(), stdout: "pipe", stderr: "pipe" },
+    );
+    await Bun.sleep(300);
+    s.stop({ id: "probe" });
+    const asked: string[] = [];
+    let connections = 0;
+    const standIn = createServer((socket) => {
+      connections += 1;
+      socket.setEncoding("utf-8");
+      socket.on("data", (line: string) => {
+        asked.push(line.trim());
+        socket.end(`${JSON.stringify({ ok: true, status: { pid: process.pid, state: {} } })}\n`);
+      });
+    });
+    standIn.listen(s.socketPath("probe"));
+    await new Promise<void>((resolve) => standIn.once("listening", resolve));
+    await Bun.sleep(3500);
+    expect(asked).toEqual([JSON.stringify({ cmd: "status" })]);
+    expect(connections).toBe(1);
+    await new Promise<void>((resolve) => standIn.close(() => resolve()));
+    if (existsSync(s.socketPath("probe"))) unlinkSync(s.socketPath("probe"));
+    expect(await followed.exited).toBe(3);
+    expect(await new Response(followed.stdout).text()).toContain("cursor: 4");
+  }, 60000);
 
   test("three failed polls in a row are one trouble notice, then one recovery, and the daemon stays up; only an error naming authentication asks for a restart", async () => {
     // A 504 or a network failure is retried by the next poll as it is; a stale token is not, and

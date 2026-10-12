@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { appendFileSync, chmodSync, unlinkSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
@@ -478,12 +478,22 @@ async function cmdWait(dir: string, args: string[]): Promise<number> {
   const timeoutSeconds =
     parsePositiveInt(values.timeout, "--timeout") ?? DEFAULT_WAIT_TIMEOUT_SECONDS;
   const deadline = Date.now() + timeoutSeconds * 1000;
+  // A daemon stopped under a running wait: the log it was reading will never grow, and the reader
+  // needs the no-daemon exit now, not at the timeout. The log is read once more first: the
+  // daemon's last poll may have appended in the same second it stopped.
+  let daemon: number | null = status.pid;
   for (;;) {
     const events = readEventsSince(files, since);
     if (events.length > 0) {
       for (const event of events) console.log(JSON.stringify(event));
       console.log(`cursor: ${(events.at(-1) as PrEvent).id}`);
       return 0;
+    }
+    if (daemon === null) {
+      console.log(`cursor: ${since}`);
+      throw new NoDaemonError(
+        `the pr-events daemon for ${describeOwner(owner)} stopped while this wait was running; start one as a background task of this session:\n  ${startCommand(owner)}`,
+      );
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
@@ -492,7 +502,22 @@ async function cmdWait(dir: string, args: string[]): Promise<number> {
       return 4;
     }
     await sleep(Math.min(WAIT_TICK_MS, remaining));
+    daemon = await liveDaemon(files, daemon);
   }
+}
+
+/**
+ * The pid of the daemon holding the socket, or null when none does, without a connection a tick:
+ * a daemon inside a gh read accepts nothing for up to a minute, and probes queued in its listen
+ * backlog come back refused once it fills. The socket file goes when a daemon stops; the known
+ * pid answers while it lives; another daemon holding the socket after it (a restart) is asked who
+ * it is once, and is the one followed from then on.
+ */
+async function liveDaemon(files: OwnerFiles, pid: number): Promise<number | null> {
+  if (!existsSync(files.socket)) return null;
+  if (isProcessAlive(pid)) return pid;
+  const reply = await requestIfRunning(files, { cmd: "status" });
+  return reply === null ? null : (unwrap(reply).status as StatusReply).pid;
 }
 
 // --- daemon -------------------------------------------------------------------
@@ -744,9 +769,10 @@ async function runDaemon(
     const verdict = judgeRuns(runs, expected);
     const base = { repo, pr: subject.pr, sha, url: subject.url };
     // The Actions runs the verdict rests on. An external check (CodeQL, a bot) moving the PR's
-    // aggregate rollup re-judges the head, and the same runs must not become a second verdict.
+    // aggregate rollup re-judges the head, and the same runs must not become a second verdict. A
+    // rerun keeps its run id, so the time the run last changed is part of what identifies it.
     const fingerprint = selectLatest(runs)
-      .map((run) => `${run.id}:${run.status}:${run.conclusion ?? ""}`)
+      .map((run) => `${run.id}:${run.status}:${run.conclusion ?? ""}:${run.updatedAt}`)
       .sort()
       .join(",");
     // Workflows by id, not name: two workflow files can share a name, and a second one registering

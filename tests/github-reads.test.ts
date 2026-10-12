@@ -786,6 +786,34 @@ describe("excerptFailedLog", () => {
       ].join("\n"),
     ],
     [
+      "a failing step whose output names no error word keeps its own tail up to the exit-code line, not the wind-down's: the failure is there in any wording",
+      [
+        row("test", "Run tests", "Failure: 1 test failed", 2),
+        row("test", "Run tests", "##[error]Process completed with exit code 1.", 3),
+        ...windDown,
+      ],
+      [
+        "test / Run tests:",
+        "  Failure: 1 test failed",
+        "  ##[error]Process completed with exit code 1.",
+      ].join("\n"),
+    ],
+    [
+      "a passing suite's summary saying `0 failed` in the failing step is not an error line, so the assertion after it is still in the tail",
+      [
+        row("test", "ctest", "100% tests passed, 0 tests failed out of 1", 1),
+        row("test", "ctest", "AssertionError: expected 1, received 2", 2),
+        row("test", "ctest", "##[error]Process completed with exit code 1.", 3),
+        ...windDown,
+      ],
+      [
+        "test / ctest:",
+        "  100% tests passed, 0 tests failed out of 1",
+        "  AssertionError: expected 1, received 2",
+        "  ##[error]Process completed with exit code 1.",
+      ].join("\n"),
+    ],
+    [
       "error lines from two steps carry each step's heading",
       [
         row("test", "Unit", "::error file=a.ts::expected 1"),

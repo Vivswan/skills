@@ -19,11 +19,13 @@ import {
 // hide a re-queued suite from both, so a multi-page snapshot is judged only once two reads agree.
 const MAX_SUITE_PAGES = 10;
 const MAX_SNAPSHOT_ROUNDS = 5;
-// The excerpt of a failed run's log: the lines that name an error or a failure (`::error`,
-// `##[error]`, `error:`, `error TS2304`, `Error`, `FAIL`, `FAILED`), or the failing step's own tail
-// when none does. The stream's last lines are the run's wind-down (a summary job, credential
-// cleanup), which is why a plain tail misses the error. The runner's own exit-code line is on every
-// failed step and says nothing on its own, so it never counts as a match.
+// The excerpt of a failed run's log: the lines that name an error (`::error`, `##[error]`,
+// `error:`, `error TS2304`, `Error`, `FAIL`, `FAILED`), or the failing step's own tail when none
+// does. The stream's last lines are the run's wind-down (a summary job, credential cleanup), which
+// is why a plain tail misses the error. The runner's own exit-code line is on every failed step and
+// says nothing on its own, so it never counts as a match. Lower-case failure words do not count
+// either: a passing suite's summary says `0 failed` (cargo, ctest), `0 fail` (bun), or
+// `Failed:     0` (dotnet), and the failing step's tail carries its failure line in any wording.
 const ERROR_LINE = /\b(?:error|Error|ERROR|FAIL|FAILED)\b/;
 const EXIT_CODE_LINE = /Process completed with exit code \d+/;
 const MAX_EXCERPT_LINES = 40;
@@ -244,10 +246,12 @@ export function excerptFailedLog(stream: string): string {
     kept = matching.slice(0, MAX_EXCERPT_LINES);
     overflow = matching.length - kept.length;
   } else {
-    const last = parsed.at(-1)?.step ?? null;
-    const stepLines = parsed.filter((line) => line.step === last);
-    // gh labels a job whose step logs are unavailable as one step, cleanup included; the runner's
-    // exit-code line is where the failing command's output ends.
+    // The failing step is the one the runner's exit-code line is in, not the stream's last step,
+    // which is the wind-down's. gh labels a job whose step logs are unavailable as one step,
+    // cleanup included, so the tail ends at that line: the failing command's output is before it.
+    const exitLine = parsed.findLast((line) => EXIT_CODE_LINE.test(line.text));
+    const failing = exitLine?.step ?? parsed.at(-1)?.step ?? null;
+    const stepLines = parsed.filter((line) => line.step === failing);
     const exit = stepLines.findLastIndex((line) => EXIT_CODE_LINE.test(line.text));
     kept = (exit < 0 ? stepLines : stepLines.slice(0, exit + 1)).slice(-STEP_TAIL_LINES);
   }
