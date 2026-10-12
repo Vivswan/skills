@@ -24,7 +24,7 @@ const MAX_SNAPSHOT_ROUNDS = 5;
 // when none does. The stream's last lines are the run's wind-down (a summary job, credential
 // cleanup), which is why a plain tail misses the error. The runner's own exit-code line is on every
 // failed step and says nothing on its own, so it never counts as a match.
-const ERROR_LINE = /\b(?:[Ee]rror|ERROR|FAIL|FAILED)\b/;
+const ERROR_LINE = /\b(?:error|Error|ERROR|FAIL|FAILED)\b/;
 const EXIT_CODE_LINE = /Process completed with exit code \d+/;
 const MAX_EXCERPT_LINES = 40;
 const STEP_TAIL_LINES = 20;
