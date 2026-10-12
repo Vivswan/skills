@@ -4,14 +4,18 @@
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { PrKey, Row } from "./pr-rows.mts";
 
 export type Sink = "socket" | "file";
@@ -27,6 +31,8 @@ export interface PrEvent {
   kind: EventKind;
   text: string;
   url: string;
+  /** The sink addresses the event was for; a file-sink reader selects its lines by this. */
+  to: string[];
 }
 
 export type EventInput = Omit<PrEvent, "id" | "at">;
@@ -36,8 +42,16 @@ export interface PrSubscription {
   expected: string[];
 }
 
+/** `${repo}@${sha}`: a fork shares its commits' shas with the upstream repository. */
+export type CommitKey = string;
+
+export function commitKey(repo: string, sha: string): CommitKey {
+  return `${repo}@${sha}`;
+}
+
 export interface CommitSubscription {
   repo: string;
+  sha: string;
   expected: string[];
 }
 
@@ -49,18 +63,18 @@ export interface Subscription {
   mode: Mode;
   leaseUntil: string | null;
   prs: Record<PrKey, PrSubscription>;
-  commits: Record<string, CommitSubscription>;
+  commits: Record<CommitKey, CommitSubscription>;
 }
 
 export interface SavedRow extends Row {
   ciPending: boolean;
-  /** Polls in a row on which the expected gate had registered no run; the grace before a trouble event. */
+  /** Polls in a row on which no run had registered; the grace before a trouble event. */
   missingPolls: number;
 }
 
 export interface PendingCommit {
   repo: string;
-  expected: string[];
+  sha: string;
   firstSeenAt: string;
   missingPolls: number;
 }
@@ -74,7 +88,7 @@ export interface Delivery {
 export interface State {
   subscriptions: Record<string, Subscription>;
   rows: Record<PrKey, SavedRow>;
-  pendingCommits: Record<string, PendingCommit>;
+  pendingCommits: Record<CommitKey, PendingCommit>;
   /** Last delivery per sink address, kept after a prune so `status` can say why a subscriber went. */
   deliveries: Record<string, Delivery>;
   lastEventId: number;
@@ -94,11 +108,12 @@ export class RuntimeDirError extends Error {}
 /**
  * One private directory per user, the ladder Claude Code uses for its own sockets. A candidate that
  * exists but belongs to someone else is skipped, never shared: the socket inside it is an open inbox.
+ * The override is made absolute because the daemon runs with another cwd than the CLI that spawned it.
  */
 export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   const uid = process.getuid?.() ?? 0;
   const candidates: string[] = [];
-  if (env.PR_EVENTS_DIR) candidates.push(env.PR_EVENTS_DIR);
+  if (env.PR_EVENTS_DIR) candidates.push(resolve(env.PR_EVENTS_DIR));
   if (env.XDG_RUNTIME_DIR) candidates.push(join(env.XDG_RUNTIME_DIR, "pr-events"));
   candidates.push(join(tmpdir(), `pr-events-${uid}`), `/tmp/pr-events-${uid}`);
   const refused: string[] = [];
@@ -153,12 +168,28 @@ export function saveState(dir: string, state: State): void {
   renameSync(tmp, target);
 }
 
-/** Appends the event to the log and returns its id; the state's counter is the id's owner. */
+/** Appends the event to the log and returns it with its id; the state's counter is the id's owner. */
 export function appendEvent(dir: string, state: State, input: EventInput): PrEvent {
   state.lastEventId += 1;
   const event: PrEvent = { id: state.lastEventId, at: new Date().toISOString(), ...input };
-  appendFileSync(join(dir, EVENTS_FILE), `${JSON.stringify(event)}\n`, { mode: 0o600 });
+  const path = join(dir, EVENTS_FILE);
+  // A crash mid-append leaves a line without its newline; the next line must not glue onto it.
+  const prefix = endsWithoutNewline(path) ? "\n" : "";
+  appendFileSync(path, `${prefix}${JSON.stringify(event)}\n`, { mode: 0o600 });
   return event;
+}
+
+function endsWithoutNewline(path: string): boolean {
+  const size = statSync(path, { throwIfNoEntry: false })?.size ?? 0;
+  if (size === 0) return false;
+  const fd = openSync(path, "r");
+  try {
+    const last = Buffer.alloc(1);
+    readSync(fd, last, 0, 1, size - 1);
+    return last[0] !== 0x0a;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Every logged event with an id above `sinceId`, oldest first. A line cut short by a crash is skipped. */

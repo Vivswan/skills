@@ -7,6 +7,7 @@
 // spawn (stderr names the log); `wait` exits 3 at its timeout.
 
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { appendFileSync, chmodSync, closeSync, openSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
@@ -28,6 +29,8 @@ import { type PrKey, type PrRef, prKey, type Row, readRows, rowChanged } from ".
 import {
   appendEvent,
   CONTROL_SOCKET,
+  type CommitKey,
+  commitKey,
   type EventInput,
   LOG_FILE,
   loadState,
@@ -49,7 +52,7 @@ const DEFAULT_IDLE_SECONDS = 600;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 1800;
 const LEASE_MS = 24 * 60 * 60 * 1000;
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
-// A gate workflow can register a few seconds after the push; two polls before calling it missing.
+// A workflow run can register a few seconds after the push; two polls before calling it missing.
 const MISSING_GRACE_POLLS = 2;
 const MAX_LOG_EXCERPTS = 3;
 const MAX_BODY_CHARS = 2000;
@@ -87,18 +90,9 @@ function errorCode(error: unknown): string | undefined {
 
 // --- control protocol --------------------------------------------------------
 
-interface WatchPr {
-  repo: string;
-  number: number;
-  head: string | null;
-  expected: string[];
-}
-
-interface WatchCommit {
-  repo: string;
-  sha: string;
-  expected: string[];
-}
+type WatchTarget =
+  | { kind: "pr"; repo: string; number: number; head: string | null; expected: string[] }
+  | { kind: "commit"; repo: string; sha: string; expected: string[] };
 
 interface SinkChoice {
   sink: Sink;
@@ -107,7 +101,7 @@ interface SinkChoice {
 }
 
 type Command =
-  | { cmd: "watch"; sink: SinkChoice; mode: Mode; pr: WatchPr | null; commit: WatchCommit | null }
+  | { cmd: "watch"; sink: SinkChoice; mode: Mode; target: WatchTarget }
   | { cmd: "unwatch"; address: string; pr: PrRef | null }
   | { cmd: "renew"; address: string }
   | { cmd: "poll" }
@@ -127,15 +121,12 @@ function controlSocketPath(dir: string): string {
   return join(dir, CONTROL_SOCKET);
 }
 
-function connectOnce(path: string): Promise<Socket> {
-  return new Promise((resolve, reject) => {
-    const socket = connect(path);
-    socket.once("connect", () => resolve(socket));
-    socket.once("error", reject);
-  });
+async function connectOnce(path: string): Promise<Socket> {
+  const socket = connect(path);
+  await once(socket, "connect");
+  return socket;
 }
 
-/** One request, one JSON reply line, on an already connected socket. */
 function exchange(socket: Socket, command: Command): Promise<Reply> {
   return new Promise((resolve, reject) => {
     let buffer = "";
@@ -160,9 +151,10 @@ function exchange(socket: Socket, command: Command): Promise<Reply> {
 function spawnDaemon(dir: string): void {
   const logFd = openSync(join(dir, LOG_FILE), "a", 0o600);
   try {
+    // The daemon's cwd is the runtime dir itself, so the dir travels resolved, never relative.
     const child = Bun.spawn([process.execPath, import.meta.path, "daemon"], {
       cwd: dir,
-      env: process.env,
+      env: { ...process.env, PR_EVENTS_DIR: dir },
       detached: true,
       stdio: ["ignore", logFd, logFd],
     });
@@ -172,13 +164,17 @@ function spawnDaemon(dir: string): void {
   }
 }
 
+function isNobodyListening(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ENOENT" || code === "ECONNREFUSED";
+}
+
 async function findOrStart(dir: string): Promise<Socket> {
   const path = controlSocketPath(dir);
   try {
     return await connectOnce(path);
   } catch (error) {
-    const code = errorCode(error);
-    if (code !== "ENOENT" && code !== "ECONNREFUSED") throw error;
+    if (!isNobodyListening(error)) throw error;
   }
   spawnDaemon(dir);
   const deadline = Date.now() + START_TIMEOUT_MS;
@@ -187,8 +183,7 @@ async function findOrStart(dir: string): Promise<Socket> {
     try {
       return await connectOnce(path);
     } catch (error) {
-      const code = errorCode(error);
-      if (code !== "ENOENT" && code !== "ECONNREFUSED") throw error;
+      if (!isNobodyListening(error)) throw error;
     }
   }
   throw new ToolingError(
@@ -200,14 +195,13 @@ async function requestStarting(dir: string, command: Command): Promise<Reply> {
   return exchange(await findOrStart(dir), command);
 }
 
-/** A request to a daemon that must already run; null when none does. */
+/** Null when no daemon runs. */
 async function requestRunning(dir: string, command: Command): Promise<Reply | null> {
   let socket: Socket;
   try {
     socket = await connectOnce(controlSocketPath(dir));
   } catch (error) {
-    const code = errorCode(error);
-    if (code === "ENOENT" || code === "ECONNREFUSED") return null;
+    if (isNobodyListening(error)) return null;
     throw error;
   }
   return exchange(socket, command);
@@ -269,8 +263,9 @@ function parseSink(values: { sink?: string; id?: string; pid?: string }): SinkCh
     return { sink, address: inbox, pid: pid ?? pidOf(inbox) };
   }
   if (!values.id) usage("the file sink needs --id <name>, the name `wait --id` reads back with");
-  if (values.id.includes("/") || values.id.includes("\n"))
+  if (values.id.includes("/") || values.id.includes("\n")) {
     usage("--id must not contain / or newlines");
+  }
   return { sink, address: values.id, pid };
 }
 
@@ -301,6 +296,26 @@ function parse<T extends ParseArgsOptionsConfig>(args: string[], options: T, pos
 
 // --- CLI commands -------------------------------------------------------------
 
+function describeTarget(target: WatchTarget): string {
+  return target.kind === "pr"
+    ? `${target.repo}#${target.number}`
+    : `${target.repo}@${target.sha.slice(0, 12)}`;
+}
+
+async function watch(
+  dir: string,
+  sink: SinkChoice,
+  mode: Mode,
+  target: WatchTarget,
+): Promise<number> {
+  requireGh();
+  const reply = unwrap(await requestStarting(dir, { cmd: "watch", sink, mode, target }));
+  console.log(
+    `watching ${describeTarget(target)} for ${sink.sink} ${sink.address} (mode ${mode}); ${reply.subscribers} subscriber(s)`,
+  );
+  return 0;
+}
+
 async function cmdWatch(dir: string, args: string[]): Promise<number> {
   const { values, positionals } = parse(
     args,
@@ -317,21 +332,12 @@ async function cmdWatch(dir: string, args: string[]): Promise<number> {
   if (values.head !== undefined && !SHA_PATTERN.test(values.head)) {
     usage(`--head must be a full 40-character lowercase sha, got: ${values.head}`);
   }
-  const sink = parseSink(values);
-  requireGh();
-  const reply = unwrap(
-    await requestStarting(dir, {
-      cmd: "watch",
-      sink,
-      mode,
-      pr: { ...ref, head: values.head ?? null, expected: parseExpected(values["expect-workflow"]) },
-      commit: null,
-    }),
-  );
-  console.log(
-    `watching ${ref.repo}#${ref.number} for ${sink.sink} ${sink.address} (mode ${mode}); ${reply.subscribers} subscriber(s)`,
-  );
-  return 0;
+  return watch(dir, parseSink(values), mode, {
+    kind: "pr",
+    ...ref,
+    head: values.head ?? null,
+    expected: parseExpected(values["expect-workflow"]),
+  });
 }
 
 async function cmdWatchCommit(dir: string, args: string[]): Promise<number> {
@@ -352,21 +358,22 @@ async function cmdWatchCommit(dir: string, args: string[]): Promise<number> {
     usage(`watch-commit needs a full 40-character lowercase sha, got: ${sha ?? "nothing"}`);
   }
   const mode = parseMode(values.mode);
-  const sink = parseSink(values);
-  requireGh();
-  const reply = unwrap(
-    await requestStarting(dir, {
-      cmd: "watch",
-      sink,
-      mode,
-      pr: null,
-      commit: { repo, sha, expected: parseExpected(values["expect-workflow"]) },
-    }),
-  );
-  console.log(
-    `watching ${repo}@${sha.slice(0, 12)} for ${sink.sink} ${sink.address} (mode ${mode}); ${reply.subscribers} subscriber(s)`,
-  );
-  return 0;
+  return watch(dir, parseSink(values), mode, {
+    kind: "commit",
+    repo,
+    sha,
+    expected: parseExpected(values["expect-workflow"]),
+  });
+}
+
+/** The daemon owns state.json while it runs; with none running the CLI edits it in place. */
+function unwatchOffline(dir: string, address: string, pr: PrRef | null): void {
+  const state = loadState(dir);
+  const sub = state.subscriptions[address];
+  if (!sub) return;
+  if (pr === null) delete state.subscriptions[address];
+  else delete sub.prs[prKey(pr)];
+  saveState(dir, state);
 }
 
 async function cmdUnwatch(dir: string, args: string[]): Promise<number> {
@@ -375,11 +382,8 @@ async function cmdUnwatch(dir: string, args: string[]): Promise<number> {
   const pr = values.all === true ? null : parseTarget(positionals[0]);
   const { address } = parseSink(values);
   const reply = await requestRunning(dir, { cmd: "unwatch", address, pr });
-  if (reply === null) {
-    console.log("no daemon running; nothing is watched");
-    return 0;
-  }
-  unwrap(reply);
+  if (reply === null) unwatchOffline(dir, address, pr);
+  else unwrap(reply);
   console.log(
     pr === null
       ? `unwatched everything for ${address}`
@@ -406,6 +410,16 @@ async function cmdStop(dir: string): Promise<number> {
   return 0;
 }
 
+function describeDelivery(delivery: State["deliveries"][string] | undefined): string {
+  return delivery ? `${delivery.outcome} (#${delivery.eventId} at ${delivery.at})` : "none";
+}
+
+function subjectOf(event: Pick<PrEvent, "repo" | "pr" | "sha">): string {
+  if (event.pr !== null) return `${event.repo}#${event.pr}`;
+  if (event.sha !== null) return `${event.repo}@${event.sha.slice(0, 12)}`;
+  return "daemon";
+}
+
 async function cmdStatus(dir: string): Promise<number> {
   const reply = await requestRunning(dir, { cmd: "status" });
   const status = reply === null ? null : unwrap(reply).status;
@@ -420,12 +434,11 @@ async function cmdStatus(dir: string): Promise<number> {
   for (const sub of subscriptions) {
     const prs = Object.keys(sub.prs).join(",") || "-";
     const commits =
-      Object.keys(sub.commits)
-        .map((sha) => sha.slice(0, 12))
+      Object.values(sub.commits)
+        .map((commit) => `${commit.repo}@${commit.sha.slice(0, 12)}`)
         .join(",") || "-";
-    const delivery = state.deliveries[sub.address];
     lines.push(
-      `  ${sub.sink} ${sub.address} mode=${sub.mode} pid=${sub.pid ?? "-"} lease=${sub.leaseUntil ?? "-"} prs=${prs} commits=${commits} delivery=${describeDelivery(delivery)}`,
+      `  ${sub.sink} ${sub.address} mode=${sub.mode} pid=${sub.pid ?? "-"} lease=${sub.leaseUntil ?? "-"} prs=${prs} commits=${commits} delivery=${describeDelivery(state.deliveries[sub.address])}`,
     );
   }
   const pruned = Object.entries(state.deliveries).filter(
@@ -433,8 +446,9 @@ async function cmdStatus(dir: string): Promise<number> {
   );
   if (pruned.length > 0) {
     lines.push(`former subscribers: ${pruned.length}`);
-    for (const [address, delivery] of pruned)
+    for (const [address, delivery] of pruned) {
       lines.push(`  ${address} delivery=${describeDelivery(delivery)}`);
+    }
   }
   const rows = Object.entries(state.rows);
   lines.push(`prs: ${rows.length}`);
@@ -443,10 +457,11 @@ async function cmdStatus(dir: string): Promise<number> {
       `  ${key} head=${row.headRefOid.slice(0, 12)} state=${row.state} ci=${row.ciPending ? "pending" : "settled"} updated=${row.updatedAt}`,
     );
   }
-  const commits = Object.entries(state.pendingCommits);
+  const commits = Object.values(state.pendingCommits);
   lines.push(`pending commits: ${commits.length}`);
-  for (const [sha, commit] of commits)
-    lines.push(`  ${commit.repo}@${sha.slice(0, 12)} since ${commit.firstSeenAt}`);
+  for (const commit of commits) {
+    lines.push(`  ${commit.repo}@${commit.sha.slice(0, 12)} since ${commit.firstSeenAt}`);
+  }
   const last = readEventsSince(dir, state.lastEventId - 1).at(-1);
   lines.push(
     last
@@ -457,49 +472,26 @@ async function cmdStatus(dir: string): Promise<number> {
   return 0;
 }
 
-function describeDelivery(delivery: State["deliveries"][string] | undefined): string {
-  return delivery ? `${delivery.outcome} (#${delivery.eventId} at ${delivery.at})` : "none";
-}
-
-function subjectOf(event: PrEvent): string {
-  if (event.pr !== null) return `${event.repo}#${event.pr}`;
-  if (event.sha !== null) return `${event.repo}@${event.sha.slice(0, 12)}`;
-  return "daemon";
-}
-
 async function cmdWait(dir: string, args: string[]): Promise<number> {
   const { values } = parse(
     args,
     { since: { type: "string" }, timeout: { type: "string" }, id: { type: "string" } },
     0,
   );
-  const state = loadState(dir);
-  const since =
-    values.since === undefined
-      ? state.lastEventId
-      : (() => {
-          if (!/^\d+$/.test(values.since) || !Number.isSafeInteger(Number(values.since))) {
-            usage(`--since must be a whole number, got: ${values.since}`);
-          }
-          return Number(values.since);
-        })();
+  let since: number;
+  if (values.since === undefined) {
+    since = loadState(dir).lastEventId;
+  } else {
+    if (!/^\d+$/.test(values.since) || !Number.isSafeInteger(Number(values.since))) {
+      usage(`--since must be a whole number, got: ${values.since}`);
+    }
+    since = Number(values.since);
+  }
   const timeoutSeconds =
     parsePositiveInt(values.timeout, "--timeout") ?? DEFAULT_WAIT_TIMEOUT_SECONDS;
-  let matches: (event: PrEvent) => boolean = () => true;
-  if (values.id !== undefined) {
-    const sub = state.subscriptions[values.id];
-    if (sub) {
-      const prs = new Set(Object.keys(sub.prs));
-      const shas = new Set(Object.keys(sub.commits));
-      matches = (event) =>
-        (event.pr === null && event.sha === null) ||
-        (event.pr !== null && prs.has(prKey({ repo: event.repo, number: event.pr }))) ||
-        (event.sha !== null && shas.has(event.sha));
-      await requestRunning(dir, { cmd: "renew", address: values.id });
-    } else {
-      console.error(`no subscription named ${values.id}; waiting on every event`);
-    }
-  }
+  const id = values.id;
+  const matches = (event: PrEvent): boolean => id === undefined || event.to.includes(id);
+  if (id !== undefined) await requestRunning(dir, { cmd: "renew", address: id });
   const deadline = Date.now() + timeoutSeconds * 1000;
   for (;;) {
     const events = readEventsSince(dir, since).filter(matches);
@@ -519,11 +511,6 @@ async function cmdWait(dir: string, args: string[]): Promise<number> {
 }
 
 // --- daemon -------------------------------------------------------------------
-
-interface Emitted {
-  event: PrEvent;
-  targets: string[];
-}
 
 type Bound = { kind: "bound"; server: Server } | { kind: "inuse" };
 
@@ -608,6 +595,11 @@ function indent(lines: string[]): string[] {
   return lines.map((line) => `  ${line}`);
 }
 
+function describeGreen(sha: string, runs: Run[]): string {
+  const names = [...new Set(selectLatest(runs).map((run) => run.name))].sort();
+  return `CI green on ${sha.slice(0, 12)}: ${names.join(", ")}`;
+}
+
 function describeRed(repo: string, sha: string, runs: Run[], verdictLines: string[]): string {
   const lines = [`CI red on ${sha.slice(0, 12)}`, ...indent(verdictLines)];
   const failed = selectLatest(runs).filter(isFailedRun);
@@ -631,6 +623,10 @@ function commitUrl(repo: string, sha: string): string {
 
 function union(lists: string[][]): string[] {
   return [...new Set(lists.flat())].sort();
+}
+
+function leaseFrom(now: number): string {
+  return new Date(now + LEASE_MS).toISOString();
 }
 
 async function runDaemon(
@@ -665,20 +661,21 @@ async function runDaemon(
     return viewer;
   };
 
+  const subscribers = (): Subscription[] => Object.values(state.subscriptions);
   const subscribersOfPr = (key: PrKey): Subscription[] =>
-    Object.values(state.subscriptions).filter((sub) => key in sub.prs);
-  const subscribersOfCommit = (sha: string): Subscription[] =>
-    Object.values(state.subscriptions).filter((sub) => sha in sub.commits);
+    subscribers().filter((sub) => key in sub.prs);
+  const subscribersOfCommit = (key: CommitKey): Subscription[] =>
+    subscribers().filter((sub) => key in sub.commits);
 
-  const emit = (input: EventInput, targets: Subscription[], emitted: Emitted[]): void => {
-    const event = appendEvent(dir, state, input);
+  const emit = (input: Omit<EventInput, "to">, targets: Subscription[]): PrEvent => {
+    const event = appendEvent(dir, state, { ...input, to: targets.map((sub) => sub.address) });
     log(`event #${event.id} ${event.kind} ${subjectOf(event)}: ${event.text.split("\n")[0]}`);
-    emitted.push({ event, targets: targets.map((sub) => sub.address) });
+    return event;
   };
 
   const checkIdle = (): void => {
     if (stopping) return;
-    if (Object.keys(state.subscriptions).length > 0) {
+    if (subscribers().length > 0) {
       idleSince = null;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = null;
@@ -690,9 +687,9 @@ async function runDaemon(
     idleTimer = setTimeout(
       () => {
         idleTimer = null;
-        if (Object.keys(state.subscriptions).length === 0) {
+        if (subscribers().length === 0) {
           log(`no subscribers for ${idleSeconds} s; exiting`);
-          void shutdown();
+          shutdown();
         }
       },
       Math.max(0, remaining),
@@ -701,7 +698,7 @@ async function runDaemon(
 
   const prune = (): void => {
     const now = Date.now();
-    for (const sub of Object.values(state.subscriptions)) {
+    for (const sub of subscribers()) {
       let reason: string | null = null;
       if (sub.sink === "socket") {
         if (!isLiveSubscriber(sub.address, sub.pid)) reason = "inbox gone or its session exited";
@@ -722,8 +719,8 @@ async function runDaemon(
     for (const key of Object.keys(state.rows)) {
       if (subscribersOfPr(key).length === 0) delete state.rows[key];
     }
-    for (const sha of Object.keys(state.pendingCommits)) {
-      if (subscribersOfCommit(sha).length === 0) delete state.pendingCommits[sha];
+    for (const key of Object.keys(state.pendingCommits)) {
+      if (subscribersOfCommit(key).length === 0) delete state.pendingCommits[key];
     }
     for (const [address, delivery] of Object.entries(state.deliveries)) {
       if (!state.subscriptions[address] && Date.parse(delivery.at) + LEASE_MS <= now) {
@@ -732,7 +729,6 @@ async function runDaemon(
     }
   };
 
-  /** CI on one sha, for a PR row or a pending commit; true once settled (an event emitted). */
   const judgeCi = (
     repo: string,
     sha: string,
@@ -740,7 +736,7 @@ async function runDaemon(
     subject: { pr: number | null; url: string },
     targets: Subscription[],
     grace: { missingPolls: number },
-    emitted: Emitted[],
+    emitted: PrEvent[],
   ): boolean => {
     const runs = discoverRuns(repo, sha);
     const verdict = judgeRuns(runs, expected);
@@ -753,38 +749,29 @@ async function runDaemon(
         grace.missingPolls = 0;
         return false;
       case "green":
-        emit(
-          {
-            ...base,
-            kind: "ci",
-            text: [`CI green on ${sha.slice(0, 12)}`, ...indent(verdict.lines)].join("\n"),
-          },
-          targets,
-          emitted,
-        );
+        emitted.push(emit({ ...base, kind: "ci", text: describeGreen(sha, runs) }, targets));
         return true;
       case "red":
-        emit(
-          { ...base, kind: "ci", text: describeRed(repo, sha, runs, verdict.lines) },
-          targets,
-          emitted,
+        emitted.push(
+          emit({ ...base, kind: "ci", text: describeRed(repo, sha, runs, verdict.lines) }, targets),
         );
         return true;
       case "missing":
       case "trouble":
         grace.missingPolls += 1;
         if (grace.missingPolls < MISSING_GRACE_POLLS) return false;
-        emit(
-          {
-            ...base,
-            kind: "trouble",
-            text: [
-              `CI ${kind === "missing" ? "run not registered" : "read gave no verdict"} on ${sha.slice(0, 12)} after ${grace.missingPolls} polls; not a verdict`,
-              ...indent(verdict.lines),
-            ].join("\n"),
-          },
-          targets,
-          emitted,
+        emitted.push(
+          emit(
+            {
+              ...base,
+              kind: "trouble",
+              text: [
+                `CI ${kind === "missing" ? "run not registered" : "read gave no verdict"} on ${sha.slice(0, 12)} after ${grace.missingPolls} polls; not a verdict`,
+                ...indent(verdict.lines),
+              ].join("\n"),
+            },
+            targets,
+          ),
         );
         return true;
     }
@@ -795,7 +782,18 @@ async function runDaemon(
     delete state.rows[key];
   };
 
-  const processRow = (ref: PrRef, current: Row, emitted: Emitted[]): void => {
+  const addPendingCommit = (repo: string, sha: string): void => {
+    state.pendingCommits[commitKey(repo, sha)] ??= {
+      repo,
+      sha,
+      firstSeenAt: new Date().toISOString(),
+      missingPolls: 0,
+    };
+  };
+
+  // The row is saved as soon as its own events are out, before the CI read: a CI read that fails
+  // must not replay the comment or head event on the next poll.
+  const processRow = (ref: PrRef, current: Row, emitted: PrEvent[]): void => {
     const key = prKey(ref);
     const saved = state.rows[key];
     const targets = subscribersOfPr(key);
@@ -819,19 +817,20 @@ async function runDaemon(
       const activities = newActivity(detail, saved.updatedAt, viewerLoginCached());
       if (activities.length > 0) {
         const { kind, text } = describeActivities(activities);
-        emit({ ...base, kind, text }, targets, emitted);
+        emitted.push(emit({ ...base, kind, text }, targets));
       }
     }
     if (headMoved && !recordedHeads.has(current.headRefOid)) {
       detail ??= readPrDetail(ref);
-      emit(
-        {
-          ...base,
-          kind: "head",
-          text: `head moved to ${current.headRefOid.slice(0, 12)} by ${detail.lastCommitAuthor ?? "an unknown author"}`,
-        },
-        targets,
-        emitted,
+      emitted.push(
+        emit(
+          {
+            ...base,
+            kind: "head",
+            text: `head moved to ${current.headRefOid.slice(0, 12)} by ${detail.lastCommitAuthor ?? "an unknown author"}`,
+          },
+          targets,
+        ),
       );
     }
     if (saved && (changes.head || changes.rollup)) {
@@ -840,34 +839,37 @@ async function runDaemon(
     }
     if (current.state === "MERGED") {
       const oid = current.mergeCommitOid;
-      emit(
-        {
-          ...base,
-          kind: "merged",
-          text: oid
-            ? `merged at ${current.mergedAt ?? "an unknown time"}; mainline commit ${oid.slice(0, 12)} is now watched for CI`
-            : `merged at ${current.mergedAt ?? "an unknown time"}; no merge commit reported`,
-        },
-        targets,
-        emitted,
+      emitted.push(
+        emit(
+          {
+            ...base,
+            kind: "merged",
+            text: oid
+              ? `merged at ${current.mergedAt ?? "an unknown time"}; mainline commit ${oid.slice(0, 12)} is now watched for CI`
+              : `merged at ${current.mergedAt ?? "an unknown time"}; no merge commit reported`,
+          },
+          targets,
+        ),
       );
       if (oid) {
-        for (const sub of targets) sub.commits[oid] = { repo: ref.repo, expected };
-        state.pendingCommits[oid] ??= {
-          repo: ref.repo,
-          expected,
-          firstSeenAt: new Date().toISOString(),
-          missingPolls: 0,
-        };
+        for (const sub of targets) {
+          sub.commits[commitKey(ref.repo, oid)] = {
+            repo: ref.repo,
+            sha: oid,
+            expected: (sub.prs[key] as { expected: string[] }).expected,
+          };
+        }
+        addPendingCommit(ref.repo, oid);
       }
       dropPr(key);
       return;
     }
     if (current.state === "CLOSED") {
-      emit({ ...base, kind: "closed", text: "closed without merging" }, targets, emitted);
+      emitted.push(emit({ ...base, kind: "closed", text: "closed without merging" }, targets));
       dropPr(key);
       return;
     }
+    state.rows[key] = row;
     if (row.ciPending) {
       const settled = judgeCi(
         ref.repo,
@@ -883,34 +885,32 @@ async function runDaemon(
         row.missingPolls = 0;
       }
     }
-    state.rows[key] = row;
   };
 
-  const processCommit = (sha: string, emitted: Emitted[]): void => {
-    const pending = state.pendingCommits[sha];
+  const processCommit = (key: CommitKey, emitted: PrEvent[]): void => {
+    const pending = state.pendingCommits[key];
     if (!pending) return;
-    const targets = subscribersOfCommit(sha);
-    const expected = union([
-      pending.expected,
-      ...targets.map((sub) => (sub.commits[sha] as { expected: string[] }).expected),
-    ]);
+    const targets = subscribersOfCommit(key);
+    const expected = union(
+      targets.map((sub) => (sub.commits[key] as { expected: string[] }).expected),
+    );
     const settled = judgeCi(
       pending.repo,
-      sha,
+      pending.sha,
       expected,
-      { pr: null, url: commitUrl(pending.repo, sha) },
+      { pr: null, url: commitUrl(pending.repo, pending.sha) },
       targets,
       pending,
       emitted,
     );
     if (!settled) return;
-    for (const sub of targets) delete sub.commits[sha];
-    delete state.pendingCommits[sha];
+    for (const sub of targets) delete sub.commits[key];
+    delete state.pendingCommits[key];
   };
 
-  const deliverAll = async (emitted: Emitted[]): Promise<void> => {
-    for (const { event, targets } of emitted) {
-      for (const address of targets) {
+  const deliverAll = async (emitted: PrEvent[]): Promise<void> => {
+    for (const event of emitted) {
+      for (const address of event.to) {
         const sub = state.subscriptions[address];
         if (sub?.sink !== "socket") continue;
         const frame: InboxFrame = {
@@ -929,7 +929,7 @@ async function runDaemon(
           const code = errorCode(error) ?? errorText(error);
           state.deliveries[address] = { eventId: event.id, at, outcome: `failed: ${code}` };
           log(`delivery of #${event.id} to ${address} failed: ${code}`);
-          if (code === "ENOENT" || code === "ECONNREFUSED") {
+          if (isNobodyListening(error)) {
             delete state.subscriptions[address];
             log(`pruned socket ${address}: inbox refused`);
           }
@@ -938,18 +938,27 @@ async function runDaemon(
     }
   };
 
-  const poll = async (): Promise<number> => {
-    prune();
-    const emitted: Emitted[] = [];
-    let lastError: string | null = null;
-    const refs: PrRef[] = [];
-    for (const sub of Object.values(state.subscriptions)) {
+  const subscribedRefs = (): PrRef[] => {
+    const refs = new Map<PrKey, PrRef>();
+    for (const sub of subscribers()) {
       for (const key of Object.keys(sub.prs)) {
-        const [repo, number] = key.split("#");
-        if (!refs.some((ref) => prKey(ref) === key))
-          refs.push({ repo: repo as string, number: Number(number) });
+        const [repo, number] = key.split("#") as [string, string];
+        refs.set(key, { repo, number: Number(number) });
       }
     }
+    return [...refs.values()];
+  };
+
+  const poll = async (): Promise<number> => {
+    prune();
+    const emitted: PrEvent[] = [];
+    let lastError: string | null = null;
+    const noteGhError = (where: string, error: unknown): void => {
+      if (!(error instanceof GhError)) throw error;
+      lastError = `${where}: ${error.message}`;
+      log(`poll: ${lastError}`);
+    };
+    const refs = subscribedRefs();
     try {
       if (refs.length > 0) {
         const rows = readRows(refs);
@@ -962,53 +971,41 @@ async function runDaemon(
           try {
             processRow(ref, current, emitted);
           } catch (error) {
-            if (!(error instanceof GhError)) throw error;
-            lastError = `${prKey(ref)}: ${error.message}`;
-            log(`poll: ${lastError}`);
+            noteGhError(prKey(ref), error);
           }
         }
       }
-      for (const sha of Object.keys(state.pendingCommits)) {
+      for (const key of Object.keys(state.pendingCommits)) {
         try {
-          processCommit(sha, emitted);
+          processCommit(key, emitted);
         } catch (error) {
-          if (!(error instanceof GhError)) throw error;
-          lastError = `${sha.slice(0, 12)}: ${error.message}`;
-          log(`poll: ${lastError}`);
+          noteGhError(key, error);
         }
       }
     } catch (error) {
-      if (!(error instanceof GhError)) throw error;
-      lastError = error.message;
-      log(`poll: ${lastError}`);
+      noteGhError("rows", error);
     }
-    const everyone = Object.values(state.subscriptions);
+    const everyone = subscribers();
+    const daemonWide = { repo: "", pr: null, sha: null, url: "", kind: "trouble" as const };
     if (lastError !== null) {
       failures += 1;
       if (failures === MAX_CONSECUTIVE_POLL_FAILURES) {
         troubled = true;
-        emit(
-          {
-            repo: "",
-            pr: null,
-            sha: null,
-            kind: "trouble",
-            url: "",
-            text: `polling failed ${failures} times in a row (${lastError}); not a verdict. Auth errors in ${logPath}: run stop, then watch again`,
-          },
-          everyone,
-          emitted,
+        emitted.push(
+          emit(
+            {
+              ...daemonWide,
+              text: `polling failed ${failures} times in a row (${lastError}); not a verdict. Auth errors in ${logPath}: run stop, then watch again`,
+            },
+            everyone,
+          ),
         );
       }
     } else {
       failures = 0;
       if (troubled) {
         troubled = false;
-        emit(
-          { repo: "", pr: null, sha: null, kind: "trouble", url: "", text: "polling recovered" },
-          everyone,
-          emitted,
-        );
+        emitted.push(emit({ ...daemonWide, text: "polling recovered" }, everyone));
       }
     }
     await deliverAll(emitted);
@@ -1020,31 +1017,29 @@ async function runDaemon(
   const schedulePoll = (): void => {
     if (stopping) return;
     if (pollTimer) clearTimeout(pollTimer);
-    pollTimer = setTimeout(() => void runPoll(), intervalSeconds * 1000);
+    pollTimer = setTimeout(() => {
+      runPoll().catch((error: unknown) => log(`poll crashed: ${errorText(error)}`));
+    }, intervalSeconds * 1000);
   };
 
   const runPoll = (): Promise<number> => {
     if (polling) return polling;
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
-    polling = poll()
-      .catch((error: unknown) => {
-        log(`poll crashed: ${errorText(error)}`);
-        return 0;
-      })
-      .finally(() => {
-        polling = null;
-        schedulePoll();
-      });
+    polling = poll().finally(() => {
+      polling = null;
+      schedulePoll();
+    });
     return polling;
   };
 
-  const shutdown = async (): Promise<void> => {
+  // Synchronous on purpose: the socket is gone and the state saved before anyone is answered. A
+  // delivery still in flight finishes on its own and the process exits with it.
+  const shutdown = (): void => {
     if (stopping) return;
     stopping = true;
     if (pollTimer) clearTimeout(pollTimer);
     if (idleTimer) clearTimeout(idleTimer);
-    if (polling) await polling;
     saveState(dir, state);
     server.close();
     try {
@@ -1056,57 +1051,54 @@ async function runDaemon(
     finish(0);
   };
 
+  const subscribe = async (sink: SinkChoice, mode: Mode, target: WatchTarget): Promise<number> => {
+    const now = Date.now();
+    const sub: Subscription = state.subscriptions[sink.address] ?? {
+      sink: sink.sink,
+      address: sink.address,
+      pid: null,
+      mode,
+      leaseUntil: null,
+      prs: {},
+      commits: {},
+    };
+    sub.mode = mode;
+    sub.pid = sink.pid;
+    sub.leaseUntil = sink.sink === "file" && sink.pid === null ? leaseFrom(now) : null;
+    if (target.kind === "pr") {
+      const key = prKey(target);
+      const previous = sub.prs[key];
+      const expected = union([previous?.expected ?? [], target.expected]);
+      sub.prs[key] = { head: target.head, expected };
+      // A gate named now was not judged by a verdict already settled on this head.
+      const row = state.rows[key];
+      if (row && expected.length > (previous?.expected.length ?? 0)) row.ciPending = true;
+    } else {
+      const key = commitKey(target.repo, target.sha);
+      const previous = sub.commits[key];
+      sub.commits[key] = {
+        repo: target.repo,
+        sha: target.sha,
+        expected: union([previous?.expected ?? [], target.expected]),
+      };
+      addPendingCommit(target.repo, target.sha);
+    }
+    state.subscriptions[sink.address] = sub;
+    saveState(dir, state);
+    checkIdle();
+    log(`watch ${sink.sink} ${sink.address} (${mode}): ${describeTarget(target)}`);
+    if (polling) await polling;
+    await runPoll();
+    return subscribers().length;
+  };
+
   const dispatch = async (command: Command): Promise<Reply> => {
     switch (command.cmd) {
-      case "watch": {
-        const { sink, mode, pr, commit } = command;
-        const existing = state.subscriptions[sink.address];
-        const sub: Subscription = existing ?? {
-          sink: sink.sink,
-          address: sink.address,
-          pid: null,
-          mode,
-          leaseUntil: null,
-          prs: {},
-          commits: {},
+      case "watch":
+        return {
+          ok: true,
+          subscribers: await subscribe(command.sink, command.mode, command.target),
         };
-        sub.mode = mode;
-        sub.pid = sink.pid;
-        sub.leaseUntil =
-          sink.sink === "file" && sink.pid === null
-            ? new Date(Date.now() + LEASE_MS).toISOString()
-            : null;
-        if (pr) {
-          const key = prKey(pr);
-          const previous = sub.prs[key];
-          sub.prs[key] = {
-            head: pr.head,
-            expected: union([previous?.expected ?? [], pr.expected]),
-          };
-        }
-        if (commit) {
-          const previous = sub.commits[commit.sha];
-          sub.commits[commit.sha] = {
-            repo: commit.repo,
-            expected: union([previous?.expected ?? [], commit.expected]),
-          };
-          state.pendingCommits[commit.sha] ??= {
-            repo: commit.repo,
-            expected: commit.expected,
-            firstSeenAt: new Date().toISOString(),
-            missingPolls: 0,
-          };
-        }
-        state.subscriptions[sink.address] = sub;
-        saveState(dir, state);
-        checkIdle();
-        log(
-          `watch ${sink.sink} ${sink.address} (${mode}): ${pr ? prKey(pr) : `${commit?.repo}@${commit?.sha.slice(0, 12)}`}`,
-        );
-        if (polling) await polling;
-        await runPoll();
-        return { ok: true, subscribers: Object.keys(state.subscriptions).length };
-      }
       case "unwatch": {
         const sub = state.subscriptions[command.address];
         if (sub) {
@@ -1116,12 +1108,12 @@ async function runDaemon(
           saveState(dir, state);
           checkIdle();
         }
-        return { ok: true, subscribers: Object.keys(state.subscriptions).length };
+        return { ok: true, subscribers: subscribers().length };
       }
       case "renew": {
         const sub = state.subscriptions[command.address];
         if (sub && sub.sink === "file" && sub.pid === null) {
-          sub.leaseUntil = new Date(Date.now() + LEASE_MS).toISOString();
+          sub.leaseUntil = leaseFrom(Date.now());
           saveState(dir, state);
         }
         return { ok: true };
@@ -1131,24 +1123,10 @@ async function runDaemon(
       case "status":
         return { ok: true, status: { pid: process.pid, state } };
       case "stop":
+        shutdown();
         return { ok: true };
     }
   };
-
-  server.on("connection", (socket) => {
-    let buffer = "";
-    socket.setEncoding("utf-8");
-    socket.on("error", (error) => log(`control connection: ${errorText(error)}`));
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
-      const line = buffer.slice(0, newline);
-      buffer = "";
-      socket.removeAllListeners("data");
-      void handleLine(line, socket);
-    });
-  });
 
   const handleLine = async (line: string, socket: Socket): Promise<void> => {
     let parsed: unknown;
@@ -1172,13 +1150,26 @@ async function runDaemon(
       reply = { ok: false, error: errorText(error) };
       log(`control ${frame.cmd}: ${errorText(error)}`);
     }
-    socket.end(`${JSON.stringify(reply)}\n`, () => {
-      if (frame.cmd === "stop") void shutdown();
-    });
+    socket.end(`${JSON.stringify(reply)}\n`);
   };
 
-  process.on("SIGTERM", () => void shutdown());
-  process.on("SIGINT", () => void shutdown());
+  server.on("connection", (socket) => {
+    let buffer = "";
+    socket.setEncoding("utf-8");
+    socket.on("error", (error) => log(`control connection: ${errorText(error)}`));
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const line = buffer.slice(0, newline);
+      buffer = "";
+      socket.removeAllListeners("data");
+      void handleLine(line, socket);
+    });
+  });
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
   checkIdle();
   schedulePoll();
   return done;
@@ -1195,6 +1186,7 @@ async function cmdDaemon(dir: string, args: string[]): Promise<number> {
     usage(`--interval must be at least ${MIN_INTERVAL_SECONDS} seconds, got: ${interval}`);
   }
   const idle = parsePositiveInt(values["idle-seconds"], "--idle-seconds") ?? DEFAULT_IDLE_SECONDS;
+  requireGh();
   return runDaemon(dir, interval, idle);
 }
 
