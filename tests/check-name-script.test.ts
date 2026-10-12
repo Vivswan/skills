@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import type { Cell, Io } from "../skills/project-naming/scripts/cells.mts";
@@ -21,11 +22,7 @@ import {
   WIKTIONARY_FLAG,
 } from "../skills/project-naming/scripts/registries.mts";
 import { sayAsSpelled } from "../skills/project-naming/scripts/say.mts";
-import {
-  CRATES_PAGES,
-  oneEditApart,
-  PYPI_TOP_URL,
-} from "../skills/project-naming/scripts/typosquat.mts";
+import { oneEditApart, PYPI_TOP_URL } from "../skills/project-naming/scripts/typosquat.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
 // check-name.mts is driven through an injected fetch and resolver: every registry reply here is
@@ -47,6 +44,32 @@ const BLUESKY_FREE: Reply = { status: 400, body: { message: "Unable to resolve h
 function npmModule(names: string[]): string {
   return `export const topDownload = [\n${names.map((name) => `  '${name}'`).join(",\n")}\n]\n`;
 }
+
+/** What the sources publish and the script requires: PyPI's and npm's lists read for their top
+ * 5000, crates.io's ranking 100 a page over 20 pages. Literals, so a shrink in the script shows. */
+const TOP = 5000;
+const PAGE = 100;
+const PAGES = 20;
+
+/** A ranking as full as its source publishes: the given names at the top, filler behind them to
+ * `size`. The script reads a shorter list as cut, so every fixture list is whole unless a test
+ * cuts it on purpose. */
+function ranking(names: string[], size: number): string[] {
+  const filler = Array.from({ length: size }, (_, i) => `filler-${i}`);
+  return [...names, ...filler].slice(0, Math.max(size, names.length));
+}
+const PYPI_ROWS = (names: string[]): Reply => ({
+  status: 200,
+  body: { rows: ranking(names, TOP).map((project) => ({ project })) },
+});
+const NPM_MODULE = (names: string[]): Reply => ({
+  status: 200,
+  text: npmModule(ranking(names, TOP)),
+});
+const CRATES_PAGE = (names: string[]): Reply => ({
+  status: 200,
+  body: { crates: ranking(names, PAGE).map((name) => ({ name })) },
+});
 
 /** The shape of formulae.brew.sh's two indexes: a formula entry carries `name`, `aliases`, and
  * `oldnames`; a cask entry `token` and `old_tokens`. */
@@ -81,12 +104,9 @@ function defaultReply(url: URL): Reply {
   if (url.hostname === "search.maven.org")
     return { status: 200, body: { response: { numFound: 0 } } };
   if (url.hostname === "public.api.bsky.app") return BLUESKY_FREE;
-  if (url.hostname === "hugovk.dev")
-    return { status: 200, body: { rows: [{ project: "filler-name" }] } };
-  if (url.hostname === "cdn.jsdelivr.net") return { status: 200, text: npmModule(["filler-name"]) };
-  if (url.pathname === "/api/v1/crates") {
-    return { status: 200, body: { crates: [{ name: "filler-crate" }] } };
-  }
+  if (url.hostname === "hugovk.dev") return PYPI_ROWS([]);
+  if (url.hostname === "cdn.jsdelivr.net") return NPM_MODULE([]);
+  if (url.pathname === "/api/v1/crates") return CRATES_PAGE([]);
   if (url.hostname === "api.urbandictionary.com") return { status: 200, body: { list: [] } };
   if (url.hostname === "en.wiktionary.org") return MISSING_PAGE;
   if (url.hostname === "export.arxiv.org") {
@@ -132,13 +152,9 @@ function allTakenIo(resolving: string[]): Io {
   );
   return fakeIo((url) => {
     // The typosquat control is one letter off regex, which all three rankings carry.
-    if (url.hostname === "hugovk.dev") {
-      return { status: 200, body: { rows: [{ project: "regex" }] } };
-    }
-    if (url.hostname === "cdn.jsdelivr.net") return { status: 200, text: npmModule(["regex"]) };
-    if (url.pathname === "/api/v1/crates") {
-      return { status: 200, body: { crates: [{ name: "regex" }] } };
-    }
+    if (url.hostname === "hugovk.dev") return PYPI_ROWS(["regex"]);
+    if (url.hostname === "cdn.jsdelivr.net") return NPM_MODULE(["regex"]);
+    if (url.pathname === "/api/v1/crates") return CRATES_PAGE(["regex"]);
     // The Homebrew control is a formula in the index, not a path of its own.
     if (url.pathname === FORMULA_INDEX) return formulaIndex([{ name: "wget" }]);
     const path = decodeURIComponent(url.pathname + url.search).toLowerCase();
@@ -277,7 +293,7 @@ describe("check-name.mts cells", () => {
     for (const reply of malformed) {
       const row = await checkName(brew(reply, dockerOnly), OPTIONS, "wget");
       expect(cell(row.cells, "homebrew").status, JSON.stringify(reply.body)).toBe("unknown");
-      expect(detail(cell(row.cells, "homebrew"))).toContain("reply unreadable");
+      expect(detail(cell(row.cells, "homebrew"))).toContain("reply malformed");
     }
   });
 
@@ -701,6 +717,9 @@ describe("check-name.mts cells", () => {
       ctxword: "# {{context|en|vulgar|slang}} [[prick]]",
       // The legacy form names the language as an argument, so every unnamed one is a label.
       legacyword: "# {{context|vulgar|slang|lang=en}} [[prick]]",
+      // The oldest form names no language at all: its first argument is a label, not a code.
+      bareword: "# {{context|vulgar}} [[prick]]",
+      barecx: "# {{cx|vulgar|slang}} [[prick]]",
       // A label may be a link template; its `|` and `}}` are its own, not the label list's.
       nestedword: "# {{cx|en|{{l|en|slang}}|vulgar}} [[prick]]",
       plainword: "# {{cx|en|British|nocat=1}} [[lorry]]",
@@ -718,7 +737,15 @@ describe("check-name.mts cells", () => {
       const body = pages[url.searchParams.get("page") ?? ""];
       return body ? wikitextReply(`==English==\n===Noun===\n${body}\n`) : MISSING_PAGE;
     });
-    for (const page of ["lbword", "cxword", "ctxword", "legacyword", "nestedword"]) {
+    for (const page of [
+      "lbword",
+      "cxword",
+      "ctxword",
+      "legacyword",
+      "bareword",
+      "barecx",
+      "nestedword",
+    ]) {
       const row = await checkName(io, OPTIONS, page);
       expect(cell(row.cells, "wiktionary"), page).toEqual({
         status: "taken",
@@ -907,24 +934,11 @@ describe("check-name.mts typosquat column", () => {
 
   function sourcesIo(pypi: string[], npm: string[], crates: string[]): Io {
     return fakeIo((url) => {
-      if (url.hostname === "hugovk.dev") {
-        // A full ranking is never empty: the filler keeps the reply well-formed when a case
-        // supplies no names of its own.
-        return {
-          status: 200,
-          body: { rows: [...pypi, "filler-name"].map((project) => ({ project })) },
-        };
-      }
-      if (url.hostname === "cdn.jsdelivr.net") {
-        return { status: 200, text: npmModule([...npm, "filler-name"]) };
-      }
+      if (url.hostname === "hugovk.dev") return PYPI_ROWS(pypi);
+      if (url.hostname === "cdn.jsdelivr.net") return NPM_MODULE(npm);
       if (url.pathname === "/api/v1/crates") {
-        // The ranking is read page by page, every page non-empty; the names sit on the first.
-        const page = url.searchParams.get("page") === "1" ? crates : [];
-        return {
-          status: 200,
-          body: { crates: [...page, "filler-crate"].map((name) => ({ name })) },
-        };
+        // The ranking is read page by page, every page full; the names sit on the first.
+        return CRATES_PAGE(url.searchParams.get("page") === "1" ? crates : []);
       }
       return undefined;
     });
@@ -972,7 +986,7 @@ describe("check-name.mts typosquat column", () => {
             }
           };
           if (url.pathname === "/api/v1/crates" && url.searchParams.get("page") === "1") {
-            return slowReply(pageStatus, { crates: [{ name: "tokio" }] }, settle);
+            return slowReply(pageStatus, CRATES_PAGE(["tokio"]).body, settle);
           }
           if (url.pathname === "/api/v1/crates/tokios") return slowReply(404, {}, settle);
           const response = await base.fetch(input, init);
@@ -1004,11 +1018,11 @@ describe("check-name.mts typosquat column", () => {
     const row = await checkName(io, OPTIONS, "tokios");
     expect(cell(row.cells, "typosquat")).toEqual({
       status: "taken",
-      detail: `1 edit from tokio on claimed crates (top ${CRATES_PAGES * 100} by downloads)`,
+      detail: `1 edit from tokio on claimed crates (top 2000 by downloads)`,
     });
     expect(seen).toEqual(
       Array.from(
-        { length: CRATES_PAGES },
+        { length: PAGES },
         (_, i) => `/api/v1/crates?sort=downloads&per_page=100&page=${i + 1}`,
       ),
     );
@@ -1028,7 +1042,7 @@ describe("check-name.mts typosquat column", () => {
     const row = await checkName(io, OPTIONS, "requezts");
     expect(cell(row.cells, "typosquat")).toEqual({
       status: "taken",
-      detail: `1 edit from requests on claimed pypi (top 5000 by downloads); 1 edit from requests on claimed crates (top ${CRATES_PAGES * 100} by downloads)`,
+      detail: `1 edit from requests on claimed pypi (top 5000 by downloads); 1 edit from requests on claimed crates (top 2000 by downloads)`,
     });
     // The page reads a hit on an unclaimed registry as MINOR and one on a claimed registry as a
     // gate failure, so the cell says which: --registries names the claimed ones.
@@ -1036,7 +1050,7 @@ describe("check-name.mts typosquat column", () => {
     const partly = await checkName(io, cratesBrief, "requezts");
     expect(cell(partly.cells, "typosquat")).toEqual({
       status: "taken",
-      detail: `1 edit from requests on unclaimed pypi (top 5000 by downloads); 1 edit from requests on claimed crates (top ${CRATES_PAGES * 100} by downloads)`,
+      detail: `1 edit from requests on unclaimed pypi (top 5000 by downloads); 1 edit from requests on claimed crates (top 2000 by downloads)`,
     });
     const exact = await checkName(sourcesIo(["requests"], [], []), OPTIONS, "Requests");
     expect(cell(exact.cells, "typosquat")).toEqual({ status: "free" });
@@ -1071,7 +1085,7 @@ describe("check-name.mts typosquat column", () => {
       expect(cell(row.cells, "typosquat").status, `${host} ${JSON.stringify(reply)}`).toBe(
         "unknown",
       );
-      expect(detail(cell(row.cells, "typosquat"))).toContain("reply unreadable");
+      expect(detail(cell(row.cells, "typosquat"))).toContain("reply malformed");
       const stands = withReply(sourcesIo(["requests"], [], []), host, () => {
         const text = reply.text ?? JSON.stringify(reply.body);
         return new Response(text, { status: reply.status });
@@ -1159,7 +1173,9 @@ describe("check-name.mts typosquat column", () => {
       () => new Response(JSON.stringify({ rows: [] }), { status: 200 }),
     );
     const cachedEmpty = await checkName(emptyAgain, OPTIONS, "numpi");
-    expect(detail(cell(cachedEmpty.cells, "typosquat"))).toContain("rows is empty");
+    expect(detail(cell(cachedEmpty.cells, "typosquat"))).toContain(
+      "rows has 0 entries, expected at least 5000",
+    );
     // A malformed reply is not cached: the next process asks again.
     const broken = withReply(
       { ...sourcesIo([], [], []), cacheDir: join(scratch, "broken") },
@@ -1168,7 +1184,7 @@ describe("check-name.mts typosquat column", () => {
     );
     await checkName(broken, OPTIONS, "lumera");
     // The npm ranking, every crates ranking page, and the two Homebrew indexes.
-    expect(readdirSync(join(scratch, "broken"))).toHaveLength(1 + CRATES_PAGES + 2);
+    expect(readdirSync(join(scratch, "broken"))).toHaveLength(1 + PAGES + 2);
     // A cache directory that cannot be made (its path is a file) costs the fetch, not the cell.
     writeFileSync(join(scratch, "blocked"), "");
     const unwritable = { ...sourcesIo(["requests"], [], []), cacheDir: join(scratch, "blocked") };
@@ -1190,6 +1206,136 @@ describe("check-name.mts typosquat column", () => {
     expect(left).not.toContain("orphan.json");
     expect(left.length).toBeGreaterThan(0);
   });
+
+  test("a ranking shorter than its source publishes is a cut list, never a complete one: a crates page under its entries, or a PyPI or npm list under the top it is read for, is the cell unknown naming the source and the count, a page cached short is fetched again, and the control run reports the lane dark", async () => {
+    // With regex on every list and requests cut from PyPI's, the regez control passed on all
+    // three while requestz read free: a list is complete only at the size its source publishes.
+    const cut = (host: string, reply: Reply) =>
+      withReply(
+        sourcesIo([], [], []),
+        host,
+        () => new Response(reply.text ?? JSON.stringify(reply.body), { status: reply.status }),
+      );
+    const short = TOP - 1;
+    const cases: [string, Reply, string][] = [
+      [
+        "crates.io",
+        {
+          status: 200,
+          body: { crates: ranking([], PAGE - 1).map((name) => ({ name })) },
+        },
+        `claimed crates lookup failed (crates ranking page 1 reply malformed: page has 99 entries, expected 100)`,
+      ],
+      [
+        "hugovk.dev",
+        {
+          status: 200,
+          body: { rows: ranking(["requests"], short).map((project) => ({ project })) },
+        },
+        `claimed pypi lookup failed (top-pypi-packages reply malformed: rows has ${short} entries, expected at least 5000)`,
+      ],
+      [
+        "cdn.jsdelivr.net",
+        { status: 200, text: npmModule(ranking(["requests"], short)) },
+        `claimed npm lookup failed (npm-high-impact reply malformed: the module has ${short} entries, expected at least 5000)`,
+      ],
+    ];
+    for (const [host, reply, expected] of cases) {
+      const row = await checkName(cut(host, reply), OPTIONS, "requestz");
+      expect(cell(row.cells, "typosquat"), host).toEqual({ status: "unknown", detail: expected });
+    }
+    // A page an earlier run kept short is a miss: the fetch answers whole and the hit stands.
+    const scratch = temp.dir("check-name-short-page-");
+    const pageOne = `https://crates.io/api/v1/crates?sort=downloads&per_page=100&page=1`;
+    writeFileSync(
+      join(scratch, `${createHash("sha256").update(pageOne).digest("hex")}.json`),
+      JSON.stringify(ranking([], PAGE - 1)),
+    );
+    const refetched = await checkName(
+      { ...sourcesIo([], [], ["tokio"]), cacheDir: scratch },
+      OPTIONS,
+      "tokios",
+    );
+    expect(cell(refetched.cells, "typosquat").status).toBe("taken");
+    // The controls: PyPI and npm carry regex, so the taken row is taken on those two with the cut
+    // crates page as the failure beside them, and the random row is unknown. Both read as dark.
+    const base = allTakenIo(["nic.com"]);
+    const [, cutPage] = cases[0] as [string, Reply, string];
+    const cratesCut: Io = {
+      ...base,
+      fetch: (input, init) =>
+        new URL(input).pathname === "/api/v1/crates"
+          ? Promise.resolve(Response.json(cutPage.body))
+          : base.fetch(input, init),
+    };
+    const failures = await runControls(cratesCut, OPTIONS, RANDOM);
+    expect(failures.map((f) => [f.column, f.control, f.got.status])).toEqual([
+      ["typosquat", "regez", "taken"],
+      ["typosquat", RANDOM, "unknown"],
+    ]);
+    expect(detail((failures[0] as { got: Cell }).got)).toContain(
+      `crates ranking page 1 reply malformed: page has 99 entries, expected 100`,
+    );
+  });
+
+  test("two processes on one cold cache fetch each list once: the second waits on the first's lock file beside the entry and reads what it wrote; a lock a dead process left is broken, and one a live process holds past the request bound is left alone and worked around", async () => {
+    const scratch = temp.dir("check-name-lock-");
+    const requests: string[] = [];
+    const isRanking = (url: URL) =>
+      url.hostname === "hugovk.dev" ||
+      url.hostname === "cdn.jsdelivr.net" ||
+      url.pathname === "/api/v1/crates";
+    // A separate Io is a separate process to the cache: its own memo, the shared directory.
+    const processLike = (cacheDir: string, timeoutMs = 5_000): Io => {
+      const base = sourcesIo([], [], ["tokio"]);
+      return {
+        ...base,
+        cacheDir,
+        timeoutMs,
+        fetch: async (input, init) => {
+          const url = new URL(input);
+          if (isRanking(url)) {
+            requests.push(url.href);
+            await Bun.sleep(5);
+          }
+          return base.fetch(input, init);
+        },
+      };
+    };
+    const shared = join(scratch, "shared");
+    const rows = await Promise.all(
+      [processLike(shared), processLike(shared)].map((io) => checkName(io, OPTIONS, "tokios")),
+    );
+    expect(rows.map((row) => cell(row.cells, "typosquat").status)).toEqual(["taken", "taken"]);
+    expect(requests).toHaveLength(2 + PAGES);
+    expect(new Set(requests).size).toBe(requests.length);
+    expect(readdirSync(shared).filter((entry) => entry.endsWith(".lock"))).toEqual([]);
+
+    const pageOne = `https://crates.io/api/v1/crates?sort=downloads&per_page=100&page=1`;
+    const lockOf = (dir: string) =>
+      join(dir, `${createHash("sha256").update(pageOne).digest("hex")}.json.lock`);
+    // The holder's pid has exited and been reaped by the time spawnSync returns.
+    const orphaned = join(scratch, "orphaned");
+    mkdirSync(orphaned);
+    writeFileSync(lockOf(orphaned), `${spawnSync("true").pid}\n`);
+    requests.length = 0;
+    const afterDead = await checkName(processLike(orphaned), OPTIONS, "tokios");
+    expect(cell(afterDead.cells, "typosquat").status).toBe("taken");
+    expect(requests).toContain(pageOne);
+    expect(existsSync(lockOf(orphaned))).toBe(false);
+    // A live holder (this process) that never releases: the waiter gives it twice the request
+    // bound, then fetches for itself and leaves the lock, since a live lock is never removed.
+    const stuck = join(scratch, "stuck");
+    mkdirSync(stuck);
+    writeFileSync(lockOf(stuck), `${process.pid}\n`);
+    requests.length = 0;
+    const began = Date.now();
+    const workedAround = await checkName(processLike(stuck, 50), OPTIONS, "tokios");
+    expect(cell(workedAround.cells, "typosquat").status).toBe("taken");
+    expect(Date.now() - began).toBeGreaterThanOrEqual(90);
+    expect(requests).toContain(pageOne);
+    expect(existsSync(lockOf(stuck))).toBe(true);
+  });
 });
 
 describe("check-name.mts say column", () => {
@@ -1209,7 +1355,8 @@ describe("check-name.mts say column", () => {
       ["table", "ok(2s)"],
       ["vale", "flag(1s; two readings trailing e)"],
       ["my-name", "flag(2s; two readings trailing e)"],
-      ["al1luma", "ok(3s)"],
+      ["al1luma", "flag(4s; spoken digits 1)"],
+      ["abc123", "flag(4s; spoken digits 1,2,3)"],
       ["quokka", "flag(2s; hard q,k; doubled kk)"],
     ];
     for (const [name, expected] of cases) {
@@ -1257,7 +1404,7 @@ describe("check-name.mts controls", () => {
       ...base,
       fetch: (input, init) =>
         new URL(input).pathname === "/api/v1/crates"
-          ? Promise.resolve(Response.json({ crates: [{ name: "filler-crate" }] }))
+          ? Promise.resolve(Response.json(CRATES_PAGE([]).body))
           : base.fetch(input, init),
     };
     const failures = await runControls(cratesBlind, OPTIONS, RANDOM);

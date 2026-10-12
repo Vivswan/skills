@@ -1,6 +1,6 @@
-// One fetch per URL per process, and per day on disk when the Io names a cache directory: the
-// popular-name lists and the Homebrew indexes are the same for every name in a batch, so a batch
-// of lanes does not pull the same list twenty times.
+// One fetch per URL per process, and per day on disk when the Io names a cache directory, once
+// across the processes that share it: the popular-name lists and the Homebrew indexes are the
+// same for every name in a batch, so a batch of lanes does not pull the same list twenty times.
 
 import { createHash } from "node:crypto";
 import {
@@ -50,32 +50,143 @@ export function cached<T>(io: Io, source: CacheSource<T>): Promise<Loaded<T>> {
 }
 
 async function load<T>(io: Io, source: CacheSource<T>): Promise<Loaded<T>> {
-  const fromDisk = io.cacheDir ? readCache(io.cacheDir, source) : null;
+  const dir = io.cacheDir;
+  const fromDisk = dir ? readCache(dir, source) : null;
   if (fromDisk !== null) return { value: fromDisk };
-  let text: string;
-  try {
-    const request = async (): Promise<{ text: string } | { status: number }> => {
-      const response = await get(io, source.url, {}, source.timeoutMs ?? io.timeoutMs);
-      if (response.status === 200) return { text: await response.text() };
-      // Released, not left open: the queue behind this request waits for the body too. The status
-      // is the error whether or not the release succeeds.
-      await response.body?.cancel().catch(() => undefined);
-      return { status: response.status };
-    };
-    const reply = await (source.through ? source.through(request) : request());
-    if ("status" in reply) return { error: `HTTP ${reply.status}` };
-    text = reply.text;
-  } catch (error) {
-    return { error: String(error) };
+  const timeoutMs = source.timeoutMs ?? io.timeoutMs;
+  const fetchAndKeep = async (): Promise<Loaded<T>> => {
+    let text: string;
+    try {
+      const response = await get(io, source.url, {}, timeoutMs);
+      if (response.status !== 200) {
+        // Released, not left open: the queue behind this request waits for the body too. The
+        // status is the error whether or not the release succeeds.
+        await response.body?.cancel().catch(() => undefined);
+        return { error: `HTTP ${response.status}` };
+      }
+      text = await response.text();
+    } catch (error) {
+      return { error: String(error) };
+    }
+    let value: T;
+    try {
+      value = source.extract(text);
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      return { error: `reply malformed: ${why}` };
+    }
+    if (dir) writeCache(dir, source.url, JSON.stringify(value));
+    return { value };
+  };
+  // The holder's request ends by its timeout, so a lock still held past twice that is a holder
+  // stalled outside one (suspended, or a pid another process wears since).
+  const work = dir ? () => underLock(dir, source, 2 * timeoutMs, fetchAndKeep) : fetchAndKeep;
+  return source.through ? source.through(work) : work();
+}
+
+const LOCK_POLL_MS = 100;
+
+/** The lock files this process holds, released at exit as well as in place: a process that ends
+ * past its finally (an unhandled rejection, process.exit) would otherwise leave them for the
+ * next waiter's dead-pid rule. */
+const held = new Set<string>();
+process.on("exit", () => {
+  for (const path of held) {
+    try {
+      unlinkSync(path);
+    } catch {
+      // Released already.
+    }
   }
-  let value: T;
+});
+
+/** The holder is alive unless the file names a pid no process has. A file still empty (its
+ * creator between open and write), one that cannot be read, and a pid we may not signal all
+ * read as alive: only a lock a dead holder left is ever broken. */
+function holderAlive(path: string): boolean {
+  let content: string;
   try {
-    value = source.extract(text);
-  } catch (error) {
-    return { error: `reply unreadable: ${String(error)}` };
+    content = readFileSync(path, "utf-8");
+  } catch {
+    return true;
   }
-  if (io.cacheDir) writeCache(io.cacheDir, source.url, JSON.stringify(value));
-  return { value };
+  if (!/^[1-9][0-9]*\n$/.test(content)) return true;
+  try {
+    process.kill(Number(content), 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+type Claim = "held" | "busy" | "unavailable";
+
+/** Creates `path` with our pid in it; a file a dead holder left is removed and the create tried
+ * once more. "busy" is a live holder; "unavailable" a place that takes no file. The break is
+ * best effort: two waiters that read the same dead pid at once may both unlink and both create,
+ * which costs one duplicate request, since the cache write lands whole either way. */
+function claim(path: string): Claim {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(path, `${process.pid}\n`, { flag: "wx" });
+      held.add(path);
+      return "held";
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return "unavailable";
+    }
+    if (holderAlive(path)) return "busy";
+    try {
+      unlinkSync(path);
+    } catch {
+      // Another waiter broke it first; the create above answers for it.
+    }
+  }
+  return "busy";
+}
+
+function release(path: string): void {
+  held.delete(path);
+  try {
+    unlinkSync(path);
+  } catch {
+    // Gone already.
+  }
+}
+
+/** One process on the machine fetches a URL while the others wait for its write: the lanes run as
+ * separate processes, and without this a cold cache was the ranking's twenty pages fetched by
+ * every lane at once. The lock saves requests and guards nothing, since the write lands whole
+ * either way, so a place that takes no lock, and a holder alive past `waitMs`, both mean
+ * fetching for ourselves. */
+async function underLock<T>(
+  dir: string,
+  source: CacheSource<T>,
+  waitMs: number,
+  fetchAndKeep: () => Promise<Loaded<T>>,
+): Promise<Loaded<T>> {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    // The claim below reads the same failure as "unavailable".
+  }
+  const lock = `${cachePath(dir, source.url)}.lock`;
+  const deadline = Date.now() + waitMs;
+  let claimed = claim(lock);
+  while (claimed === "busy") {
+    const fromDisk = readCache(dir, source);
+    if (fromDisk !== null) return { value: fromDisk };
+    if (Date.now() >= deadline) break;
+    await Bun.sleep(LOCK_POLL_MS);
+    claimed = claim(lock);
+  }
+  try {
+    // The holder we waited for may have written between our last read and our claim.
+    const fromDisk = readCache(dir, source);
+    if (fromDisk !== null) return { value: fromDisk };
+    return await fetchAndKeep();
+  } finally {
+    if (claimed === "held") release(lock);
+  }
 }
 
 export function stringList(stored: unknown): string[] | null {

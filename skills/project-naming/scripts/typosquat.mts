@@ -9,8 +9,20 @@ export const RANKING_TOP = 5_000;
 
 /** crates.io publishes no ranking file, and its search is not the ranking: a search for the name
  * returns what matches the name, not the popular crate one edit away. So its crate list sorted
- * by downloads is read whole, 100 a page (the most it serves), this many pages. */
+ * by downloads is read whole, CRATES_PER_PAGE a page (the most it serves), this many pages. */
 export const CRATES_PAGES = 20;
+export const CRATES_PER_PAGE = 100;
+
+/** How many names a list holds when it is whole. A list is read for the names a typo lands on,
+ * so one cut on the way (a proxy, a page served half) would read every name past the cut as
+ * free: it is a malformed reply, and so is one cached short by an earlier build. */
+type Size = { exactly: number } | { atLeast: number };
+
+/** PyPI's list publishes 15,000 names and npm's about 16,000; each is read for its top
+ * RANKING_TOP, so one under that was cut. */
+const RANKING_FLOOR: Size = { atLeast: RANKING_TOP };
+/** The registry holds hundreds of thousands of crates, so every page the lane reads is full. */
+const CRATES_PAGE_SIZE: Size = { exactly: CRATES_PER_PAGE };
 
 /** Every request to crates.io, the per-name lookups and the ranking pages alike: its crawler
  * policy asks for one request a second and a User-Agent that says who is asking. */
@@ -66,23 +78,31 @@ async function source(
   url: string,
   basis: string,
   extract: (text: string) => string[],
-  revive: (stored: unknown) => string[] | null = stringList,
+  revive: (stored: unknown) => string[] | null,
 ): Promise<Source> {
   const loaded = await cached(io, { url, extract, revive });
   if ("error" in loaded) return { registry, error: `${label} ${loaded.error}` };
   return { registry, names: loaded.value, basis };
 }
 
-/** A full ranking with no entries is a malformed reply, not a registry with nothing popular. */
-function nonEmpty(names: string[], what: string): string[] {
-  if (names.length === 0) throw new Error(`${what} is empty`);
+function shortfall(count: number, size: Size): string | null {
+  if ("exactly" in size) {
+    return count === size.exactly ? null : `${count} entries, expected ${size.exactly}`;
+  }
+  return count >= size.atLeast ? null : `${count} entries, expected at least ${size.atLeast}`;
+}
+
+function whole(names: string[], what: string, size: Size): string[] {
+  const short = shortfall(names.length, size);
+  if (short) throw new Error(`${what} has ${short}`);
   return names;
 }
 
-/** A cached ranking an earlier build saved empty is a miss, so the ranking is fetched again. */
-function nonEmptyStringList(stored: unknown): string[] | null {
-  const list = stringList(stored);
-  return list && list.length > 0 ? list : null;
+function wholeStringList(size: Size): (stored: unknown) => string[] | null {
+  return (stored) => {
+    const list = stringList(stored);
+    return list && shortfall(list.length, size) === null ? list : null;
+  };
 }
 
 // The project publishes the ranking at hugovk.github.io, which redirects here.
@@ -96,13 +116,11 @@ const NPM_TOP_URL = "https://cdn.jsdelivr.net/npm/npm-high-impact@1/lib/top-down
 function quotedNames(moduleText: string): string[] {
   const exported = /^export const \w+ = \[([^\]]*)\]/m.exec(moduleText);
   if (!exported) throw new Error("not a module exporting one array");
-  const names = [...(exported[1] ?? "").matchAll(/'([^'\n]+)'/g)].map((match) => match[1] ?? "");
-  if (names.length === 0) throw new Error("no quoted names in the module");
-  return names;
+  return [...(exported[1] ?? "").matchAll(/'([^'\n]+)'/g)].map((match) => match[1] ?? "");
 }
 
 function cratesPage(page: number): string {
-  return `https://crates.io/api/v1/crates?sort=downloads&per_page=100&page=${page}`;
+  return `https://crates.io/api/v1/crates?sort=downloads&per_page=${CRATES_PER_PAGE}&page=${page}`;
 }
 
 /** The ranking page by page, in turn, each kept a day: a page that could not be read fails the
@@ -113,11 +131,12 @@ async function cratesRanking(io: Io): Promise<Source> {
     const loaded = await cached(io, {
       url: cratesPage(page),
       extract: (text) =>
-        nonEmpty(
+        whole(
           stringsOf(text, ["crates"], (crate) => (crate as { name?: unknown }).name),
-          "crates",
+          "page",
+          CRATES_PAGE_SIZE,
         ),
-      revive: nonEmptyStringList,
+      revive: wholeStringList(CRATES_PAGE_SIZE),
       through: (work) => cratesQueue(io.cratesGapMs, work),
     });
     if ("error" in loaded) {
@@ -125,7 +144,11 @@ async function cratesRanking(io: Io): Promise<Source> {
     }
     names.push(...loaded.value);
   }
-  return { registry: "crates", names, basis: `top ${CRATES_PAGES * 100} by downloads` };
+  return {
+    registry: "crates",
+    names,
+    basis: `top ${CRATES_PAGES * CRATES_PER_PAGE} by downloads`,
+  };
 }
 
 function sources(io: Io): Promise<Source>[] {
@@ -138,11 +161,12 @@ function sources(io: Io): Promise<Source>[] {
       PYPI_TOP_URL,
       ranking,
       (text) =>
-        nonEmpty(
+        whole(
           stringsOf(text, ["rows"], (row) => (row as { project?: unknown }).project),
           "rows",
+          RANKING_FLOOR,
         ).slice(0, RANKING_TOP),
-      nonEmptyStringList,
+      wholeStringList(RANKING_FLOOR),
     ),
     source(
       io,
@@ -150,8 +174,8 @@ function sources(io: Io): Promise<Source>[] {
       "npm-high-impact",
       NPM_TOP_URL,
       ranking,
-      (text) => quotedNames(text).slice(0, RANKING_TOP),
-      nonEmptyStringList,
+      (text) => whole(quotedNames(text), "the module", RANKING_FLOOR).slice(0, RANKING_TOP),
+      wholeStringList(RANKING_FLOOR),
     ),
     cratesRanking(io),
   ];

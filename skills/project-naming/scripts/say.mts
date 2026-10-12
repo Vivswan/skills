@@ -33,10 +33,8 @@ function twoReadings(word: string): string[] {
 }
 
 export function sayAsSpelled(name: string): Note {
-  const parts = name
-    .toLowerCase()
-    .split(/[^a-z]+/)
-    .filter((part) => part.length > 0);
+  const lower = name.toLowerCase();
+  const parts = lower.split(/[^a-z]+/).filter((part) => part.length > 0);
   const word = parts.join("");
   const reasons: string[] = [];
   const hard = [...new Set(word.match(/[xqzk]/g) ?? [])];
@@ -49,7 +47,11 @@ export function sayAsSpelled(name: string): Note {
   if (cluster.length >= 3) reasons.push(`cluster ${cluster}`);
   const readings = parts.flatMap(twoReadings);
   if (readings.length > 0) reasons.push(`two readings ${readings.join(",")}`);
-  const count = parts.reduce((sum, part) => sum + syllables(part), 0);
+  // A digit is said, not read past: abc123 ends in one, two, three. Each is a syllable at least
+  // (seven is two) and is counted as one.
+  const digits = lower.match(/[0-9]/g) ?? [];
+  if (digits.length > 0) reasons.push(`spoken digits ${digits.join(",")}`);
+  const count = parts.reduce((sum, part) => sum + syllables(part), digits.length);
   const detail = `${count}s`;
   return {
     status: "note",

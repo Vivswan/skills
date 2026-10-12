@@ -487,8 +487,8 @@ function templateText(inner: string): string {
   return unnamed[unnamed.length - 1] ?? "";
 }
 
-/** Every template replaced by its text, the innermost first, so a template around a gloss reads
- * as the gloss with the templates inside it already read. */
+/** Innermost first, so an outer template's last unnamed argument is plain text by the time it is
+ * read as the gloss. */
 function templatesAsText(text: string): string {
   let out = text;
   while (/\{\{[^{}]*\}\}/.test(out)) {
@@ -508,14 +508,20 @@ function plainGloss(line: string): string {
     .trim();
 }
 
-/** The labels the templates on one line carry: their unnamed arguments after the language, which
- * is the first unless the legacy `lang=` argument names it. A named argument is never a label. */
+/** A Wiktionary language code: `en`, `cmn`, `gem-pro`, `roa-opt`. */
+const LANGUAGE_CODE = /^[a-z]{2,3}(?:-[a-z]{2,3})*$/;
+
+/** The labels the templates on one line carry: their unnamed arguments after the language. The
+ * language is the first argument when it has a code's shape; the legacy `{{context|vulgar}}` and
+ * `{{context|vulgar|lang=en}}` forms name none there, and every unnamed argument is a label. A
+ * named argument is never a label. */
 function registerLabels(line: string): string[] {
   const labels: string[] = [];
   for (const { args } of templates(line, [...SENSE_LABEL, ...TERM_LABEL])) {
     const languageNamed = args.some((arg) => /^lang\s*=/.test(arg));
     const unnamed = args.filter((arg) => !isNamed(arg));
-    for (const label of languageNamed ? unnamed : unnamed.slice(1)) {
+    const languageFirst = !languageNamed && LANGUAGE_CODE.test(unnamed[0] ?? "");
+    for (const label of languageFirst ? unnamed.slice(1) : unnamed) {
       labels.push(templatesAsText(label).toLowerCase());
     }
   }
@@ -763,7 +769,8 @@ export const REGISTRIES: readonly RegistryEntry[] = [
     kind: "note",
     id: "say",
     gate: true,
-    label: "said as spelled: syllables, hard letters, doubled letters, clusters, two readings",
+    label:
+      "said as spelled: syllables, hard letters, doubled letters, clusters, two readings, spoken digits",
     lookup: async (_io, name) => sayAsSpelled(name),
   },
 ];

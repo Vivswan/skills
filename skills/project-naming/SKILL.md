@@ -114,7 +114,9 @@ numpi   free  free                free    free                            free  
 - The `typosquat` column is one edit (a letter added, dropped, changed, or two swapped) from a popular package. The cell names the package, the registry as `claimed` or `unclaimed` (`--registries` names the claimed ones; without it every registry is claimed), and the list it came from. The lists are kept a day under the OS temp dir in `check-name-cache`.
 - A list that could not be read is named in the same cell beside any hit (`taken(1 edit from lumeras on unclaimed pypi (...); claimed crates lookup failed (crates ranking page 1 HTTP 503))`), and is the cell when nothing hit. A hit list with a failed source is not complete: rerun before reading it as the only collision.
 - Those lists: PyPI's top 5000 by downloads (the public top-pypi-packages JSON); npm's top 5000 by downloads from the npm-high-impact dataset (npm publishes no ranking and its search is not fuzzy); crates.io's top 2000 by downloads, read from its crate list 100 a page (it publishes no ranking file, and its search returns what matches the name, not the popular crate one edit away).
-- crates.io asks automated clients for one request a second, so the script spaces its crate lookups and the ranking's twenty pages that far: a cold cache costs about twenty seconds once a day, and a 20-name batch about as long again on the `crates` column.
+- A list shorter than its source publishes is a cut list, not a shorter ranking: a crates page under its 100 entries, or a PyPI or npm list under the 5000 the column reads, fails that source the same way (`claimed crates lookup failed (crates ranking page 7 reply malformed: page has 40 entries, expected 100)`), since the names past the cut were never compared.
+- crates.io asks automated clients for one request a second. Within a process the script spaces its crate lookups and the ranking's twenty pages that far: a 20-name batch is about twenty seconds on the `crates` column, per process.
+- Across processes the ranking is fetched once a day: the first process to reach a page holds a lock file beside the cache entry while it fetches, and the others wait on it and read what it wrote, so six lanes on a cold cache are one fetch of the ranking, about twenty seconds.
 - The `say` column reads the spelling alone, so it is a `note`, never free or taken, and runs no control: `ok(<syllables>s)` or `flag(<syllables>s; <reasons>)`. The "said as spelled" row under Conditions names each reason.
 - `--json` prints the rows and the control verdicts as one object for a lane report.
 
@@ -172,7 +174,7 @@ A name fails the hard gate on any one row:
 
 | Gate | Fails when |
 | --- | --- |
-| said as spelled | the `say` column flags it: `hard x,q,z,k`; `doubled ll`; `cluster str` (three consonants together); `two readings` for ch, gh, ough, ea, a trailing e, or c and g before e, i, y |
+| said as spelled | the `say` column flags it: `hard x,q,z,k`; `doubled ll`; `cluster str` (three consonants together); `two readings` for ch, gh, ough, ea, a trailing e, or c and g before e, i, y; `spoken digits 1,2,3` (a digit is said, and counted one syllable) |
 | short | more than 3 syllables, more than about 8 letters, or more than one token |
 | free | taken on any registry the brief claims, or an exact-name repository with 20 or more stars |
 | no neighbour | an AI company, product, or ML method already uses it (web search) |
