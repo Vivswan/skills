@@ -18,6 +18,9 @@ export interface InboxFrame {
   msg_id: string;
 }
 
+// The proc mount; a test replaces it to give a live pid another start token, which nothing else can.
+const PROC_ROOT = process.env.PR_EVENTS_PROC ?? "/proc";
+
 export const FROM_NAME = "pr-events";
 export const CLOSING_LINE = "automated notice from pr-events; no reply needed";
 const ENVELOPE_END = "</cross-session-message>";
@@ -88,7 +91,7 @@ export function pidOf(socketPath: string): number | null {
  */
 export function processStart(pid: number): string | null {
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const stat = readFileSync(`${PROC_ROOT}/${pid}/stat`, "utf-8");
     // The command name sits in parentheses and may hold spaces; the fields follow the last ")".
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return fields[19] ?? null;

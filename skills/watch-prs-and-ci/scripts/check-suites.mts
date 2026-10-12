@@ -59,6 +59,12 @@ export type Run = {
   name: string;
 };
 
+/** A workflow, job, or step name as one quoted line: whitespace runs collapsed, 80 characters at most. */
+export function displayName(name: string): string {
+  const flat = name.replace(/\s+/g, " ").trim();
+  return flat.length > 80 ? `${flat.slice(0, 77)}...` : flat;
+}
+
 export type Verdict = {
   kind: "pending" | "green" | "red" | "missing" | "trouble";
   lines: string[];
@@ -183,30 +189,30 @@ export function missingWorkflows(latest: Run[], expected: string[]): string[] {
 // a vacuous green.
 export function judgeRuns(runs: Run[], expected: string[]): Verdict {
   const { latest, superseded } = partitionRuns(runs);
-  const lines = superseded.map((run) => `superseded: ${run.name} (${run.id})`);
+  const lines = superseded.map((run) => `superseded: ${displayName(run.name)} (${run.id})`);
   let red = false;
   let pending = false;
   let trouble = false;
   for (const run of latest) {
     if (run.status !== "completed") {
       pending = true;
-      lines.push(`pending(${run.status}): ${run.name} (${run.id})`);
+      lines.push(`pending(${run.status}): ${displayName(run.name)} (${run.id})`);
     } else if (run.conclusion === "success") {
-      lines.push(`pass: ${run.name} (${run.id})`);
+      lines.push(`pass: ${displayName(run.name)} (${run.id})`);
     } else if (run.conclusion === "skipped") {
-      lines.push(`skip: ${run.name} (${run.id})`);
+      lines.push(`skip: ${displayName(run.name)} (${run.id})`);
     } else if (run.conclusion === null) {
       trouble = true;
       lines.push(
-        `run ${run.id} (${run.name}) is completed but carries no conclusion (gh or GitHub trouble?)`,
+        `run ${run.id} (${displayName(run.name)}) is completed but carries no conclusion (gh or GitHub trouble?)`,
       );
     } else {
       red = true;
-      lines.push(`FAIL(${run.conclusion}): ${run.name} (${run.id})`);
+      lines.push(`FAIL(${run.conclusion}): ${displayName(run.name)} (${run.id})`);
     }
   }
   const missing = missingWorkflows(latest, expected);
-  for (const name of missing) lines.push(`no run registered for ${name}`);
+  for (const name of missing) lines.push(`no run registered for ${displayName(name)}`);
   if (latest.length === 0 && missing.length === 0) {
     return { kind: "pending", lines: [...lines, "no workflow runs registered"] };
   }

@@ -243,11 +243,12 @@ export interface LoadedState {
 }
 
 /**
- * An earlier incarnation's state and events files, renamed with its start token before the last
- * extension: `<pid>.events.<start>.jsonl`. The events path, or null when it had no log.
+ * An earlier session's state and events files, renamed with a tag before the last extension:
+ * `<pid>.events.<tag>.jsonl`. The events path, or null when it had no log. The events go first: a
+ * crash between the two leaves the old state, seen stale again at the next start, beside no
+ * events; the other order left a fresh start beside the old events, which it would have served.
  */
-function setAside(files: OwnerFiles, owner: OwnerIncarnation): string | null {
-  const tag = owner.start.replace(/[^A-Za-z0-9.]+/g, "-");
+function setAside(files: OwnerFiles, tag: string): string | null {
   const move = (path: string): string | null => {
     const target = path.replace(/(\.[^.]+)$/, `.${tag}$1`);
     try {
@@ -258,8 +259,13 @@ function setAside(files: OwnerFiles, owner: OwnerIncarnation): string | null {
       throw error;
     }
   };
+  const events = move(files.events);
   move(files.state);
-  return move(files.events);
+  return events;
+}
+
+function tagOf(start: string): string {
+  return start.replace(/[^A-Za-z0-9.]+/g, "-");
 }
 
 function readSavedState(files: OwnerFiles): State | null {
@@ -293,7 +299,8 @@ export function loadState(
   files: OwnerFiles,
   incarnation: OwnerIncarnation | null = null,
 ): LoadedState {
-  let state = readSavedState(files) ?? emptyState();
+  const saved = readSavedState(files);
+  let state = saved ?? emptyState();
   let staleOwner: OwnerIncarnation | null = null;
   let movedEvents: string | null = null;
   // A pid comes back around: targets saved by an earlier session that happened to have this pid
@@ -305,8 +312,12 @@ export function loadState(
     (state.owner.pid !== incarnation.pid || state.owner.start !== incarnation.start)
   ) {
     staleOwner = state.owner;
-    movedEvents = setAside(files, staleOwner);
+    movedEvents = setAside(files, tagOf(staleOwner.start));
     state = emptyState();
+  } else if (saved === null && readEventsSince(files, 0).length > 0) {
+    // The state is saved before its events are appended, so a log beside no state is not this
+    // daemon's: an earlier session's, left by a half-done rollover or a state file removed by hand.
+    movedEvents = setAside(files, `unknown-${Date.now()}`);
   }
   if (incarnation) state.owner = incarnation;
   const log = readEventsSince(files, 0);

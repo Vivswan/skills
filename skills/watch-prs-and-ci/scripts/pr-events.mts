@@ -9,7 +9,14 @@ import { appendFileSync, chmodSync, existsSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
-import { discoverRuns, failedJobLog, judgeRuns, type Run, selectLatest } from "./check-suites.mts";
+import {
+  discoverRuns,
+  displayName,
+  failedJobLog,
+  judgeRuns,
+  type Run,
+  selectLatest,
+} from "./check-suites.mts";
 import { AbortedRead, GhError, guardReads } from "./gh.mts";
 import {
   deliver,
@@ -150,6 +157,9 @@ function resolveOwner(
   if (values.id !== undefined) {
     if (!ID_PATTERN.test(values.id)) {
       usage(`--id must be a name of letters, digits, . _ or -, not ${values.id}`);
+    }
+    if (/^\d+$/.test(values.id)) {
+      usage("--id must not be all digits: a session's files are keyed by its pid");
     }
     return { key: values.id, inbox: null, pid };
   }
@@ -695,25 +705,38 @@ function indent(lines: string[]): string[] {
   return lines.map((line) => `  ${line}`);
 }
 
+/** The judged runs' workflow names, one per run: two workflows can share a name. */
 function workflowNames(runs: Run[]): string[] {
-  return [...new Set(selectLatest(runs).map((run) => run.name))].sort();
+  return selectLatest(runs)
+    .map((run) => run.name)
+    .sort();
 }
 
+// Workflow, job, and step names are the PR branch's own: the headline carries the count, and the
+// names, the per-run lines, and the excerpts sit in the fence.
 function describeGreen(sha: string, runs: Run[]): string {
-  return `CI green on ${sha.slice(0, 12)}: ${workflowNames(runs).join(", ")}`;
+  const names = workflowNames(runs);
+  return [
+    `CI green on ${sha.slice(0, 12)}: ${plural(names.length, "workflow")}`,
+    ...fenceQuoted(names.map((name) => `  ${displayName(name)}`)),
+  ].join("\n");
 }
 
 function describeRed(repo: string, sha: string, runs: Run[], verdictLines: string[]): string {
-  const lines = [`CI red on ${sha.slice(0, 12)}`, ...indent(verdictLines)];
+  const quoted = indent(verdictLines);
   const failed = selectLatest(runs).filter(isFailedRun);
   for (const run of failed.slice(0, MAX_LOG_EXCERPTS)) {
     const excerpt = failedJobLog(repo, run.id);
     if (excerpt === "") continue;
-    lines.push(
-      `  --- ${run.name} (${run.id}) failed-step log excerpt ---`,
-      ...fenceQuoted(indent(excerpt.split("\n"))),
+    quoted.push(
+      `  --- ${displayName(run.name)} (${run.id}) failed-step log excerpt ---`,
+      ...indent(excerpt.split("\n")),
     );
   }
+  const lines = [
+    `CI red on ${sha.slice(0, 12)}: ${plural(workflowNames(runs).length, "workflow")}`,
+    ...fenceQuoted(quoted),
+  ];
   if (failed.length > MAX_LOG_EXCERPTS) {
     lines.push(`  ${failed.length - MAX_LOG_EXCERPTS} more failed run(s) without an excerpt`);
   }
@@ -765,16 +788,21 @@ async function runDaemon(
   }
   // The owner's start token: the process start from /proc, else its inbox socket's identity; a
   // file-sink owner has neither, and its saved targets are its own.
-  const start =
+  const ownerStart = (): string | null =>
     owner.pid === null
       ? null
       : (processStart(owner.pid) ?? (owner.inbox === null ? null : inboxToken(owner.inbox)));
+  const start = ownerStart();
   const incarnation = owner.pid !== null && start !== null ? { pid: owner.pid, start } : null;
   const { state, unlogged, newestEventAt, staleOwner, movedEvents } = loadState(files, incarnation);
   if (staleOwner) {
     const where = movedEvents === null ? "" : `; its events were moved to ${movedEvents}`;
     log(
       `the saved state belonged to an earlier session with pid ${staleOwner.pid}; this session starts with no targets${where}`,
+    );
+  } else if (movedEvents !== null) {
+    log(
+      `an events log with no saved state belonged to an earlier session; it was moved to ${movedEvents}`,
     );
   }
   if (unlogged.length > 0) {
@@ -814,8 +842,17 @@ async function runDaemon(
   const watchedCount = (): number =>
     Object.keys(state.prs).length + Object.keys(state.commits).length;
 
-  const ownerGone = (): boolean => owner.pid !== null && !isProcessAlive(owner.pid);
-  guardReads(() => (ownerGone() ? `${describeOwner(owner)} exited` : null));
+  // The pid alone is not the owner: a session that exited and a process that took its pid would
+  // keep the daemon polling, and a new session with that pid would receive the old targets' events.
+  const ownerGoneReason = (): string | null => {
+    if (owner.pid === null) return null;
+    if (!isProcessAlive(owner.pid)) return `${describeOwner(owner)} exited`;
+    if (incarnation !== null && ownerStart() !== incarnation.start) {
+      return `pid ${owner.pid} now belongs to another process`;
+    }
+    return null;
+  };
+  guardReads(ownerGoneReason);
 
   // An event is numbered here and reaches the disk at the end of its poll, in the state first and
   // then the log (`commitPoll` below).
@@ -903,7 +940,7 @@ async function runDaemon(
             kind: "trouble",
             text: [
               `CI ${kind === "missing" ? "run not registered" : "read gave no verdict"} on ${sha.slice(0, 12)} after ${grace.missingPolls} polls; not a verdict`,
-              ...indent(verdict.lines),
+              ...fenceQuoted(indent(verdict.lines)),
             ].join("\n"),
           }),
         );
@@ -1261,7 +1298,8 @@ async function runDaemon(
   };
 
   const ownerTimer = setInterval(() => {
-    if (ownerGone()) void shutdown(`${describeOwner(owner)} exited`);
+    const reason = ownerGoneReason();
+    if (reason !== null) void shutdown(reason);
   }, OWNER_CHECK_MS);
 
   // The flags of a call are the complete gate set. A watch restarts a pending judgment's grace, so
