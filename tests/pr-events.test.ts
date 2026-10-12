@@ -1116,6 +1116,38 @@ describe("pr-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a PR number past the safe-integer range is a usage error, not a rounded number", () => {
+    const s = new Scenario("big-number");
+    const r = s.run(["watch", `${REPO}#9007199254740993`, ...GATE_CI], { inbox: s.socketPath() });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("PR number out of range");
+    expect(s.ghCalls()).toEqual([]);
+  });
+
+  test("a recycled session pid does not inherit the earlier session's targets: a saved state with another start token is set aside", async () => {
+    // State files are keyed by pid, and pids come back around; a new session given an exited
+    // session's pid would otherwise poll its PRs and receive its events.
+    const s = new Scenario("recycled-pid");
+    const box = await s.inbox("a");
+    writeFileSync(
+      s.file("state.json"),
+      JSON.stringify({
+        owner: { pid: process.pid, start: "an-earlier-incarnation" },
+        prs: { [PR7]: { head: null, expected: ["ci"] } },
+        lastEventId: 3,
+      }),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.log()).toContain(
+      `the saved state belonged to an earlier session with pid ${process.pid}`,
+    );
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("prs: 0");
+    s.stop({ inbox: box.path });
+    const saved = JSON.parse(readFileSync(s.file("state.json"), "utf-8"));
+    expect(saved.owner.pid).toBe(process.pid);
+    expect(saved.owner.start).not.toBe("an-earlier-incarnation");
+  }, 30000);
+
   test("a reply inside an existing thread (thread count unchanged) is a comment event with path:line; the viewer's own is not", async () => {
     const s = new Scenario("reply");
     const box = await s.inbox("a");

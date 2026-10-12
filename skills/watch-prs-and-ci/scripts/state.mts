@@ -97,7 +97,15 @@ export interface Delivery {
   outcome: string;
 }
 
+/** One incarnation of the owning session: its pid and that process's start token. */
+export interface OwnerIncarnation {
+  pid: number;
+  start: string;
+}
+
 export interface State {
+  /** The session the saved targets belong to; a recycled pid with another start token is a stranger. */
+  owner: OwnerIncarnation | null;
   prs: Record<PrKey, PrWatch>;
   commits: Record<CommitKey, CommitWatch>;
   rows: Record<PrKey, SavedRow>;
@@ -109,7 +117,15 @@ export interface State {
 }
 
 export function emptyState(): State {
-  return { prs: {}, commits: {}, rows: {}, delivery: null, lastEventId: 0, lastPoll: [] };
+  return {
+    owner: null,
+    prs: {},
+    commits: {},
+    rows: {},
+    delivery: null,
+    lastEventId: 0,
+    lastPoll: [],
+  };
 }
 
 /**
@@ -194,6 +210,8 @@ export interface LoadedState {
   unlogged: PrEvent[];
   /** When the newest event was written, the unlogged ones included. */
   newestEventAt: string | null;
+  /** The earlier session whose saved targets were set aside, when the pid was recycled. */
+  staleOwner: OwnerIncarnation | null;
 }
 
 function readSavedState(files: OwnerFiles): State | null {
@@ -218,8 +236,23 @@ function readSavedState(files: OwnerFiles): State | null {
 
 // The state is the source of the log: an id is never reused, so the counter also clears any line
 // a log left by an earlier daemon carries past the saved state.
-export function loadState(files: OwnerFiles): LoadedState {
-  const state = readSavedState(files) ?? emptyState();
+export function loadState(
+  files: OwnerFiles,
+  incarnation: OwnerIncarnation | null = null,
+): LoadedState {
+  let state = readSavedState(files) ?? emptyState();
+  let staleOwner: OwnerIncarnation | null = null;
+  // A pid comes back around: targets saved by an earlier session that happened to have this pid
+  // are not this session's. The log stays, and the counter continues from it.
+  if (
+    incarnation &&
+    state.owner &&
+    (state.owner.pid !== incarnation.pid || state.owner.start !== incarnation.start)
+  ) {
+    staleOwner = state.owner;
+    state = emptyState();
+  }
+  if (incarnation) state.owner = incarnation;
   const log = readEventsSince(files, 0);
   const logged = log.at(-1);
   const unlogged = state.lastPoll.filter((event) => event.id > (logged?.id ?? 0));
@@ -240,7 +273,7 @@ export function loadState(files: OwnerFiles): LoadedState {
   }
   const newest = unlogged.at(-1) ?? logged;
   state.lastEventId = Math.max(state.lastEventId, newest?.id ?? 0);
-  return { state, unlogged, newestEventAt: newest?.at ?? null };
+  return { state, unlogged, newestEventAt: newest?.at ?? null, staleOwner };
 }
 
 export function saveState(files: OwnerFiles, state: State): void {

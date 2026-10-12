@@ -3,6 +3,7 @@
 // the session it serves, so its frames render as plain text with no envelope and no permission hold.
 
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { basename } from "node:path";
 import { finished } from "node:stream/promises";
@@ -45,6 +46,21 @@ export async function deliver(socketPath: string, frame: InboxFrame): Promise<vo
 export function pidOf(socketPath: string): number | null {
   const match = /^(\d+)\.sock$/.exec(basename(socketPath));
   return match ? Number(match[1]) : null;
+}
+
+/**
+ * The process's start time in clock ticks since boot, from /proc; with the pid it names one
+ * incarnation, since pids are reused. Null where /proc is absent (macOS), and the pid stands alone.
+ */
+export function processStart(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    // The command name sits in parentheses and may hold spaces; the fields follow the last ")".
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[19] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** A signal 0 answered with EPERM is a process that exists. */

@@ -17,6 +17,7 @@ import {
   type InboxFrame,
   isProcessAlive,
   pidOf,
+  processStart,
   renderDigest,
 } from "./inbox.mts";
 import { type Activity, newActivity, readPrDetail, viewerLogin } from "./pr-detail.mts";
@@ -271,7 +272,9 @@ function parseTarget(target: string | undefined): PrRef {
   if (target === undefined) usage("missing <owner/repo>#<n>");
   const match = TARGET_PATTERN.exec(target);
   if (!match) usage(`target must be <owner/repo>#<n>, got: ${target}`);
-  return { repo: match[1] as string, number: Number(match[2]) };
+  const number = Number(match[2]);
+  if (!Number.isSafeInteger(number)) usage(`PR number out of range: ${match[2]}`);
+  return { repo: match[1] as string, number };
 }
 
 // A workflow name is matched exactly, commas and all; one flag carries one name, and the flags of
@@ -669,7 +672,14 @@ async function runDaemon(
     console.log(`another pr-events daemon already serves ${describeOwner(owner)}; exiting`);
     return 0;
   }
-  const { state, unlogged, newestEventAt } = loadState(files);
+  const start = owner.pid === null ? null : processStart(owner.pid);
+  const incarnation = owner.pid !== null && start !== null ? { pid: owner.pid, start } : null;
+  const { state, unlogged, newestEventAt, staleOwner } = loadState(files, incarnation);
+  if (staleOwner) {
+    log(
+      `the saved state belonged to an earlier session with pid ${staleOwner.pid}; this session starts with no targets`,
+    );
+  }
   if (unlogged.length > 0) {
     appendEvents(files, unlogged);
     log(
