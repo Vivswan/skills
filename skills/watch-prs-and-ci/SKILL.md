@@ -96,7 +96,7 @@ The texts above are the shape, and the specimen is the exact text. The shipped s
 
 ## After a Merge
 
-A watched PR needs nothing more. The `merged` event names the merge commit, and the daemon judges that commit's CI with the PR's gates, so the mainline verdict arrives as a later `ci` message.
+A watched PR needs nothing more. The `merged` event names the merge commit, and the daemon judges that commit's CI with the PR's gates, so the mainline verdict arrives as a `ci` event: in the same message as the `merged` line when a full poll found the merge and the commit's gates were already complete, in a later one otherwise.
 
 The judged SHA is the PR's merge commit on the mainline, never the topic branch's HEAD: after `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline. With a merge queue, `gh pr merge` can return on enqueue; the event waits for `mergedAt`.
 

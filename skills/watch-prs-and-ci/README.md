@@ -22,7 +22,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-prs-and-
 
 - **One daemon per session**, started once as a background task; it is the session's own child, so its messages render as plain text, and it exits when the session does.
 - **One `watch` per PR**, with the head it pushed and the complete gate set; a repeated call replaces the gates.
-- **Seven event kinds** as messages: comment, review, CI verdict with a log excerpt per failed run, head moved to a SHA the session did not record, merged, closed, and tooling trouble. A poll's events arrive in one message.
+- **Seven event kinds** as messages: comment, review, CI verdict with a log excerpt for up to three failed runs (the rest are counted), head moved to a SHA the session did not record, merged, closed, and tooling trouble. A poll's events arrive in one message.
 - **The merge commit's mainline CI** follows a merge event automatically. `watch-commit` covers a direct mainline push with no PR.
 - **A file sink** for Codex, the Copilot CLI, or a shell: a daemon named with `--id <name>` and a blocking `wait --id <name> --since <id>`.
 - **One poller per session, 60 s floor, GraphQL only**: the rate buckets behind those rules are in the skill's Polling Budget.
