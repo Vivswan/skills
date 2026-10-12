@@ -22,13 +22,14 @@ import {
 import { type Activity, newActivity, readPrDetail, viewerLogin } from "./pr-detail.mts";
 import { type PrKey, type PrRef, prKey, type Row, readRows, rowChanged } from "./pr-rows.mts";
 import {
-  appendEvent,
+  appendEvents,
   type CommitKey,
   commitKey,
   type EventInput,
   freshGrace,
   type Grace,
   loadState,
+  nextEvent,
   type Owner,
   type OwnerFiles,
   ownerFiles,
@@ -624,13 +625,36 @@ function sameSet(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((name, i) => name === b[i]);
 }
 
+/** The one target a poll judges CI for, or null for every pending target. */
+type Scope = PrKey | CommitKey | null;
+
+/** How a poll judges a target's CI: with the settling bookkeeping, for terminal verdicts only, or not at all. */
+type Judging = "settling" | "terminal" | "none";
+
+function judgingOf(scope: Scope, key: PrKey | CommitKey): Judging {
+  if (scope === null) return "settling";
+  return scope === key ? "terminal" : "none";
+}
+
 async function runDaemon(
   owner: Owner,
   files: OwnerFiles,
   intervalSeconds: number,
 ): Promise<number> {
   const log = (line: string) => appendFileSync(files.log, `${new Date().toISOString()} ${line}\n`);
-  const state = loadState(files);
+  const { state, unlogged, newestEventAt } = loadState(files);
+  if (unlogged.length > 0) {
+    appendEvents(files, unlogged);
+    log(
+      `appended #${unlogged.map((event) => event.id).join(",#")} to the log from the saved state`,
+    );
+  }
+  // Registration settles over this daemon's own polls: the startup poll can follow the last
+  // daemon's by seconds, so what that one saw counts toward no confirmation and no grace.
+  for (const row of Object.values(state.rows)) {
+    if (row.ci.pending) row.ci.grace = freshGrace();
+  }
+  for (const commit of Object.values(state.commits)) commit.grace = freshGrace();
   const server = await bindControlSocket(files.socket, log);
   if (server === null) {
     console.log(`another pr-events daemon already serves ${describeOwner(owner)}; exiting`);
@@ -662,12 +686,17 @@ async function runDaemon(
   const ownerGone = (): boolean => owner.pid !== null && !isProcessAlive(owner.pid);
   guardReads(() => (ownerGone() ? `${describeOwner(owner)} exited` : null));
 
+  // An event is numbered here and reaches the disk at the end of its poll, in the state first and
+  // then the log (`commitPoll` below).
   const emit = (input: EventInput): PrEvent => {
-    const event = appendEvent(files, state, input);
+    const event = nextEvent(state, input);
     log(`event #${event.id} ${event.kind} ${subjectOf(event)}: ${event.text.split("\n")[0]}`);
     return event;
   };
 
+  // Registration settles over full polls, an interval apart: the read a `watch` triggers judges a
+  // red or a gated green at once and leaves the grace alone, since a full poll can follow it within
+  // a second and two reads that close together would confirm a set a gate has not joined yet.
   const judgeCi = (
     repo: string,
     sha: string,
@@ -675,6 +704,7 @@ async function runDaemon(
     subject: { pr: number | null; url: string },
     grace: Grace,
     emitted: PrEvent[],
+    settling: boolean,
   ): PrEvent | null => {
     const runs = discoverRuns(repo, sha);
     const verdict = judgeRuns(runs, expected);
@@ -696,15 +726,19 @@ async function runDaemon(
     const kind = verdict.kind === "pending" && runs.length === 0 ? "missing" : verdict.kind;
     switch (kind) {
       case "pending":
-        grace.missingPolls = 0;
-        grace.registered = registered;
+        if (settling) {
+          grace.missingPolls = 0;
+          grace.registered = registered;
+        }
         return null;
       case "green": {
-        grace.missingPolls = 0;
         // Registration settles before a green is terminal: every named gate is present (a missing
-        // one ranks above green), or two reads in a row saw the same workflow set, so a workflow
-        // still registering when the first all-green read happened gets its say.
-        const confirmed = expected.length > 0 || sameSet(grace.registered, registered);
+        // one ranks above green), or two full polls in a row saw the same workflow set, so a
+        // workflow still registering when the first all-green read happened gets its say.
+        if (expected.length > 0) return settle(describeGreen(sha, runs));
+        if (!settling) return null;
+        grace.missingPolls = 0;
+        const confirmed = sameSet(grace.registered, registered);
         grace.registered = registered;
         return confirmed ? settle(describeGreen(sha, runs)) : null;
       }
@@ -714,6 +748,7 @@ async function runDaemon(
       case "trouble":
         // Noticed once, at the grace; the sha stays judged, so a run that registers late still
         // gets its verdict.
+        if (!settling) return null;
         grace.missingPolls += 1;
         grace.registered = registered;
         if (grace.missingPolls !== MISSING_GRACE_POLLS) return null;
@@ -736,9 +771,9 @@ async function runDaemon(
     delete state.rows[key];
   };
 
-  // The row is saved as soon as its own events are out, before the CI read: a CI read that fails
+  // The row is stored as soon as its own events are out, before the CI read: a CI read that fails
   // must not replay the comment or head event on the next poll.
-  const processRow = (ref: PrRef, current: Row, emitted: PrEvent[]): void => {
+  const processRow = (ref: PrRef, current: Row, emitted: PrEvent[], judging: Judging): void => {
     const key = prKey(ref);
     const watch = state.prs[key];
     if (watch === undefined) return;
@@ -784,8 +819,9 @@ async function runDaemon(
       const oid = current.mergeCommitOid;
       const mergedAt = current.mergedAt ?? "an unknown time";
       if (oid === null) {
-        // The merge commit can lag mergedAt by a poll; the target stays until it is reported.
-        row.mergeCommitPolls += 1;
+        // The merge commit can lag mergedAt by a poll; the target stays until it is reported, and
+        // only a full poll counts toward giving up, since a scoped one can follow within seconds.
+        if (judging === "settling") row.mergeCommitPolls += 1;
         if (row.mergeCommitPolls < MERGE_COMMIT_GRACE_POLLS) {
           state.rows[key] = row;
           return;
@@ -827,7 +863,7 @@ async function runDaemon(
       return;
     }
     state.rows[key] = row;
-    if (row.ci.pending) {
+    if (judging !== "none" && row.ci.pending) {
       const verdict = judgeCi(
         ref.repo,
         current.headRefOid,
@@ -835,14 +871,15 @@ async function runDaemon(
         { pr: ref.number, url: current.url },
         row.ci.grace,
         emitted,
+        judging === "settling",
       );
       if (verdict) row.ci = { pending: false };
     }
   };
 
-  const processCommit = (key: CommitKey, emitted: PrEvent[]): void => {
+  const processCommit = (key: CommitKey, emitted: PrEvent[], judging: Judging): void => {
     const watch = state.commits[key];
-    if (!watch) return;
+    if (!watch || judging === "none") return;
     const verdict = judgeCi(
       watch.repo,
       watch.sha,
@@ -850,6 +887,7 @@ async function runDaemon(
       { pr: null, url: commitUrl(watch.repo, watch.sha) },
       watch.grace,
       emitted,
+      judging === "settling",
     );
     if (verdict !== null) delete state.commits[key];
   };
@@ -857,8 +895,13 @@ async function runDaemon(
   // One message per poll, and a second's gap between messages: the receiver drops a second frame
   // from one sender within the same second.
   // The clock survives a restart: a daemon started right after the last one stopped would otherwise
-  // send its first message within a second of the previous one.
-  let lastDeliveryAt = state.delivery ? Date.parse(state.delivery.at) : 0;
+  // send its first message within a second of the previous one. The delivery is recorded as
+  // `sending` before the frame goes out, so a daemon that dies mid-send still leaves the send time;
+  // the newest event's time is the floor under that.
+  let lastDeliveryAt = Math.max(
+    state.delivery ? Date.parse(state.delivery.at) : 0,
+    newestEventAt === null ? 0 : Date.parse(newestEventAt),
+  );
   const deliverDigest = async (emitted: PrEvent[]): Promise<void> => {
     if (owner.inbox === null || emitted.length === 0) return;
     const gap = lastDeliveryAt + MIN_DELIVERY_GAP_MS - Date.now();
@@ -871,19 +914,22 @@ async function runDaemon(
       from_name: FROM_NAME,
       msg_id: `pr-events-${(emitted[0] as PrEvent).id}-${randomUUID()}`,
     };
-    const delivery = {
+    state.delivery = {
       eventIds: emitted.map((event) => event.id),
-      at: new Date().toISOString(),
+      at: new Date(lastDeliveryAt).toISOString(),
       msgId: frame.msg_id,
+      outcome: "sending",
     };
+    saveState(files, state);
     try {
       await deliver(owner.inbox, frame);
-      state.delivery = { ...delivery, outcome: "sent" };
+      state.delivery.outcome = "sent";
     } catch (error) {
       const code = errorCode(error) ?? errorText(error);
-      state.delivery = { ...delivery, outcome: `failed: ${code}` };
-      log(`delivery of #${delivery.eventIds.join(",#")} to ${owner.inbox} failed: ${code}`);
+      state.delivery.outcome = `failed: ${code}`;
+      log(`delivery of #${state.delivery.eventIds.join(",#")} to ${owner.inbox} failed: ${code}`);
     }
+    saveState(files, state);
   };
 
   const watchedRefs = (): PrRef[] =>
@@ -892,7 +938,19 @@ async function runDaemon(
       return { repo, number: Number(number) };
     });
 
-  const poll = async (): Promise<number> => {
+  // The state is saved first, the poll's events inside it, and the log appended from it; a daemon
+  // killed between the two completes the log on restart and judges nothing twice. The delivery
+  // comes last, so one killed before it leaves the events in the log for `status` and `wait`.
+  const commitPoll = (emitted: PrEvent[]): void => {
+    state.lastPoll = emitted;
+    saveState(files, state);
+    appendEvents(files, emitted);
+  };
+
+  // A scoped poll, the one a `watch` triggers, judges CI for its target alone: judged on it, the
+  // other targets' registration grace would be two reads seconds apart instead of two polls a
+  // minute apart, and a gate registering in that minute would never be read.
+  const poll = async (scope: Scope): Promise<number> => {
     const emitted: PrEvent[] = [];
     let lastError: string | null = null;
     const noteGhError = (where: string, error: unknown): void => {
@@ -915,7 +973,7 @@ async function runDaemon(
               continue;
             }
             try {
-              processRow(ref, current, emitted);
+              processRow(ref, current, emitted, judgingOf(scope, prKey(ref)));
             } catch (error) {
               noteGhError(prKey(ref), error);
             }
@@ -926,7 +984,7 @@ async function runDaemon(
       }
       for (const key of Object.keys(state.commits)) {
         try {
-          processCommit(key, emitted);
+          processCommit(key, emitted, judgingOf(scope, key));
         } catch (error) {
           noteGhError(key, error);
         }
@@ -934,30 +992,34 @@ async function runDaemon(
     } catch (error) {
       if (!(error instanceof AbortedRead)) throw error;
       log(`poll stopped: ${error.message}`);
-      saveState(files, state);
+      commitPoll(emitted);
       return emitted.length;
     }
-    const daemonWide = { repo: "", pr: null, sha: null, url: "", kind: "trouble" as const };
-    if (lastError !== null) {
-      failures += 1;
-      if (failures === MAX_CONSECUTIVE_POLL_FAILURES) {
-        troubled = true;
-        emitted.push(
-          emit({
-            ...daemonWide,
-            text: `polling failed ${failures} times in a row (${lastError}); not a verdict. Auth errors in ${files.log}: run stop, then start the daemon again`,
-          }),
-        );
-      }
-    } else {
-      failures = 0;
-      if (troubled) {
-        troubled = false;
-        emitted.push(emit({ ...daemonWide, text: "polling recovered" }));
+    // The daemon's health is judged on full polls, which read every target: a scoped poll that
+    // succeeds has not retried the read that failed, and one that fails is retried within a minute.
+    if (scope === null) {
+      const daemonWide = { repo: "", pr: null, sha: null, url: "", kind: "trouble" as const };
+      if (lastError !== null) {
+        failures += 1;
+        if (failures === MAX_CONSECUTIVE_POLL_FAILURES) {
+          troubled = true;
+          emitted.push(
+            emit({
+              ...daemonWide,
+              text: `polling failed ${failures} times in a row (${lastError}); not a verdict. Auth errors in ${files.log}: run stop, then start the daemon again`,
+            }),
+          );
+        }
+      } else {
+        failures = 0;
+        if (troubled) {
+          troubled = false;
+          emitted.push(emit({ ...daemonWide, text: "polling recovered" }));
+        }
       }
     }
+    commitPoll(emitted);
     await deliverDigest(emitted);
-    saveState(files, state);
     return emitted.length;
   };
 
@@ -969,14 +1031,20 @@ async function runDaemon(
     }, intervalSeconds * 1000);
   };
 
-  const runPoll = (): Promise<number> => {
-    if (polling) return polling;
-    if (stopping) return Promise.resolve(0);
-    if (pollTimer) clearTimeout(pollTimer);
-    pollTimer = null;
-    polling = poll().finally(() => {
+  // A poll asked for while one is in flight follows it, whatever either's scope: two watches
+  // queued behind one poll each get their own read. A scoped poll leaves the interval's clock
+  // alone, so a `watch` never postpones the other targets' next read. Null: the daemon is stopping
+  // and nothing was read.
+  const runPoll = (scope: Scope = null): Promise<number | null> => {
+    if (stopping) return Promise.resolve(null);
+    if (polling) return polling.then(() => runPoll(scope));
+    if (scope === null && pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    polling = poll(scope).finally(() => {
       polling = null;
-      schedulePoll();
+      if (scope === null) schedulePoll();
     });
     return polling;
   };
@@ -1015,8 +1083,9 @@ async function runDaemon(
   // two calls seconds apart do not spend the polls meant to be a minute apart; a settled head is
   // judged again only when the set changed, so a corrected gate name gets its verdict.
   const subscribe = async (target: WatchTarget): Promise<number> => {
+    let key: Scope;
     if (target.kind === "pr") {
-      const key = prKey(target);
+      key = prKey(target);
       const previous = state.prs[key];
       state.prs[key] = { head: target.head, expected: target.expected };
       const row = state.rows[key];
@@ -1024,7 +1093,7 @@ async function runDaemon(
         row.ci = { pending: true, grace: freshGrace() };
       }
     } else {
-      const key = commitKey(target.repo, target.sha);
+      key = commitKey(target.repo, target.sha);
       const previous = state.commits[key];
       state.commits[key] = {
         repo: target.repo,
@@ -1036,10 +1105,8 @@ async function runDaemon(
     }
     saveState(files, state);
     log(`watch ${describeTarget(target)} gates=${gates(target.expected)}`);
-    if (polling) await polling;
     // The target is saved for the next daemon; a poll for it would outlive this one's socket.
-    if (stopping) throw new Error(STOPPING_ERROR);
-    await runPoll();
+    if ((await runPoll(key)) === null) throw new Error(STOPPING_ERROR);
     return watchedCount();
   };
 
@@ -1063,7 +1130,7 @@ async function runDaemon(
         return { ok: true, watched: watchedCount() };
       }
       case "poll":
-        return { ok: true, events: await runPoll() };
+        return { ok: true, events: (await runPoll()) ?? 0 };
       case "status":
         return { ok: true, status: { pid: process.pid, state } };
       case "stop":

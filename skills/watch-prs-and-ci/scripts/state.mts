@@ -45,9 +45,10 @@ export function commitKey(repo: string, sha: string): CommitKey {
 }
 
 /**
- * What a head still being judged carries between polls: the polls in a row on which no run had
- * registered (the grace before a trouble event), and the workflow ids the last read saw (a green
- * with no gate named is terminal only once two reads agree on that set).
+ * What a head still being judged carries between full polls: the polls in a row on which no run had
+ * registered (the grace before a trouble event), and the workflow ids the last poll saw (a green
+ * with no gate named is terminal only once two polls agree on that set). The read a `watch`
+ * triggers leaves both alone.
  */
 export interface Grace {
   missingPolls: number;
@@ -81,7 +82,7 @@ export interface Delivery {
   at: string;
   /** The frame's msg_id; the receiver's status report names it. */
   msgId: string;
-  /** `sent`, `failed: <code>`, or the state the receiver reported back: held, released, denied, expired, refused, dropped. */
+  /** `sending` (saved before the frame goes out), `sent`, `failed: <code>`, or the state the receiver reported back: held, released, denied, expired, refused, dropped. */
   outcome: string;
 }
 
@@ -92,10 +93,12 @@ export interface State {
   /** The last delivery to the owner's inbox, so `status` can show how it went. */
   delivery: Delivery | null;
   lastEventId: number;
+  /** The newest poll's events, saved before they are appended to the log; a restart appends the ones the log lacks. */
+  lastPoll: PrEvent[];
 }
 
 export function emptyState(): State {
-  return { prs: {}, commits: {}, rows: {}, delivery: null, lastEventId: 0 };
+  return { prs: {}, commits: {}, rows: {}, delivery: null, lastEventId: 0, lastPoll: [] };
 }
 
 /**
@@ -174,14 +177,20 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   );
 }
 
-export function loadState(files: OwnerFiles): State {
+export interface LoadedState {
+  state: State;
+  /** The saved poll's events the log lacks: the daemon died between saving the state and appending them. */
+  unlogged: PrEvent[];
+  /** When the newest event was written, the unlogged ones included. */
+  newestEventAt: string | null;
+}
+
+function readSavedState(files: OwnerFiles): State | null {
   let text: string;
   try {
     text = readFileSync(files.state, "utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { ...emptyState(), lastEventId: lastLoggedEventId(files) };
-    }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
   let parsed: unknown;
@@ -193,10 +202,18 @@ export function loadState(files: OwnerFiles): State {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`${files.state} is not an object; move it aside to start fresh`);
   }
-  const state = { ...emptyState(), ...(parsed as Partial<State>) };
-  // The log is appended before the state is saved, so after a crash the log may be ahead of it.
-  state.lastEventId = Math.max(state.lastEventId, lastLoggedEventId(files));
-  return state;
+  return { ...emptyState(), ...(parsed as Partial<State>) };
+}
+
+// The state is the source of the log: an id is never reused, so the counter also clears any line
+// a log left by an earlier daemon carries past the saved state.
+export function loadState(files: OwnerFiles): LoadedState {
+  const state = readSavedState(files) ?? emptyState();
+  const logged = readEventsSince(files, 0).at(-1);
+  const unlogged = state.lastPoll.filter((event) => event.id > (logged?.id ?? 0));
+  const newest = unlogged.at(-1) ?? logged;
+  state.lastEventId = Math.max(state.lastEventId, newest?.id ?? 0);
+  return { state, unlogged, newestEventAt: newest?.at ?? null };
 }
 
 export function saveState(files: OwnerFiles, state: State): void {
@@ -205,14 +222,18 @@ export function saveState(files: OwnerFiles, state: State): void {
   renameSync(tmp, files.state);
 }
 
-/** Appends the event to the log and returns it with its id; the state's counter is the id's owner. */
-export function appendEvent(files: OwnerFiles, state: State, input: EventInput): PrEvent {
+/** The next event, numbered by the state's counter; `appendEvents` puts it in the log. */
+export function nextEvent(state: State, input: EventInput): PrEvent {
   state.lastEventId += 1;
-  const event: PrEvent = { id: state.lastEventId, at: new Date().toISOString(), ...input };
+  return { id: state.lastEventId, at: new Date().toISOString(), ...input };
+}
+
+export function appendEvents(files: OwnerFiles, events: PrEvent[]): void {
+  if (events.length === 0) return;
   // A crash mid-append leaves a line without its newline; the next line must not glue onto it.
   const prefix = endsWithoutNewline(files.events) ? "\n" : "";
-  appendFileSync(files.events, `${prefix}${JSON.stringify(event)}\n`, { mode: 0o600 });
-  return event;
+  const lines = events.map((event) => `${JSON.stringify(event)}\n`).join("");
+  appendFileSync(files.events, `${prefix}${lines}`, { mode: 0o600 });
 }
 
 function endsWithoutNewline(path: string): boolean {
@@ -256,9 +277,4 @@ export function readEventsSince(files: OwnerFiles, sinceId: number): PrEvent[] {
     }
   }
   return events;
-}
-
-function lastLoggedEventId(files: OwnerFiles): number {
-  const events = readEventsSince(files, 0);
-  return events.length === 0 ? 0 : (events.at(-1) as PrEvent).id;
 }

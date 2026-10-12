@@ -61,7 +61,8 @@ bun "<skill-dir>/scripts/pr-events.mts" watch <owner/repo>#<n> --head "$(git rev
 
 - **`--head <sha>`** records the head you pushed, so that head is never reported as a head move. Pass the full 40-character SHA, and run `watch --head` again after each push.
 - **`--expect-workflow <name>`** names a gate workflow: the `name:` of a workflow file under `.github/workflows/` that gates the PR. Repeat the flag per gate. The flags of one call are the complete gate set: a repeated `watch` replaces the set and restarts a pending judgment, so a mistyped name is corrected by calling again.
-- With every gate present and passed, a green is terminal at once. Without a gate, every workflow that registered a run on the head is judged, and a green is confirmed by the next poll seeing the same workflows, so a workflow still registering gets its say.
+- With every gate present and passed, a green is terminal at once. Without a gate, every workflow that registered a run on the head is judged, and a green is confirmed by two polls a minute apart seeing the same workflows, so a workflow still registering gets its say.
+- The poll a `watch` triggers reads the watched target at once: a red, or a green with every gate present, is reported from it, and the no-gate confirmation starts with the next full poll. It judges CI for that target alone, and still reads every PR's row, so the other targets' comments, head moves, and merges arrive as usual. A restart starts the confirmation over too.
 
 `watch` returns once its poll has finished, a few seconds, so a `ci` event for an already-green head can arrive before the call returns. A PR's first sighting reads what is already on it and reports none of it; only what lands afterwards is an event. Without a daemon, `watch` exits 3 and prints the exact start command.
 
@@ -111,7 +112,8 @@ start     the session runs `daemon` as a background task; the owner is the sessi
           CLAUDE_CODE_MESSAGING_SOCKET names, and every file the daemon owns is named by that session's pid
 one only  binding `<runtime-dir>/<session-pid>.sock` is the rule: a second daemon of the session finds it
           answering and exits 0; a socket file nobody answers on was left by a crash and is replaced
-poll      once a minute, and at once on `watch`; a restart with saved targets polls at once
+poll      once a minute for every target, and at once on `watch`, judging CI for the watched target
+          alone; a restart with saved targets polls at once
 stop      the session's pid gone (checked every second, and before every gh read) -> finish the poll
           in flight, save, unlink the socket, exit; `stop`, SIGTERM, SIGINT -> the same at once
 agents    `status` prints the targets with their gates, the last delivery and how it went, and the last event
@@ -135,11 +137,13 @@ The runtime directory, tried in this order. Each must be creatable as a private 
 | File | Holds |
 | --- | --- |
 | `<session-pid>.sock` | the control socket, also the daemon's `from` address, where the session reports a held or refused delivery |
-| `<session-pid>.events.jsonl` | the write-ahead log, one line per event, appended before any delivery |
-| `<session-pid>.state.json` | the targets, last-seen rows with the activity ids already seen, and the last delivery, written tmp-then-rename after every poll |
+| `<session-pid>.events.jsonl` | the write-ahead log, one line per event, appended from the saved state before a poll's delivery |
+| `<session-pid>.state.json` | the targets, last-seen rows with the activity ids already seen, the newest poll's events, and the last delivery, written tmp-then-rename before the log's lines, again as `sending` before a frame goes out, and again with how it went |
 | `<session-pid>.log` | the daemon's log; the first place to read when something is off |
 
 A file-sink daemon (below) names its files `<id>.` instead. A `gh` call is a fresh process each time, so tokens refresh under gh's control, and the daemon never exits on gh trouble: three consecutive failed polls raise one `trouble` event, and a recovery event follows.
+
+A daemon killed between saving a poll's state and appending its log lines completes the log from the state on restart, and judges none of those targets again. One killed before delivering leaves the events in the log, where `status` and `wait` read them.
 
 ## Commands
 
@@ -218,7 +222,7 @@ When a workflow's runs share a `concurrency` group key, GitHub keeps at most one
 | `watch` exits 3 naming a socket and a command | no daemon for this session | run the printed command as a background task, then `watch` again |
 | `watch` exits 2: `CLAUDE_CODE_MESSAGING_SOCKET` is unset | not a Claude Code session, or one without an inbox | a file-sink daemon with `--id`, and `wait` (above) |
 | auth errors in the daemon's log after a `gh auth` change | the session that started the daemon handed it a `GH_TOKEN` that has gone stale | `stop`, then start the daemon again |
-| a `trouble` event: the gate workflow never registered | the named `--expect-workflow` has no run on the head two polls after its CI went pending (a head move or a rollup change); bystanders may be green or still running | check the name against `.github/workflows/*.yml`, then `watch` again with the right set, or dispatch it by hand with `gh workflow run <gate workflow file> --ref <branch>`; never read the rollup as green |
+| a `trouble` event: the gate workflow never registered | the named `--expect-workflow` has no run on the head two full polls after its CI went pending (a head move or a rollup change); bystanders may be green or still running | check the name against `.github/workflows/*.yml`, then `watch` again with the right set, or dispatch it by hand with `gh workflow run <gate workflow file> --ref <branch>`; never read the rollup as green |
 | a `trouble` event: polling failed, not a verdict | three consecutive polls failed (gh, network, or GitHub); the daemon keeps polling | wait for the recovery event; read the log if it does not come |
 | a `trouble` event: no merge commit reported | GitHub reported no merge commit for the merged PR within 5 polls | read the merge commit from the PR page and `watch-commit` it |
 

@@ -28,7 +28,10 @@ next() {
 }
 serve() {
   local prefix="$1" n="$2"
-  if [ -f "\${STUB_DIR}/fail-\${prefix}" ]; then echo "gh: graphql boom" >&2; exit 1; fi
+  if [ -f "\${STUB_DIR}/fail-\${prefix}" ]; then
+    local why; why="$(cat "\${STUB_DIR}/fail-\${prefix}")"
+    echo "gh: \${why:-graphql boom}" >&2; exit 1
+  fi
   if [ -f "\${STUB_DIR}/slow-\${prefix}" ]; then sleep 2; fi
   while [ "$n" -gt 1 ] && [ ! -f "\${STUB_DIR}/\${prefix}-\${n}.json" ]; do n=$((n-1)); done
   local file="\${STUB_DIR}/\${prefix}-\${n}.json"
@@ -38,7 +41,10 @@ serve() {
 case "$1" in
   api)
     case "$*" in
-      *"checkSuites("*) serve suites "$(next suites)";;
+      *"checkSuites("*)
+        oid="$(printf '%s' "$*" | sed -n 's/.*-f oid=\\([0-9a-f]*\\).*/\\1/p')"
+        if [ -f "\${STUB_DIR}/fail-suites-\${oid}" ]; then echo "gh: HTTP 504: Gateway Timeout" >&2; exit 1; fi
+        serve suites "$(next suites)";;
       *"reviewThreads(first:"*) serve detail "$(next detail)";;
       *"query OlderComments("*) serve older "$(next older)";;
       *"pullRequest(number:"*) serve rows "$(next rows)";;
@@ -260,6 +266,8 @@ interface Inbox {
   frames: (expected: number) => Promise<string[]>;
   /** The write-ahead log's event ids as they stood when each connection arrived. */
   walAtConnect: number[][];
+  /** The saved state as it stood when each connection arrived: its last event id and its delivery record. */
+  savedAtConnect: Array<{ lastEventId: number; delivery: string | null }>;
   /** When each connection arrived, meaningful only while this process's event loop was free. */
   arrivedAt: number[];
   close: () => void;
@@ -281,6 +289,21 @@ function eventIds(walPath: string): number[] {
     .map((line) => (JSON.parse(line) as { id: number }).id);
 }
 
+function savedState(statePath: string): { lastEventId: number; delivery: string | null } {
+  const state = readOr(
+    () =>
+      JSON.parse(readFileSync(statePath, "utf-8")) as {
+        lastEventId: number;
+        delivery: { eventIds: number[]; outcome: string } | null;
+      },
+    { lastEventId: 0, delivery: null },
+  );
+  return {
+    lastEventId: state.lastEventId,
+    delivery: state.delivery && `${state.delivery.outcome} #${state.delivery.eventIds.join(",#")}`,
+  };
+}
+
 /** One JSON line to a Unix socket, the way an inbox reports a delivery's state to its sender. */
 function sendLine(socketPath: string, frame: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -295,14 +318,20 @@ function sendLine(socketPath: string, frame: unknown): Promise<void> {
  * With `reportState`, every frame received is answered to its `from` with a peer_message_status
  * frame in that state, as a session does for a held or refused delivery.
  */
-function inbox(dir: string, walPath: string, reportState?: string): Promise<Inbox> {
+function inbox(
+  dir: string,
+  files: { wal: string; state: string },
+  reportState?: string,
+): Promise<Inbox> {
   const path = join(dir, `${process.pid}.sock`);
   const connections: string[] = [];
   const walAtConnect: number[][] = [];
+  const savedAtConnect: Array<{ lastEventId: number; delivery: string | null }> = [];
   const arrivedAt: number[] = [];
   return new Promise((resolve, reject) => {
     const server: Server = createServer((socket) => {
-      walAtConnect.push(eventIds(walPath));
+      walAtConnect.push(eventIds(files.wal));
+      savedAtConnect.push(savedState(files.state));
       arrivedAt.push(Date.now());
       let bytes = "";
       socket.setEncoding("utf-8");
@@ -334,6 +363,7 @@ function inbox(dir: string, walPath: string, reportState?: string): Promise<Inbo
           return [...connections];
         },
         walAtConnect,
+        savedAtConnect,
         arrivedAt,
         close: () => server.close(),
       }),
@@ -462,7 +492,11 @@ class Scenario {
   async inbox(name: string, reportState?: string): Promise<Inbox> {
     const dir = join(this.dir, name);
     mkdirSync(dir);
-    const box = await inbox(dir, this.file("events.jsonl"), reportState);
+    const box = await inbox(
+      dir,
+      { wal: this.file("events.jsonl"), state: this.file("state.json") },
+      reportState,
+    );
     this.inboxes.push(box);
     return box;
   }
@@ -819,7 +853,9 @@ describe("pr-events.mts", () => {
     s.stop({ id: "same-name" });
   }, 30000);
 
-  test("a repeated watch restarts the missing-workflow grace: two calls seconds apart are not the two polls a minute apart", async () => {
+  test("the read a watch triggers does not count toward the missing-workflow grace: two watches seconds apart and a poll are not the two polls a minute apart", async () => {
+    // Counted, two watch reads a second apart would raise the not-registered notice before the
+    // gate had its few seconds to register.
     const s = new Scenario("regrace");
     const id = ["--id", "regrace"];
     s.fixtures({ "suites-1": suites([["bystander", "completed", "success"]]) });
@@ -828,9 +864,43 @@ describe("pr-events.mts", () => {
     expect(s.run(["watch-commit", REPO, HEAD_A, ...gate, ...id]).code).toBe(0);
     expect(s.run(["watch-commit", REPO, HEAD_A, ...gate, ...id]).code).toBe(0);
     expect(s.events("regrace")).toEqual([]);
+    expect(s.run(["poll", ...id]).stdout).toContain("0 event(s)");
     expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
     expect(s.events("regrace").map((e) => e.kind)).toEqual(["trouble"]);
     s.stop({ id: "regrace" });
+  }, 30000);
+
+  test("a restart starts the no-gate confirmation over: the startup poll agreeing with the last daemon's poll seconds earlier is not two polls a minute apart", async () => {
+    // The saved grace carried the set the last daemon saw; the startup poll a second later saw
+    // the same set and settled the commit green, and the gate registering red after that was
+    // never read.
+    const s = new Scenario("restart-grace");
+    const id = ["--id", "restart-grace"];
+    s.fixtures({
+      "suites-1": suites([["assign", "completed", "success", 1]]),
+      "suites-4": suites([
+        ["assign", "completed", "success", 1],
+        ["checks", "completed", "failure", 2],
+      ]),
+      "log-2.txt": "checks failed",
+    });
+    await s.start({ id: "restart-grace" });
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...id]).code).toBe(0);
+    expect(s.run(["poll", ...id]).stdout).toContain("0 event(s)");
+    s.stop({ id: "restart-grace" });
+    await s.start({ id: "restart-grace" });
+    // The startup poll's suites read is the third; the fake logs a call as it starts.
+    const suiteReads = () => s.ghCalls().filter((call) => call.includes("checkSuites(")).length;
+    const deadline = Date.now() + 5000;
+    while (suiteReads() < 3 && Date.now() < deadline) await Bun.sleep(20);
+    await Bun.sleep(300);
+    expect(suiteReads()).toBe(3);
+    expect(s.events("restart-grace")).toEqual([]);
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    expect(s.events("restart-grace").map((e) => e.text.split("\n")[0])).toEqual([
+      `CI red on ${SHORT_A}`,
+    ]);
+    s.stop({ id: "restart-grace" });
   }, 30000);
 
   test("a watch queued behind a poll when the stop arrives is refused instead of polling after the socket is gone", async () => {
@@ -863,6 +933,37 @@ describe("pr-events.mts", () => {
     expect(Object.keys(JSON.parse(readFileSync(s.file("state.json"), "utf-8")).commits)).toEqual([
       `${REPO}@${MERGE_C}`,
     ]);
+  }, 30000);
+
+  test("two watches queued behind one poll each get their own read before they return", async () => {
+    // Both awaited the poll in flight; the first to resume started its own, and the second was
+    // handed that poll's promise, so its watch returned ok with its target never read.
+    const s = new Scenario("queued-pair");
+    const box = await s.inbox("a");
+    s.fixtures({ "suites-1": suites([["ci", "completed", "success"]]) });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    const cli = (sha: string) =>
+      Bun.spawn([process.execPath, SCRIPT, "watch-commit", REPO, sha, ...GATE_CI], {
+        env: s.env({ inbox: box.path }),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    // B's poll waits in its delivery gap; C and D queue behind it together.
+    const b = cli(HEAD_B);
+    await Bun.sleep(200);
+    const c = cli(MERGE_C);
+    const d = cli("d".repeat(40));
+    for (const watch of [b, c, d]) expect(await watch.exited).toBe(0);
+    expect(headlines(await box.frames(4))).toHaveLength(4);
+    const judged = s
+      .ghCalls()
+      .filter((call) => call.includes("checkSuites("))
+      .map((call) => /-f oid=([0-9a-f]+)/.exec(call)?.[1])
+      .sort();
+    expect(judged).toEqual([HEAD_A, HEAD_B, MERGE_C, "d".repeat(40)]);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("commits: 0");
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a stop arriving while a signal's shutdown drains waits for that same shutdown, so it answers once the socket is gone", async () => {
@@ -1187,6 +1288,32 @@ describe("pr-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("the polls a merged row waits for its merge commit are full polls: five watches of another target within seconds do not give it up", async () => {
+    // Counted on every poll, five scoped reads in a few seconds dropped the merged PR with the
+    // trouble notice, and the merge commit GitHub reported right after was never watched.
+    const s = new Scenario("merge-oid-scoped");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({ rollup: "SUCCESS" }),
+      "suites-1": suites([["ci", "completed", "success"]]),
+      "rows-2": rows({ state: "MERGED", mergedAt: T2, rollup: "SUCCESS" }),
+      "suites-2": suites([["ci", "queued", null]]),
+      "rows-7": rows({ state: "MERGED", mergedAt: T2, mergeCommit: MERGE_C, rollup: "SUCCESS" }),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    for (let watch = 0; watch < 5; watch += 1) {
+      expect(s.run(["watch-commit", REPO, HEAD_B, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    }
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("prs: 1");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))).toEqual([
+      GREEN_A,
+      `PR ${PR7}: merged at ${T2}; mainline commit ${SHORT_C} is now watched for CI`,
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a merged row whose merge commit never comes is given up after 5 polls with a trouble notice, not silently", async () => {
     const s = new Scenario("merge-oid-never");
     const box = await s.inbox("a");
@@ -1214,16 +1341,17 @@ describe("pr-events.mts", () => {
   test("the same sha watched in two repositories is judged in each", async () => {
     const s = new Scenario("fork");
     const id = ["--id", "codex"];
-    // Each watch polls at once, and a poll judges every watched commit: suites calls 1 to 3 belong
-    // to the two watches, 4 and 5 to the explicit poll.
+    // Each watch reads its own target at once, and each poll judges both: suites calls 1 and 2
+    // belong to the two watches, 3 and 4 to the first poll, 5 and 6 to the second.
     s.fixtures({
       "suites-1": suites([["ci", "queued", null]]),
-      "suites-4": suites([["ci", "completed", "success"]]),
+      "suites-3": suites([["ci", "completed", "success"]]),
     });
     await s.start({ id: "codex" });
     for (const repo of [REPO, FORK]) {
       expect(s.run(["watch-commit", repo, HEAD_A, ...id]).code).toBe(0);
     }
+    expect(s.run(["poll", ...id]).stdout).toContain("0 event(s)");
     expect(s.run(["poll", ...id]).stdout).toContain("2 event(s)");
     expect(s.events("codex").map((e) => [e.repo, e.sha])).toEqual([
       [REPO, HEAD_A],
@@ -1233,9 +1361,46 @@ describe("pr-events.mts", () => {
       .ghCalls()
       .filter((call) => call.includes("checkSuites("))
       .map((call) => /-f name=(\S+)/.exec(call)?.[1]);
-    expect(repos).toEqual(["example", "example", "fork", "example", "fork"]);
+    expect(repos).toEqual(["example", "fork", "example", "fork", "example", "fork"]);
     expect(s.run(["status", ...id]).stdout).toContain("commits: 0");
     s.stop({ id: "codex" });
+  }, 30000);
+
+  test("a watch judges its own target alone: the first target's green is not confirmed by the second's watch seconds later, and its gate registering red in the minute is reported", async () => {
+    // The first read of A sees one quick housekeeping run; a watch of B seconds later re-read A
+    // and, finding the same set, settled A green before `checks` had registered. The red that
+    // followed was never read.
+    const s = new Scenario("scoped-watch");
+    const id = ["--id", "scoped"];
+    s.fixtures({
+      "suites-1": suites([["assign", "completed", "success", 1]]),
+      "suites-3": suites([
+        ["assign", "completed", "success", 1],
+        ["checks", "completed", "failure", 2],
+      ]),
+      "suites-4": suites([["assign", "completed", "success", 1]]),
+      "log-2.txt": "checks failed",
+    });
+    await s.start({ id: "scoped" });
+    expect(s.run(["watch-commit", REPO, HEAD_A, ...id]).code).toBe(0);
+    expect(s.run(["watch-commit", REPO, HEAD_B, ...id]).code).toBe(0);
+    expect(s.events("scoped")).toEqual([]);
+    expect(s.run(["status", ...id]).stdout).toContain("commits: 2");
+    const judged = () =>
+      s
+        .ghCalls()
+        .filter((call) => call.includes("checkSuites("))
+        .map((call) => /-f oid=([0-9a-f]+)/.exec(call)?.[1]);
+    expect(judged()).toEqual([HEAD_A, HEAD_B]);
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    expect(s.run(["status", ...id]).stdout).toContain("commits: 1");
+    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    expect(s.events("scoped").map((e) => [e.sha, e.text.split("\n")[0]])).toEqual([
+      [HEAD_A, `CI red on ${SHORT_A}`],
+      [HEAD_B, `CI green on ${HEAD_B.slice(0, 12)}: assign`],
+    ]);
+    expect(s.run(["status", ...id]).stdout).toContain("commits: 0");
+    s.stop({ id: "scoped" });
   }, 30000);
 
   test("a red CI event carries the --log-failed tail, and no other Actions endpoint is touched", async () => {
@@ -1286,6 +1451,7 @@ describe("pr-events.mts", () => {
       `PR ${PR7}: CI green on ${SHORT_A}: bystander`,
     ]);
     expect(s.run(["watch", PR7, "--expect-workflow", "gaet"], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     const frames = await box.frames(2);
     const content = parseFrame(frames[1] as string).message.content;
@@ -1337,7 +1503,7 @@ describe("pr-events.mts", () => {
       "suites-2": suites([]),
       "rows-3": rows({ state: "MERGED", mergedAt: T2, mergeCommit: MERGE_C, rollup: "SUCCESS" }),
       "suites-3": suites([["pr-gate", "completed", "success", 300]]),
-      "suites-4": suites([
+      "suites-5": suites([
         ["pr-gate", "completed", "success", 300],
         ["main-gate", "completed", "success", 301],
       ]),
@@ -1347,8 +1513,9 @@ describe("pr-events.mts", () => {
     expect(
       s.run(["watch-commit", REPO, MERGE_C, "--expect-workflow", "main-gate", ...id]).code,
     ).toBe(0);
-    expect(s.run(["poll", ...id]).stdout).toContain("2 event(s)");
-    expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    for (let poll = 0; poll < 3; poll += 1) {
+      expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
+    }
     const events = s.events("a");
     expect(events.map((e) => e.kind)).toEqual(["ci", "merged", "trouble", "ci"]);
     expect(events[2]?.text).toContain("no run registered for main-gate");
@@ -1358,21 +1525,23 @@ describe("pr-events.mts", () => {
     s.stop({ id: "a" });
   }, 30000);
 
-  test("with no gate named, a first all-green read is not a verdict: a workflow registering red on the next read is reported, and an unchanged set is confirmed green", async () => {
-    // Poll 1 sees only a quick housekeeping run; the gate registers afterwards. Settled on poll 1,
-    // the red gate would never be reported.
-    const cases: Array<[string, RunSpec[], string]> = [
+  test("with no gate named, a first all-green read is not a verdict: a workflow registering red on the next poll is reported, and a set unchanged over two polls is confirmed green", async () => {
+    // The watch's read sees only a quick housekeeping run; the gate registers afterwards. Settled
+    // on that read, or on the first poll agreeing with it a second later, the red gate would never
+    // be reported.
+    const cases: Array<[string, RunSpec[], number, string]> = [
       [
         "late-red",
         [
           ["assign", "completed", "success", 1],
           ["gate", "completed", "failure", 2],
         ],
+        0,
         `CI red on ${SHORT_A}`,
       ],
-      ["confirmed", [["assign", "completed", "success", 1]], `CI green on ${SHORT_A}: assign`],
+      ["confirmed", [["assign", "completed", "success", 1]], 1, `CI green on ${SHORT_A}: assign`],
     ];
-    for (const [name, second, expected] of cases) {
+    for (const [name, second, quietPolls, expected] of cases) {
       const s = new Scenario(`register-${name}`);
       const id = ["--id", name];
       s.fixtures({
@@ -1383,6 +1552,9 @@ describe("pr-events.mts", () => {
       await s.start({ id: name });
       expect(s.run(["watch-commit", REPO, HEAD_A, ...id]).code).toBe(0);
       expect(s.events(name)).toEqual([]);
+      for (let poll = 0; poll < quietPolls; poll += 1) {
+        expect(s.run(["poll", ...id]).stdout).toContain("0 event(s)");
+      }
       expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
       expect(s.events(name).map((e) => e.text.split("\n")[0])).toEqual([expected]);
       expect(s.run(["status", ...id]).stdout).toContain("commits: 0");
@@ -1394,16 +1566,17 @@ describe("pr-events.mts", () => {
     const s = new Scenario("rows-down");
     const id = ["--id", "a"];
     s.fixtures({
-      // Suites calls 1 to 3 belong to the two watches (the PR twice, the commit once); with the
-      // rows read failing, the explicit poll's only suites call, the fourth, is the commit's.
+      // Suites calls 1 and 2 belong to the two watches (the PR, then the commit); with the rows
+      // read failing, each poll's only suites call is the commit's: green at call 3, confirmed at 4.
       "rows-1": rows({ rollup: "PENDING" }),
       "suites-1": suites([["ci", "queued", null]]),
-      "suites-4": suites([["ci", "completed", "success"]]),
+      "suites-3": suites([["ci", "completed", "success"]]),
     });
     await s.start({ id: "a" });
     expect(s.run(["watch", PR7, ...id]).code).toBe(0);
     expect(s.run(["watch-commit", REPO, MERGE_C, ...id]).code).toBe(0);
     writeFileSync(join(s.stubDir, "fail-rows"), "");
+    expect(s.run(["poll", ...id]).stdout).toContain("0 event(s)");
     expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");
     expect(s.events("a").map((e) => [e.kind, e.sha])).toEqual([["ci", MERGE_C]]);
     s.stop({ id: "a" });
@@ -1462,7 +1635,10 @@ describe("pr-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("the WAL line exists when delivery is attempted; a refusing inbox leaves it logged and status shows the failure", async () => {
+  test("the log line, the state that says it is out, and the send time are on disk when the delivery arrives; a refusing inbox leaves the line logged and status shows the failure", async () => {
+    // Saved after the delivery, the state of a daemon killed in between still held the target
+    // pending and no send time: the restart judged and delivered the same verdict again, within
+    // a millisecond of the first frame.
     const live = new Scenario("wal-first");
     const box = await live.inbox("a");
     live.fixtures({
@@ -1480,6 +1656,11 @@ describe("pr-events.mts", () => {
     expect(await watch.exited).toBe(0);
     expect(await box.frames(1)).toHaveLength(1);
     expect(box.walAtConnect).toEqual([[1]]);
+    // The daemon saves `sent` as soon as its write is flushed, which can precede this process's
+    // accept callback; either record proves the send time was saved before the frame.
+    expect(box.savedAtConnect).toHaveLength(1);
+    expect(box.savedAtConnect[0]?.lastEventId).toBe(1);
+    expect(box.savedAtConnect[0]?.delivery).toMatch(/^(sending|sent) #1$/);
     expect(live.run(["status"], { inbox: box.path }).stdout).toContain("delivery: sent (#1 at ");
     live.stop({ inbox: box.path });
 
@@ -1498,6 +1679,55 @@ describe("pr-events.mts", () => {
       "delivery: failed: ECONNREFUSED (#1 at ",
     );
     refused.stop({ inbox: dead });
+  }, 30000);
+
+  test("a poll's events the log lacks are appended on restart from the saved state, and the target they settled is not judged or delivered again", async () => {
+    // The state is saved before the log is appended. A daemon killed between the two left the
+    // verdict in neither, under the old order, or in the log alone; either way the restart judged
+    // the settled target again and sent its green a second time.
+    const s = new Scenario("unlogged");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "suites-1": suites([["ci", "queued", null]]),
+      "suites-3": suites([["ci", "completed", "success"]]),
+      "suites-4": suites([["ci", "queued", null]]),
+      "suites-5": suites([["ci", "completed", "success"]]),
+    });
+    await s.start({ inbox: box.path });
+    for (const sha of [HEAD_A, HEAD_B]) {
+      expect(s.run(["watch-commit", REPO, sha, ...GATE_CI], { inbox: box.path }).code).toBe(0);
+    }
+    // Spawned asynchronously, so the fake inbox stamps the arrival as it happens.
+    const poll = Bun.spawn([process.execPath, SCRIPT, "poll"], {
+      env: s.env({ inbox: box.path }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await poll.exited).toBe(0);
+    expect(await new Response(poll.stdout).text()).toContain("1 event(s)");
+    expect(await box.frames(1)).toHaveLength(1);
+    s.stop({ inbox: box.path });
+    expect(s.events().map((e) => [e.id, e.sha])).toEqual([[1, HEAD_A]]);
+    unlinkSync(s.file("events.jsonl"));
+    await s.start({ inbox: box.path });
+    expect(headlines(await box.frames(2))).toEqual([
+      `commit ${REPO}@${SHORT_A}: CI green on ${SHORT_A}: ci`,
+      `commit ${REPO}@${HEAD_B.slice(0, 12)}: CI green on ${HEAD_B.slice(0, 12)}: ci`,
+    ]);
+    const [first, second] = box.arrivedAt as [number, number];
+    expect(second - first).toBeGreaterThanOrEqual(1000);
+    expect(s.events().map((e) => [e.id, e.sha])).toEqual([
+      [1, HEAD_A],
+      [2, HEAD_B],
+    ]);
+    const judged = s
+      .ghCalls()
+      .filter((call) => call.includes("checkSuites("))
+      .map((call) => /-f oid=([0-9a-f]+)/.exec(call)?.[1]);
+    expect(judged).toEqual([HEAD_A, HEAD_B, HEAD_A, HEAD_B, HEAD_B]);
+    expect(s.log()).toContain("appended #1 to the log from the saved state");
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("commits: 0");
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("a WAL tail cut mid-line does not swallow the next event appended", async () => {
