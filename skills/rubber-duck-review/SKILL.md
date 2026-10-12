@@ -111,6 +111,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
     - The copy is removed when the reviewer exits, its own directory modes repaired first where they refuse (what still refuses is reported as `not removed` in `review.err`), and the report and the launch record carry `sandbox: "copy"`. A stderr line names the refusal and the copy's path.
     - The reviewer runs under a scratch `CODEX_HOME` holding copies of the user's `config.toml` and `auth.json`. codex marks the directory it launches in as a trusted project by writing to its config, and a copy has a fresh path every review, so that write lands in the scratch home and dies with it.
     - The user's own config is never written. A token refresh codex writes into the scratch `auth.json` does go back to the user's file, since codex expects it to persist.
+    - The scratch home's `sessions` directory is a link to the user's own, so the review's transcript (codex's session rollout) lands in the user's home as in a read-only launch and survives the cleanup.
     - Outside a git repository there is nothing to snapshot: exit 2. Any other probe failure (a codex too old for the subcommand) keeps the read-only launch.
   - `claude`: runs `claude -p --permission-mode plan --verbose --output-format stream-json --json-schema <schema>` (`--verbose` is required with `stream-json`).
   - `copilot`: runs `copilot -p <prompt> -s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps`. Last-resort fallback, so prefer codex/claude. Its limits:
@@ -159,7 +160,8 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
     - 1: review failed or `--wait timed out` (relaunch).
     - 2: wrong reviewer or file, or no launch record beside the output file.
 - `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>` without `--wait` reads a finished run once: it exits 1 (`no exit status recorded`) while the reviewer is still running instead of blocking.
-- Every run that reached the reviewer keeps its scratch dir for 24 hours (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). The script snapshots your prompt into that dir, so all review artifacts travel and clean up together.
+- Every run that reached the reviewer keeps its scratch dir for 24 hours (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). The script snapshots your prompt into that dir, so everything the launcher writes travels and cleans up together.
+  - The reviewer's own transcript is codex's, kept in its home, in every launch mode.
   - `prepare` and each launch first remove sibling `rubber-duck-*` directories older than 24 hours, by age alone, so the prompt directory you minted lives the same 24 hours. A younger one is another session's live review and is left alone, a symlink is never followed, and a purge that fails is reported on stderr and never fails the review.
   - To clear your own two directories sooner, remove exactly those two, never a glob over the shared temp dir. A sweep of `rubber-duck-*` there kills other sessions' in-flight reviews.
   - A session that wants a sweepable space sets its own `TMPDIR` to a directory it created before launching. `prepare` and the launch both honor it.
