@@ -1,6 +1,6 @@
 # The Architecture Page
 
-The page kind with the most to rot: one layering declaration, two readers, one page whose every box names real code. The declaration cannot rot because a lint fails in both directions. The page cannot rot because a test checks every path, symbol, and demonstration link it names.
+The page kind with the most to rot: one layering declaration, the lint and the renderer that read it, one page whose every box names real code. The declaration cannot rot because a lint fails in both directions. The page cannot rot because a test checks every path, symbol, and demonstration link it names.
 
 ## The specimen
 
@@ -52,6 +52,8 @@ The page header says what the checks prove: existence only. A caption-only box (
 ## The recipe
 
 The three commands ship with the `/working-text` skill under `scripts/architecture/`, beside the readers they share. Copy that folder and `package.json` into a folder of the repository's own, so its check command runs without the skill installed; `<scripts-dir>` below is the copied `scripts/architecture/`.
+
+The output prefixes keep the old command names: `arch-lint:`, `render-architecture-map:`, `check-architecture-page:`.
 
 ```bash
 mkdir -p <tools-dir>/working-text/scripts
@@ -137,7 +139,7 @@ Repositories that already have a bun test suite can import the same functions in
 
 ### 5. Wire the gates
 
-Both readers and the page check run inside the repository's check command and, where the repository publishes a docs site, the page is part of it. The entries, shown for a `package.json`:
+The lint, the renderer, and the page check run inside the repository's check command and, where the repository publishes a docs site, the page is part of it. The entries, shown for a `package.json`:
 
 ```json
 {
