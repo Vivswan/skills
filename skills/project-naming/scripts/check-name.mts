@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-// One row per candidate name, one column per entry in registries.mts: is it free there, does any
-// language already own the word, does slang, is it one typo from a popular package, and can it be
-// said as spelled? A registry cell is `free`, `taken(<why>)`, or `unknown(<why>)`, and a lookup
+// One row per candidate name, one column per entry in registries/table.mts: is it free there, does
+// any language already own the word, does slang, is it one typo from a popular package, and can it
+// be said as spelled? A registry cell is `free`, `taken(<why>)`, or `unknown(<why>)`, and a lookup
 // that failed never reads as free; the say column is a `note(<reading>)`. Two controls run with
 // every batch: per registry column, a name known to be taken there, and one random string that
 // must be free everywhere. A column that answers either control wrongly is reported as a failed
@@ -19,7 +19,15 @@ import { join } from "node:path";
 import { domainToASCII } from "node:url";
 import { parseArgs } from "node:util";
 import { type Cell, type Claimed, type Io, renderCell, unknown } from "./cells.mts";
-import { type Column, REGISTRIES, type RegistryEntry } from "./registries.mts";
+import {
+  ARXIV_GAP_MS,
+  type Column,
+  CRATES_GAP_MS,
+  GITHUB_SEARCH_GAP_ANONYMOUS_MS,
+  GITHUB_SEARCH_GAP_MS,
+  REGISTRIES,
+  type RegistryEntry,
+} from "./registries/table.mts";
 
 const USAGE =
   "usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--no-arxiv] [--json] <name>...\n" +
@@ -28,12 +36,6 @@ const USAGE =
 export type Row = { name: string; cells: Record<string, Cell> };
 
 export const REQUEST_TIMEOUT_MS = 20_000;
-export const ARXIV_GAP_MS = 3_000;
-/** GitHub's search limit is 30 a minute with a token and 10 without. */
-export const GITHUB_SEARCH_GAP_MS = 2_000;
-export const GITHUB_SEARCH_GAP_ANONYMOUS_MS = 6_000;
-/** crates.io's crawler policy: one request a second. */
-export const CRATES_GAP_MS = 1_000;
 
 export type Options = {
   table: readonly RegistryEntry[];
