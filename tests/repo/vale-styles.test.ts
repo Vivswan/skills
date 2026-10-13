@@ -1,3 +1,4 @@
+// reaches: skills/**/*.yml xeno/**/*.yml skills/natural-writing/references/words-to-avoid.md
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
