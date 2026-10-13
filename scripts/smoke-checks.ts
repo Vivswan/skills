@@ -8,6 +8,8 @@
 
 import { isBuiltin } from "node:module";
 import { posix } from "node:path";
+import { parse } from "@babel/parser";
+import { traverseFast } from "@babel/types";
 import type { Frontmatter } from "./lib";
 import { errorMessage, fail, isRecord, KEBAB_CASE } from "./lib";
 
@@ -225,14 +227,55 @@ interface RuntimeImport {
   readonly path: string;
   /** A static ESM import, hoisted above every statement; `await import()` and `require()` run where they stand. */
   readonly hoisted: boolean;
+  /** Offset of an in-place load in the type-erased text, or -1 for a hoisted import or one not found there. */
+  readonly position: number;
 }
 
 interface RuntimeImports {
   readonly packages: readonly RuntimeImport[];
   readonly relatives: readonly RuntimeImport[];
+  /** Offset of `function ensureBuilt` in the type-erased text, or -1 without a block. */
+  readonly blockAt: number;
 }
 
-/** The package and relative specifiers a script loads at runtime. */
+interface LoadSites {
+  /** Each literal specifier's `import("x")` and `require("x")` offsets, in source order. */
+  readonly loads: ReadonlyMap<string, number[]>;
+  readonly blockAt: number;
+}
+
+// Positions come from an AST of the erased text, never from searching it: a string or comment that spells
+// `import("x")` or `function ensureBuilt(` is text there, and `import("x", { with: ... })` is still a load.
+function loadSites(runtime: string, displayPath: string): LoadSites {
+  let program: ReturnType<typeof parse>;
+  try {
+    program = parse(runtime, {
+      sourceType: "module",
+      allowReturnOutsideFunction: true,
+      allowUndeclaredExports: true,
+    });
+  } catch (error) {
+    fail(`${displayPath}: the type-erased text does not parse (${errorMessage(error)})`);
+  }
+  const loads = new Map<string, number[]>();
+  let blockAt = -1;
+  traverseFast(program, (node) => {
+    let request: string | undefined;
+    if (node.type === "ImportExpression" && node.source.type === "StringLiteral") {
+      request = node.source.value;
+    } else if (node.type === "CallExpression" && node.callee.type === "Identifier") {
+      const [first] = node.arguments;
+      if (node.callee.name === "require" && first?.type === "StringLiteral") request = first.value;
+    } else if (node.type === "FunctionDeclaration" && node.id?.name === "ensureBuilt") {
+      if (blockAt === -1) blockAt = node.start ?? -1;
+    }
+    if (request !== undefined)
+      loads.set(request, [...(loads.get(request) ?? []), node.start ?? -1]);
+  });
+  return { loads, blockAt };
+}
+
+/** The package and relative specifiers a script loads at runtime, each with where its load stands. */
 function runtimeImports(script: SkillScript): RuntimeImports {
   const transpiler = /\.[jt]sx$/.test(script.path) ? TRANSPILERS.tsx : TRANSPILERS.ts;
   let runtime: string;
@@ -241,14 +284,18 @@ function runtimeImports(script: SkillScript): RuntimeImports {
   } catch (error) {
     fail(`${script.path}: does not parse: ${errorMessage(error)}`);
   }
+  const sites = loadSites(runtime, script.path);
   const packages: RuntimeImport[] = [];
   const relatives: RuntimeImport[] = [];
+  // scanImports lists loads in source order, so the n-th in-place load of a specifier is its n-th site.
   for (const { kind, path } of transpiler.scanImports(runtime)) {
-    const entry = { path, hoisted: kind === "import-statement" };
+    const hoisted = kind === "import-statement";
+    const position = hoisted ? -1 : (sites.loads.get(path)?.shift() ?? -1);
+    const entry = { path, hoisted, position };
     if (/^\.\.?\//.test(path)) relatives.push(entry);
     else if (!/^(?:\/|file:|data:)/.test(path) && !isRuntimeModule(path)) packages.push(entry);
   }
-  return { packages, relatives };
+  return { packages, relatives, blockAt: sites.blockAt };
 }
 
 /**
@@ -309,20 +356,27 @@ export function checkSkillScripts(scripts: readonly SkillScript[], scope: SkillS
     const found = imports.get(script.path);
     if (found !== undefined && needsBundle(script.path, new Set())) {
       // ESM hoists a static import above the guard, where the source path would resolve the package through
-      // bun's unpinned auto-install; a static import of a sibling that loads packages is the same, one step away.
-      const hoisted = [
-        ...found.packages.filter((entry) => entry.hoisted),
-        ...found.relatives.filter((entry) => {
-          const target = entry.hoisted ? resolveRelative(script.path, entry.path) : undefined;
-          return target !== undefined && needsBundle(target, new Set());
-        }),
-      ];
-      for (const entry of hoisted) {
+      // bun's unpinned auto-install; a static import of a sibling that loads packages is the same, one step
+      // away. An in-place load written above the block runs before the guard just the same.
+      const reaching = (entry: RuntimeImport): boolean => {
+        const target = resolveRelative(script.path, entry.path);
+        return target !== undefined && needsBundle(target, new Set());
+      };
+      const loads = [...found.packages, ...found.relatives.filter(reaching)];
+      for (const entry of loads.filter((entry) => entry.hoisted)) {
         fail(
           `${script.path}: static import of '${entry.path}' is hoisted above the ensureBuilt guard, so the` +
             ` source path resolves it before the bundle exists; load it below the guard with await import()` +
             ` (${DEPENDENCIES_DOC})`,
         );
+      }
+      for (const entry of loads) {
+        if (entry.position >= 0 && found.blockAt >= 0 && entry.position < found.blockAt) {
+          fail(
+            `${script.path}: loads '${entry.path}' above the ensureBuilt block, so the source path resolves it` +
+              ` before the guard decides; move the load below the guard (${DEPENDENCIES_DOC})`,
+          );
+        }
       }
       if (!carries) {
         fail(

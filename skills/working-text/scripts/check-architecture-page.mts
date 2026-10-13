@@ -21,9 +21,19 @@ import type { Nodes, Paragraph, Root } from "mdast";
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
 
 function buildPaths(source: string) {
-  const scripts = dirname(source);
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
+  }
   const skill = dirname(scripts);
-  const built = join(skill, ".build", `${basename(source, ".mts")}.js`);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
   return { scripts, skill, built };
 }
 

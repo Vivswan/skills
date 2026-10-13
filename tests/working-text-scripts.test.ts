@@ -437,6 +437,28 @@ describe("self-building scripts", () => {
     expect(statSync(bundle).mtimeMs).toBeGreaterThan(second);
   });
 
+  test("an entry below scripts/ finds the skill root and bundles to the same path under .build", () => {
+    const root = copiedSkill("nested-entry");
+    const head = readFileSync(join(root, "scripts", "arch-lint.mts"), "utf8");
+    const guard = "if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();\n";
+    const prefix = head.slice(0, head.indexOf(guard) + guard.length);
+    const entry = join(root, "scripts", "nested", "entry.mts");
+    mkdirSync(join(root, "scripts", "nested"));
+    writeFileSync(
+      entry,
+      `${prefix}const { toString } = await import("mdast-util-to-string");\nconsole.log(toString({ type: "text", value: "nested" }));\n`,
+    );
+    expect(run(entry, [], root)).toEqual({ status: 0, stdout: "nested\n", stderr: "" });
+    expect(existsSync(join(root, ".build", "nested", "entry.js"))).toBe(true);
+    expect(readdirSync(root).sort()).toEqual([
+      ".build",
+      "architecture.yml",
+      "package.json",
+      "scripts",
+      "src",
+    ]);
+  });
+
   test("the source path touches no package: a recording bun sees install, build, and the bundle run before anything resolves", () => {
     const root = copiedSkill("source-path");
     const binDir = join(scratch, "recording-bun");

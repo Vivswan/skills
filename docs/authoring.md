@@ -71,20 +71,32 @@ skills/my-skill/
 
 The script bundles itself on first run. Run as source (`bun scripts/x.mts`), the block installs the pins into the skill folder, bundles the script and everything it imports into the `.build` folder with `bun build`, removes the install, and runs the bundle with the same arguments. Later runs go straight to the bundle until a file in `scripts/` or the `package.json` is newer.
 
+An entry below `scripts/` bundles to the same relative path under the `.build` folder; the block finds the skill root by walking up to the `scripts/` directory with the `package.json` beside it.
+
 `bun build` resolves installed packages only, which is why the install step exists. A failed install or build prints bun's error and exits 2. A user may install any one skill alone, so no script imports from another skill.
 
-The block needs `spawnSync` from `node:child_process`, `existsSync`, `readdirSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
+The block needs `spawnSync` from `node:child_process`, `existsSync`, `readdirSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join`, `relative` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
 
-Below the guard, the program loads its packages and sibling scripts with `await import("yaml")`, never a static import: ESM hoists a static import above the guard, where the source path would resolve the package through bun's unpinned auto-install. Type-only imports stay static; they are erased. The smoke test refuses a hoisted one.
+Below the guard, the program loads its packages and sibling scripts with `await import("yaml")`, never a static import: ESM hoists a static import above the guard, where the source path would resolve the package through bun's unpinned auto-install. Type-only imports stay static; they are erased. The smoke test refuses a hoisted import, and a load placed above the block.
 
 ```ts
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
 
 function buildPaths(source: string) {
-  const scripts = dirname(source);
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
+  }
   const skill = dirname(scripts);
-  const built = join(skill, ".build", `${basename(source, ".mts")}.js`);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
   return { scripts, skill, built };
 }
 

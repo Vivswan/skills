@@ -532,6 +532,7 @@ describe("checkSkillScripts", () => {
     'const o = await import("@scope/pkg/sub");',
     'import Pad = require("left-pad");',
     'const r = require("left-pad");',
+    'const o = await import("left-pad", { with: { type: "json" } });',
   ];
   const LOADS = [...HOISTED_LOADS, ...IN_PLACE_LOADS];
 
@@ -564,6 +565,60 @@ describe("checkSkillScripts", () => {
       () => checkSkillScripts([script(source)], declared),
       /^skills\/x\/scripts\/x\.mts: loads a package, directly or through a relative import, so it carries the ensureBuilt block above its program/,
     );
+  });
+
+  test.each(IN_PLACE_LOADS)(
+    "rejects %s placed above the block: it runs before the guard",
+    (source) => {
+      expectCheckFailure(
+        () => checkSkillScripts([script(`${source}\n${BLOCK}`)], declared),
+        /^skills\/x\/scripts\/x\.mts: loads '[^']+' above the ensureBuilt block, so the source path resolves it before the guard decides; move the load below the guard/,
+      );
+    },
+  );
+
+  test("positions come from the erased text's syntax: a string spelling a load or the block is text", () => {
+    expect(() =>
+      checkSkillScripts(
+        [
+          script(
+            `const example = 'import("left-pad")';\n${BLOCK}const o = await import("left-pad");`,
+          ),
+        ],
+        declared,
+      ),
+    ).not.toThrow();
+    expectCheckFailure(
+      () =>
+        checkSkillScripts(
+          [
+            script(
+              `const example = "function ensureBuilt(";\nconst o = await import("left-pad");\n${BLOCK}`,
+            ),
+          ],
+          declared,
+        ),
+      /loads 'left-pad' above the ensureBuilt block/,
+    );
+  });
+
+  test("a sibling that loads a package, loaded in place above the block, is rejected too", () => {
+    const lib = script(
+      `${BLOCK}const { pad } = await import("left-pad");\nexport const x = pad;`,
+      "skills/x/scripts/lib.mts",
+    );
+    const cli = (text: string) => script(text, "skills/x/scripts/cli.mts");
+    expectCheckFailure(
+      () =>
+        checkSkillScripts(
+          [lib, cli(`const { x } = await import("./lib.mts");\n${BLOCK}`)],
+          declared,
+        ),
+      /^skills\/x\/scripts\/cli\.mts: loads '\.\/lib\.mts' above the ensureBuilt block/,
+    );
+    expect(() =>
+      checkSkillScripts([lib, cli(`${BLOCK}const { x } = await import("./lib.mts");`)], declared),
+    ).not.toThrow();
   });
 
   test("a block that differs by a byte is drift, not a block", () => {
