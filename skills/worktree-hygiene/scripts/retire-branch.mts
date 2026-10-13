@@ -242,12 +242,15 @@ function mergeInto(root: string, reference: string, subject: string, why: string
   const run = git(top, [...args, reference, subject], FETCH_TIMEOUT_MS);
   const command = `git merge-tree --write-tree ${short(reference)} ${short(subject)}`;
   // Exit 1 is also "not something we can merge", printed with no tree; only a
-  // tree id in front makes a 1 a conflict. `--write-tree` arrived in git 2.38.
+  // tree id in front makes a 1 a conflict. `--write-tree` arrived in git 2.38,
+  // and an older git rejects the option with 129; any other exit (128 for
+  // unrelated histories) is git's own message, not a version problem.
   if (run.status !== 0 && run.status !== 1) {
-    const version = git(root, ["--version"]).text.trim() || "git version unknown";
-    broken(
-      `${why} ${command} exited ${run.status} (${version}; 2.38 or newer is required): ${run.err}`,
-    );
+    const version =
+      run.status === 129
+        ? ` (${git(root, ["--version"]).text.trim() || "git version unknown"}; 2.38 or newer is required)`
+        : "";
+    broken(`${why} ${command} exited ${run.status}${version}: ${run.err}`);
   }
   const messages = run.out.indexOf(Buffer.from([0, 0]));
   const [tree = Buffer.alloc(0), ...conflicted] = nulSplit(

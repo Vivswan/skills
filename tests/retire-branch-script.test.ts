@@ -628,6 +628,31 @@ describe("retire-branch.mts landing gates", () => {
   );
 
   scenario(
+    "REFUSE: a squash landing the mainline then REVERTED is not landed; the refusal names every path",
+    async (ws) => {
+      // The mainline no longer holds what the branch adds, so merging the
+      // branch back in would re-apply it: the fail-closed direction of the
+      // three-way merge, pinned so a "once landed, always landed" shortcut
+      // cannot creep in.
+      const { repo } = await buildRepo(ws, "reverted");
+      await commitOnBranch(repo, "topic", "F", "f\n");
+      await commitOnBranch(repo, "topic", "G", "g\n");
+      await squashLandTopic(repo);
+      await git(repo, "revert", "--no-edit", "HEAD");
+      await git(repo, "push", "-q", "origin", "main");
+      expect(
+        await retire(ws, { repo }, ["--repo-root", repo, "--branch", "topic", "--execute"]),
+      ).toEqual({
+        status: EXIT_REFUSED,
+        stdout: lines(FETCH, BRANCH),
+        stderr: differs("F, G"),
+        branch: "unchanged",
+        tree: "none",
+      });
+    },
+  );
+
+  scenario(
     "ALLOW: a squash-landed branch stays landed after a later mainline edit of a file it changed",
     async (ws) => {
       // The two-endpoint check refused this shape: the branch's version of F
@@ -753,6 +778,8 @@ describe("retire-branch.mts landing gates", () => {
       // merge-tree exits 1 for a conflict AND for an argument it cannot merge;
       // only a printed tree id makes the 1 a conflict. An unknown option is
       // git's exit 129, which must name the version floor instead of refusing.
+      // Unrelated histories are git's own 128: the message passes through
+      // without the version hint, which would mislead there.
       const { repo } = await buildRepo(ws, "mergebroken");
       await commitOnBranch(repo, "topic", "t.txt", "topic\n");
       await squashLandTopic(repo);
@@ -768,7 +795,11 @@ describe("retire-branch.mts landing gates", () => {
           `  *"merge-tree"*) echo "error: unknown option \\\`write-tree'" >&2; exit 129 ;;`,
         ),
       });
-      expect({ failing, old }).toEqual({
+      const emptyTree = (await git(repo, "hash-object", "-t", "tree", "/dev/null")).trim();
+      const root = (await git(repo, "commit-tree", emptyTree, "-m", "orphan")).trim();
+      await git(repo, "branch", "-f", "topic", root);
+      const orphan = await retire(ws, { repo }, args);
+      expect({ failing, old, orphan }).toEqual({
         failing: {
           status: EXIT_BROKEN,
           stdout: lines(FETCH, BRANCH),
@@ -780,6 +811,13 @@ describe("retire-branch.mts landing gates", () => {
           status: EXIT_BROKEN,
           stdout: lines(FETCH, BRANCH),
           stderr: `${mergeCouldNotRun} exited 129 (${version}; 2.38 or newer is required): error: unknown option \`write-tree'`,
+          branch: "unchanged",
+          tree: "none",
+        },
+        orphan: {
+          status: EXIT_BROKEN,
+          stdout: lines(FETCH, BRANCH),
+          stderr: `${mergeCouldNotRun} exited 128: fatal: refusing to merge unrelated histories`,
           branch: "unchanged",
           tree: "none",
         },
