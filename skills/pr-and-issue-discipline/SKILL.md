@@ -54,7 +54,7 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 
 When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` carries one more bullet (in the measured shape, the last of `## Reasoning`'s 3 to 4): `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
 
-**Readability is an accessibility requirement.** Readers include people with dyslexia, and a wall of prose costs them the PR. The standard is the one the `/working-text` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
+**Readability is an accessibility requirement.** Readers include people who take in pictures faster than prose, and a wall of prose costs them the PR. The standard is the one the `/working-text` skill states for any page: a mix of devices the reader can skim, with the detail in short paragraphs where they choose to read.
 
 These rules bind PR bodies and the `/reply-and-review-discipline` skill's replies alike (it points here rather than restating them):
 

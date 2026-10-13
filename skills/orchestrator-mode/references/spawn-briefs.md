@@ -8,7 +8,7 @@ Every brief to any builder or reviewer opens with the owner's standing rules, ve
 
 ```text
 OWNER'S STANDING RULES (verbatim at the top of every brief)
-- The owner has dyslexia. Everything the owner reads (PR title and body, page text, replies, your report) leads with a picture: a table, a before/after, a strip, a code block. Short sentences. No paragraph over 70 words. Explanations sit beside what they explain. Plain ASCII punctuation.
+- Write for a reader who takes in pictures faster than prose. Everything the owner reads (PR title and body, page text, replies, your report) leads with a picture: a table, a before/after, a strip, a code block. Short sentences. No paragraph over 70 words. Explanations sit beside what they explain. Plain ASCII punctuation.
 - Commits carry the identity the repository's AGENTS.md states, never a work account. No Co-Authored-By or "Generated with" trailers anywhere.
 - Conventional Commit subjects. PRs open as drafts and are squash-merged. Never flip ready, never merge.
 - Rubber-duck review with codex before every commit (the /rubber-duck-review skill), two rounds cap. Build only a finding with a concrete input and a wrong output inside the stated operating envelope. Reply to and record everything else.
@@ -204,6 +204,19 @@ Builders may never leave TODO or FIXME markers. The work either happens in the s
 ## Example Brief
 
 ```text
+OWNER'S STANDING RULES (verbatim at the top of every brief)
+- Write for a reader who takes in pictures faster than prose. Everything the owner reads (PR title and body, page text, replies, your report) leads with a picture: a table, a before/after, a strip, a code block. Short sentences. No paragraph over 70 words. Explanations sit beside what they explain. Plain ASCII punctuation.
+- Commits carry the identity the repository's AGENTS.md states, never a work account. No Co-Authored-By or "Generated with" trailers anywhere.
+- Conventional Commit subjects. PRs open as drafts and are squash-merged. Never flip ready, never merge.
+- Rubber-duck review with codex before every commit (the /rubber-duck-review skill), two rounds cap. Build only a finding with a concrete input and a wrong output inside the stated operating envelope. Reply to and record everything else.
+- The pre-commit hook runs the reached tests. Never run the full check locally. Run the repository's static gates (typecheck, lint, docs check, smoke, validate) before pushing.
+- Caps: 256 characters per code line, 70 words per Markdown paragraph, 3200 lines per test file. Skill scripts are .mts run with bun. No node_modules, nothing generated in git.
+- PII grep over the diff, the commit message, and the PR text with the session's needle file prints nothing.
+- Never touch the owner's configs: no ~/.codex, no ~/.claude settings, no dotfile of theirs.
+- No CI watcher of your own: the lead's daemon watches every PR. Read back every write (push, reply, resolve). A thread reply counts only when its review state is COMMENTED, not PENDING.
+- Read your inbox before every commit. One bundled brief per commit. When asked, confirm the list back to the lead before building.
+- Clean up every temp file and worktree you create. Report with read-back facts (sha, counts, exit codes), never intentions.
+
 Task: Add rate limiting to the API gateway (worktree branch: wt/rate-limit, worktree /repo/.claude/worktrees/wt-rate-limit).
 Done means: middleware added, unit tests pass, gateway docs section updated.
 Territory: src/gateway/** and tests/gateway/** only. Do NOT touch src/core/** or shared configs; report needed changes there in your signal instead of making them.
