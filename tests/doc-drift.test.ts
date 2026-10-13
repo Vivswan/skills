@@ -401,6 +401,15 @@ const SURFACES: Record<string, Surface> = {
         doc: "`--interval` is 60 s by default",
         script: 'name: "github-events", interval: 60, idleInterval: 300',
       },
+      {
+        doc: "`PR owner/repo#12: 3 reads failed; read the daemon log`",
+        script: "const READ_FAILURES = 3;",
+      },
+      {
+        doc: "`PR owner/repo#12: 3 reads failed; read the daemon log`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label}: ${READ_FAILURES} reads failed; read the daemon log`,",
+      },
     ],
   },
   "watch-github/SKILL.md <-> targets/pr.mts": {
@@ -454,7 +463,7 @@ const SURFACES: Record<string, Surface> = {
         doc: "`PR owner/repo#12: CI settled on 1a2b3c4d5e6f with no run of checks; check the workflow name`",
         script:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-          'text: `${label}: CI settled on ${short} with no run of ${verdict.gates.join(", ")}; check the workflow name`,',
+          ': CI settled on ${short} with no run of ${verdict.gates.join(", ")}; check the workflow name`',
       },
       {
         doc: "`PR owner/repo#12: CI red on 1a2b3c4d5e6f: checks / check / Run tests`",
@@ -463,6 +472,10 @@ const SURFACES: Record<string, Surface> = {
           'text: `${label}: CI red on ${short}: ${parts.length > 0 ? parts.join(", ") : "a check outside Actions"}${missing}`,',
       },
       { doc: "more than 100 check suites", script: "checkSuites(first: 100, after: $cursor)" },
+      {
+        doc: "after two polls on a head with no checks at all",
+        script: "export const NO_RUN_POLLS = 2;",
+      },
     ],
   },
   "worktree-hygiene/SKILL.md <-> retire-branch.mts": {

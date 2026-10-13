@@ -8,6 +8,7 @@ import {
   describeVerdict,
   discoverRuns,
   judgeHead,
+  NO_RUN_POLLS,
   rollupPending,
   type Suites,
   verdictKey,
@@ -28,9 +29,13 @@ export interface BranchTarget {
     ci: CiState;
     /** The last delivered verdict's key (check-suites.mts verdictKey). */
     verdict: string | null;
+    /** Polls on this head with no checks at all, for a named gate that never registers. */
+    noRuns: number;
   } | null;
   /** Set once the tip answered null and the trouble event went out; cleared when it reads again. */
   unreadable?: boolean;
+  /** Reads of this one target (paged suites) that failed in a row; three are one trouble event. */
+  readFailures?: number;
 }
 
 export function parseBranchTarget(text: string, gates: string[]): BranchTarget | null {
@@ -88,6 +93,7 @@ export function processBranch(
   let ci: CiState = previous?.ci ?? "pending";
   // The verdict last delivered on this head; a new head has none, so its first verdict is news.
   let verdict = previous !== null && previous.oid === sha ? previous.verdict : null;
+  let noRuns = previous !== null && previous.oid === sha ? previous.noRuns : 0;
   if (previous && previous.oid !== sha) {
     events.push({
       ...fields,
@@ -103,7 +109,8 @@ export function processBranch(
   }
   if (suites !== null) {
     const runs = suites.complete ? suites.runs : discoverRuns(target.repo, sha);
-    const judged = judgeHead(tip.rollupState, runs, target.gates);
+    noRuns = runs.length === 0 && tip.rollupState === null ? noRuns + 1 : 0;
+    const judged = judgeHead(tip.rollupState, runs, target.gates, noRuns >= NO_RUN_POLLS);
     const key = verdictKey(judged);
     ci = judged.kind;
     // Described (a red reads its failed jobs) only when it is news.
@@ -116,7 +123,7 @@ export function processBranch(
     }
   }
   delete target.unreadable;
-  target.seen = { oid: sha, rollupState: tip.rollupState, ci, verdict };
+  target.seen = { oid: sha, rollupState: tip.rollupState, ci, verdict, noRuns };
   return {
     events,
     busy: ci === "pending" || rollupPending(tip.rollupState) || events.length > 0,

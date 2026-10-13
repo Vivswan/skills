@@ -11,6 +11,8 @@ import { GhError, get, graphql, requireNumber, requireString, stringOrNull } fro
 const MAX_SUITE_PAGES = 10;
 const MAX_SNAPSHOT_ROUNDS = 5;
 const TERMINAL_ROLLUPS = new Set(["SUCCESS", "FAILURE", "ERROR"]);
+/** Polls a head may show no checks at all before a named gate is called missing; a run can register seconds after a push. */
+export const NO_RUN_POLLS = 2;
 
 // External apps (CodeQL, Semgrep) register check suites without a workflowRun; only github-actions
 // suites carrying one are workflow runs.
@@ -174,15 +176,22 @@ export type Verdict =
   /** `missing`: gates with no run although the rollup settled, named on the red line so the red does not hide them. */
   | { kind: "red"; latest: Run[]; failed: Run[]; missing: string[] }
   | { kind: "pending" }
-  /** CI settled on the head and a named gate has no run: a typo in the name, or a workflow that does not trigger here. */
-  | { kind: "missing"; gates: string[] };
+  /** A named gate has no run once CI settled, or after two polls on a head with no checks at all: a typo in the name, or a workflow that does not trigger here. */
+  | { kind: "missing"; gates: string[]; settled: boolean };
 
 /**
  * Green is every named gate's latest run passed, or, with no gate named, the aggregate rollup
  * SUCCESS. Red is any named gate's latest run failed, or the rollup FAILURE or ERROR with no gate.
- * A named gate with no run is pending until the rollup settles, then missing.
+ * A named gate with no run is pending until the rollup settles, then missing; `waited` says the
+ * head has had no checks at all for long enough (two polls) to call the gate missing without a
+ * rollup, since a head nothing runs on never settles.
  */
-export function judgeHead(rollup: string | null, runs: Run[], gates: string[]): Verdict {
+export function judgeHead(
+  rollup: string | null,
+  runs: Run[],
+  gates: string[],
+  waited = false,
+): Verdict {
   const latest = selectLatest(runs);
   const settled = TERMINAL_ROLLUPS.has(rollup ?? "");
   if (gates.length === 0) {
@@ -195,7 +204,10 @@ export function judgeHead(rollup: string | null, runs: Run[], gates: string[]): 
   const failed = gateRuns.filter(isFailed);
   const absent = gates.filter((gate) => !gateRuns.some((run) => run.name === gate));
   if (failed.length > 0) return { kind: "red", latest, failed, missing: settled ? absent : [] };
-  if (absent.length > 0) return settled ? { kind: "missing", gates: absent } : { kind: "pending" };
+  if (absent.length > 0) {
+    if (settled) return { kind: "missing", gates: absent, settled: true };
+    return waited ? { kind: "missing", gates: absent, settled: false } : { kind: "pending" };
+  }
   if (gateRuns.some((run) => run.status !== "completed" || run.conclusion === null)) {
     return { kind: "pending" };
   }
@@ -296,7 +308,9 @@ export function describeVerdict(
       return {
         kind: "trouble",
         state: "missing",
-        text: `${label}: CI settled on ${short} with no run of ${verdict.gates.join(", ")}; check the workflow name`,
+        text: verdict.settled
+          ? `${label}: CI settled on ${short} with no run of ${verdict.gates.join(", ")}; check the workflow name`
+          : `${label}: no checks on ${short} after ${NO_RUN_POLLS} polls, so no run of ${verdict.gates.join(", ")}; check the workflow name`,
         url: checksUrl,
       };
     case "red": {

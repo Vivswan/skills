@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
+import type { Activity } from "../skills/watch-github/scripts/pr-detail.mts";
+import { parseBranchTarget } from "../skills/watch-github/scripts/targets/branch.mts";
+import { describeActivities, parsePrTarget } from "../skills/watch-github/scripts/targets/pr.mts";
 import {
   CLOSING,
   detail,
@@ -497,6 +500,126 @@ describe("github-events.mts", () => {
     expect(s.violations()).toBe("");
     s.stop({ inbox: box.path });
     paged.stop({ inbox: pagedBox.path });
+  }, 30000);
+});
+
+describe("the target modules", () => {
+  test("a target parses in one form or the other, and the empty COMMENTED review GitHub wraps inline comments in is dropped when none of its comments is new", () => {
+    expect(parsePrTarget("octo/example#7", ["ci"])).toEqual({
+      form: "pr",
+      repo: "octo/example",
+      number: 7,
+      gates: ["ci"],
+      seen: null,
+    });
+    expect(parsePrTarget("octo/example:main", [])).toBeNull();
+    expect(parseBranchTarget("octo/example:release/2", [])).toEqual({
+      form: "branch",
+      repo: "octo/example",
+      branch: "release/2",
+      gates: [],
+      seen: null,
+    });
+    const wrapper: Activity = {
+      id: "review:1",
+      kind: "review",
+      at: "2026-01-01T00:00:00Z",
+      author: "octocat",
+      hasBody: false,
+      url: "u",
+      reviewState: "COMMENTED",
+    };
+    expect(describeActivities("PR x#1", [wrapper])).toEqual([]);
+    expect(describeActivities("PR x#1", [{ ...wrapper, reviewState: "APPROVED" }])).toEqual([
+      { kind: "review", text: "PR x#1: review by octocat (APPROVED)", url: "u" },
+    ]);
+  });
+});
+
+describe("a head nothing runs on, and a target whose own reads keep failing", () => {
+  test("a named gate on a head with no checks at all is missing after two polls, said once; a settled rollup says so at once", async () => {
+    const s = new Scenario("no-runs");
+    const box = await s.inbox("a");
+    s.fixtures({
+      "rows-1": rows({
+        p7: prNode({ rollup: null, suites: [] }),
+        p8: prNode({ number: 8, rollup: "SUCCESS", suites: [["lint", "COMPLETED", "SUCCESS"]] }),
+      }),
+    });
+    await s.start({ inbox: box.path });
+    // PR 7 has no checks at all: pending for one poll, missing on the second, then quiet. PR 8's
+    // rollup settled without the gate: missing at once.
+    expect(s.run(["watch", PR7, "--expect-workflow", "CI"], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["watch", `${REPO}#8`, "--expect-workflow", "CI"], { inbox: box.path }).code).toBe(
+      0,
+    );
+    expect((await box.frames(2)).map(text)).toEqual([
+      [
+        `PR ${PR7}: no checks on ${SHORT_A} after 2 polls, so no run of CI; check the workflow name`,
+        `${PR7_URL}/checks`,
+        CLOSING,
+      ].join("\n"),
+      [
+        `PR ${REPO}#8: CI settled on ${SHORT_A} with no run of CI; check the workflow name`,
+        `https://github.com/${REPO}/pull/8/checks`,
+        CLOSING,
+      ].join("\n"),
+    ]);
+    expect(s.events().map((e) => e.kind)).toEqual(["trouble", "trouble"]);
+    expect(s.violations()).toBe("");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a target whose detail read fails three polls in a row is one trouble event naming the count, while the repository read keeps the other targets served; a success resets the count", async () => {
+    const s = new Scenario("read-failures");
+    const box = await s.inbox("a");
+    const row = (minute: number) =>
+      prNode({ rollup: "SUCCESS", suites: [], updatedAt: `2026-01-01T00:${minute}:00Z` });
+    const p8 = prNode({ number: 8, rollup: "SUCCESS", suites: [] });
+    s.fixtures({
+      "rows-1": rows({ p7: row(10), p8 }),
+      "rows-2": rows({ p7: row(11), p8 }),
+      "rows-3": rows({ p7: row(12), p8 }),
+      "rows-4": rows({ p7: row(13), p8 }),
+      "rows-5": rows({ p7: row(14), p8 }),
+    });
+    await s.start({ inbox: box.path });
+    // PR 8 takes its baseline first; then every detail read fails, and only PR 7, which still
+    // needs its baseline, reads one. The failing watch still returns, the target stays, the
+    // count starts; the repository read keeps answering for both.
+    expect(s.run(["watch", `${REPO}#8`], { inbox: box.path }).code).toBe(0);
+    writeFileSync(join(s.fixtureDir, "fail-detail"), "GraphQL 502");
+    expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(headlines(await box.frames(2))).toEqual([
+      `PR ${REPO}#8: CI green on ${SHORT_A}: 0 workflows`,
+      `PR ${PR7}: 3 reads failed; read the daemon log`,
+    ]);
+    expect(s.events().map((e) => [e.kind, e.pr])).toEqual([
+      ["ci", 8],
+      ["trouble", 7],
+    ]);
+    expect(
+      s
+        .log()
+        .split("\n")
+        .filter((line) => line.includes(`${PR7}: gh api graphql exited 1`)),
+    ).toHaveLength(4);
+    expect(s.state().targets[PR7]).toMatchObject({ readFailures: 4, seen: null });
+    // The read comes back: the baseline is taken, the gateless SUCCESS rollup is green, the count goes.
+    rmSync(join(s.fixtureDir, "fail-detail"));
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(3))[2]).toBe(
+      `PR ${PR7}: CI green on ${SHORT_A}: 0 workflows`,
+    );
+    expect(s.state().targets[PR7]).not.toHaveProperty("readFailures");
+    expect(s.state().targets[PR7]).toMatchObject({ seen: expect.anything() });
+    expect(s.violations()).toBe("");
+    s.stop({ inbox: box.path });
   }, 30000);
 });
 

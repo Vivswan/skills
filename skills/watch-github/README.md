@@ -4,7 +4,7 @@
 
 A PR merge reaches this skill through the `/pr-landing-discipline` skill, which owns the merge moment. The mainline's CI after a merge is the branch target's business: watch `owner/repo:main` once per session.
 
-The daemon is the `/session-events` skill's; this skill is its GitHub source and resolves it as the sibling folder. Install both.
+The `/session-events` skill is required: the daemon is its, this skill is its GitHub source, and the script resolves it as the sibling folder (exit 2 with the install line when it is absent). Install both.
 
 ## Install
 

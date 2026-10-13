@@ -71,7 +71,7 @@ Each message holds one poll's events, each with a URL, and the closing line `aut
 | `head` | `PR owner/repo#12: head moved to 1a2b3c4d5e6f; last commit by octocat` (the commit's author, not who pushed), on every move, your own pushes included | a head you did not push: pull before touching the branch |
 | `merged` | `PR owner/repo#12: merged into main` | stop babysitting; the mainline's CI is the branch target's business |
 | `closed` | `PR owner/repo#12: closed without merging` | stop babysitting |
-| `trouble` | `PR owner/repo#12 is not readable; unwatch it or check access`; `PR owner/repo#12: CI settled on 1a2b3c4d5e6f with no run of checks; check the workflow name`; or the `/session-events` skill's line after three failed polls | tooling trouble, never a red or green pipeline; Gotchas below |
+| `trouble` | `PR owner/repo#12 is not readable; unwatch it or check access`; `PR owner/repo#12: CI settled on 1a2b3c4d5e6f with no run of checks; check the workflow name` (or `no checks on 1a2b3c4d5e6f after 2 polls, so no run of checks`); `PR owner/repo#12: 3 reads failed; read the daemon log`; or the `/session-events` skill's line after three failed polls | tooling trouble, never a red or green pipeline; Gotchas below |
 | busy | not a kind: a poll with an event, a pending rollup, or a head still being judged keeps the 60 s interval; a quiet poll moves to 300 s | nothing |
 
 A branch target's lines open with `branch owner/repo:main:` instead. The comment line counts the viewer's own comments out. A review's inline comments are counted on its line and not again as comments.
@@ -80,7 +80,7 @@ A branch target's lines open with `branch owner/repo:main:` instead. The comment
 
 - **Green** is every named gate's latest run passed (skipped counts), or, with no gate named, the PR's aggregate rollup `SUCCESS`.
 - **Red** is any named gate's latest run failed or cancelled with no newer run, or, with no gate, the rollup `FAILURE` or `ERROR`. The red line names each failed job's workflow, job, and first failed step, and any gate with no run after `; no run of`.
-- **A gate with no run** is pending while the rollup is pending, and one `trouble` event once the rollup settled without it: a typo in the name, or a workflow that does not trigger on this ref.
+- **A gate with no run** is pending while the rollup is pending, and one `trouble` event once the rollup settled without it, or after two polls on a head with no checks at all: a typo in the name, or a workflow that does not trigger on this ref.
 - **The unit is the workflow.** Re-triggers stack runs on one SHA; the newest run of each workflow is judged, and an older cancelled one is superseded.
 - **After a verdict**, the head is judged again when something moves: a gated head on every poll (a gate's re-run need not move the rollup), a gateless one when the rollup changes. The same verdict stays silent; a different one is a new `ci` event. A new head is judged from nothing.
 
@@ -117,7 +117,7 @@ github-events.mts poll | status | stop [--id <name>]
 
 `--interval` is 60 s by default. The file sink (`--id`), `wait` and its cursor, and the runtime files are the `/session-events` skill's; the log line of this source is `{"id":17,"at":"2026-10-12T14:03:20Z","repo":"owner/repo","pr":12,"sha":"1a2b...","kind":"ci","text":"...","url":"..."}`, with `branch` in place of `pr` on a branch target's line.
 
-In a fleet, the lead's inbox is not the sink: a relay subagent runs a file-sink daemon and forwards each event; its brief and routing table are the `/orchestrator-mode` skill's `references/github-relay.md`.
+In a fleet, the lead's session runs the daemon as its own background task, `--mode` matching the session, and watches the fleet's PRs; a builder never runs `watch` there. When the lead wants a builder to act on a review line, it forwards that line by one message.
 
 ## Gotchas
 
@@ -128,7 +128,8 @@ In a fleet, the lead's inbox is not the sink: a relay subagent runs a file-sink 
 | a `trouble` event after three failed polls | gh, the network, or GitHub refused three polls in a row; `gh auth status` is the first check | fix what the daemon log names; a stale token needs `stop` and a fresh start, since the daemon inherited the session's |
 | a `trouble` event: CI settled with no run of a gate | the named workflow never registered a run on the head | check the name against `.github/workflows/*.yml`, then `watch` again with the right set; never read the rollup as green |
 | a `trouble` event: not readable | the PR or branch answers null: deleted, renamed, or no access | `unwatch` it, or fix the access |
+| a `trouble` event: 3 reads failed | this one target's detail or paged suites read failed three polls in a row while the repository read kept answering | read the daemon log; the target is retried every poll and the counter resets on a success |
 | a red line with workflow names only | the failed-jobs read failed; the verdict stands | `gh run view <id> --log-failed` on the run URL's id |
 | `gh` missing | `daemon` polls fail from the first | install and authenticate the GitHub CLI; until then, report the push with the PR URL and never silently skip the watch |
 
-A local subagent spawned with the Agent tool shares its session's inbox socket and pid, so a `watch` run inside it subscribes the session's daemon, and the events land with the session, which relays them. A teammate from agent teams is a separate process with its own socket and runs its own daemon.
+A local subagent spawned with the Agent tool shares its session's inbox socket and pid, so a `watch` run inside it subscribes the session's daemon, and the events land with the session. A teammate from agent teams is a separate process with its own socket and runs its own daemon.

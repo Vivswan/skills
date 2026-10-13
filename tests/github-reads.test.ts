@@ -700,7 +700,7 @@ describe("judgeHead", () => {
       rollup: "SUCCESS",
       runs: [run({ id: 1, name: "Other" })],
       gates: ["Gate", "Other"],
-      verdict: { kind: "missing", gates: ["Gate"] },
+      verdict: { kind: "missing", gates: ["Gate"], settled: true },
     },
     {
       id: "an older cancelled run of a re-triggered workflow is superseded, not red (numeric newest pick)",
@@ -736,7 +736,7 @@ describe("judgeHead", () => {
       rollup: "SUCCESS",
       runs: [run({ id: 1, name: "CI-1" })],
       gates: ["CI"],
-      verdict: { kind: "missing", gates: ["CI"] },
+      verdict: { kind: "missing", gates: ["CI"], settled: true },
     },
     {
       id: "a gate completed with no conclusion is pending, never green or red",

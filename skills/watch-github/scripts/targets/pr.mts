@@ -8,6 +8,7 @@ import {
   describeVerdict,
   discoverRuns,
   judgeHead,
+  NO_RUN_POLLS,
   plural,
   rollupPending,
   type Suites,
@@ -30,10 +31,14 @@ export interface PrTarget {
     ci: CiState;
     /** The last delivered verdict's key (check-suites.mts verdictKey). */
     verdict: string | null;
+    /** Polls on this head with no checks at all, for a named gate that never registers. */
+    noRuns: number;
     activity: string[][];
   } | null;
   /** Set once the row answered null and the trouble event went out; cleared when it reads again. */
   unreadable?: boolean;
+  /** Reads of this one target (detail, paged suites) that failed in a row; three are one trouble event. */
+  readFailures?: number;
 }
 
 export function parsePrTarget(text: string, gates: string[]): PrTarget | null {
@@ -169,10 +174,12 @@ export function processPr(
   // The verdict last delivered on this head; a new head has none, so its first verdict is news. A
   // rollup that moves after a verdict is judged again, and the same verdict stays silent.
   let verdict = previous !== null && !changes.head ? previous.verdict : null;
+  let noRuns = previous !== null && !changes.head ? previous.noRuns : 0;
   if (previous !== null && (changes.head || changes.rollup)) ci = "pending";
   if (suites !== null) {
     const runs = suites.complete ? suites.runs : discoverRuns(target.repo, row.headRefOid);
-    const judged = judgeHead(row.rollupState, runs, target.gates);
+    noRuns = runs.length === 0 && row.rollupState === null ? noRuns + 1 : 0;
+    const judged = judgeHead(row.rollupState, runs, target.gates, noRuns >= NO_RUN_POLLS);
     const key = verdictKey(judged);
     ci = judged.kind;
     // Described (a red reads its failed jobs) only when it is news.
@@ -184,7 +191,7 @@ export function processPr(
     }
   }
   delete target.unreadable;
-  target.seen = { row, ci, verdict, activity };
+  target.seen = { row, ci, verdict, noRuns, activity };
   return {
     events,
     busy: ci === "pending" || rollupPending(row.rollupState) || events.length > 0,

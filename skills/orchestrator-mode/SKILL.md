@@ -141,13 +141,13 @@ The per-mode procedures, including the stacked-chain loop and the worktree rules
   Read every landing's sums against its own purpose and the wave's total against the wave's, and report the mismatches with their reasons.
 - **After every push or merge** (a direct landing, a PR update, or a PR merge), the PR or the mainline branch is subscribed with the `/watch-github` skill's `watch`, and the verdict arrives as a message naming the failed job and step. Never fire-and-forget a push, and never watch CI inline.
 
-  In a fleet the GitHub relay owns the subscription and forwards each event to the agent that acts on it; its brief and routing table are `references/github-relay.md`.
+  In a fleet the lead's session runs the daemon as its own background task, `--mode` matching the session, and watches every PR of the fleet (`watch owner/repo#n`); a builder never runs `watch`. When the lead wants a builder to act on a review line, it forwards that line by one SendMessage.
 
-  After a MERGE, the SHA judged is the PR's MERGE COMMIT on the mainline, never `git rev-parse HEAD` in the worktree: HEAD still names the topic tip, and the squash or merge commit exists only on the mainline. The mainline branch target, watched once, reports that tip and its verdict; for a direct landing, `git fetch <base-remote> <mainline> && git rev-parse FETCH_HEAD` names it, from the remote the push went to.
+  After a MERGE, the SHA judged is the PR's MERGE COMMIT on the mainline, never `git rev-parse HEAD` in the worktree: HEAD still names the topic tip, and the squash or merge commit exists only on the mainline. The mainline branch target, watched once, reports that tip and its verdict; for a direct landing, `git fetch <base-remote> <mainline> && git rev-parse FETCH_HEAD` names it.
 
   Where installed, the `/watch-github` skill defines the subscription (the two target forms, the gate workflows, the event texts).
 
-  One daemon per session, the relay's file sink in a fleet, started as a background task and gone with the session: its interval is 60 s while something moves, and no agent polls beside it. When the mainline's runs share a concurrency group key, only the newest mainline tip gets a verdict (a newer push cancels an older tip's pending run).
+  One daemon per session, started as a background task and gone with the session: its interval is 60 s while something moves, and no agent polls beside it. When the mainline's runs share a concurrency group key, only the newest mainline tip gets a verdict (a newer push cancels an older tip's pending run).
 
   Production: parallel watchers at gh's default 3 s refresh drained GitHub's 5000-requests-per-hour REST bucket and blinded every CI verdict for 45 minutes.
 - **Every rebase gets the shared-file content check** ("the rebase is the risk, not the intent"): a clean replay can silently drop a prior landing's lines in files both tracks edit, with no conflict marker to warn anyone. The check is executable, not a prose token recipe: `scripts/baseline.mts pin`/`check` for whole-file ownership, `scripts/probe.mts tokens` for specific-line claims in shared files. Wiring in `references/fleet-monitor.md`, Verifying a Landing.
@@ -159,7 +159,7 @@ After each landing on the mainline, and again over the combined delta once all s
 At phase boundaries (a wave finishing, a landing), stop subagents whose work is delivered and delete completed tasks, so the visible lists show only live work.
 
 - **Before stopping an agent**, check nothing still owes output, and copy handoff facts a later step needs into a still-open task first.
-- **Long-lived service agents** (the fleet monitor, the GitHub relay) stay up until their exit condition. The GitHub daemon is not one: it is a background task of the relay, or of the session outside a fleet, the `/session-events` skill's daemon on the `/watch-github` skill's source, never a subagent, and it exits with the session.
+- **Long-lived service agents** (the fleet monitor) stay up until their exit condition. The GitHub daemon is not one: it is a background task of the session, the `/session-events` skill's daemon on the `/watch-github` skill's source, never a subagent, and it exits with the session.
 - **Worktree handovers, removals, and fan-out file ownership** have destructive failure modes. Follow the `/worktree-hygiene` skill for those rules.
 
 ## Harness Variations
@@ -190,4 +190,3 @@ Triage findings against sections 2 (Decompose, Board, Monitor, Builders) and 7 (
 - `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, the test rule, unnamed one-shot watchers, git-fixture hygiene for test suites)
 - `references/fleet-monitor.md`: the monitor's script wiring (sweep, probe, ledger, baseline) and the judgment rules learned from production false alarms
 - `references/landing.md`: the two landing gates (direct commits, and PRs with per-track bases, including the stacked-chain flow and the worktree rules around it)
-- `references/github-relay.md`: the GitHub relay's spawn brief and routing table (which event kinds go to the lead, which to the owning builder)

@@ -11,10 +11,18 @@
 import type { EventInput, Io } from "../../session-events/scripts/session-events.mts";
 import { GhError } from "./gh.mts";
 import { type RepoRead, type RepoReply, readRepository } from "./pr-rows.mts";
-import { type BranchTarget, parseBranchTarget, processBranch } from "./targets/branch.mts";
-import { type PrTarget, parsePrTarget, processPr } from "./targets/pr.mts";
+import {
+  type BranchTarget,
+  branchLabel,
+  parseBranchTarget,
+  processBranch,
+} from "./targets/branch.mts";
+import { type PrTarget, parsePrTarget, prLabel, processPr } from "./targets/pr.mts";
 
 const INSTALL = "npx skills add Vivswan/skills -g --skill session-events";
+// Reads of one target failing this many polls in a row (its detail, its paged suites) are one
+// trouble event for that target; the repository read failing is the whole poll's failure.
+const READ_FAILURES = 3;
 
 type Target = PrTarget | BranchTarget;
 
@@ -93,10 +101,26 @@ async function poll(targets: Record<string, Target>, io: Io) {
       events.push(...outcome.events);
       busy ||= outcome.busy;
       if (outcome.done) delete targets[key];
+      else delete target.readFailures;
     } catch (error) {
       if (!(error instanceof GhError)) throw error;
       io.log(`${key}: ${error.message}`);
       busy = true;
+      target.readFailures = (target.readFailures ?? 0) + 1;
+      if (target.readFailures === READ_FAILURES) {
+        const label = target.form === "pr" ? prLabel(target) : branchLabel(target);
+        events.push({
+          repo: target.repo,
+          ...(target.form === "pr" ? { pr: target.number } : { branch: target.branch }),
+          sha: null,
+          kind: "trouble",
+          text: `${label}: ${READ_FAILURES} reads failed; read the daemon log`,
+          url:
+            target.form === "pr"
+              ? `https://github.com/${target.repo}/pull/${target.number}`
+              : `https://github.com/${target.repo}/tree/${target.branch}`,
+        });
+      }
     }
   }
   return { events, busy };
