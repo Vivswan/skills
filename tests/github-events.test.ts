@@ -581,9 +581,13 @@ describe("a head nothing runs on, and a target whose own reads keep failing", ()
     s.fixtures({
       "rows-1": rows({ p7: row(10), p8 }),
       "rows-2": rows({ p7: row(11), p8 }),
-      "rows-3": rows({ p7: row(12), p8 }),
-      "rows-4": rows({ p7: row(13), p8 }),
-      "rows-5": rows({ p7: row(14), p8 }),
+      // PR 8 merges while PR 7's reads fail: the batch keeps serving it.
+      "rows-3": rows({
+        p7: row(12),
+        p8: prNode({ number: 8, state: "MERGED", rollup: "SUCCESS" }),
+      }),
+      "rows-4": rows({ p7: row(13) }),
+      "rows-5": rows({ p7: row(14) }),
     });
     await s.start({ inbox: box.path });
     // PR 8 takes its baseline first; then every detail read fails, and only PR 7, which still
@@ -592,17 +596,20 @@ describe("a head nothing runs on, and a target whose own reads keep failing", ()
     expect(s.run(["watch", `${REPO}#8`], { inbox: box.path }).code).toBe(0);
     writeFileSync(join(s.fixtureDir, "fail-detail"), "GraphQL 502");
     expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
-    expect(headlines(await box.frames(2))).toEqual([
+    expect(headlines(await box.frames(3))).toEqual([
       `PR ${REPO}#8: CI green on ${SHORT_A}: 0 workflows`,
+      `PR ${REPO}#8: merged into main`,
       `PR ${PR7}: 3 reads failed; read the daemon log`,
     ]);
     expect(s.events().map((e) => [e.kind, e.pr])).toEqual([
       ["ci", 8],
+      ["merged", 8],
       ["trouble", 7],
     ]);
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain(`targets: 1\n  ${PR7}\n`);
     expect(
       s
         .log()
@@ -613,7 +620,7 @@ describe("a head nothing runs on, and a target whose own reads keep failing", ()
     // The read comes back: the baseline is taken, the gateless SUCCESS rollup is green, the count goes.
     rmSync(join(s.fixtureDir, "fail-detail"));
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
-    expect(headlines(await box.frames(3))[2]).toBe(
+    expect(headlines(await box.frames(4))[3]).toBe(
       `PR ${PR7}: CI green on ${SHORT_A}: 0 workflows`,
     );
     expect(s.state().targets[PR7]).not.toHaveProperty("readFailures");
