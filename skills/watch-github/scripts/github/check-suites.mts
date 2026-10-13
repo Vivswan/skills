@@ -137,8 +137,8 @@ export function discoverRuns(repo: string, oid: string): Run[] {
 
 // --- failed jobs -------------------------------------------------------------
 
-/** `workflow / job / step` for each failed job of each failed run, as the red line prints them. */
-export type FailedJob = { workflow: string; job: string; step: string | null };
+/** `workflow / job / step` for each failed job of each failed run, as the red line prints them; `suiteId` is the run's, since two workflows can share a name. */
+export type FailedJob = { suiteId: string; workflow: string; job: string; step: string | null };
 
 /**
  * The failed jobs and their first failed step, one request for all the failed runs of a verdict;
@@ -159,6 +159,7 @@ export function readFailedJobs(failed: Run[]): FailedJob[] {
         ["FAILURE", "TIMED_OUT", "CANCELLED"].includes(String(get(step, "conclusion"))),
       );
       jobs.push({
+        suiteId: run.suiteId,
         workflow: run.name,
         job: requireString(get(checkRun, "name"), "checkRuns name"),
         step: stringOrNull(get(failedStep, "name")),

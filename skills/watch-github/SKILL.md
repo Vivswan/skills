@@ -26,7 +26,7 @@ bun "<skill-dir>/scripts/github-events.mts" watch owner/repo#12 --expect-workflo
 The session goes back to work. Minutes later the gate finishes, and this arrives in the conversation unasked:
 
 ```text
-<cross-session-message from="uds:/run/user/1000/session-events/4242.github-events.sock" from-name="github-events">
+<cross-session-message from="uds:/run/user/1000/session-events/4242.github-events.sock" from-name="github-events" from-mode="bypass">
 PR owner/repo#12: CI green on 1a2b3c4d5e6f: 3 workflows
 https://github.com/owner/repo/pull/12/checks
 automated notice from github-events; no reply needed

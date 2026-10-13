@@ -171,12 +171,14 @@ export function describeVerdict(
           log(`failed jobs of ${short}: ${error.message}`);
         }
       }
-      const parts =
-        jobs.length > 0
-          ? jobs.map(
-              (job) => `${job.workflow} / ${job.job}${job.step === null ? "" : ` / ${job.step}`}`,
-            )
-          : verdict.failed.map((run) => run.name);
+      // A failed run the read returned no job for (a failure outside a job, or a read that failed)
+      // is still named, after the jobs, so one workflow's job rows never hide another's failure.
+      const parts = jobs.map(
+        (job) => `${job.workflow} / ${job.job}${job.step === null ? "" : ` / ${job.step}`}`,
+      );
+      for (const run of verdict.failed) {
+        if (!jobs.some((job) => job.suiteId === run.suiteId)) parts.push(run.name);
+      }
       const missing = verdict.missing.length > 0 ? `; no run of ${verdict.missing.join(", ")}` : "";
       return {
         kind: "ci",

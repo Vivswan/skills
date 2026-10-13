@@ -17,7 +17,11 @@ import {
   readRepository,
   rowChanged,
 } from "../skills/watch-github/scripts/github/repository.mts";
-import { judgeHead, verdictKey } from "../skills/watch-github/scripts/targets/ci.mts";
+import {
+  describeVerdict,
+  judgeHead,
+  verdictKey,
+} from "../skills/watch-github/scripts/targets/ci.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
 // Contract tests for the GitHub read modules: a fake `gh` on PATH validates the exact invocation
@@ -762,6 +766,65 @@ describe("judgeHead", () => {
     expect(verdictKey(judgeHead("SUCCESS", [], ["Lint"]))).toBe("missing Lint");
     expect(verdictKey(judgeHead("PENDING", [], ["Lint"]))).toBeNull();
     expect(verdictKey(judgeHead("SUCCESS", [run({ id: 2 })], []))).toBe("green");
+  });
+});
+
+describe("describeVerdict", () => {
+  test("a red names every failed run: a workflow the jobs read returns no row for is named after another's job rows, never dropped, even when the two share a name", () => {
+    const s = scenario({
+      "jobs-1.json": JSON.stringify({
+        data: {
+          nodes: [
+            {
+              id: "S1",
+              checkRuns: {
+                nodes: [
+                  {
+                    name: "check",
+                    steps: {
+                      nodes: [
+                        { name: "Checkout", conclusion: "SUCCESS" },
+                        { name: "Run tests", conclusion: "FAILURE" },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+            { id: "S2", checkRuns: { nodes: [] } },
+          ],
+        },
+      }),
+    });
+    const checks = run({ id: 1, conclusion: "failure", name: "checks" });
+    const cleanup = run({ id: 2, conclusion: "stale", name: "cleanup" });
+    const said = describeVerdict(
+      "PR octocat/repo#7",
+      "deadbeef".repeat(5),
+      judgeHead("FAILURE", [checks, cleanup], []),
+      "https://github.com/octocat/repo/pull/7/checks",
+      () => {},
+    );
+    expect(said?.text).toBe(
+      "PR octocat/repo#7: CI red on deadbeefdead: checks / check / Run tests, cleanup",
+    );
+    // Two workflow files named alike: the run with no job row is told from the other by suite.
+    const twin = run({ id: 2, conclusion: "stale", name: "checks", wf: 102 });
+    const alike = describeVerdict(
+      "PR octocat/repo#7",
+      "deadbeef".repeat(5),
+      judgeHead(
+        "FAILURE",
+        [run({ id: 1, conclusion: "failure", name: "checks", wf: 101 }), twin],
+        [],
+      ),
+      "https://github.com/octocat/repo/pull/7/checks",
+      () => {},
+    );
+    expect(alike?.text).toBe(
+      "PR octocat/repo#7: CI red on deadbeefdead: checks / check / Run tests, checks",
+    );
+    expect(s.violations()).toBe("");
   });
 });
 
