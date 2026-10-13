@@ -10,99 +10,74 @@
 // `import X = require("./x")`. Only relative specifiers are edges; a path
 // alias is invisible here, so the declaration names the tree, not the alias.
 
-import { type SpawnSyncReturns, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-} from "node:fs";
-import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { Node, parseSync as ParseSync, TemplateElement } from "oxc-parser";
+import type { ParserPlugin } from "@babel/parser";
+import type { Node, Program } from "@babel/types";
 
-// The parser installs once per manifest-and-lock pair into a shared per-user cache, never into the skill
-// folder or the user's project; hashing both files makes a bumped pin, or a lock left stale behind one,
-// a fresh directory where `--frozen-lockfile` decides. Install output stays off stdout, which the
-// scripts' callers parse.
-const SKILL_DIR = join(import.meta.dir, "..");
-const SKILL = basename(SKILL_DIR);
-if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
-  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
-  process.exit(2);
-}
-const DEPS_HASH = createHash("sha256")
-  .update(readFileSync(join(SKILL_DIR, "package.json")))
-  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
-  .digest("hex")
-  .slice(0, 12);
-const DEPS_DIR = join(
-  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
-  "skills-deps",
-  `${SKILL}-${DEPS_HASH}`,
-);
-// One shell word, so the printed recovery command runs as printed whatever the path holds.
-const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
-const INSTALL_TIMEOUT_MS = 10 * 60_000;
-// Parallel lanes start these scripts at once on a cold cache, so each installs into its own staging
-// directory and renames the finished node_modules into place: a reader sees a complete tree or none,
-// and the rename that finds one already there lost the race and discards its own. DEPS_DIR holds the
-// manifests too, so the printed recovery command runs in it.
-if (!existsSync(join(DEPS_DIR, "node_modules"))) {
-  const staging = `${DEPS_DIR}.tmp-${process.pid}`;
-  let install: SpawnSyncReturns<string>;
-  try {
-    rmSync(staging, { recursive: true, force: true });
-    for (const dir of [DEPS_DIR, staging]) {
-      mkdirSync(dir, { recursive: true });
-      for (const file of ["package.json", "bun.lock"]) {
-        copyFileSync(join(SKILL_DIR, file), join(dir, file));
-      }
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
     }
-    install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", staging], {
-      encoding: "utf8",
-      timeout: INSTALL_TIMEOUT_MS,
-    });
-    if (install.status === 0 && existsSync(join(staging, "node_modules"))) {
-      try {
-        renameSync(join(staging, "node_modules"), join(DEPS_DIR, "node_modules"));
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
-      }
-    }
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
+    scripts = dirname(scripts);
   }
-  if (install.status !== 0) {
-    process.stderr.write(install.stderr ?? "");
-    const timedOut = (install.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
-    console.error(
-      `${SKILL} dependencies did not install${timedOut ? ` within ${INSTALL_TIMEOUT_MS / 60_000} minutes` : ""}; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
 }
-export const parseSync: typeof ParseSync = await (async () => {
-  try {
-    // Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, which would load
-    // whatever version the global cache has; the directory check keeps a broken install a failure.
-    if (!existsSync(join(DEPS_DIR, "node_modules", "oxc-parser"))) throw new Error("not installed");
-    const oxc: typeof import("oxc-parser") = await import(Bun.resolveSync("oxc-parser", DEPS_DIR));
-    return oxc.parseSync;
-  } catch {
-    console.error(
-      `${SKILL} scripts need oxc-parser: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
-})();
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
+}
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, skill: string, built: string): void {
+  // bun build resolves installed packages only: install the pins for the build's duration, then remove them.
+  const ok =
+    runBun(["install", "--production", "--no-save", "--cwd", skill]) &&
+    runBun(["build", source, "--target", "bun", "--outfile", built]);
+  rmSync(join(skill, "node_modules"), { recursive: true, force: true });
+  if (!ok) process.exit(2);
+}
+
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built)) build(source, skill, built);
+  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  // A bundle killed by a signal has no status: die of the same signal.
+  if (run.signal) process.kill(process.pid, run.signal);
+  process.exitCode = run.status ?? 1;
+  return true;
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { parse } = await import("@babel/parser");
 
 export const DEFAULT_CONFIG = "architecture.yml";
 
@@ -196,7 +171,162 @@ export function layerOf(arch: Architecture, path: string): string | undefined {
   )?.[0];
 }
 
-// --- source scanning ---------------------------------------------------------
+// --- source reading ----------------------------------------------------------
+
+/**
+ * One export of a module: `name` as an importer sees it, and `from` when the binding is another
+ * module's (`export { a as b } from "./m"`, or `import { a } from "./m"; export { a as b }`).
+ */
+export interface ExportEntry {
+  readonly name: string;
+  readonly from?: { readonly request: string; readonly imported: string };
+}
+
+export interface ModuleRecord {
+  readonly program: Program;
+  /** The module requests of the static imports and re-exports, in source order. */
+  readonly requests: readonly string[];
+  readonly exports: readonly ExportEntry[];
+  /** The module requests of `export * from`, in source order. */
+  readonly stars: readonly string[];
+}
+
+/** The string an export or import name is: `export { a as "b c" }` names "b c". */
+function moduleExportName(node: Node): string {
+  return node.type === "Identifier" ? node.name : node.type === "StringLiteral" ? node.value : "";
+}
+
+/** The identifiers a declaration binds: `export const { a, b: [c] } = x` exports a and c. */
+function* boundNames(node: Node | null | undefined): Generator<string> {
+  if (!node) return;
+  switch (node.type) {
+    case "Identifier":
+      yield node.name;
+      return;
+    case "VariableDeclaration":
+      for (const declarator of node.declarations) yield* boundNames(declarator.id);
+      return;
+    case "ObjectPattern":
+      for (const property of node.properties) {
+        yield* boundNames(property.type === "RestElement" ? property.argument : property.value);
+      }
+      return;
+    case "ArrayPattern":
+      for (const element of node.elements) yield* boundNames(element);
+      return;
+    case "AssignmentPattern":
+      yield* boundNames(node.left);
+      return;
+    case "RestElement":
+      yield* boundNames(node.argument);
+      return;
+    case "FunctionDeclaration":
+    case "ClassDeclaration":
+    case "TSDeclareFunction":
+    case "TSTypeAliasDeclaration":
+    case "TSInterfaceDeclaration":
+    case "TSEnumDeclaration":
+    case "TSImportEqualsDeclaration":
+      yield* boundNames(node.id);
+      return;
+    case "TSModuleDeclaration":
+      // `declare module "x"` is ambient and binds no name here.
+      if (node.id.type === "Identifier") yield node.id.name;
+      return;
+    default:
+      return;
+  }
+}
+
+/**
+ * The grammar follows the extension, as oxc's did: a .js file has no TypeScript syntax, so `a < b > (c)`
+ * is a comparison there, not a call with type arguments. tsc owns binding checks, so an export ahead of
+ * its import parses, and a CommonJS file may return at top level; .cjs is a script, where `package` is a
+ * plain name, and .js is a module unless only script syntax parses it.
+ */
+function parseProgram(file: string, text: string): Program {
+  const plugins: ParserPlugin[] = ["decorators", "decoratorAutoAccessors"];
+  if (!/\.[mc]?jsx?$/.test(file)) plugins.push("typescript");
+  if (/\.[jt]sx$|\.[mc]?js$/.test(file)) plugins.push("jsx");
+  const options = {
+    plugins,
+    attachComment: false,
+    allowUndeclaredExports: true,
+    allowReturnOutsideFunction: true,
+  };
+  if (file.endsWith(".cjs")) return parse(text, { ...options, sourceType: "script" }).program;
+  try {
+    return parse(text, { ...options, sourceType: "module" }).program;
+  } catch (error) {
+    if (!/\.jsx?$/.test(file)) throw error;
+    try {
+      return parse(text, { ...options, sourceType: "script" }).program;
+    } catch {
+      throw error;
+    }
+  }
+}
+
+/**
+ * The module record of `text`: its static imports and exports, read from the TypeScript AST. A file
+ * that does not parse throws naming the line.
+ */
+export function parseModule(file: string, text: string): ModuleRecord {
+  let program: Program;
+  try {
+    program = parseProgram(file, text);
+  } catch (error) {
+    const line = (error as { loc?: { line?: number } }).loc?.line ?? 1;
+    throw new Error(
+      `${file}:${line} does not parse: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  // Bindings first, since `export { v }` may precede `import { v } from "./a"` and still forward it.
+  const imported = new Map<string, { request: string; imported: string }>();
+  for (const statement of program.body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.type === "ImportSpecifier") {
+        imported.set(specifier.local.name, {
+          request: statement.source.value,
+          imported: moduleExportName(specifier.imported),
+        });
+      } else if (specifier.type === "ImportDefaultSpecifier") {
+        imported.set(specifier.local.name, {
+          request: statement.source.value,
+          imported: "default",
+        });
+      }
+    }
+  }
+  const requests: string[] = [];
+  const exports: ExportEntry[] = [];
+  const stars: string[] = [];
+  for (const statement of program.body) {
+    if (statement.type === "ImportDeclaration") {
+      requests.push(statement.source.value);
+    } else if (statement.type === "ExportAllDeclaration") {
+      requests.push(statement.source.value);
+      stars.push(statement.source.value);
+    } else if (statement.type === "ExportDefaultDeclaration") {
+      exports.push({ name: "default" });
+    } else if (statement.type === "ExportNamedDeclaration") {
+      const request = statement.source?.value;
+      if (request !== undefined) requests.push(request);
+      for (const name of boundNames(statement.declaration)) exports.push({ name });
+      for (const specifier of statement.specifiers) {
+        if (specifier.type === "ExportNamespaceSpecifier") {
+          exports.push({ name: moduleExportName(specifier.exported) });
+        } else if (specifier.type === "ExportSpecifier") {
+          const local = moduleExportName(specifier.local);
+          const from = request === undefined ? imported.get(local) : { request, imported: local };
+          exports.push({ name: moduleExportName(specifier.exported), from });
+        }
+      }
+    }
+  }
+  return { program, requests, exports, stars };
+}
 
 /** Every AST node under `value`, in source order. */
 export function* nodesOf(value: unknown): Generator<Node> {
@@ -207,7 +337,7 @@ export function* nodesOf(value: unknown): Generator<Node> {
   if (typeof value !== "object" || value === null) return;
   if ("type" in value && typeof value.type === "string") yield value as Node;
   for (const [key, child] of Object.entries(value)) {
-    if (key !== "parent") yield* nodesOf(child);
+    if (key !== "loc") yield* nodesOf(child);
   }
 }
 
@@ -222,11 +352,9 @@ function unwrapped(node: Node): Node {
 
 /** The string a literal or substitution-free template specifier holds, else undefined. */
 function literalSpecifier(node: Node | null | undefined): string | undefined {
-  if (node?.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node?.type === "StringLiteral") return node.value;
   if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
-    return node.quasis
-      .map((quasi: TemplateElement) => quasi.value.cooked ?? quasi.value.raw)
-      .join("");
+    return node.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join("");
   }
   return undefined;
 }
@@ -237,33 +365,19 @@ function literalSpecifier(node: Node | null | undefined): string | undefined {
  * edge is the one failure this lint exists to catch, so the file is rewritten, not skipped.
  */
 export function importSpecifiers(text: string, file: string): string[] {
-  const { program, module, errors } = parseSync(file, text);
-  const lineOf = (offset: number): number => text.slice(0, offset).split("\n").length;
-  const [error] = errors;
-  if (error) {
+  const { program, requests } = parseModule(file, text);
+  const found = new Set<string>(requests);
+  const computed = (node: Node): never => {
     throw new Error(
-      `${file}:${lineOf(error.labels[0]?.start ?? 0)} does not parse: ${error.message}`,
-    );
-  }
-  const found = new Set<string>();
-  for (const entry of module.staticImports) found.add(entry.moduleRequest.value);
-  for (const statement of module.staticExports) {
-    for (const entry of statement.entries) {
-      if (entry.moduleRequest) found.add(entry.moduleRequest.value);
-    }
-  }
-  const computed = (offset: number): never => {
-    throw new Error(
-      `${file}:${lineOf(offset)} loads a module through a computed specifier, which the import graph cannot follow; use a string literal`,
+      `${file}:${node.loc?.start.line ?? 0} loads a module through a computed specifier, which the import graph cannot follow; use a string literal`,
     );
   };
   for (const node of nodesOf(program)) {
     if (node.type === "ImportExpression") {
-      found.add(literalSpecifier(node.source) ?? computed(node.start));
-    } else if (node.type === "CallExpression") {
-      const callee = unwrapped(node.callee);
-      if (isRequireCallee(callee)) {
-        found.add(literalSpecifier(node.arguments[0]) ?? computed(node.start));
+      found.add(literalSpecifier(node.source) ?? computed(node));
+    } else if (node.type === "CallExpression" || node.type === "OptionalCallExpression") {
+      if (isRequireCallee(unwrapped(node.callee))) {
+        found.add(literalSpecifier(node.arguments[0]) ?? computed(node));
       }
     } else if (node.type === "TSImportType") {
       found.add(node.source.value);
@@ -274,11 +388,13 @@ export function importSpecifiers(text: string, file: string): string[] {
   return [...found].filter((specifier) => /^\.\.?\//.test(specifier));
 }
 
-/** `require(...)` and CommonJS's `module.require(...)` both load; `require.resolve(...)` does not. */
+/** `require(...)` and CommonJS's `module.require(...)` load, through `?.` too; `require.resolve(...)` does not. */
 function isRequireCallee(callee: Node): boolean {
   if (callee.type === "Identifier") return callee.name === "require";
-  if (callee.type !== "MemberExpression" || callee.computed) return false;
-  const { object, property } = callee as unknown as { object: Node; property: Node };
+  if (callee.type !== "MemberExpression" && callee.type !== "OptionalMemberExpression")
+    return false;
+  if (callee.computed) return false;
+  const { object, property } = callee;
   return (
     object.type === "Identifier" &&
     object.name === "module" &&

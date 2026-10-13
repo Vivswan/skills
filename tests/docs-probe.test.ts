@@ -357,11 +357,9 @@ describe("the CLI", () => {
         "  --shape-only  word counts only; skip the check that named paths exist",
         "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
       ].join("\n");
-    // A vendored copy ships beside the skill's package.json and bun.lock, as the bootstrap requires.
+    // A vendored copy ships beside the skill's package.json, the pin list its dependencies install from.
     const root = repo({ "a.md": "" });
-    const skillDir = dirname(dirname(PROBE));
-    for (const file of ["package.json", "bun.lock"])
-      copyFileSync(join(skillDir, file), join(root, file));
+    copyFileSync(join(dirname(dirname(PROBE)), "package.json"), join(root, "package.json"));
     const copy = join(root, "scripts", "docs_probe.ts");
     mkdirSync(dirname(copy));
     copyFileSync(PROBE, copy);

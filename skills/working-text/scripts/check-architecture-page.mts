@@ -13,72 +13,78 @@
 // and need no demonstration line.
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Nodes, Paragraph, Root } from "mdast";
-import { parseSync, pathLabel, resolveImport, SOURCE_EXTENSIONS } from "./arch-lint.mts";
 
-const SKILL_DIR = join(import.meta.dir, "..");
-const SKILL = basename(SKILL_DIR);
-if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
-  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
-  process.exit(2);
-}
-const DEPS_HASH = createHash("sha256")
-  .update(readFileSync(join(SKILL_DIR, "package.json")))
-  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
-  .digest("hex")
-  .slice(0, 12);
-const DEPS_DIR = join(
-  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
-  "skills-deps",
-  `${SKILL}-${DEPS_HASH}`,
-);
-// One shell word, so the printed recovery command runs as printed whatever the path holds.
-const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
-if (!existsSync(join(DEPS_DIR, "node_modules"))) {
-  mkdirSync(DEPS_DIR, { recursive: true });
-  for (const file of ["package.json", "bun.lock"]) {
-    copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
   }
-  const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], {
-    encoding: "utf8",
-  });
-  if (install.status !== 0) {
-    process.stderr.write(install.stderr ?? "");
-    console.error(
-      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
 }
-// Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
-for (const name of [
-  "mdast-util-from-markdown",
-  "mdast-util-gfm",
-  "mdast-util-to-string",
-  "micromark-extension-gfm",
-]) {
-  if (!existsSync(join(DEPS_DIR, "node_modules", name))) {
-    console.error(
-      `${SKILL} scripts need ${name}: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
 }
-const { fromMarkdown }: typeof import("mdast-util-from-markdown") = await import(
-  Bun.resolveSync("mdast-util-from-markdown", DEPS_DIR)
-);
-const { gfmFromMarkdown }: typeof import("mdast-util-gfm") = await import(
-  Bun.resolveSync("mdast-util-gfm", DEPS_DIR)
-);
-const { toString: plainText }: typeof import("mdast-util-to-string") = await import(
-  Bun.resolveSync("mdast-util-to-string", DEPS_DIR)
-);
-const { gfm }: typeof import("micromark-extension-gfm") = await import(
-  Bun.resolveSync("micromark-extension-gfm", DEPS_DIR)
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, skill: string, built: string): void {
+  // bun build resolves installed packages only: install the pins for the build's duration, then remove them.
+  const ok =
+    runBun(["install", "--production", "--no-save", "--cwd", skill]) &&
+    runBun(["build", source, "--target", "bun", "--outfile", built]);
+  rmSync(join(skill, "node_modules"), { recursive: true, force: true });
+  if (!ok) process.exit(2);
+}
+
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built)) build(source, skill, built);
+  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  // A bundle killed by a signal has no status: die of the same signal.
+  if (run.signal) process.kill(process.pid, run.signal);
+  process.exitCode = run.status ?? 1;
+  return true;
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { fromMarkdown } = await import("mdast-util-from-markdown");
+const { gfmFromMarkdown } = await import("mdast-util-gfm");
+const { toString: plainText } = await import("mdast-util-to-string");
+const { gfm } = await import("micromark-extension-gfm");
+const { visit } = await import("unist-util-visit");
+const { parseModule, pathLabel, resolveImport, SOURCE_EXTENSIONS } = await import(
+  "./arch-lint.mts"
 );
 
 // An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
@@ -103,34 +109,30 @@ export function exportOrigins(
   if (cached) return cached;
   if (visiting.has(file)) return new Map();
   const inner = new Set([...visiting, file]);
-  const { module } = parseSync(file, readFileSync(file, "utf8"));
+  const { exports, stars } = parseModule(file, readFileSync(file, "utf8"));
+  const isRelative = (request: string): boolean => /^\.\.?\//.test(request);
   const direct = new Map<string, string>();
   const starred = new Map<string, Set<string>>();
-  for (const statement of module.staticExports) {
-    for (const entry of statement.entries) {
-      const request = entry.moduleRequest?.value;
-      const relativeRequest = request !== undefined && /^\.\.?\//.test(request);
-      if (entry.exportName.kind === "Default") {
-        direct.set("default", `${file}#default`);
-      } else if (entry.exportName.name !== null) {
-        // `export { x as y } from "./m"`, and `import { x } from "./m"; export { x as y }`, which the
-        // module record already folds into the same shape, keep the binding of ./m, not a new one here.
-        const imported = entry.importName.kind === "Name" ? entry.importName.name : null;
-        const origin =
-          relativeRequest && imported !== null
-            ? (exportOrigins(resolveImport(file, request), inner).get(imported) ??
-              `${resolveImport(file, request)}#${imported}`)
-            : `${file}#${entry.exportName.name}`;
-        direct.set(entry.exportName.name, origin);
-      } else if (relativeRequest) {
-        const target = resolveImport(file, request);
-        for (const [name, origin] of exportOrigins(target, inner)) {
-          if (name === "default") continue;
-          const origins = starred.get(name) ?? new Set<string>();
-          origins.add(origin);
-          starred.set(name, origins);
-        }
-      }
+  for (const entry of exports) {
+    // `export { x as y } from "./m"`, and `import { x } from "./m"; export { x as y }`, keep the binding of ./m,
+    // not a new one here; a name bound in this file, a default export included, is this file's.
+    const from =
+      entry.from !== undefined && isRelative(entry.from.request) ? entry.from : undefined;
+    const origin =
+      from === undefined
+        ? `${file}#${entry.name}`
+        : (exportOrigins(resolveImport(file, from.request), inner).get(from.imported) ??
+          `${resolveImport(file, from.request)}#${from.imported}`);
+    direct.set(entry.name, origin);
+  }
+  for (const request of stars) {
+    if (!isRelative(request)) continue;
+    const target = resolveImport(file, request);
+    for (const [name, origin] of exportOrigins(target, inner)) {
+      if (name === "default") continue;
+      const origins = starred.get(name) ?? new Set<string>();
+      origins.add(origin);
+      starred.set(name, origins);
     }
   }
   const names = new Map(direct);
@@ -199,22 +201,16 @@ function positionOf(node: Nodes): Span {
   };
 }
 
-/** Every node under `node`, itself first, in page order. */
-function* descendants(node: Nodes): Generator<Nodes> {
-  yield node;
-  if ("children" in node) for (const child of node.children) yield* descendants(child);
-}
-
 /** The destinations a paragraph links, a reference link through its definition. */
 function linkTargets(paragraph: Paragraph, definitions: ReadonlyMap<string, string>): string[] {
   const links: string[] = [];
-  for (const node of descendants(paragraph)) {
+  visit(paragraph, (node) => {
     if (node.type === "link") links.push(node.url);
     else if (node.type === "linkReference") {
       const url = definitions.get(node.identifier);
       if (url !== undefined) links.push(url);
     }
-  }
+  });
   return links;
 }
 
@@ -229,11 +225,9 @@ export function readPage(markdown: string): Page {
     mdastExtensions: [gfmFromMarkdown()],
   });
   const definitions = new Map<string, string>();
-  for (const node of descendants(root)) {
-    if (node.type === "definition" && !definitions.has(node.identifier)) {
-      definitions.set(node.identifier, node.url);
-    }
-  }
+  visit(root, "definition", (node) => {
+    if (!definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
+  });
   const fences: Fence[] = [];
   const markers: Marker[] = [];
   const headings: number[] = [];
@@ -258,8 +252,7 @@ export function readPage(markdown: string): Page {
     if (block.type === "paragraph" && plainText(block).startsWith(DEMONSTRATED)) {
       demonstrations.push({ line: start.line, links: linkTargets(block, definitions) });
     }
-    for (const node of descendants(block)) {
-      if (node.type !== "code") continue;
+    visit(block, "code", (node) => {
       const at = positionOf(node);
       fences.push({
         line: at.start.line,
@@ -268,7 +261,7 @@ export function readPage(markdown: string): Page {
         body: node.value,
         generated,
       });
-    }
+    });
   }
   return { fences, markers, headings, demonstrations };
 }

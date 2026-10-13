@@ -4,7 +4,7 @@ One subagent whose only job is watching the rest of the fleet. It starts a perio
 
 Sweep every 5-10 minutes. Each sweep is a single script invocation built to the Probe Cost budget below, so the bound is noise, not load. Reviewers sometimes idle without delivering: tell them explicitly to report back, and nudge if only an idle notification arrives.
 
-The measurement mechanism lives in this skill's `scripts/` now. Runtime: bun. `baseline.mts` needs it, since on first run it installs its one dependency, `diff`, from the skill's `bun.lock` into a shared per-user cache; the other scripts also run on Node 24.3+.
+The measurement mechanism lives in this skill's `scripts/` now. Runtime: bun. `baseline.mts` needs it, since on first run it bundles its one dependency, `diff`, into the skill's `.build` folder; the other scripts also run on Node 24.3+.
 
 Every mechanical trap those scripts retire is deliberately absent from this file: self-matching greps, zsh word-splitting and glob aborts, the missing `timeout` binary on macOS, fragile hand-grepped token checks, counts standing in for the sets they approximate. A trap folded into a tested script cannot re-fire. Keeping its prose recipe around only invites hand-rolling the probe again.
 

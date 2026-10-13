@@ -42,7 +42,9 @@ import {
   checkReadmeSkillList,
   checkReadmeUsageExplicitRoster,
   checkSkillDependencies,
-  checkSkillScriptImports,
+  checkSkillScripts,
+  ensureBuiltTemplate,
+  SCRIPT_EXTENSIONS,
   SEMVER,
 } from "./smoke-checks";
 import { parseSources } from "./sync-xeno.mts";
@@ -90,28 +92,24 @@ function checkNoInstallDroppedFiles(skillDir: string): void {
   }
 }
 
-const SCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
-
-/** bun.lock is JSONC (trailing commas), so JSON.parse would refuse the file bun itself writes. */
-function loadLockfile(path: string): Record<string, unknown> {
-  let lock: unknown;
-  try {
-    lock = Bun.JSONC.parse(readTextFile(path));
-  } catch (error) {
-    fail(`${rel(path)}: invalid JSONC (${errorMessage(error)})`);
-  }
-  if (!isRecord(lock)) fail(`${rel(path)}: root must be an object`);
-  return lock;
-}
+const LOCKFILES = new Set([
+  "bun.lock",
+  "bun.lockb",
+  "package-lock.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+]);
 
 interface SkillTree {
   readonly manifestPaths: string[];
   readonly nodeModulesPaths: string[];
+  readonly lockfilePaths: string[];
   readonly scriptPaths: string[];
 }
 
 // statSync follows links, so a linked package.json or script is judged as the file it points at and a dangling
-// link fails instead of vanishing from the walk; node_modules is recorded for the gate, never entered.
+// link fails instead of vanishing from the walk; node_modules is recorded for the gate, never entered, and .build
+// holds the gitignored bundles a run left behind.
 function walkSkillTree(dir: string, tree: SkillTree): SkillTree {
   const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
     a.name < b.name ? -1 : 1,
@@ -122,6 +120,7 @@ function walkSkillTree(dir: string, tree: SkillTree): SkillTree {
       tree.nodeModulesPaths.push(full);
       continue;
     }
+    if (entry.name === ".build") continue;
     let stat: ReturnType<typeof statSync>;
     try {
       stat = statSync(full);
@@ -130,30 +129,36 @@ function walkSkillTree(dir: string, tree: SkillTree): SkillTree {
     }
     if (stat.isDirectory()) walkSkillTree(full, tree);
     else if (entry.name === "package.json") tree.manifestPaths.push(full);
-    else if (SCRIPT_EXTENSIONS.has(extname(entry.name))) tree.scriptPaths.push(full);
+    else if (LOCKFILES.has(entry.name)) tree.lockfilePaths.push(full);
+    else if (SCRIPT_EXTENSIONS.includes(extname(entry.name))) tree.scriptPaths.push(full);
   }
   return tree;
 }
 
-function checkDependencies(skillDir: string, rootDevDependencies: Record<string, unknown>): void {
+function checkDependencies(
+  skillDir: string,
+  rootDevDependencies: Record<string, unknown>,
+  buildBlock: string,
+): void {
   const tree = walkSkillTree(skillDir, {
     manifestPaths: [],
     nodeModulesPaths: [],
+    lockfilePaths: [],
     scriptPaths: [],
   });
   const manifestPath = join(skillDir, "package.json");
-  const lockPath = join(skillDir, "bun.lock");
   const declared = checkSkillDependencies({
     skillPath: rel(skillDir),
     manifestPaths: tree.manifestPaths.map(rel),
     nodeModulesPaths: tree.nodeModulesPaths.map(rel),
+    lockfilePaths: tree.lockfilePaths.map(rel),
     manifest: existsSync(manifestPath) ? loadJsonObject(manifestPath) : undefined,
-    lock: existsSync(lockPath) ? loadLockfile(lockPath) : undefined,
     rootDevDependencies,
   });
-  for (const path of tree.scriptPaths) {
-    checkSkillScriptImports(rel(path), readTextFile(path), { skillPath: rel(skillDir), declared });
-  }
+  checkSkillScripts(
+    tree.scriptPaths.map((path) => ({ path: rel(path), text: readTextFile(path) })),
+    { skillPath: rel(skillDir), declared, buildBlock },
+  );
 }
 
 interface CodexManifest {
@@ -974,13 +979,19 @@ function main(): void {
   const rootDevDependencies = isRecord(rootPackage.devDependencies)
     ? rootPackage.devDependencies
     : {};
+  const buildBlock = ensureBuiltTemplate(readTextFile(join(ROOT, "docs", "authoring.md")));
+  if (!readTextFile(join(ROOT, ".gitignore")).split("\n").includes(".build/")) {
+    fail(
+      ".gitignore: missing the .build/ line; a skill script's bundle is never committed (docs/authoring.md > Dependencies)",
+    );
+  }
   const codexManifests: CodexManifest[] = [];
   const skillFrontmatters: SkillFrontmatter[] = [];
   for (const skillDir of dirs) {
     requireFile(join(skillDir, "README.md"));
     checkNoPlaceholders(skillDir);
     checkNoInstallDroppedFiles(skillDir);
-    checkDependencies(skillDir, rootDevDependencies);
+    checkDependencies(skillDir, rootDevDependencies, buildBlock);
     const codex = loadCodexManifest(skillDir);
     const skillMd = loadSkillFrontmatter(skillDir);
     checkSingleSourceVersion(codex, skillMd);

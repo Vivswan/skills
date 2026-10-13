@@ -15,66 +15,76 @@
 // may name files the reader will create.
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { List, Nodes, RootContent } from "mdast";
 import type { Position } from "unist";
 
-const SKILL_DIR = join(import.meta.dir, "..");
-const SKILL = basename(SKILL_DIR);
-if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
-  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
-  process.exit(2);
-}
-const DEPS_HASH = createHash("sha256")
-  .update(readFileSync(join(SKILL_DIR, "package.json")))
-  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
-  .digest("hex")
-  .slice(0, 12);
-const DEPS_DIR = join(
-  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
-  "skills-deps",
-  `${SKILL}-${DEPS_HASH}`,
-);
-// One shell word, so the printed recovery command runs as printed whatever the path holds.
-const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
-if (!existsSync(join(DEPS_DIR, "node_modules"))) {
-  mkdirSync(DEPS_DIR, { recursive: true });
-  for (const file of ["package.json", "bun.lock"]) {
-    copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
   }
-  const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], {
-    encoding: "utf8",
-  });
-  if (install.status !== 0) {
-    process.stderr.write(install.stderr ?? "");
-    console.error(
-      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
 }
-// Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
-for (const name of ["mdast-util-from-markdown", "mdast-util-gfm", "micromark-extension-gfm"]) {
-  if (!existsSync(join(DEPS_DIR, "node_modules", name))) {
-    console.error(
-      `${SKILL} scripts need ${name}: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
 }
-const { fromMarkdown }: typeof import("mdast-util-from-markdown") = await import(
-  Bun.resolveSync("mdast-util-from-markdown", DEPS_DIR)
-);
-const { gfmFromMarkdown }: typeof import("mdast-util-gfm") = await import(
-  Bun.resolveSync("mdast-util-gfm", DEPS_DIR)
-);
-const { gfm }: typeof import("micromark-extension-gfm") = await import(
-  Bun.resolveSync("micromark-extension-gfm", DEPS_DIR)
-);
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, skill: string, built: string): void {
+  // bun build resolves installed packages only: install the pins for the build's duration, then remove them.
+  const ok =
+    runBun(["install", "--production", "--no-save", "--cwd", skill]) &&
+    runBun(["build", source, "--target", "bun", "--outfile", built]);
+  rmSync(join(skill, "node_modules"), { recursive: true, force: true });
+  if (!ok) process.exit(2);
+}
+
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built)) build(source, skill, built);
+  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  // A bundle killed by a signal has no status: die of the same signal.
+  if (run.signal) process.kill(process.pid, run.signal);
+  process.exitCode = run.status ?? 1;
+  return true;
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { fromMarkdown } = await import("mdast-util-from-markdown");
+const { gfmFromMarkdown } = await import("mdast-util-gfm");
+const { gfm } = await import("micromark-extension-gfm");
+const { visit } = await import("unist-util-visit");
 
 export const DEFAULT_MAX_WORDS = 70;
 
@@ -155,12 +165,6 @@ function startLine(node: Nodes): number {
   return position.start.line;
 }
 
-/** Every node under `node`, itself first, in page order. */
-function* descendants(node: Nodes): Generator<Nodes> {
-  yield node;
-  if ("children" in node) for (const child of node.children) yield* descendants(child);
-}
-
 /**
  * The text a reader sees: a comment is nothing (it joins what it sits between), any other inline
  * HTML is at most a break, a hard break is a line, an image is nothing.
@@ -179,11 +183,9 @@ export function scanPage(text: string): Scan {
   });
   // A definition resolves references anywhere on the page, a generated region included; one no reference uses renders no link.
   const definitions = new Map<string, string>();
-  for (const node of descendants(tree)) {
-    if (node.type === "definition" && !definitions.has(node.identifier)) {
-      definitions.set(node.identifier, node.url);
-    }
-  }
+  visit(tree, "definition", (node) => {
+    if (!definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
+  });
   const scan: Scan = { units: [], codespans: [], links: [] };
   const walk = (nodes: readonly RootContent[], itemText: boolean) => {
     for (const node of nodes) {
@@ -320,9 +322,11 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
   return findings.sort((a, b) => a.line - b.line);
 }
 
+// The bundle in .build/ is <name>.js built from <name>.mts; a vendored copy under another name prints that name,
+// an importer never its own.
+const SELF = basename(import.meta.path).replace(/\.js$/, ".mts");
 const USAGE = [
-  // The file names itself, so a vendored copy under another name prints a command that exists there.
-  `usage: ${basename(fileURLToPath(import.meta.url))} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
+  `usage: ${SELF} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
   "  --root        the repository root paths resolve against (default: cwd)",
   "  --base        a directory under the root that paths also resolve against (repeatable)",
   "  --max-words   the cap on a paragraph or list item (default: 70)",

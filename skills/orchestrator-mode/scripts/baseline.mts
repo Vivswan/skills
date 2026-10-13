@@ -20,13 +20,13 @@
  * manifest.json can never collide with the manifest itself.
  */
 
-import { type SpawnSyncReturns, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -34,79 +34,70 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-// The diff library installs once per manifest-and-lock pair into a shared per-user cache, never into the skill
-// folder or the user's project; hashing both files makes a bumped pin, or a lock left stale behind one,
-// a fresh directory where `--frozen-lockfile` decides. Install output stays off stdout, which the
-// check's callers parse.
-const SKILL_DIR = join(import.meta.dir, "..");
-const SKILL = basename(SKILL_DIR);
-if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
-  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
-  process.exit(2);
-}
-const DEPS_HASH = createHash("sha256")
-  .update(readFileSync(join(SKILL_DIR, "package.json")))
-  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
-  .digest("hex")
-  .slice(0, 12);
-const DEPS_DIR = join(
-  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
-  "skills-deps",
-  `${SKILL}-${DEPS_HASH}`,
-);
-// One shell word, so the printed recovery command runs as printed whatever the path holds.
-const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
-const INSTALL_TIMEOUT_MS = 10 * 60_000;
-// Parallel lanes start these scripts at once on a cold cache, so each installs into its own staging
-// directory and renames the finished node_modules into place: a reader sees a complete tree or none,
-// and the rename that finds one already there lost the race and discards its own. DEPS_DIR holds the
-// manifests too, so the printed recovery command runs in it.
-if (!existsSync(join(DEPS_DIR, "node_modules"))) {
-  const staging = `${DEPS_DIR}.tmp-${process.pid}`;
-  let install: SpawnSyncReturns<string>;
-  try {
-    rmSync(staging, { recursive: true, force: true });
-    for (const dir of [DEPS_DIR, staging]) {
-      mkdirSync(dir, { recursive: true });
-      for (const file of ["package.json", "bun.lock"]) {
-        copyFileSync(join(SKILL_DIR, file), join(dir, file));
-      }
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
     }
-    install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", staging], {
-      encoding: "utf8",
-      timeout: INSTALL_TIMEOUT_MS,
-    });
-    if (install.status === 0 && existsSync(join(staging, "node_modules"))) {
-      try {
-        renameSync(join(staging, "node_modules"), join(DEPS_DIR, "node_modules"));
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
-      }
-    }
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
+    scripts = dirname(scripts);
   }
-  if (install.status !== 0) {
-    process.stderr.write(install.stderr ?? "");
-    const timedOut = (install.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
-    console.error(
-      `${SKILL} dependencies did not install${timedOut ? ` within ${INSTALL_TIMEOUT_MS / 60_000} minutes` : ""}; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
 }
-// Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
-if (!existsSync(join(DEPS_DIR, "node_modules", "diff"))) {
-  console.error(
-    `${SKILL} scripts need diff: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-  );
-  process.exit(2);
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
 }
-const jsdiff: typeof import("diff") = await import(Bun.resolveSync("diff", DEPS_DIR));
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, skill: string, built: string): void {
+  // bun build resolves installed packages only: install the pins for the build's duration, then remove them.
+  const ok =
+    runBun(["install", "--production", "--no-save", "--cwd", skill]) &&
+    runBun(["build", source, "--target", "bun", "--outfile", built]);
+  rmSync(join(skill, "node_modules"), { recursive: true, force: true });
+  if (!ok) process.exit(2);
+}
+
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built)) build(source, skill, built);
+  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  // A bundle killed by a signal has no status: die of the same signal.
+  if (run.signal) process.kill(process.pid, run.signal);
+  process.exitCode = run.status ?? 1;
+  return true;
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { createTwoFilesPatch, FILE_HEADERS_ONLY } = await import("diff");
 
 const MANIFEST_NAME = "manifest.json";
 const CONTENT_DIR = "content";
@@ -210,14 +201,14 @@ function compareFiles(baselineFile: string, treeFile: string): DiffResult {
     };
   }
   const [pinnedText, currentText] = decodeTexts(pinned, current);
-  const patch = jsdiff.createTwoFilesPatch(
+  const patch = createTwoFilesPatch(
     baselineFile,
     treeFile,
     pinnedText,
     currentText,
     undefined,
     undefined,
-    { context: 3, timeout: DIFF_TIMEOUT_MS, headerOptions: jsdiff.FILE_HEADERS_ONLY },
+    { context: 3, timeout: DIFF_TIMEOUT_MS, headerOptions: FILE_HEADERS_ONLY },
   );
   return {
     identical: false,

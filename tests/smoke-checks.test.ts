@@ -8,7 +8,8 @@ import {
   checkReadmeSkillList,
   checkReadmeUsageExplicitRoster,
   checkSkillDependencies,
-  checkSkillScriptImports,
+  checkSkillScripts,
+  ensureBuiltTemplate,
   type SkillDependencyLayout,
 } from "../scripts/smoke-checks";
 import { expectCheckFailure } from "./helpers/check-failure";
@@ -359,59 +360,34 @@ describe("checkReadmeUsageExplicitRoster", () => {
 });
 
 describe("checkSkillDependencies", () => {
-  // What drifts: bun's auto-install ignores a package.json pin and resolves `pkg@1.2.3` only until a
-  // second version was ever fetched, so the lock-per-skill layout and a root devDependency at the same
-  // version are what keep a consumer's run and this repository's typecheck on one version; nothing
-  // else in the repository enforces either.
-  const FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
-  function lockFor(entries: Record<string, Record<string, string>>): Record<string, unknown> {
-    return { lockfileVersion: 1, workspaces: { "": { name: "x-dependencies", ...entries } } };
-  }
+  // What drifts: the skill's package.json is the list bun installs before a script's bundle is built, and the
+  // root devDependency at the same version is what tsc checks; nothing else in the repository holds the two
+  // together, and a lockfile or node_modules under a skill is generated state the layout forbids.
   function layout(overrides: Partial<SkillDependencyLayout> = {}): SkillDependencyLayout {
     return {
       skillPath: "skills/x",
       manifestPaths: ["skills/x/package.json"],
       nodeModulesPaths: [],
+      lockfilePaths: [],
       manifest: { name: "x-dependencies", private: true, dependencies: { left: "1.2.3" } },
-      lock: lockFor({ dependencies: { left: "1.2.3" } }),
       rootDevDependencies: { left: "1.2.3" },
       ...overrides,
     };
   }
 
-  test.each(FIELDS)("accepts exact pins under %s and returns the declared names", (field) => {
+  test("accepts exact pins and returns the declared names", () => {
     const pins = { left: "1.0.0-beta.2", "@scope/right": "2.0.0+build.7" };
     expect(
       checkSkillDependencies(
-        layout({
-          manifest: { [field]: pins },
-          lock: lockFor({ [field]: pins }),
-          rootDevDependencies: pins,
-        }),
+        layout({ manifest: { dependencies: pins }, rootDevDependencies: pins }),
       ),
     ).toEqual(new Set(["left", "@scope/right"]));
   });
 
-  test("accepts a package named in dependencies and optionalDependencies, which bun locks once", () => {
-    // bun 1.4.2 writes the optional entry alone into workspaces[""], so a per-field comparison could
-    // never be satisfied by any regenerated lock.
-    const manifest = {
-      dependencies: { left: "1.2.3" },
-      optionalDependencies: { left: "1.2.3" },
-    };
-    expect(
-      checkSkillDependencies(
-        layout({ manifest, lock: lockFor({ optionalDependencies: { left: "1.2.3" } }) }),
-      ),
-    ).toEqual(new Set(["left"]));
-  });
-
-  test.each(FIELDS)("rejects a range under %s with a message naming the rule", (field) => {
+  test("rejects a range with a message naming the rule", () => {
     expectCheckFailure(
-      () => checkSkillDependencies(layout({ manifest: { [field]: { left: "^1.2.3" } } })),
-      new RegExp(
-        `^skills/x/package\\.json: ${field} entry 'left' is "\\^1\\.2\\.3" .* exact version`,
-      ),
+      () => checkSkillDependencies(layout({ manifest: { dependencies: { left: "^1.2.3" } } })),
+      /^skills\/x\/package\.json: dependencies entry 'left' is "\^1\.2\.3" .* exact version/,
     );
   });
 
@@ -448,26 +424,26 @@ describe("checkSkillDependencies", () => {
     expectCheckFailure(() => checkSkillDependencies(layout({ rootDevDependencies })), detail);
   });
 
+  test.each(["devDependencies", "optionalDependencies", "peerDependencies"])(
+    "rejects a pin under %s: a skill's pins are one list",
+    (field) => {
+      expectCheckFailure(
+        () =>
+          checkSkillDependencies(
+            layout({ manifest: { dependencies: { left: "1.2.3" }, [field]: { right: "1.0.0" } } }),
+          ),
+        new RegExp(
+          `^skills/x/package\\.json: ${field}: a skill declares its packages under dependencies only`,
+        ),
+      );
+    },
+  );
+
   test.each<[reason: string, overrides: Partial<SkillDependencyLayout>, message: RegExp]>([
-    [
-      "a package.json with dependencies and no bun.lock",
-      { lock: undefined },
-      /^skills\/x\/bun\.lock: missing beside a package\.json with dependencies; run bun install --lockfile-only --cwd skills\/x/,
-    ],
-    [
-      "a bun.lock that records other pins than package.json declares",
-      { lock: lockFor({ dependencies: { left: "1.2.2" } }) },
-      /^skills\/x\/bun\.lock: records {"left":"1\.2\.2"} but package\.json declares {"left":"1\.2\.3"}; run bun install --lockfile-only --cwd skills\/x/,
-    ],
-    [
-      "a bun.lock with no package.json",
-      { manifestPaths: [], manifest: undefined },
-      /^skills\/x\/bun\.lock: a lockfile with no package\.json beside it/,
-    ],
     [
       "a package.json that declares no dependency",
       { manifest: { name: "x-dependencies", private: true } },
-      /^skills\/x\/package\.json: declares no dependency; a skill without dependencies ships neither/,
+      /^skills\/x\/package\.json: declares no dependency; a skill without dependencies ships no package\.json/,
     ],
     [
       "a package.json below the skill root",
@@ -477,7 +453,12 @@ describe("checkSkillDependencies", () => {
     [
       "a node_modules directory under the skill",
       { nodeModulesPaths: ["skills/x/node_modules"] },
-      /^skills\/x\/node_modules: node_modules under a skill folder; dependencies install into the shared cache/,
+      /^skills\/x\/node_modules: node_modules under a skill folder; a script installs its pins for the build's duration only/,
+    ],
+    [
+      "a lockfile under the skill",
+      { lockfilePaths: ["skills/x/bun.lock"] },
+      /^skills\/x\/bun\.lock: a lockfile under a skill folder; the exact pins in package\.json are the lock/,
     ],
     [
       "a dependency field that is not a name-to-version object",
@@ -489,15 +470,28 @@ describe("checkSkillDependencies", () => {
   });
 });
 
-describe("checkSkillScriptImports", () => {
-  // What drifts: a bare import in an installed skill resolves from the user's project (or nothing), so
-  // the only load of a dependency is the bootstrap's computed dynamic import. The judge reads what bun's
-  // own transpiler leaves after erasing types, so these cases pin bun's erasure and folding rules
-  // (type-only forms vanish, wrappers and concatenations fold to one path), facts nothing else in the
-  // repository states.
-  const path = "skills/x/scripts/x.mts";
-  const none = { skillPath: "skills/x", declared: undefined };
-  const declared = { skillPath: "skills/x", declared: new Set(["oxc-parser", "@scope/pkg"]) };
+describe("checkSkillScripts", () => {
+  // What drifts: a bare import in an installed skill resolves from nothing until the script's bundle holds it,
+  // so every package a script loads is declared, and every script whose bundle would hold one carries the block
+  // that builds it, byte for byte. The judge reads what bun's transpiler leaves after erasing types, so these
+  // cases pin bun's erasure rules too: type-only forms vanish and need no declaration.
+  const BLOCK = [
+    "/**",
+    " * the template",
+    " */",
+    "function ensureBuilt(source: string): boolean {",
+    "  return source.endsWith('.js');",
+    "}",
+    "if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();",
+    "",
+  ].join("\n");
+  const none = { skillPath: "skills/x", declared: undefined, buildBlock: BLOCK };
+  const declared = {
+    skillPath: "skills/x",
+    declared: new Set(["left-pad", "@scope/pkg"]),
+    buildBlock: BLOCK,
+  };
+  const script = (text: string, path = "skills/x/scripts/x.mts") => ({ path, text });
 
   test.each([
     'import { a } from "./a.mts";',
@@ -510,103 +504,270 @@ describe("checkSkillScriptImports", () => {
     'import { Database } from "bun:sqlite";',
     'import { $ } from "bun";',
     'const m = await import("./d.mts");',
-    'const o = await import(Bun.resolveSync("oxc-parser", depsDir));',
-    'const t: typeof import("oxc-parser") = o;',
-    'import type { Node } from "oxc-parser";',
-  ])("accepts %s in a skill with no package.json", (source) => {
-    expect(() => checkSkillScriptImports(path, source, none)).not.toThrow();
+    'import type { Node } from "left-pad";',
+    'import /* erased at runtime */ type { Node } from "left-pad";',
+    'export type * from "left-pad";',
+    'export type { Node } from "left-pad";',
+    'import type { Sub } from "@scope/pkg/sub";',
+    'import { type Node, type Span } from "left-pad";',
+    'export { type Node } from "left-pad";',
+    'import type Parser = require("left-pad");',
+    'declare module "virtual" { export { pad } from "left-pad"; }',
+    'const t: typeof import("left-pad") = o;',
+  ])("accepts %s in a skill with no package.json: nothing loads at runtime", (source) => {
+    expect(() => checkSkillScripts([script(source)], none)).not.toThrow();
   });
 
-  test.each([
-    'import { parseSync } from "oxc-parser";',
-    'export { parseSync } from "oxc-parser";',
-    'const o = await import("oxc-parser");',
-    'import Parser = require("oxc-parser");',
-    'const r = require("oxc-parser");',
-  ])("rejects %s in a skill with no package.json, naming the policy", (source) => {
+  const HOISTED_LOADS = [
+    'import { pad } from "left-pad";',
+    'export { pad } from "left-pad";',
+    'import { type Node, pad } from "left-pad";',
+    'export * from "@scope/pkg/sub";',
+  ];
+  // `import X = require()` compiles to a require call, which runs where it stands like `await import()`.
+  const IN_PLACE_LOADS = [
+    'const o = await import("left-pad");',
+    'const o = await import("left-" + "pad");',
+    "const o = await import(`left-pad`);",
+    'const o = await import("@scope/pkg/sub");',
+    'import Pad = require("left-pad");',
+    'const r = require("left-pad");',
+    'const o = await import("left-pad", { with: { type: "json" } });',
+  ];
+  const LOADS = [...HOISTED_LOADS, ...IN_PLACE_LOADS];
+
+  test.each(LOADS)("rejects %s in a skill with no package.json, naming the policy", (source) => {
     expectCheckFailure(
-      () => checkSkillScriptImports(path, source, none),
-      /^skills\/x\/scripts\/x\.mts: imports '[^']+' but skills\/x has no package\.json -- a dependency ships skills\/x\/package\.json \+ bun\.lock/,
+      () => checkSkillScripts([script(source)], none),
+      /^skills\/x\/scripts\/x\.mts: imports '[^']+' but skills\/x has no package\.json -- a dependency is declared in skills\/x\/package\.json and bundled on first run/,
     );
   });
 
-  test.each([
-    'import type { Node } from "oxc-parser";',
-    'import /* erased at runtime */ type { Node } from "oxc-parser";',
-    'export type * from "oxc-parser";',
-    'export type { Node } from "oxc-parser";',
-    'import type { Sub } from "@scope/pkg/sub";',
-    'import { type Node, type Span } from "oxc-parser";',
-    'export { type Node } from "oxc-parser";',
-    'import type Parser = require("oxc-parser");',
-    'declare module "virtual-parser" { export { parseSync } from "oxc-parser"; }',
-    'const o: typeof import("oxc-parser") = await import(Bun.resolveSync("oxc-parser", depsDir));',
-  ])("accepts %s in a skill that declares the package", (source) => {
-    expect(() => checkSkillScriptImports(path, source, declared)).not.toThrow();
+  test.each(IN_PLACE_LOADS)(
+    "accepts %s below the block in a skill that declares the package",
+    (source) => {
+      expect(() => checkSkillScripts([script(`${BLOCK}${source}`)], declared)).not.toThrow();
+    },
+  );
+
+  test.each(HOISTED_LOADS)(
+    "rejects %s even with the block: ESM hoists it above the guard",
+    (source) => {
+      expectCheckFailure(
+        () => checkSkillScripts([script(`${BLOCK}${source}`)], declared),
+        /^skills\/x\/scripts\/x\.mts: static import of '[^']+' is hoisted above the ensureBuilt guard, so the source path resolves it before the bundle exists; load it below the guard with await import\(\)/,
+      );
+    },
+  );
+
+  test.each(IN_PLACE_LOADS)("rejects %s without the block, naming the missing block", (source) => {
+    expectCheckFailure(
+      () => checkSkillScripts([script(source)], declared),
+      /^skills\/x\/scripts\/x\.mts: loads a package, directly or through a relative import, so it carries the ensureBuilt block above its program/,
+    );
   });
 
-  test.each<[source: string, message: RegExp]>([
-    [
-      'import { parseSync } from "oxc-parser";',
-      /static import of 'oxc-parser' runs before the bootstrap installs it -- load it with the typed dynamic import/,
-    ],
-    [
-      'import { type Node, parseSync } from "oxc-parser";',
-      /static import of 'oxc-parser' runs before the bootstrap/,
-    ],
-    [
-      'import Parser = require("oxc-parser");',
-      /static import of 'oxc-parser' runs before the bootstrap/,
-    ],
-    [
-      'export * from "@scope/pkg/sub";',
-      /static import of '@scope\/pkg\/sub' runs before the bootstrap/,
-    ],
-    [
-      'const o = await import("oxc-parser");',
-      /import\("oxc-parser"\) resolves from the user's project, not the skill's dependencies -- import\(Bun\.resolveSync\("oxc-parser", DEPS_DIR\)\)/,
-    ],
-    [
-      'const o = await import(("oxc-parser"));',
-      /import\("oxc-parser"\) resolves from the user's project/,
-    ],
-    [
-      'const o = await import("oxc-parser" as const);',
-      /import\("oxc-parser"\) resolves from the user's project/,
-    ],
-    [
-      'const o = await import("oxc-parser"!);',
-      /import\("oxc-parser"\) resolves from the user's project/,
-    ],
-    [
-      'const o = await import("oxc-" + "parser");',
-      /import\("oxc-parser"\) resolves from the user's project/,
-    ],
-    ['const r = require("oxc-parser");', /static import of 'oxc-parser' runs before the bootstrap/],
-    [
-      "const o = await import(`oxc-parser`);",
-      /import\("oxc-parser"\) resolves from the user's project/,
-    ],
-    [
-      'import { pad } from "left-pad";',
-      /imports 'left-pad', which skills\/x\/package\.json does not declare/,
-    ],
-  ])("rejects %s in a skill that declares the package", (source, message) => {
-    expectCheckFailure(() => checkSkillScriptImports(path, source, declared), message);
+  test.each(IN_PLACE_LOADS)(
+    "rejects %s placed above the block: it runs before the guard",
+    (source) => {
+      expectCheckFailure(
+        () => checkSkillScripts([script(`${source}\n${BLOCK}`)], declared),
+        /^skills\/x\/scripts\/x\.mts: loads '[^']+' above the ensureBuilt block, so the source path resolves it before the guard decides; move the load below the guard/,
+      );
+    },
+  );
+
+  test("positions come from the erased text's syntax: a string spelling a load or the block is text", () => {
+    expect(() =>
+      checkSkillScripts(
+        [
+          script(
+            `const example = 'import("left-pad")';\n${BLOCK}const o = await import("left-pad");`,
+          ),
+        ],
+        declared,
+      ),
+    ).not.toThrow();
+    expectCheckFailure(
+      () =>
+        checkSkillScripts(
+          [
+            script(
+              `const example = "function ensureBuilt(";\nconst o = await import("left-pad");\n${BLOCK}`,
+            ),
+          ],
+          declared,
+        ),
+      /loads 'left-pad' above the ensureBuilt block/,
+    );
+  });
+
+  test("a sibling that loads a package, loaded in place above the block, is rejected too", () => {
+    const lib = script(
+      `${BLOCK}const { pad } = await import("left-pad");\nexport const x = pad;`,
+      "skills/x/scripts/lib.mts",
+    );
+    const cli = (text: string) => script(text, "skills/x/scripts/cli.mts");
+    expectCheckFailure(
+      () =>
+        checkSkillScripts(
+          [lib, cli(`const { x } = await import("./lib.mts");\n${BLOCK}`)],
+          declared,
+        ),
+      /^skills\/x\/scripts\/cli\.mts: loads '\.\/lib\.mts' above the ensureBuilt block/,
+    );
+    expect(() =>
+      checkSkillScripts([lib, cli(`${BLOCK}const { x } = await import("./lib.mts");`)], declared),
+    ).not.toThrow();
+  });
+
+  test("a block that differs by a byte is drift, not a block", () => {
+    const drifted = BLOCK.replace("return source", "return  source");
+    expectCheckFailure(
+      () =>
+        checkSkillScripts(
+          [script(`${drifted}const { pad } = await import("left-pad");`)],
+          declared,
+        ),
+      /^skills\/x\/scripts\/x\.mts: loads a package, .* but its ensureBuilt block differs from the template; paste it again/,
+    );
+  });
+
+  test("a package the manifest does not declare fails before the block is judged", () => {
+    expectCheckFailure(
+      () => checkSkillScripts([script(`${BLOCK}import { x } from "right-pad";`)], declared),
+      /^skills\/x\/scripts\/x\.mts: imports 'right-pad', which skills\/x\/package\.json does not declare/,
+    );
+  });
+
+  test("a script reaching a package through a relative import needs the block too", () => {
+    const lib = script(
+      `${BLOCK}const { pad } = await import("left-pad");\nexport const x = pad;`,
+      "skills/x/scripts/lib.mts",
+    );
+    const cli = (text: string) => script(text, "skills/x/scripts/cli.mts");
+    expectCheckFailure(
+      () => checkSkillScripts([lib, cli('const { x } = await import("./lib.mts");')], declared),
+      /^skills\/x\/scripts\/cli\.mts: loads a package, directly or through a relative import, so it carries the ensureBuilt block/,
+    );
+    // A static import of the sibling runs the sibling's package loads above this script's guard.
+    expectCheckFailure(
+      () => checkSkillScripts([lib, cli(`${BLOCK}import { x } from "./lib.mts";`)], declared),
+      /^skills\/x\/scripts\/cli\.mts: static import of '\.\/lib\.mts' is hoisted above the ensureBuilt guard/,
+    );
+    // bun's resolution: a .js specifier names the .mts sibling, an extension-less one gains it, a directory
+    // its index file; a chain of two relative imports is followed.
+    for (const specifier of ["./lib.js", "./lib", "./lib/"]) {
+      const target =
+        specifier === "./lib/" ? "skills/x/scripts/lib/index.mts" : "skills/x/scripts/lib.mts";
+      expectCheckFailure(
+        () =>
+          checkSkillScripts(
+            [{ ...lib, path: target }, cli(`await import("${specifier}");`)],
+            declared,
+          ),
+        /^skills\/x\/scripts\/cli\.mts: loads a package/,
+      );
+    }
+    const mid = script(
+      `${BLOCK}export const m = await import("./lib");`,
+      "skills/x/scripts/mid.mts",
+    );
+    expectCheckFailure(
+      () => checkSkillScripts([lib, mid, cli('await import("./mid");')], declared),
+      /^skills\/x\/scripts\/cli\.mts: loads a package/,
+    );
+    expect(() =>
+      checkSkillScripts([lib, mid, cli(`${BLOCK}await import("./mid");`)], declared),
+    ).not.toThrow();
+  });
+
+  test("a dependency-free script carrying the block fails: the block makes bun a requirement", () => {
+    expectCheckFailure(
+      () => checkSkillScripts([script(`${BLOCK}console.log(1);`)], none),
+      /^skills\/x\/scripts\/x\.mts: carries an ensureBuilt block but loads no package/,
+    );
+    expectCheckFailure(
+      () => checkSkillScripts([script('function ensureBuilt() {}\nimport "./a.mts";')], declared),
+      /carries an ensureBuilt block but loads no package/,
+    );
+  });
+
+  test("a relative import cycle between dependency-free scripts terminates", () => {
+    expect(() =>
+      checkSkillScripts(
+        [
+          script('import "./b.mts";', "skills/x/scripts/a.mts"),
+          script('import "./a.mts";', "skills/x/scripts/b.mts"),
+        ],
+        none,
+      ),
+    ).not.toThrow();
   });
 
   test("JSX in a .tsx script is judged by the import bun synthesizes for it", () => {
     // bun 1.4.2 compiles `<div />` to an import of react/jsx-dev-runtime; the source text names no package.
     expectCheckFailure(
-      () => checkSkillScriptImports("skills/x/scripts/view.tsx", "console.log(<div />);", none),
+      () => checkSkillScripts([script("console.log(<div />);", "skills/x/scripts/view.tsx")], none),
       /^skills\/x\/scripts\/view\.tsx: imports 'react\/jsx-dev-runtime' but skills\/x has no package\.json/,
     );
   });
 
   test("a script that does not parse fails instead of passing with no imports seen", () => {
     expectCheckFailure(
-      () => checkSkillScriptImports(path, "import { from ;", none),
+      () => checkSkillScripts([script("import { from ;")], none),
       /^skills\/x\/scripts\/x\.mts: does not parse: /,
     );
+  });
+});
+
+describe("ensureBuiltTemplate", () => {
+  const fence = "```ts\nfunction ensureBuilt(source: string): boolean {\n  return false;\n}\n```\n";
+
+  test("returns the first ts fence of the Dependencies section, not one of another section", () => {
+    const doc = [
+      "# A",
+      "",
+      "## Other",
+      "",
+      "```ts",
+      "function ensureBuilt() {}",
+      "```",
+      "",
+      "## Dependencies",
+      "",
+      "text",
+      "",
+      "```text",
+      "layout",
+      "```",
+      "",
+      fence,
+      "## Next",
+      "",
+    ].join("\n");
+    expect(ensureBuiltTemplate(doc)).toBe(
+      "function ensureBuilt(source: string): boolean {\n  return false;\n}\n",
+    );
+  });
+
+  test.each<[reason: string, doc: string, message: RegExp]>([
+    [
+      "no Dependencies section",
+      `# A\n\n## Other\n\n${fence}`,
+      /^docs\/authoring\.md: missing the '## Dependencies' section/,
+    ],
+    [
+      "a section without the fence",
+      `# A\n\n## Dependencies\n\ntext\n\n## Next\n\n${fence}`,
+      /^docs\/authoring\.md: the Dependencies section has no ts fence holding function ensureBuilt/,
+    ],
+    [
+      "a ts fence holding something else",
+      "# A\n\n## Dependencies\n\n```ts\nconst x = 1;\n```\n",
+      /no ts fence holding function ensureBuilt/,
+    ],
+  ])("rejects %s", (_reason, doc, message) => {
+    expectCheckFailure(() => ensureBuiltTemplate(doc), message);
   });
 });
