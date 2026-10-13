@@ -108,8 +108,10 @@ usage: retire-branch.mts --branch <name> [options]
   --no-writer-check     skip the lsof live-writer probe (hosts without a usable lsof)
   --execute             actually remove the worktree and delete the branch
 
-exit codes: 0 every requested step passed; 1 a gate refused on the evidence;
-            2 usage error; 3 broken measurement (the question was never answered)
+prints: one [gate] line per step; without --execute the destructive steps read 'would ... (add --execute)' and
+        the run ends 'REHEARSED: every gate passed for <branch>; nothing was destroyed'
+exits: 0 every requested step passed; 1 a gate refused on the evidence;
+       2 usage error; 3 broken measurement (the question was never answered)
 ```
 
 `--original-tip` is for a branch rebased before it landed: the OLD tip must prove landed too. `--no-writer-check` is for a host where lsof cannot answer, and the run says so out loud.

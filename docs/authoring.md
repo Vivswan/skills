@@ -153,11 +153,13 @@ usage: lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]
   --config   the layering declaration (default: <root>/architecture.yml)
   --root     the repository root the paths are relative to (default: cwd)
   --mermaid  print the module map instead of linting
-exit 0: the tree matches the declaration; 1: forbidden or stale edges; 2: usage or an unreadable graph
+exits: 0 the tree matches the declaration; 1 forbidden or stale edges; 2 usage or an unreadable graph
 ```
 ````
 
 `tests/repo/usage-blocks.test.ts` runs `bun <script> --help` for every command and holds the fence equal to it, trailing whitespace aside. A command with no fence, or with two, fails the same test. Other pages link to the one that carries the fence.
+
+The test's first line, `// reaches: **/*.md skills/*/scripts/**/*.mts`, declares what it reads, so the pre-commit hook runs it when a staged file matches. Any test that discovers its inputs by pattern declares them the same way.
 
 A fence that drifted is never edited by hand. Regenerate it from the repository root and paste the output:
 

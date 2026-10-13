@@ -115,6 +115,12 @@ the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET 
 --mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;
 --interval is 5 s by default, 1 to 86400
 targets: the absolute path of a file; an event when its size changes or it disappears
+files: <dir>/<pid>-<start>.log-events.{state.json,events.jsonl,log} and <dir>/<pid>.log-events.sock for a session; <id>.log-events.* for a file sink;
+  <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
+prints: one message per poll with events, wrapped in <cross-session-message from="uds:<socket>" from-name="log-events" from-mode="<mode>"> and ending "automated notice from log-events; no reply needed";
+  wait prints the new events as JSON lines, then cursor: <id>
+exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too); 2 usage, a state file that is not JSON, or no runtime directory;
+       3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line
 ```
 
 | Exit | Meaning |

@@ -102,7 +102,7 @@ The row is data. These rules are what it means:
 Any claim about file content ("the sentence landed", "the key set matches", "this track touched only its territory") runs through the probe script, never a raw grep. `bun <skill-dir>/scripts/probe.mts <subcommand> ...`:
 
 ```text usage=skills/orchestrator-mode/scripts/probe.mts
-usage: probe <subcommand> ...
+usage: probe.mts <subcommand> ...
   probe count <file> <literal>        count whitespace-normalized matches, with evidence
   probe json-keys <file> [<file2>]    parsed key paths; with two files, the key-set diff
   probe set <repo-root> <base-ref>    changed files: committed (base..HEAD) + dirty union
@@ -203,7 +203,7 @@ test -s "$needles" &&
 Per-worker standing state lives in a ledger file the LEAD creates at session start, so it survives agent context loss and monitor handovers. The monitor checks every would-be flag against it before reporting. `bun <skill-dir>/scripts/ledger.mts <file> <command>`:
 
 ```text usage=skills/orchestrator-mode/scripts/ledger.mts
-usage: ledger <file> <command> [args...]
+usage: ledger.mts <file> <command> [args...]
 commands:
   init                                create an empty ledger (never clobbers an existing one)
   state <worker> <state>              set standing state; states: active, dormant-by-design, landing-gate, landed-swept
@@ -302,17 +302,13 @@ The row's one size-scaling reading is `treeFileCount`, backed by a per-worktree 
 A whole-file ownership claim is an exact copy pinned before the risky step and compared after it, byte for byte, so drift is a visible diff and never a count. `bun <skill-dir>/scripts/baseline.mts <command> ...`:
 
 ```text usage=skills/orchestrator-mode/scripts/baseline.mts
-usage:
-  baseline pin <baseline-dir> <tree-root> <file...>
-      Copy the exact current content of each file (paths relative to
-      tree-root) into baseline-dir, preserving relative paths, and write
-      a manifest.json listing the pinned set. If anything fails, the
-      previous baseline is left untouched and every file is reported as
-      pinned or not.
-  baseline check <baseline-dir> <tree-root>
-      Compare every manifest entry against the tree byte for byte.
-      Reports per file: identical | drifted (with the unified diff)
-      | missing-in-tree | missing-baseline. Exits 1 unless all identical.
+usage: baseline.mts pin <baseline-dir> <tree-root> <file...>
+       baseline.mts check <baseline-dir> <tree-root>
+  pin    copy the exact current content of each file (paths relative to tree-root) into baseline-dir, keeping
+         the relative paths, and write a manifest.json listing the pinned set; if anything fails, the previous
+         baseline is left untouched and every file is reported as pinned or not
+  check  compare every manifest entry against the tree byte for byte; per file: identical | drifted (with the
+         unified diff) | missing-in-tree | missing-baseline
 prints: one JSON summary object on stdout; findings and unified diffs on stderr
 exits: 0 clean; 1 drift found or ok:false; 2 usage error
 ```

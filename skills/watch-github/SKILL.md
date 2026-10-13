@@ -118,6 +118,13 @@ the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET 
 --interval is 60 s by default, 1 to 86400
 targets: <owner/repo>#<n> for a pull request, <owner/repo>:<branch> for a branch tip
 --expect-workflow <name> names a workflow whose run must appear on the head before CI reads green; repeatable
+the session-events skill must be installed beside this one; without it every command exits 2 naming the install: npx skills add Vivswan/skills -g --skill session-events
+files: <dir>/<pid>-<start>.github-events.{state.json,events.jsonl,log} and <dir>/<pid>.github-events.sock for a session; <id>.github-events.* for a file sink;
+  <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
+prints: one message per poll with events, wrapped in <cross-session-message from="uds:<socket>" from-name="github-events" from-mode="<mode>"> and ending "automated notice from github-events; no reply needed";
+  wait prints the new events as JSON lines, then cursor: <id>
+exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too); 2 usage, a state file that is not JSON, or no runtime directory;
+       3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line
 ```
 
 | Exit | Meaning |

@@ -62,9 +62,10 @@ Keep the grant in this session's own notes (the task list or plan), never in mem
    `--help`:
 
    ```text usage=skills/claude-remote-peers/scripts/bridge.mts
-   usage: bun bridge.mts <ssh-destination> [remote-pid] [-- <extra ssh options>]
+   usage: bridge.mts <ssh-destination> [remote-pid] [-- <extra ssh options>]
    run from a shell inside a Claude Code session (it sets CLAUDE_CODE_MESSAGING_SOCKET)
    prints: SendMessage to: uds:<remote socket> once both forwards are confirmed; stays up until ssh exits or a signal
+   exits: 0 clean shutdown (a signal, or ssh exited 0); 1 a setup, tunnel, or cleanup failure
    ```
 
 2. **Wait for the `SendMessage to:` line** in the log. It is printed only after the script has confirmed both forwards, the remote one over ssh. A socket file that appears earlier is not yet known to work.

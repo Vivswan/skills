@@ -84,7 +84,7 @@ usage: lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]
   --config   the layering declaration (default: <root>/architecture.yml)
   --root     the repository root the paths are relative to (default: cwd)
   --mermaid  print the module map instead of linting
-exit 0: the tree matches the declaration; 1: forbidden or stale edges; 2: usage or an unreadable graph
+exits: 0 the tree matches the declaration; 1 forbidden or stale edges; 2 usage or an unreadable graph
 ```
 
 | Message | What to do |
@@ -119,7 +119,7 @@ usage: render-map.mts --page <path> [--config <architecture.yml>] [--root <dir>]
   --root     the repository root (default: cwd)
   --region   the generated region's name (default: architecture-map)
   --check    exit 1 when the committed region differs, instead of rewriting it
-exit 0: written or already current; 1: drift under --check; 2: usage, no region, or an unreadable declaration
+exits: 0 written or already current; 1 drift under --check; 2 usage, no region, or an unreadable declaration
 ```
 
 ### 3. Author the concept diagrams, box by box, against real symbols
@@ -152,7 +152,7 @@ usage: check-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expe
   --repo-url         the URL prefix an absolute demonstration link maps onto the root with
                      (e.g. https://github.com/owner/repo/blob/main/); relative links resolve from the page
   --expect-diagrams  the number of concept diagrams the page must carry
-exit 0: the page names real code; 1: problems, each printed; 2: usage or an unreadable page
+exits: 0 the page names real code; 1 problems, each printed; 2 usage or an unreadable page
 ```
 
 | Message | What to do |

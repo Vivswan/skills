@@ -17,6 +17,22 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { Fence, Marker, Page } from "./page.mts";
 
+const USAGE = [
+  "usage: check-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expect-diagrams <n>]",
+  "  --page             the architecture page to check",
+  "  --root             the repository root the label paths are relative to (default: cwd)",
+  "  --repo-url         the URL prefix an absolute demonstration link maps onto the root with",
+  "                     (e.g. https://github.com/owner/repo/blob/main/); relative links resolve from the page",
+  "  --expect-diagrams  the number of concept diagrams the page must carry",
+  "exits: 0 the page names real code; 1 problems, each printed; 2 usage or an unreadable page",
+].join("\n");
+
+// Above the self-build: a cold install with no network still answers --help.
+if (import.meta.main && (process.argv[2] === "--help" || process.argv[2] === "-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
 
@@ -418,16 +434,6 @@ export function conceptCounts(markdown: string): { diagrams: number; demonstrati
   return { diagrams: conceptFences(page).length, demonstrations: page.demonstrations.length };
 }
 
-const USAGE = [
-  "usage: check-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expect-diagrams <n>]",
-  "  --page             the architecture page to check",
-  "  --root             the repository root the label paths are relative to (default: cwd)",
-  "  --repo-url         the URL prefix an absolute demonstration link maps onto the root with",
-  "                     (e.g. https://github.com/owner/repo/blob/main/); relative links resolve from the page",
-  "  --expect-diagrams  the number of concept diagrams the page must carry",
-  "exit 0: the page names real code; 1: problems, each printed; 2: usage or an unreadable page",
-].join("\n");
-
 interface CliOptions extends PageCheckOptions {
   pagePath: string;
   expectDiagrams?: number;
@@ -459,10 +465,6 @@ function parseArgs(argv: readonly string[]): CliOptions {
 }
 
 if (import.meta.main) {
-  if (process.argv[2] === "--help" || process.argv[2] === "-h") {
-    console.log(USAGE);
-    process.exit(0);
-  }
   let options: CliOptions;
   try {
     options = parseArgs(process.argv.slice(2));

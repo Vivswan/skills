@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // The targeted gate the pre-commit hook runs: the fast static checks always, then only the test
-// files a staged file can reach (by import, by name in the test's text, or by a glob in the test's text
-// that the staged path matches). The full suite is CI's (checks.yml runs `bun run check`
+// files a staged file can reach (by import, by name in the test's text, or by a glob the test's
+// `// reaches:` line declares). The full suite is CI's (checks.yml runs `bun run check`
 // on every push and PR), so a commit here stays seconds long.
 //   check-staged.mts               staged paths read from the index, deletions included (a deleted
 //                                  script's test still runs, and fails, which is the point)
@@ -55,9 +55,9 @@ function closure(roots: readonly string[], files: ReadonlyMap<string, string>): 
 /**
  * The test files to run for a staging: every staged test; every test whose import closure reaches a
  * staged file; every test whose text names a staged file's stem (a script a test runs by path, a
- * SKILL.md a doc test pins); every test whose text carries a glob a staged path matches (a test that
- * discovers pages or scripts by pattern). A staged file in the launcher's closure selects every test.
- * A stem under three characters names too little to select by.
+ * SKILL.md a doc test pins); every test whose `// reaches:` line declares a glob a staged path matches
+ * (a test that discovers pages or scripts by pattern). A staged file in the launcher's closure selects
+ * every test. A stem under three characters names too little to select by.
  */
 export function selectTests(
   staged: readonly string[],
@@ -77,17 +77,19 @@ export function selectTests(
       stagedSet.has(t) ||
       [...closure([t], files)].some((f) => stagedSet.has(f)) ||
       stems.some((s) => (files.get(t) as string).includes(s)) ||
-      globsOf(files.get(t) as string).some((g) => staged.some((p) => new Bun.Glob(g).match(p))),
+      reachesOf(files.get(t) as string).some((g) => staged.some((p) => new Bun.Glob(g).match(p))),
   );
 }
 
-const QUOTED = /["'`]([^"'`\s]+)["'`]/g;
+const REACHES = /^\/\/ reaches: (.+)$/;
 
-/** The path globs quoted in a test's text: a quoted token carrying both a slash and a star, as the page and script patterns the usage-blocks test scans. */
-export function globsOf(text: string): string[] {
-  return [...text.matchAll(QUOTED)]
-    .map((match) => match[1] as string)
-    .filter((token) => token.includes("*") && token.includes("/"));
+/** The globs a test declares it reads, on its FIRST line: `// reaches: <glob> [<glob>...]`, repo-relative. A later line, a fixture's text included, declares nothing. */
+export function reachesOf(text: string): string[] {
+  return (
+    REACHES.exec(text.split("\n", 1)[0] as string)?.[1]
+      ?.trim()
+      .split(/\s+/) ?? []
+  );
 }
 
 const SOURCE_DIRS = ["tests", "scripts", "skills", ".githooks", ".github"];

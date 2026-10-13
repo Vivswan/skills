@@ -44,8 +44,10 @@ const USAGE = [
   "  --no-writer-check     skip the lsof live-writer probe (hosts without a usable lsof)",
   "  --execute             actually remove the worktree and delete the branch",
   "",
-  "exit codes: 0 every requested step passed; 1 a gate refused on the evidence;",
-  "            2 usage error; 3 broken measurement (the question was never answered)",
+  "prints: one [gate] line per step; without --execute the destructive steps read 'would ... (add --execute)' and",
+  "        the run ends 'REHEARSED: every gate passed for <branch>; nothing was destroyed'",
+  "exits: 0 every requested step passed; 1 a gate refused on the evidence;",
+  "       2 usage error; 3 broken measurement (the question was never answered)",
 ].join("\n");
 
 const usage: Exit = (message) => exitWith(EXIT_USAGE, `${message}\n\n${USAGE}`);

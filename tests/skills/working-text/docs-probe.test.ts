@@ -355,7 +355,7 @@ describe("the CLI", () => {
         "  --base        a directory under the root that paths also resolve against (repeatable)",
         "  --max-words   the cap on a paragraph or list item (default: 70)",
         "  --shape-only  word counts only; skip the check that named paths exist",
-        "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
+        "exits: 0 every page is clean; 1 findings, one per line as page:line: message; 2 usage or an unreadable page",
       ].join("\n");
     // A vendored copy ships beside the skill's package.json, the pin list its dependencies install from.
     const root = repo({ "a.md": "" });

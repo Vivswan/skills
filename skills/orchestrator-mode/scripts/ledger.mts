@@ -62,7 +62,7 @@ interface Ledger {
   flags: FlagEntry[];
 }
 
-const USAGE = `usage: ledger <file> <command> [args...]
+const USAGE = `usage: ledger.mts <file> <command> [args...]
 commands:
   init                                create an empty ledger (never clobbers an existing one)
   state <worker> <state>              set standing state; states: ${WORKER_STATES.join(", ")}

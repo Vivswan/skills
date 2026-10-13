@@ -7,6 +7,24 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
+export const DEFAULT_REGION = "architecture-map";
+
+const USAGE = [
+  "usage: render-map.mts --page <path> [--config <architecture.yml>] [--root <dir>] [--region <name>] [--check]",
+  "  --page     the markdown page carrying the generated region",
+  "  --config   the layering declaration (default: <root>/architecture.yml)",
+  "  --root     the repository root (default: cwd)",
+  `  --region   the generated region's name (default: ${DEFAULT_REGION})`,
+  "  --check    exit 1 when the committed region differs, instead of rewriting it",
+  "exits: 0 written or already current; 1 drift under --check; 2 usage, no region, or an unreadable declaration",
+].join("\n");
+
+// Above the self-build: a cold install with no network still answers --help.
+if (import.meta.main && (process.argv[2] === "--help" || process.argv[2] === "-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
 
@@ -74,8 +92,6 @@ const { DEFAULT_CONFIG, readArchitecture, renderArchitectureMermaid } = await im
 const { readPage } = await import("./page.mts");
 const { pathLabel } = await import("./paths.mts");
 
-export const DEFAULT_REGION = "architecture-map";
-
 // A marker name is one token to the page reader, so a name with whitespace or markup could never be found; refusing it names the fix.
 const REGION_NAME = /^[a-z0-9-]+$/;
 
@@ -107,16 +123,6 @@ export function spliceMap(text: string, name: string, map: string): string {
   const { bodyStart, bodyEnd } = regionBounds(text, name);
   return `${text.slice(0, bodyStart)}\n\`\`\`mermaid\n${map}\n\`\`\`\n${text.slice(bodyEnd)}`;
 }
-
-const USAGE = [
-  "usage: render-map.mts --page <path> [--config <architecture.yml>] [--root <dir>] [--region <name>] [--check]",
-  "  --page     the markdown page carrying the generated region",
-  "  --config   the layering declaration (default: <root>/architecture.yml)",
-  "  --root     the repository root (default: cwd)",
-  `  --region   the generated region's name (default: ${DEFAULT_REGION})`,
-  "  --check    exit 1 when the committed region differs, instead of rewriting it",
-  "exit 0: written or already current; 1: drift under --check; 2: usage, no region, or an unreadable declaration",
-].join("\n");
 
 interface CliOptions {
   page: string;
@@ -151,10 +157,6 @@ function parseArgs(argv: readonly string[]): CliOptions {
 }
 
 if (import.meta.main) {
-  if (process.argv[2] === "--help" || process.argv[2] === "-h") {
-    console.log(USAGE);
-    process.exit(0);
-  }
   let options: CliOptions;
   try {
     options = parseArgs(process.argv.slice(2));

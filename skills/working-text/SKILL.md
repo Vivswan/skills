@@ -147,7 +147,7 @@ usage: docs-probe.mts [--root <dir>] [--base <dir>]... [--max-words <n>] [--shap
   --base        a directory under the root that paths also resolve against (repeatable)
   --max-words   the cap on a paragraph or list item (default: 70)
   --shape-only  word counts only; skip the check that named paths exist
-exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page
+exits: 0 every page is clean; 1 findings, one per line as page:line: message; 2 usage or an unreadable page
 ```
 
 The path check leaves alone, on purpose: placeholders (`<skill-dir>/x`), globs, `owner/repo` slugs, absolute paths, and bare file names (`package.json`). It also leaves alone a path whose first segment exists nowhere between the page and the root, nor under a `--base` (a page describing another layout).

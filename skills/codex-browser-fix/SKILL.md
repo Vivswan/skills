@@ -31,6 +31,11 @@ The installed Chrome plugin's own skill (`skills/control-chrome/SKILL.md` inside
 
 Run before importing `browser-client.mjs` or selecting a browser. Requires Bun and the ChatGPT or Codex desktop app. `<skill-dir>` is the installed skill folder (Codex default: `~/.codex/skills/codex-browser-fix`).
 
+```bash
+bun "<skill-dir>/scripts/browser-plugin-preflight.mts"          # sync + verify
+bun "<skill-dir>/scripts/browser-plugin-preflight.mts" --check  # read-only verify
+```
+
 ```text usage=skills/codex-browser-fix/scripts/browser-plugin-preflight.mts
 usage: browser-plugin-preflight.mts [--check] [--plugin-dir <dir>]
   --check             verify only, nothing written; exit 1 on drift

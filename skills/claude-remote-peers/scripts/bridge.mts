@@ -19,9 +19,10 @@ type SessionRecord = {
 };
 
 const USAGE = [
-  "usage: bun bridge.mts <ssh-destination> [remote-pid] [-- <extra ssh options>]",
+  "usage: bridge.mts <ssh-destination> [remote-pid] [-- <extra ssh options>]",
   "run from a shell inside a Claude Code session (it sets CLAUDE_CODE_MESSAGING_SOCKET)",
   "prints: SendMessage to: uds:<remote socket> once both forwards are confirmed; stays up until ssh exits or a signal",
+  "exits: 0 clean shutdown (a signal, or ssh exited 0); 1 a setup, tunnel, or cleanup failure",
 ].join("\n");
 
 const args = parseArgs(process.argv.slice(2));

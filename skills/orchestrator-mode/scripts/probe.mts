@@ -24,7 +24,7 @@ import {
 import { isAbsolute, join, sep } from "node:path";
 
 const USAGE = [
-  "usage: probe <subcommand> ...",
+  "usage: probe.mts <subcommand> ...",
   "  probe count <file> <literal>        count whitespace-normalized matches, with evidence",
   "  probe json-keys <file> [<file2>]    parsed key paths; with two files, the key-set diff",
   "  probe set <repo-root> <base-ref>    changed files: committed (base..HEAD) + dirty union",

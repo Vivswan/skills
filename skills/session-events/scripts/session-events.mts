@@ -153,6 +153,12 @@ function usageText(entry: string, source: Source<object>): string {
     "--mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;",
     `--interval is ${source.interval} s by default, ${MIN_INTERVAL_SECONDS} to ${MAX_INTERVAL_SECONDS}`,
     ...(source.usage ?? []),
+    `files: <dir>/<pid>-<start>.${source.name}.{state.json,events.jsonl,log} and <dir>/<pid>.${source.name}.sock for a session; <id>.${source.name}.* for a file sink;`,
+    "  <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>",
+    `prints: one message per poll with events, wrapped in <cross-session-message from="uds:<socket>" from-name="${source.name}" from-mode="<mode>"> and ending "automated notice from ${source.name}; no reply needed";`,
+    "  wait prints the new events as JSON lines, then cursor: <id>",
+    "exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too); 2 usage, a state file that is not JSON, or no runtime directory;",
+    "       3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line",
   ].join("\n");
 }
 

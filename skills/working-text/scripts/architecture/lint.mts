@@ -15,6 +15,20 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { Architecture } from "./declaration.mts";
 
+const USAGE = [
+  "usage: lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]",
+  "  --config   the layering declaration (default: <root>/architecture.yml)",
+  "  --root     the repository root the paths are relative to (default: cwd)",
+  "  --mermaid  print the module map instead of linting",
+  "exits: 0 the tree matches the declaration; 1 forbidden or stale edges; 2 usage or an unreadable graph",
+].join("\n");
+
+// Above the self-build: a cold install with no network still answers --help.
+if (import.meta.main && (process.argv[2] === "--help" || process.argv[2] === "-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
 
@@ -174,14 +188,6 @@ export function lintArchitecture(
 
 // --- CLI ---------------------------------------------------------------------
 
-const USAGE = [
-  "usage: lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]",
-  "  --config   the layering declaration (default: <root>/architecture.yml)",
-  "  --root     the repository root the paths are relative to (default: cwd)",
-  "  --mermaid  print the module map instead of linting",
-  "exit 0: the tree matches the declaration; 1: forbidden or stale edges; 2: usage or an unreadable graph",
-].join("\n");
-
 export interface CliOptions {
   root: string;
   config: string;
@@ -208,10 +214,6 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 }
 
 if (import.meta.main) {
-  if (process.argv[2] === "--help" || process.argv[2] === "-h") {
-    console.log(USAGE);
-    process.exit(0);
-  }
   let options: CliOptions;
   try {
     options = parseArgs(process.argv.slice(2));

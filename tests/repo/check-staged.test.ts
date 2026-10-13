@@ -13,7 +13,11 @@ const FILES = new Map<string, string>([
   ],
   ["scripts/sync-xeno.mts", 'import { ROOT } from "./lib.mts";'],
   ["scripts/probe.ts", "export const probe = 1;"],
-  ["tests/repo/sync-xeno.test.ts", 'import { update } from "../../scripts/sync-xeno.mts";'],
+  // A quoted glob inside a fixture is not a declaration, nor is a reaches line below the first: only the first line selects by pattern.
+  [
+    "tests/repo/sync-xeno.test.ts",
+    'import { update } from "../../scripts/sync-xeno.mts";\nconst text = `path: "*/*"\n// reaches: **/*.md\n`;',
+  ],
   ["tests/repo/probe.test.ts", 'import { probe } from "../../scripts/probe";'],
   [
     "tests/skills/watch-github/github-events.test.ts",
@@ -21,7 +25,7 @@ const FILES = new Map<string, string>([
   ],
   [
     "tests/repo/usage-blocks.test.ts",
-    'const PAGES = new Bun.Glob("**/*.md"); const SCRIPTS = new Bun.Glob("skills/*/scripts/**/*.mts");',
+    "// reaches: **/*.md skills/*/scripts/**/*.mts\nconst pages = [];",
   ],
 ]);
 const ALL = [...FILES.keys()].filter((p) => p.endsWith(".test.ts")).sort();
@@ -37,7 +41,7 @@ describe("selectTests", () => {
     ["a launcher module no test imports selects every test", ["scripts/hermetic-git-env.mts"], ALL],
     ["the preload selects every test even when it is not in the map", ["tests/preload.ts"], ALL],
     [
-      "a skill script run by path selects the test that names it, and the test that scans scripts by glob",
+      "a skill script run by path selects the test that names it, and the test whose reaches line covers scripts",
       ["skills/watch-github/scripts/github-events.mts"],
       ["tests/repo/usage-blocks.test.ts", "tests/skills/watch-github/github-events.test.ts"],
     ],
@@ -52,13 +56,18 @@ describe("selectTests", () => {
       ["tests/repo/usage-blocks.test.ts", "tests/skills/watch-github/github-events.test.ts"],
     ],
     [
-      "a SKILL.md selects the test that scans pages by glob only",
+      "a SKILL.md selects the test whose reaches line covers pages, only",
       ["skills/unslop/SKILL.md"],
       ["tests/repo/usage-blocks.test.ts"],
     ],
     [
-      "a reference page selects the test that scans pages by glob",
+      "a reference page selects the test whose reaches line covers pages",
       ["skills/orchestrator-mode/references/fleet-monitor.md"],
+      ["tests/repo/usage-blocks.test.ts"],
+    ],
+    [
+      "a page selects by the reaches line, never by a glob quoted inside another test",
+      ["docs/authoring.md"],
       ["tests/repo/usage-blocks.test.ts"],
     ],
     ["a stem under three characters selects nothing", ["ab.yml", "x.ts"], []],
