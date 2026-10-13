@@ -365,10 +365,21 @@ describe("dependency bootstrap", () => {
     "check-architecture-page.mts",
   ];
 
-  function copiedSkill(name: string, files: readonly string[]): string {
+  /** The copied arch-lint with its install limit rewritten, so the timeout path runs in a test instead of ten minutes. */
+  function copiedSkill(name: string, files: readonly string[], installTimeoutMs?: number): string {
     const root = join(scratch, name);
     for (const script of SCRIPT_NAMES) cpSync(join(SCRIPTS, script), join(root, "scripts", script));
     for (const file of files) cpSync(join(SKILL_DIR, file), join(root, file));
+    if (installTimeoutMs !== undefined) {
+      const lint = join(root, "scripts", "arch-lint.mts");
+      const limit = "const INSTALL_TIMEOUT_MS = 10 * 60_000;\n";
+      const source = readFileSync(lint, "utf8");
+      if (!source.includes(limit)) throw new Error(`arch-lint.mts no longer declares ${limit}`);
+      writeFileSync(
+        lint,
+        source.replace(limit, `const INSTALL_TIMEOUT_MS = ${installTimeoutMs};\n`),
+      );
+    }
     writeTree(root, {
       "architecture.yml": "layers:\n  a: [src/a.ts]\n",
       "src/a.ts": "export const a = 1;\n",
@@ -383,6 +394,112 @@ describe("dependency bootstrap", () => {
       .digest("hex");
     return join(cacheHome, "skills-deps", `${basename(root)}-${hash.slice(0, 12)}`);
   }
+
+  /** A `bun` ahead of the real one on PATH, running `body` with the install's --cwd in $cwd. */
+  function fakeBun(name: string, body: string): string {
+    const binDir = join(scratch, name);
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "bun"), `#!/bin/sh\ncwd=$4\n${body}\n`);
+    chmodSync(join(binDir, "bun"), 0o755);
+    return `${binDir}:${process.env.PATH ?? ""}`;
+  }
+
+  /** The bootstrap from `const SKILL_DIR` through the install block: the part every copy shares. */
+  function sharedBootstrap(path: string): string {
+    const source = readFileSync(path, "utf8");
+    const start = source.indexOf('const SKILL_DIR = join(import.meta.dir, "..");');
+    const installAt = source.indexOf('if (!existsSync(join(DEPS_DIR, "node_modules"))) {', start);
+    const tail = "    process.exit(2);\n  }\n}\n";
+    const end = source.indexOf(tail, installAt);
+    if (start < 0 || installAt < 0 || end < 0) throw new Error(`${path}: no bootstrap block`);
+    return source.slice(start, end + tail.length);
+  }
+
+  test("the template in docs/authoring.md and both shipped bootstraps are one text", () => {
+    // Three copies by design (the template is the author's to paste), so only this holds them together.
+    const template = sharedBootstrap(join(ROOT, "docs", "authoring.md"));
+    expect(sharedBootstrap(ARCH_LINT)).toBe(template);
+    expect(
+      sharedBootstrap(join(ROOT, "skills", "orchestrator-mode", "scripts", "baseline.mts")),
+    ).toBe(template);
+  });
+
+  test("two lanes on a cold cache both install, one tree is published, and no staging directory is left", async () => {
+    // The fake waits until both lanes are inside their install, so both reach the rename; the loser's
+    // tree is discarded. The real oxc-parser is linked in so the lanes then lint for real.
+    const root = copiedSkill("cold-race", ["package.json", "bun.lock"]);
+    const cacheHome = join(scratch, "race cache home");
+    const barrier = join(scratch, "race-barrier");
+    const log = join(scratch, "race-installs.txt");
+    mkdirSync(barrier, { recursive: true });
+    const PATH = fakeBun(
+      "race-bin",
+      [
+        'echo "$cwd" >> "$FAKE_BUN_LOG"',
+        'touch "$FAKE_BUN_BARRIER/$$"',
+        "i=0",
+        'while [ "$(ls "$FAKE_BUN_BARRIER" | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done',
+        'mkdir -p "$cwd/node_modules"',
+        'ln -s "$REAL_OXC_PARSER" "$cwd/node_modules/oxc-parser"',
+      ].join("\n"),
+    );
+    const env = {
+      ...process.env,
+      NO_COLOR: "1",
+      XDG_CACHE_HOME: cacheHome,
+      PATH,
+      FAKE_BUN_LOG: log,
+      FAKE_BUN_BARRIER: barrier,
+      REAL_OXC_PARSER: join(ROOT, "node_modules", "oxc-parser"),
+    };
+    const lanes = [0, 1].map(() =>
+      Bun.spawn([process.execPath, join(root, "scripts", "arch-lint.mts")], {
+        cwd: root,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    );
+    const outcomes = await Promise.all(
+      lanes.map(async (lane) => ({
+        status: await lane.exited,
+        stdout: await new Response(lane.stdout).text(),
+        stderr: await new Response(lane.stderr).text(),
+      })),
+    );
+
+    const depsDir = depsDirFor(root, cacheHome);
+    const green = {
+      status: 0,
+      stdout: "arch-lint: imports under src match architecture.yml\n",
+      stderr: "",
+    };
+    expect(outcomes).toEqual([green, green]);
+    const installs = readFileSync(log, "utf8").split("\n").filter(Boolean);
+    expect(installs).toHaveLength(2);
+    expect(new Set(installs).size).toBe(2);
+    for (const dir of installs) expect(dir.startsWith(`${depsDir}.tmp-`)).toBe(true);
+    expect(readdirSync(join(cacheHome, "skills-deps"))).toEqual([basename(depsDir)]);
+    expect(readdirSync(depsDir).sort()).toEqual(["bun.lock", "node_modules", "package.json"]);
+    expect(readdirSync(join(depsDir, "node_modules"))).toEqual(["oxc-parser"]);
+  });
+
+  test("an install past the limit is cut off: exit 2 naming the limit and the directory, nothing half-built", () => {
+    const root = copiedSkill("slow-install", ["package.json", "bun.lock"], 300);
+    const cacheHome = join(scratch, "slow cache home");
+    const out = run(join(root, "scripts", "arch-lint.mts"), [], root, {
+      XDG_CACHE_HOME: cacheHome,
+      PATH: fakeBun("slow-bin", "exec sleep 30"),
+    });
+    const depsDir = depsDirFor(root, cacheHome);
+    expect(out).toEqual({
+      status: 2,
+      stdout: "",
+      stderr: `slow-install dependencies did not install within 0.005 minutes; run: bun install --frozen-lockfile --cwd '${depsDir}'\n`,
+    });
+    expect(readdirSync(join(cacheHome, "skills-deps"))).toEqual([basename(depsDir)]);
+    expect(readdirSync(depsDir).sort()).toEqual(["bun.lock", "package.json"]);
+  });
 
   test("scripts copied without the skill's package.json and bun.lock exit 2 with the one-line hint", () => {
     const root = copiedSkill("no-manifest", []);
@@ -404,26 +521,21 @@ describe("dependency bootstrap", () => {
     const root = copiedSkill("shared-cache", ["package.json", "bun.lock"]);
     // A cache root with a space: the printed recovery command must survive being pasted back into a shell.
     const cacheHome = join(scratch, "shared cache home");
-    const binDir = join(scratch, "fake-bin");
     const argvFile = join(scratch, "fake-bun-argv.txt");
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(join(binDir, "bun"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$FAKE_BUN_ARGV"\n');
-    chmodSync(join(binDir, "bun"), 0o755);
     const depsDir = depsDirFor(root, cacheHome);
 
     const out = run(join(root, "scripts", "arch-lint.mts"), [], root, {
       XDG_CACHE_HOME: cacheHome,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PATH: fakeBun("fake-bin", 'printf "%s\\n" "$@" > "$FAKE_BUN_ARGV"'),
       FAKE_BUN_ARGV: argvFile,
     });
 
-    expect(readFileSync(argvFile, "utf8").split("\n").filter(Boolean)).toEqual([
-      "install",
-      "--frozen-lockfile",
-      "--cwd",
-      depsDir,
-    ]);
-    // The fake installed nothing, so the copied manifests are all the directory holds and the import fails.
+    const argv = readFileSync(argvFile, "utf8").split("\n").filter(Boolean);
+    expect(argv.slice(0, 3)).toEqual(["install", "--frozen-lockfile", "--cwd"]);
+    expect(argv[3]?.startsWith(`${depsDir}.tmp-`)).toBe(true);
+    // The fake installed nothing, so the copied manifests are all the directory holds and the import fails;
+    // the staging directory is gone either way.
+    expect(readdirSync(join(cacheHome, "skills-deps"))).toEqual([basename(depsDir)]);
     expect(readdirSync(depsDir).sort()).toEqual(["bun.lock", "package.json"]);
     expect(readdirSync(root).sort()).toEqual([
       "architecture.yml",

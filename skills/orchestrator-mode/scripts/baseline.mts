@@ -20,7 +20,7 @@
  * manifest.json can never collide with the manifest itself.
  */
 
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -59,18 +59,42 @@ const DEPS_DIR = join(
 );
 // One shell word, so the printed recovery command runs as printed whatever the path holds.
 const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
+const INSTALL_TIMEOUT_MS = 10 * 60_000;
+// Parallel lanes start these scripts at once on a cold cache, so each installs into its own staging
+// directory and renames the finished node_modules into place: a reader sees a complete tree or none,
+// and the rename that finds one already there lost the race and discards its own. DEPS_DIR holds the
+// manifests too, so the printed recovery command runs in it.
 if (!existsSync(join(DEPS_DIR, "node_modules"))) {
-  mkdirSync(DEPS_DIR, { recursive: true });
-  for (const file of ["package.json", "bun.lock"]) {
-    copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
+  const staging = `${DEPS_DIR}.tmp-${process.pid}`;
+  let install: SpawnSyncReturns<string>;
+  try {
+    rmSync(staging, { recursive: true, force: true });
+    for (const dir of [DEPS_DIR, staging]) {
+      mkdirSync(dir, { recursive: true });
+      for (const file of ["package.json", "bun.lock"]) {
+        copyFileSync(join(SKILL_DIR, file), join(dir, file));
+      }
+    }
+    install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", staging], {
+      encoding: "utf8",
+      timeout: INSTALL_TIMEOUT_MS,
+    });
+    if (install.status === 0 && existsSync(join(staging, "node_modules"))) {
+      try {
+        renameSync(join(staging, "node_modules"), join(DEPS_DIR, "node_modules"));
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+      }
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
   }
-  const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], {
-    encoding: "utf8",
-  });
   if (install.status !== 0) {
     process.stderr.write(install.stderr ?? "");
+    const timedOut = (install.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
     console.error(
-      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+      `${SKILL} dependencies did not install${timedOut ? ` within ${INSTALL_TIMEOUT_MS / 60_000} minutes` : ""}; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
     );
     process.exit(2);
   }

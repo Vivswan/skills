@@ -68,12 +68,14 @@ skills/my-skill/
   scripts/x.mts
 ```
 
-Each entry script starts with the bootstrap below. It installs the lock once into `${XDG_CACHE_HOME:-~/.cache}/skills-deps/<skill>-<first 12 hex of sha256(package.json + bun.lock)>/`, so a user's project never gains a `node_modules`; a changed pin or lock means a new directory, and old ones can be deleted. `bun install --frozen-lockfile` refusing a lock that disagrees with `package.json` is the intended failure: exit 2, with the command to run.
+Each entry script starts with the bootstrap below. It installs the lock once into `${XDG_CACHE_HOME:-~/.cache}/skills-deps/<skill>-<first 12 hex of sha256(package.json + bun.lock)>/`, so a user's project never gains a `node_modules`; a changed pin or lock means a new directory, and old ones can be deleted.
+
+Two lanes starting on a cold cache each install into a sibling staging directory and rename the finished `node_modules` into place, so neither sees a half-built tree. An install past ten minutes is cut off, and `bun install --frozen-lockfile` refusing a lock that disagrees with `package.json` is the intended failure: both exit 2 with the command to run.
 
 ```ts
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -88,16 +90,50 @@ const DEPS_HASH = createHash("sha256")
   .update(readFileSync(join(SKILL_DIR, "bun.lock")))
   .digest("hex")
   .slice(0, 12);
-const DEPS_DIR = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "skills-deps", `${SKILL}-${DEPS_HASH}`);
+const DEPS_DIR = join(
+  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
+  "skills-deps",
+  `${SKILL}-${DEPS_HASH}`,
+);
 // One shell word, so the printed recovery command runs as printed whatever the path holds.
 const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
+const INSTALL_TIMEOUT_MS = 10 * 60_000;
+// Parallel lanes start these scripts at once on a cold cache, so each installs into its own staging
+// directory and renames the finished node_modules into place: a reader sees a complete tree or none,
+// and the rename that finds one already there lost the race and discards its own. DEPS_DIR holds the
+// manifests too, so the printed recovery command runs in it.
 if (!existsSync(join(DEPS_DIR, "node_modules"))) {
-  mkdirSync(DEPS_DIR, { recursive: true });
-  for (const file of ["package.json", "bun.lock"]) copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
-  const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], { encoding: "utf8" });
+  const staging = `${DEPS_DIR}.tmp-${process.pid}`;
+  let install: SpawnSyncReturns<string>;
+  try {
+    rmSync(staging, { recursive: true, force: true });
+    for (const dir of [DEPS_DIR, staging]) {
+      mkdirSync(dir, { recursive: true });
+      for (const file of ["package.json", "bun.lock"]) {
+        copyFileSync(join(SKILL_DIR, file), join(dir, file));
+      }
+    }
+    install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", staging], {
+      encoding: "utf8",
+      timeout: INSTALL_TIMEOUT_MS,
+    });
+    if (install.status === 0 && existsSync(join(staging, "node_modules"))) {
+      try {
+        renameSync(join(staging, "node_modules"), join(DEPS_DIR, "node_modules"));
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+      }
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
   if (install.status !== 0) {
     process.stderr.write(install.stderr ?? "");
-    console.error(`${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`);
+    const timedOut = (install.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+    console.error(
+      `${SKILL} dependencies did not install${timedOut ? ` within ${INSTALL_TIMEOUT_MS / 60_000} minutes` : ""}; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+    );
     process.exit(2);
   }
 }
