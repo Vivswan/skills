@@ -31,16 +31,17 @@ The installed Chrome plugin's own skill (`skills/control-chrome/SKILL.md` inside
 
 Run before importing `browser-client.mjs` or selecting a browser. Requires Bun and the ChatGPT or Codex desktop app. `<skill-dir>` is the installed skill folder (Codex default: `~/.codex/skills/codex-browser-fix`).
 
-```bash
-bun "<skill-dir>/scripts/browser-plugin-preflight.mts"          # sync + verify
-bun "<skill-dir>/scripts/browser-plugin-preflight.mts" --check  # read-only verify, exit 1 on drift
+```text usage=skills/codex-browser-fix/scripts/browser-plugin-preflight.mts
+usage: browser-plugin-preflight.mts [--check] [--plugin-dir <dir>]
+  --check             verify only, nothing written; exit 1 on drift
+  --plugin-dir <dir>  the bundled Chrome plugin directory of a non-standard install
+the codex home is $CODEX_HOME or ~/.codex
+exits: 0 synchronized, or verified current; 1 a missing file or a stale setting; 2 usage
 ```
 
 It prints the app bundle version, the plugin path to import `browser-client.mjs` from, and which caches were synchronized. Re-run it after every desktop app update or restart.
 
-A failure names the missing file or stale setting and exits 1. A missing `config.toml`, bundle, or executable is an error, never a pass.
-
-The codex home is `$CODEX_HOME` or `~/.codex`. A non-standard install passes `--plugin-dir <dir>` with the bundled Chrome plugin directory. `--check` on a missing `config.toml` exits 1, and a missing `--plugin-dir` value exits 2.
+A failure names the missing file or stale setting and exits 1. A missing `config.toml`, bundle, or executable is an error, never a pass, under `--check` too.
 
 What it changes, and nothing else (`<home>` is the codex home):
 

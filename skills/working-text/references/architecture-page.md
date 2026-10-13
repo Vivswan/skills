@@ -79,6 +79,14 @@ A repository whose `tsc` includes the copied scripts also adds the pins of the c
 bun <scripts-dir>/lint.mts --root .            # exit 0: arch-lint: imports under src match architecture.yml
 ```
 
+```text usage=skills/working-text/scripts/architecture/lint.mts
+usage: lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]
+  --config   the layering declaration (default: <root>/architecture.yml)
+  --root     the repository root the paths are relative to (default: cwd)
+  --mermaid  print the module map instead of linting
+exit 0: the tree matches the declaration; 1: forbidden or stale edges; 2: usage or an unreadable graph
+```
+
 | Message | What to do |
 | --- | --- |
 | `forbidden import a -> b: src/a/x.ts -> src/b/y.ts; move it or declare the edge` | Move the import, or add `b` under `edges.a` when the dependency is right |
@@ -104,6 +112,16 @@ bun <scripts-dir>/render-map.mts --page <docs>/architecture.md          # writes
 bun <scripts-dir>/render-map.mts --page <docs>/architecture.md --check  # exit 1 on drift, for CI
 ```
 
+```text usage=skills/working-text/scripts/architecture/render-map.mts
+usage: render-map.mts --page <path> [--config <architecture.yml>] [--root <dir>] [--region <name>] [--check]
+  --page     the markdown page carrying the generated region
+  --config   the layering declaration (default: <root>/architecture.yml)
+  --root     the repository root (default: cwd)
+  --region   the generated region's name (default: architecture-map)
+  --check    exit 1 when the committed region differs, instead of rewriting it
+exit 0: written or already current; 1: drift under --check; 2: usage, no region, or an unreadable declaration
+```
+
 ### 3. Author the concept diagrams, box by box, against real symbols
 
 One hand-authored mermaid flowchart per concept, above the module map. Rules per box and per diagram:
@@ -125,6 +143,16 @@ Run the check with the diagram count pinned, where `<n>` is the number of concep
 bun <scripts-dir>/check-page.mts --page <docs>/architecture.md \
   --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams <n>
 # exit 0: check-architecture-page: <docs>/architecture.md names real code (concept diagrams: <n>)
+```
+
+```text usage=skills/working-text/scripts/architecture/check-page.mts
+usage: check-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expect-diagrams <n>]
+  --page             the architecture page to check
+  --root             the repository root the label paths are relative to (default: cwd)
+  --repo-url         the URL prefix an absolute demonstration link maps onto the root with
+                     (e.g. https://github.com/owner/repo/blob/main/); relative links resolve from the page
+  --expect-diagrams  the number of concept diagrams the page must carry
+exit 0: the page names real code; 1: problems, each printed; 2: usage or an unreadable page
 ```
 
 | Message | What to do |

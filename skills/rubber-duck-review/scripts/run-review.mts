@@ -10,11 +10,6 @@
  *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
- *
- * Exit codes (tests/repo/doc-drift.test.ts pins them to SKILL.md; change both together):
- *   0  verdict printed, or a --background launch started (its verdict comes via --extract)
- *   1  review FAILED - relaunch: no usable verdict, whatever the cause; never a clean pass
- *   2  usage error, or the reviewer binary is not installed
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -106,6 +101,10 @@ const USAGE = [
   "       run-review.mts prepare <section>",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
   "codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir",
+  "prints: the JSON report (verdict, tool_calls, capture, trajectory); --background prints output-file: <path> and pid: <n>",
+  "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
+  "       1 review FAILED - relaunch: no usable verdict, whatever the cause, or --wait timed out; never a clean pass;",
+  "       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository",
 ].join("\n");
 
 const SCRATCH_PREFIX = "rubber-duck-";
@@ -862,6 +861,10 @@ function extractAfterWait(tool: Tool, outputFile: string, timeoutSeconds: number
 
 function main(): void {
   const argv = process.argv.slice(2);
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    process.stdout.write(`${USAGE}\n`);
+    return;
+  }
   if (argv[0] === "prepare") {
     const section = argv[1];
     if (section === undefined || argv.length !== 2)

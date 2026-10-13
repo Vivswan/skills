@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { appendFileSync, chmodSync, existsSync, rmSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
+import { basename } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   deliver,
@@ -67,6 +68,8 @@ export interface Source<Target extends object> {
   interval: number;
   /** Seconds between polls while nothing moves; defaults to `interval`. */
   idleInterval?: number;
+  /** Lines the usage text ends with: the target's forms and the source's own flags after `watch`. */
+  usage?: string[];
   /** The arguments after `watch`, the target text first and the source's own flags after it; throws UsageError. */
   parseTarget(args: string[]): Target;
   /**
@@ -149,6 +152,7 @@ function usageText(entry: string, source: Source<object>): string {
     "--id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;",
     "--mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;",
     `--interval is ${source.interval} s by default, ${MIN_INTERVAL_SECONDS} to ${MAX_INTERVAL_SECONDS}`,
+    ...(source.usage ?? []),
   ].join("\n");
 }
 
@@ -821,6 +825,10 @@ export async function main<Target extends object>(
       );
     }
     if (command === undefined) usage("missing <command>");
+    if (command === "--help" || command === "-h") {
+      console.log(usageText(basename(entry), source));
+      return 0;
+    }
     const ctx: Context<Target> = { source, entry, dir: runtimeDir() };
     switch (command) {
       case "daemon":
@@ -842,7 +850,7 @@ export async function main<Target extends object>(
     }
   } catch (error) {
     if (error instanceof UsageError) {
-      console.error(`${error.message}\n${usageText(entry, source)}`);
+      console.error(`${error.message}\n${usageText(basename(entry), source)}`);
       return 2;
     }
     if (error instanceof ToolingError || error instanceof RuntimeDirError) {

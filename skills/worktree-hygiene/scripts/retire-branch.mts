@@ -61,6 +61,10 @@ const VALUED_FLAGS = {
 } as const;
 
 function parseOptions(argv: string[]): Options {
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    emit(1, USAGE);
+    process.exit(0);
+  }
   const options: Options = {
     branch: "",
     repoRoot: process.cwd(),

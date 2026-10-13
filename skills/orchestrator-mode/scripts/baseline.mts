@@ -8,12 +8,7 @@
  * copies compared byte for byte and rendered as a unified diff, so every
  * change is a visible diff instead of a bare count.
  *
- * Usage:
- *   baseline pin <baseline-dir> <tree-root> <file...>
- *   baseline check <baseline-dir> <tree-root>
- *
- * stdout: one JSON summary object. stderr: human-readable findings + diffs.
- * Exit 0 = clean, 1 = drift found or ok:false, 2 = usage error.
+ * The commands, the output streams, and the exit codes are USAGE below; `--help` prints it.
  *
  * Baseline layout: <baseline-dir>/manifest.json plus exact copies under
  * <baseline-dir>/content/<relative-path>, so a pinned file named
@@ -119,6 +114,8 @@ const USAGE = [
   "      Compare every manifest entry against the tree byte for byte.",
   "      Reports per file: identical | drifted (with the unified diff)",
   "      | missing-in-tree | missing-baseline. Exits 1 unless all identical.",
+  "prints: one JSON summary object on stdout; findings and unified diffs on stderr",
+  "exits: 0 clean; 1 drift found or ok:false; 2 usage error",
 ].join("\n");
 
 /** CLI misuse (bad subcommand, arity, or file argument). Rendered as exit 2. */
@@ -493,6 +490,10 @@ function check(baselineDir: string, treeRoot: string): number {
 
 function main(): number {
   const [command, ...rest] = process.argv.slice(2);
+  if (command === "--help" || command === "-h") {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
   if (command === "pin") {
     const [baselineDir, treeRoot, ...files] = rest;
     if (!baselineDir || !treeRoot || files.length === 0) {

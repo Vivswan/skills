@@ -20,8 +20,8 @@ const FILES = new Map<string, string>([
     'const SCRIPT = join(ROOT, "skills", "watch-github", "scripts", "github-events.mts");',
   ],
   [
-    "tests/repo/doc-drift.test.ts",
-    'const SKILL = join(ROOT, "skills", "rubber-duck-review", "SKILL.md");',
+    "tests/repo/usage-blocks.test.ts",
+    'const PAGES = new Bun.Glob("**/*.md"); const SCRIPTS = new Bun.Glob("skills/*/scripts/**/*.mts");',
   ],
 ]);
 const ALL = [...FILES.keys()].filter((p) => p.endsWith(".test.ts")).sort();
@@ -37,26 +37,31 @@ describe("selectTests", () => {
     ["a launcher module no test imports selects every test", ["scripts/hermetic-git-env.mts"], ALL],
     ["the preload selects every test even when it is not in the map", ["tests/preload.ts"], ALL],
     [
-      "a skill script run by path selects the test that names it",
+      "a skill script run by path selects the test that names it, and the test that scans scripts by glob",
       ["skills/watch-github/scripts/github-events.mts"],
-      ["tests/skills/watch-github/github-events.test.ts"],
+      ["tests/repo/usage-blocks.test.ts", "tests/skills/watch-github/github-events.test.ts"],
     ],
     [
       "a staged test runs itself",
-      ["tests/repo/doc-drift.test.ts"],
-      ["tests/repo/doc-drift.test.ts"],
+      ["tests/repo/usage-blocks.test.ts"],
+      ["tests/repo/usage-blocks.test.ts"],
     ],
     [
       "a deleted script, absent from the map, still selects the test that names it",
       ["scripts/gone.mts", "skills/watch-github/scripts/github-events.mts"],
-      ["tests/skills/watch-github/github-events.test.ts"],
+      ["tests/repo/usage-blocks.test.ts", "tests/skills/watch-github/github-events.test.ts"],
     ],
     [
-      "a SKILL.md selects the doc pin only",
+      "a SKILL.md selects the test that scans pages by glob only",
       ["skills/unslop/SKILL.md"],
-      ["tests/repo/doc-drift.test.ts"],
+      ["tests/repo/usage-blocks.test.ts"],
     ],
-    ["a stem under three characters selects nothing", ["ab.md", "x.ts"], []],
+    [
+      "a reference page selects the test that scans pages by glob",
+      ["skills/orchestrator-mode/references/fleet-monitor.md"],
+      ["tests/repo/usage-blocks.test.ts"],
+    ],
+    ["a stem under three characters selects nothing", ["ab.yml", "x.ts"], []],
     ["nothing staged selects nothing", [], []],
   ])("%s", (_name, staged, expected) => {
     expect(selectTests(staged, FILES)).toEqual(expected);

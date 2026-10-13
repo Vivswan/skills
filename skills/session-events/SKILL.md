@@ -45,6 +45,7 @@ type File = { path: string; size: number | null };
 runEvents<File>({
   name: "log-events",
   interval: 5,
+  usage: ["targets: the absolute path of a file; an event when its size changes or it disappears"],
   parseTarget([path, ...rest]) {
     if (path === undefined || !path.startsWith("/"))
       throw new UsageError("watch needs an absolute path");
@@ -83,6 +84,7 @@ A source script imports `runEvents` from `scripts/session-events.mts` and calls 
 | `name` | `"log-events"` (`[a-z0-9-]{1,40}`) | the file stems, the envelope's `from-name`, the `msg_id` prefix, the closing line |
 | `interval` | `5` | seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400 |
 | `idleInterval` (optional) | not set, so `5` | seconds between polls while nothing moves |
+| `usage` (optional) | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags |
 | `parseTarget(args)` | the path, refused unless absolute | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2 |
 | `poll(targets, io)` | stat each file, compare with its saved size | every poll: the events, and whether anything is still moving |
 
@@ -99,12 +101,20 @@ Rules a poll keeps:
 
 ## Commands
 
-```text
-<source.mts> daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]
-<source.mts> watch <target> [the source's flags] [--id <name>]
-<source.mts> unwatch <target> | --all [--id <name>]
-<source.mts> wait [--since <id>] [--timeout <s>] [--id <name>]
-<source.mts> poll | status | stop [--id <name>]
+Every source runs the same commands. The file source's `--help` (`<source.mts>` elsewhere on this page is your own source script):
+
+```text usage=skills/session-events/scripts/examples/log-source.mts
+usage: log-source.mts <command> [options]
+  daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]
+  watch <target> [the source's flags] [--id <name>]
+  unwatch <target> | --all [--id <name>]
+  wait [--since <id>] [--timeout <s>] [--id <name>]
+  poll | status | stop [--id <name>]
+the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET and exits with it;
+--id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;
+--mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;
+--interval is 5 s by default, 1 to 86400
+targets: the absolute path of a file; an event when its size changes or it disappears
 ```
 
 | Exit | Meaning |

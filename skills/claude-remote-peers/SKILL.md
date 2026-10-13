@@ -59,6 +59,14 @@ Keep the grant in this session's own notes (the task list or plan), never in mem
    bun "<skill-dir>/scripts/bridge.mts" user@10.0.0.7 -- -p 2222 -i ~/.ssh/other_key
    ```
 
+   `--help`:
+
+   ```text usage=skills/claude-remote-peers/scripts/bridge.mts
+   usage: bun bridge.mts <ssh-destination> [remote-pid] [-- <extra ssh options>]
+   run from a shell inside a Claude Code session (it sets CLAUDE_CODE_MESSAGING_SOCKET)
+   prints: SendMessage to: uds:<remote socket> once both forwards are confirmed; stays up until ssh exits or a signal
+   ```
+
 2. **Wait for the `SendMessage to:` line** in the log. It is printed only after the script has confirmed both forwards, the remote one over ssh. A socket file that appears earlier is not yet known to work.
 
 3. **Send with the printed address as `to`.** The remote sees a normal `<cross-session-message>`. It replies to the `from` address and needs nothing from you.

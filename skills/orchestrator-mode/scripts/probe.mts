@@ -6,14 +6,8 @@
 // existence-validated before any zero is trusted, counts always carry
 // the matched lines, and change sets union committed and dirty paths.
 //
-// Run with bun; node builtins only, no npm dependencies.
-//
-// Subcommands (one JSON object to stdout; exit 0 = ok, 1 = failed
-// check or broken probe, 2 = usage):
-//   probe count <file> <literal>
-//   probe json-keys <file> [<other-file>]
-//   probe set <repo-root> <base-ref>
-//   probe tokens <table.json> <tree-root>
+// Run with bun; node builtins only, no npm dependencies. The subcommands and the exit codes are
+// USAGE below; `--help` prints it.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -35,6 +29,9 @@ const USAGE = [
   "  probe json-keys <file> [<file2>]    parsed key paths; with two files, the key-set diff",
   "  probe set <repo-root> <base-ref>    changed files: committed (base..HEAD) + dirty union",
   "  probe tokens <table.json> <root>    run a token table against a tree",
+  "prints: one JSON object; a match carries its start line's text and its line range (endLine);",
+  '  a tokens table maps tree-relative files to [{"text": ..., "expect": <n> | ">=1"}, ...]',
+  "exits: 0 ok (a measurement succeeded, or a check passed); 1 a failed check or a broken probe; 2 usage",
 ].join("\n");
 
 // Same bound as sweep.mts: a child git on a stalled mount must fail loudly
@@ -591,6 +588,10 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
 
 function main(argv: string[]): void {
   const [subcommand, ...rest] = argv;
+  if (subcommand === "--help" || subcommand === "-h") {
+    writeFileSync(1, `${USAGE}\n`);
+    return;
+  }
   switch (subcommand) {
     case "count": {
       const [file, literal] = rest;

@@ -208,6 +208,10 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 }
 
 if (import.meta.main) {
+  if (process.argv[2] === "--help" || process.argv[2] === "-h") {
+    console.log(USAGE);
+    process.exit(0);
+  }
   let options: CliOptions;
   try {
     options = parseArgs(process.argv.slice(2));

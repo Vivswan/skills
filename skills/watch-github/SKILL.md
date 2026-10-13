@@ -105,12 +105,19 @@ When a workflow's runs share a `concurrency` group key, a newer push cancels the
 
 ## Commands
 
-```text
-github-events.mts daemon [--interval <s>] [--id <name> [--pid <pid>]]
-github-events.mts watch <owner/repo>#<n> | <owner/repo>:<branch> [--expect-workflow <name>]... [--id <name>]
-github-events.mts unwatch <target> | --all [--id <name>]
-github-events.mts wait [--since <id>] [--timeout <s>] [--id <name>]
-github-events.mts poll | status | stop [--id <name>]
+```text usage=skills/watch-github/scripts/github-events.mts
+usage: github-events.mts <command> [options]
+  daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]
+  watch <target> [the source's flags] [--id <name>]
+  unwatch <target> | --all [--id <name>]
+  wait [--since <id>] [--timeout <s>] [--id <name>]
+  poll | status | stop [--id <name>]
+the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET and exits with it;
+--id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;
+--mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;
+--interval is 60 s by default, 1 to 86400
+targets: <owner/repo>#<n> for a pull request, <owner/repo>:<branch> for a branch tip
+--expect-workflow <name> names a workflow whose run must appear on the head before CI reads green; repeatable
 ```
 
 | Exit | Meaning |

@@ -197,7 +197,7 @@ describe("session-events.mts", () => {
       expect([args.join(" "), r.code]).toEqual([args.join(" "), 2]);
       expect(r.stderr).toContain(reason);
       expect(r.stderr.trim().split("\n").at(-1)).toBe("--interval is 1 s by default, 1 to 86400");
-      expect(r.stderr).toContain(`usage: ${FAKE_SOURCE} <command> [options]`);
+      expect(r.stderr).toContain("usage: fake-source.mts <command> [options]");
     }
     expect(existsSync(s.socketPath())).toBe(false);
     expect(await box.frames(0)).toEqual([]);

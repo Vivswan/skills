@@ -12,14 +12,28 @@ What remains is the judgment layer: what the readings mean, when to flag, and ho
 
 The measurement rules that are not monitor-specific live in the `/verify-with-controls` skill: evidence-or-error probes, positive and negative controls, suspecting the instrument, postconditions over logs, the look-then-send re-measure. This file keeps their monitor-specific instantiations and wiring.
 
-The shipped scripts and this page are kept in sync upstream. Where they disagree, trust the script and report the drift.
+Each script prints its contract with `--help`. This page quotes those blocks, and a test upstream keeps every quote equal to its script, so the script is the source where the prose around it disagrees.
 
 ## The Sweep
 
-The periodic check is one command (`<skill-dir>` is this skill's root):
+The periodic check is one command, `bun <skill-dir>/scripts/sweep.mts <repo-root>` (`<skill-dir>` is this skill's root):
 
-```bash
-bun <skill-dir>/scripts/sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]
+```text usage=skills/orchestrator-mode/scripts/sweep.mts
+usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]
+  --base <ref>         aheadBehind against this committish (e.g. origin/develop) instead of origin's default branch
+  --transcripts <dir>  add one liveness line over the agent-*.jsonl transcripts in the directory
+prints: one JSON line each, in this order, each only when its condition holds
+  {"control":"FAILED","reason":...}          the sweep itself is broken
+  {"lsof":{"ok":false,"error":...}}          process attribution is down (rows carry processes:[])
+  {"lsof":{"ok":true,"degraded":true,...}}   lsof exited nonzero but produced records (lists may omit processes)
+  {"defaultRef":{"ok":false,"error":...}}    origin's default branch is unresolvable (rows carry aheadBehind:null)
+  {"baseRef":{"ok":false,"error":...}}       the --base ref is unresolvable or ambiguous (same, never a fallback)
+  {"worktree":...,"ok":true,...}             one per worktree: branch, headSha, aheadBehind {ahead, behind}, treeFileCount,
+                                             dirtyCount, untrackedCount, newestDirtyMtime, statusHash, processes [{pid, command, state}]
+  {"worktree":...,"ok":false,"error":...}    vanished dir, git failure, or readings that moved mid-row
+  {"transcripts":{...}}                      only with --transcripts: mtime, sizeBytes, lastEventAgeSeconds,
+                                             lastEventType per agent
+exits: 0 the sweep ran (ok:false rows included); 1 control failure; 2 usage error
 ```
 
 It prints one JSON line per worktree of `<repo-root>` (a real captured row, wrapped here for width):
@@ -85,13 +99,17 @@ The row is data. These rules are what it means:
 
 ## Content Claims: probe.mts
 
-Any claim about file content ("the sentence landed", "the key set matches", "this track touched only its territory") runs through the probe script, never a raw grep:
+Any claim about file content ("the sentence landed", "the key set matches", "this track touched only its territory") runs through the probe script, never a raw grep. `bun <skill-dir>/scripts/probe.mts <subcommand> ...`:
 
-```bash
-bun <skill-dir>/scripts/probe.mts count <file> <literal>       # occurrences of a token-bounded match, with per-match evidence
-bun <skill-dir>/scripts/probe.mts json-keys <file> [<file2>]   # parsed key paths; with two files, the key-set diff
-bun <skill-dir>/scripts/probe.mts set <repo-root> <base-ref>   # changed files: committed (base..HEAD) + dirty, as one union
-bun <skill-dir>/scripts/probe.mts tokens <table.json> <root>   # a token table (schema below) against a tree
+```text usage=skills/orchestrator-mode/scripts/probe.mts
+usage: probe <subcommand> ...
+  probe count <file> <literal>        count whitespace-normalized matches, with evidence
+  probe json-keys <file> [<file2>]    parsed key paths; with two files, the key-set diff
+  probe set <repo-root> <base-ref>    changed files: committed (base..HEAD) + dirty union
+  probe tokens <table.json> <root>    run a token table against a tree
+prints: one JSON object; a match carries its start line's text and its line range (endLine);
+  a tokens table maps tree-relative files to [{"text": ..., "expect": <n> | ">=1"}, ...]
+exits: 0 ok (a measurement succeeded, or a check passed); 1 a failed check or a broken probe; 2 usage
 ```
 
 Every result is evidence-bearing or a loud error, never a bare number:
@@ -182,16 +200,27 @@ test -s "$needles" &&
 
 ## Standing States: ledger.mts
 
-Per-worker standing state lives in a ledger file the LEAD creates at session start, so it survives agent context loss and monitor handovers. The monitor checks every would-be flag against it before reporting:
+Per-worker standing state lives in a ledger file the LEAD creates at session start, so it survives agent context loss and monitor handovers. The monitor checks every would-be flag against it before reporting. `bun <skill-dir>/scripts/ledger.mts <file> <command>`:
+
+```text usage=skills/orchestrator-mode/scripts/ledger.mts
+usage: ledger <file> <command> [args...]
+commands:
+  init                                create an empty ledger (never clobbers an existing one)
+  state <worker> <state>              set standing state; states: active, dormant-by-design, landing-gate, landed-swept
+  flag <worker> <text>                record a standing flag (an identical standing flag is refused)
+  retract <flag-hash-prefix>          mark a flag retracted (unique prefix match)
+  grant <worker> <wording> <glob...>  record a territory grant with its exact wording
+  show [worker]                       print the whole ledger, or one worker
+prints: one JSON result per command; mutations (state, flag, retract, grant) hold the <file>.lock lockfile
+exits: 0 ok; 1 refused, not found, or a corrupt ledger; 2 usage
+```
+
+`init` does not create parent directories. Quote the `grant` wording and every glob, or the shell splits the wording and expands the globs:
 
 ```bash
-mkdir -p /tmp/fleet-<sessionId>   # ledger init does not create parent directories
+mkdir -p /tmp/fleet-<sessionId>
 bun <skill-dir>/scripts/ledger.mts /tmp/fleet-<sessionId>/ledger.json init
-bun <skill-dir>/scripts/ledger.mts <file> state <worker> <state>    # active | dormant-by-design | landing-gate | landed-swept
-bun <skill-dir>/scripts/ledger.mts <file> flag <worker> <text>      # content-hashed; an identical standing flag is REFUSED
-bun <skill-dir>/scripts/ledger.mts <file> retract <hash-prefix>     # retraction is a recorded transition
-bun <skill-dir>/scripts/ledger.mts <file> grant <worker> "<wording>" "<glob>"...   # quote wording AND globs: unquoted, the shell splits the wording and expands the globs
-bun <skill-dir>/scripts/ledger.mts <file> show [worker]
+bun <skill-dir>/scripts/ledger.mts <file> grant <worker> "<wording>" "<glob>"...
 ```
 
 Saves are temp-plus-rename atomic. `init` is an atomic create-if-absent (it never clobbers an existing ledger). The mutating commands (`state`, `flag`, `retract`, `grant`) run under a lockfile, and a mutation never proceeds unlocked.
@@ -267,6 +296,26 @@ Two disaster-shaped non-disasters:
 Routine sweeps must be O(cheap), and the sweep script is built to that budget: status hash, dirty-file mtimes, HEAD sha, ahead/behind. Never a whole-tree filesystem walk, which collapses under wave-start I/O (parallel installs can kill consecutive sweeps at the command cap).
 
 The row's one size-scaling reading is `treeFileCount`, backed by a per-worktree `git ls-tree -r` at HEAD, the sweep's heaviest git call. It reads the object store rather than walking the filesystem, but its cost still grows with tree size. Expensive walks belong at flag-time, against one worktree only.
+
+## Pinned Copies: baseline.mts
+
+A whole-file ownership claim is an exact copy pinned before the risky step and compared after it, byte for byte, so drift is a visible diff and never a count. `bun <skill-dir>/scripts/baseline.mts <command> ...`:
+
+```text usage=skills/orchestrator-mode/scripts/baseline.mts
+usage:
+  baseline pin <baseline-dir> <tree-root> <file...>
+      Copy the exact current content of each file (paths relative to
+      tree-root) into baseline-dir, preserving relative paths, and write
+      a manifest.json listing the pinned set. If anything fails, the
+      previous baseline is left untouched and every file is reported as
+      pinned or not.
+  baseline check <baseline-dir> <tree-root>
+      Compare every manifest entry against the tree byte for byte.
+      Reports per file: identical | drifted (with the unified diff)
+      | missing-in-tree | missing-baseline. Exits 1 unless all identical.
+prints: one JSON summary object on stdout; findings and unified diffs on stderr
+exits: 0 clean; 1 drift found or ok:false; 2 usage error
+```
 
 ## Verifying a Landing
 

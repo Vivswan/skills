@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 // Bridge Claude Code cross-session messaging to a session on another machine over SSH.
-//
-//   bun bridge.mts <ssh-destination> [remote-pid] [-- <extra ssh options>]
+// The command line is USAGE below; `--help` prints it.
 //
 // Run from a shell inside a Claude Code session (it sets CLAUDE_CODE_MESSAGING_SOCKET).
 // Nothing is copied between the machines. Each session's inbox socket is forwarded to
@@ -18,6 +17,12 @@ type SessionRecord = {
   startedAt: number;
   messagingSocketPath: string;
 };
+
+const USAGE = [
+  "usage: bun bridge.mts <ssh-destination> [remote-pid] [-- <extra ssh options>]",
+  "run from a shell inside a Claude Code session (it sets CLAUDE_CODE_MESSAGING_SOCKET)",
+  "prints: SendMessage to: uds:<remote socket> once both forwards are confirmed; stays up until ssh exits or a signal",
+].join("\n");
 
 const args = parseArgs(process.argv.slice(2));
 const localSocket = requireEnv("CLAUDE_CODE_MESSAGING_SOCKET");
@@ -74,8 +79,11 @@ function parseArgs(argv: string[]) {
   const own = dash === -1 ? argv : argv.slice(0, dash);
   const sshOptions = dash === -1 ? [] : argv.slice(dash + 1);
   const [destination, remotePid] = own;
-  if (!destination)
-    fail("usage: bun bridge.mts <ssh-destination> [remote-pid] [-- <extra ssh options>]");
+  if (destination === "--help" || destination === "-h") {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  if (!destination) fail(USAGE);
   return { destination, remotePid, sshOptions };
 }
 

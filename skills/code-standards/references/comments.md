@@ -41,8 +41,7 @@ The carrier follows the fact at that spot. Real-shaped examples, tell first in e
 ```
 
 ```ts
-// tests/repo/doc-drift.test.ts pins this usage text to SKILL.md; change both together or CI fails.
-// See its "rubber-duck-review/SKILL.md <-> run-review.mts" entry.
+// `--help` prints this block, and tests/repo/usage-blocks.test.ts holds the fence on SKILL.md equal to it.
 ```
 
 ```ts
