@@ -273,7 +273,8 @@ describe("github-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a conflict is said when the merge test settles on it, once per settled stretch and again after a push it survived, and resolved when it settles clean, a push in between or not; UNKNOWN says nothing; a PR already conflicting is said at its first sighting", async () => {
+  test("a conflict is said when the merge test settles on it, once per settled stretch and again after a push it survived, " +
+    "and resolved when it settles clean, a push in between or not; UNKNOWN says nothing; a PR already conflicting is said at its first sighting", async () => {
     const s = new Scenario("conflicts");
     const box = await s.inbox("a");
     const p7 = (mergeable: string, head = HEAD_A): RowSpec => ({

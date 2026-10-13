@@ -192,9 +192,9 @@ export function processPr(
     });
   }
   if (previous !== null) {
-    const moved = describeLabels(previous.row.labels, row.labels);
-    if (moved !== null)
-      events.push({ ...fields, kind: "label", text: `${label}: ${moved}`, url: row.url });
+    const labelMoves = describeLabels(previous.row.labels, row.labels);
+    if (labelMoves !== null)
+      events.push({ ...fields, kind: "label", text: `${label}: ${labelMoves}`, url: row.url });
   }
   // GitHub answers UNKNOWN while it recomputes the merge test after either side moved, so only a
   // settled answer is judged, and a move keeps the standing conflict line until one arrives.
