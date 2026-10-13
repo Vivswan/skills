@@ -3,20 +3,19 @@
 // close that ends the watch.
 
 import type { EventInput, Io } from "../../../session-events/scripts/session-events.mts";
+import { discoverRuns, type Suites } from "../github/check-suites.mts";
+import { type Activity, newActivity, readPrDetail } from "../github/pr-activity.mts";
+import { type Row, rowChanged } from "../github/repository.mts";
+import type { Outcome } from "./branch.mts";
 import {
   type CiState,
   describeVerdict,
-  discoverRuns,
   judgeHead,
   NO_RUN_POLLS,
   plural,
   rollupPending,
-  type Suites,
   verdictKey,
-} from "../check-suites.mts";
-import { type Activity, newActivity, readPrDetail } from "../pr-detail.mts";
-import { type Row, rowChanged } from "../pr-rows.mts";
-import type { Outcome } from "./branch.mts";
+} from "./ci.mts";
 
 const PR_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
 // GraphQL's Int: a number past it makes the whole repository query invalid, every target with it.
@@ -31,7 +30,7 @@ export interface PrTarget {
   seen: {
     row: Row;
     ci: CiState;
-    /** The last delivered verdict's key (check-suites.mts verdictKey). */
+    /** The last delivered verdict's key (ci.mts verdictKey). */
     verdict: string | null;
     /** Polls on this head with no checks at all (no rollup), for a named gate that never registers. */
     noRuns: number;

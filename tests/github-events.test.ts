@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
-import type { Activity } from "../skills/watch-github/scripts/pr-detail.mts";
+import type { Activity } from "../skills/watch-github/scripts/github/pr-activity.mts";
 import { parseBranchTarget } from "../skills/watch-github/scripts/targets/branch.mts";
 import { describeActivities, parsePrTarget } from "../skills/watch-github/scripts/targets/pr.mts";
 import {

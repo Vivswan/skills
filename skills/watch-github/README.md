@@ -33,8 +33,8 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-github -
 
 - [`SKILL.md`](./SKILL.md): the subscribe-and-act workflow, the targets, the event texts and CI rules, the polling budget, the command contract, and the gotchas
 - [`scripts/github-events.mts`](./scripts/github-events.mts): the CLI entry, run with bun: `daemon`, `watch`, `unwatch`, `wait`, `poll`, `status`, `stop`. It composes the source and hands it to the `/session-events` library. Exit 0 ok; 2 usage or the `/session-events` skill not installed beside this one; 3 no daemon for this session, naming the command that starts one; `wait` exits 4 on timeout.
-- [`scripts/targets/pr.mts`](./scripts/targets/pr.mts) and [`scripts/targets/branch.mts`](./scripts/targets/branch.mts): the two target forms, their cursors, and their event texts.
-- [`scripts/pr-rows.mts`](./scripts/pr-rows.mts), [`scripts/pr-detail.mts`](./scripts/pr-detail.mts), [`scripts/check-suites.mts`](./scripts/check-suites.mts), [`scripts/gh.mts`](./scripts/gh.mts): the reads: the per-repository query, the PR detail, the check suites and the verdict, and the `gh` wrapper.
+- [`scripts/targets/pr.mts`](./scripts/targets/pr.mts) and [`scripts/targets/branch.mts`](./scripts/targets/branch.mts): the two target forms, their cursors, and their event texts; [`scripts/targets/ci.mts`](./scripts/targets/ci.mts): the CI judgment both share, the verdict rules and the verdict as an event line.
+- [`scripts/github/repository.mts`](./scripts/github/repository.mts), [`scripts/github/pr-activity.mts`](./scripts/github/pr-activity.mts), [`scripts/github/check-suites.mts`](./scripts/github/check-suites.mts), [`scripts/github/gh.mts`](./scripts/github/gh.mts): the reads: the per-repository query, one PR's comments and reviews, the paged check suites and failed jobs, and the `gh` wrapper.
 
 ## Plugin-Ready Layout
 

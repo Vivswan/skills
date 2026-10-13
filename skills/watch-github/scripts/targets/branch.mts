@@ -3,17 +3,16 @@
 // mainline it merged into is a branch target.
 
 import type { EventInput, Io } from "../../../session-events/scripts/session-events.mts";
+import { discoverRuns, type Suites } from "../github/check-suites.mts";
+import type { Tip } from "../github/repository.mts";
 import {
   type CiState,
   describeVerdict,
-  discoverRuns,
   judgeHead,
   NO_RUN_POLLS,
   rollupPending,
-  type Suites,
   verdictKey,
-} from "../check-suites.mts";
-import type { Tip } from "../pr-rows.mts";
+} from "./ci.mts";
 
 const BRANCH_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+):(.+)$/;
 
@@ -27,7 +26,7 @@ export interface BranchTarget {
     oid: string;
     rollupState: string | null;
     ci: CiState;
-    /** The last delivered verdict's key (check-suites.mts verdictKey). */
+    /** The last delivered verdict's key (ci.mts verdictKey). */
     verdict: string | null;
     /** Polls on this head with no checks at all (no rollup), for a named gate that never registers. */
     noRuns: number;

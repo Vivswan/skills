@@ -449,9 +449,16 @@ const SURFACES: Record<string, Surface> = {
       },
     ],
   },
-  "watch-github/SKILL.md <-> check-suites.mts": {
+  "watch-github/SKILL.md <-> github/check-suites.mts": {
     docPath: join(WATCH_GITHUB, "SKILL.md"),
-    scriptPath: join(WATCH_GITHUB, "scripts", "check-suites.mts"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "github", "check-suites.mts"),
+    tokens: [
+      { doc: "more than 100 check suites", script: "checkSuites(first: 100, after: $cursor)" },
+    ],
+  },
+  "watch-github/SKILL.md <-> targets/ci.mts": {
+    docPath: join(WATCH_GITHUB, "SKILL.md"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "targets", "ci.mts"),
     tokens: [
       {
         doc: "`PR owner/repo#12: CI green on 1a2b3c4d5e6f: 3 workflows`",
@@ -471,7 +478,6 @@ const SURFACES: Record<string, Surface> = {
           // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
           'text: `${label}: CI red on ${short}: ${parts.length > 0 ? parts.join(", ") : "a check outside Actions"}${missing}`,',
       },
-      { doc: "more than 100 check suites", script: "checkSuites(first: 100, after: $cursor)" },
       {
         doc: "after two polls on a head with no checks at all",
         script: "export const NO_RUN_POLLS = 2;",

@@ -3,18 +3,21 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   discoverRuns,
-  judgeHead,
   parseSuites,
   type Run,
-  verdictKey,
-} from "../skills/watch-github/scripts/check-suites.mts";
-import { GhError, gh } from "../skills/watch-github/scripts/gh.mts";
+} from "../skills/watch-github/scripts/github/check-suites.mts";
+import { GhError, gh } from "../skills/watch-github/scripts/github/gh.mts";
 import {
   type Activity,
   newActivity,
   readPrDetail,
-} from "../skills/watch-github/scripts/pr-detail.mts";
-import { type Row, readRepository, rowChanged } from "../skills/watch-github/scripts/pr-rows.mts";
+} from "../skills/watch-github/scripts/github/pr-activity.mts";
+import {
+  type Row,
+  readRepository,
+  rowChanged,
+} from "../skills/watch-github/scripts/github/repository.mts";
+import { judgeHead, verdictKey } from "../skills/watch-github/scripts/targets/ci.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
 // Contract tests for the GitHub read modules: a fake `gh` on PATH validates the exact invocation
@@ -470,7 +473,7 @@ describe("gh", () => {
   });
 });
 
-// --- check-suites.mts --------------------------------------------------------
+// --- github/check-suites.mts and targets/ci.mts ------------------------------
 
 describe("discoverRuns", () => {
   test("external-app suites are not runs and GitHub's enums are lowercased: a CodeQL FAILURE is not judged", () => {
@@ -1013,7 +1016,7 @@ describe("rowChanged", () => {
   });
 });
 
-// --- pr-detail.mts -----------------------------------------------------------
+// --- github/pr-activity.mts --------------------------------------------------
 
 describe("readPrDetail", () => {
   test("threads are paged past the first page, unresolved counts sum across pages, and a thread's first comment is told from a reply by position", () => {

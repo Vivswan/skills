@@ -9,8 +9,8 @@
 //   bun "<skill-dir>/scripts/github-events.mts" watch owner/repo:main
 
 import type { EventInput, Io } from "../../session-events/scripts/session-events.mts";
-import { GhError } from "./gh.mts";
-import { type RepoRead, type RepoReply, readRepository } from "./pr-rows.mts";
+import { GhError } from "./github/gh.mts";
+import { type RepoRead, type RepoReply, readRepository } from "./github/repository.mts";
 import {
   type BranchTarget,
   branchLabel,
