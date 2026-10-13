@@ -22,6 +22,7 @@ body:
         - project-naming
         - reply-and-review-discipline
         - rubber-duck-review
+        - session-events
         - verify-with-controls
         - watch-prs-and-ci
         - worktree-hygiene

@@ -15,7 +15,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { connect, createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { ROOT } from "../../scripts/lib";
-import { isProcessAlive } from "../../skills/watch-prs-and-ci/scripts/inbox.mts";
+import { isProcessAlive } from "../../skills/session-events/scripts/inbox.mts";
 import { type TempDirs, tempDirs } from "./temp-dirs";
 
 export const SCRIPT = join(ROOT, "skills", "watch-prs-and-ci", "scripts", "pr-events.mts");
@@ -391,7 +391,7 @@ export function inbox(
 
 /**
  * A proc mount holding one entry for this test process whose start field reads `start`, for the
- * daemon's PR_EVENTS_PROC: the only way to give a live pid a chosen token, or another one later.
+ * daemon's SESSION_EVENTS_PROC: the only way to give a live pid a chosen token, or another one later.
  */
 export function fakeProc(start: string): {
   dir: string;
@@ -473,7 +473,7 @@ export class Scenario {
       STUB_DIR: this.stubDir,
       STUB_ARGS_LOG: join(this.stubDir, "args.log"),
       STUB_VIOLATIONS: join(this.stubDir, "violations.log"),
-      PR_EVENTS_DIR: this.dir,
+      SESSION_EVENTS_DIR: this.dir,
       ...options.env,
     };
     // The test process may itself run inside a Claude Code session; the owner is the test's choice.
@@ -528,9 +528,9 @@ export class Scenario {
     return box;
   }
 
-  /** `<dir>/<owner key>.<suffix>`; the key defaults to this process, the fake inboxes' owner. */
+  /** `<dir>/<owner key>.pr-events.<suffix>`; the key defaults to this process, the fake inboxes' owner. */
   file(suffix: string, key: string = String(process.pid)): string {
-    return join(this.dir, `${key}.${suffix}`);
+    return join(this.dir, `${key}.pr-events.${suffix}`);
   }
 
   socketPath(key: string = String(process.pid)): string {

@@ -69,8 +69,9 @@ export interface OwnerFiles {
   log: string;
 }
 
-export function ownerFiles(dir: string, owner: Owner): OwnerFiles {
-  const stem = join(dir, owner.key);
+/** `<dir>/<owner key>.<source name>.<suffix>`: two sources of one session never share a socket. */
+export function ownerFiles(dir: string, owner: Owner, sourceName: string): OwnerFiles {
+  const stem = join(dir, `${owner.key}.${sourceName}`);
   return {
     socket: `${stem}${SOCKET_SUFFIX}`,
     events: `${stem}${EVENTS_SUFFIX}`,
@@ -90,18 +91,20 @@ export class RuntimeDirError extends Error {}
 export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   const uid = process.getuid?.() ?? 0;
   const candidates: string[] = [];
-  if (env.PR_EVENTS_DIR) {
-    if (!isAbsolute(env.PR_EVENTS_DIR)) {
+  if (env.SESSION_EVENTS_DIR) {
+    if (!isAbsolute(env.SESSION_EVENTS_DIR)) {
       throw new RuntimeDirError(
-        `PR_EVENTS_DIR must be an absolute path, got: ${env.PR_EVENTS_DIR}`,
+        `SESSION_EVENTS_DIR must be an absolute path, got: ${env.SESSION_EVENTS_DIR}`,
       );
     }
-    candidates.push(env.PR_EVENTS_DIR);
+    candidates.push(env.SESSION_EVENTS_DIR);
   }
-  if (env.XDG_RUNTIME_DIR) candidates.push(join(env.XDG_RUNTIME_DIR, "pr-events"));
+  if (env.XDG_RUNTIME_DIR) candidates.push(join(env.XDG_RUNTIME_DIR, "session-events"));
   // Claude Code's own temp root, which os.tmpdir() does not read.
-  if (env.CLAUDE_CODE_TMPDIR) candidates.push(join(env.CLAUDE_CODE_TMPDIR, `pr-events-${uid}`));
-  candidates.push(join(tmpdir(), `pr-events-${uid}`), `/tmp/pr-events-${uid}`);
+  if (env.CLAUDE_CODE_TMPDIR) {
+    candidates.push(join(env.CLAUDE_CODE_TMPDIR, `session-events-${uid}`));
+  }
+  candidates.push(join(tmpdir(), `session-events-${uid}`), `/tmp/session-events-${uid}`);
   const refused: string[] = [];
   for (const dir of candidates) {
     try {
@@ -118,7 +121,7 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
     }
   }
   throw new RuntimeDirError(
-    `no usable runtime directory; set PR_EVENTS_DIR to a private directory\n  ${refused.join("\n  ")}`,
+    `no usable runtime directory; set SESSION_EVENTS_DIR to a private directory\n  ${refused.join("\n  ")}`,
   );
 }
 

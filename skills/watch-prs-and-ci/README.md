@@ -4,12 +4,14 @@
 
 A PR merge reaches this skill through the `/pr-landing-discipline` skill, which owns the merge moment. A subscribed PR's merge event names the merge commit, and the daemon follows that commit's mainline CI, so the SHA judged after a merge is the PR's merge commit, never the topic branch's HEAD.
 
+The daemon is the `/session-events` skill's; this skill is its PR source and resolves it as the sibling folder. Install both.
+
 ## Install
 
-From the collection:
+From the collection, both skills:
 
 ```bash
-npx skills add Vivswan/skills -g --skill watch-prs-and-ci
+npx skills add Vivswan/skills -g --skill session-events --skill watch-prs-and-ci
 ```
 
 Directly from this folder:
@@ -20,7 +22,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-prs-and-
 
 ## What It Does
 
-- **One daemon per session**, started once as a background task; it is the session's own child, so its messages render as plain text, and it exits when the session does. The harness also ends a background task after two hours; the saved state survives, so the session starts it again.
+- **One daemon per session**, the `/session-events` skill's, started once as a background task; it is the session's own child, so its messages render as plain text, and it exits when the session does. The harness also ends a background task after two hours; the saved state survives, so the session starts it again.
 - **One `watch` per PR**, with the head it pushed and the complete gate set; a repeated call replaces the gates.
 - **Seven event kinds** as messages: comment, review, CI verdict with a log excerpt for up to three failed runs (the rest are counted), head moved to a SHA the session did not record, merged, closed, and tooling trouble. A poll's events arrive in one message.
 - **The merge commit's mainline CI** follows a merge event automatically. `watch-commit` covers a direct mainline push with no PR.
@@ -31,8 +33,9 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-prs-and-
 ## Layout
 
 - [`SKILL.md`](./SKILL.md): the subscribe-and-act workflow, the daemon lifecycle, the command contract, and the gotchas
-- `<skill-dir>/scripts/pr-events.mts`: the CLI entry, run with bun: `daemon`, `watch`, `watch-commit`, `unwatch`, `wait`, `poll`, `status`, `stop`. Exit 0 ok; 2 usage or gh missing; 3 no daemon for this session, naming the command that starts one; `wait` exits 4 on timeout.
-- The other `scripts/` modules are the daemon's parts: the `gh` wrapper, check-suite discovery and judging, the PR batch and detail reads, the inbox delivery, and the state and log files.
+- `<skill-dir>/scripts/pr-events.mts`: the CLI entry, run with bun: `daemon`, `watch`, `watch-commit`, `unwatch`, `wait`, `poll`, `status`, `stop`. It runs the `/session-events` daemon on this skill's source. Exit 0 ok; 2 usage, gh missing, or the `/session-events` skill not installed beside this one; 3 no daemon for this session, naming the command that starts one; `wait` exits 4 on timeout.
+- `<skill-dir>/scripts/pr-source.mts` and `pr-state.mts`: the source: what a target is, the GraphQL reads, the CI judgment, and the event texts.
+- The other `scripts/` modules are the reads: the `gh` wrapper, check-suite discovery and judging, and the PR batch and detail reads.
 
 ## Plugin-Ready Layout
 

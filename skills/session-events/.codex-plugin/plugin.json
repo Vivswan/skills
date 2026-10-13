@@ -1,0 +1,29 @@
+{
+  "name": "session-events",
+  "description": "One daemon per session, a background task of that session, polls any source and delivers its events as messages in the peer envelope, with the polled system's text fenced as untrusted, and as a log agents read with wait.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/session-events",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": ["agent-skills", "events", "daemon", "polling", "inbox", "plugin-ready"],
+  "skills": "./",
+  "interface": {
+    "displayName": "Session Events",
+    "shortDescription": "Events from any polled system delivered as messages, not polls.",
+    "longDescription": "One daemon per Claude Code session, a background task that ends with it, polls a source for the targets the session watches and delivers each poll's events as one message in the peer envelope, with text the polled system produced fenced after a boundary line, and as a write-ahead log agents read with wait. A source is a small module: what a target is, how it is read, what its events say. The PR and CI source ships as the watch-prs-and-ci skill; a file source ships as the worked example.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/session-events",
+    "defaultPrompt": [
+      "Tell me when this build log changes.",
+      "Watch this queue and message me when a job lands.",
+      "Write a source that polls our deploy status."
+    ],
+    "brandColor": "#0E7490"
+  }
+}

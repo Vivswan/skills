@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { inboxToken } from "../skills/watch-prs-and-ci/scripts/inbox.mts";
+import { inboxToken } from "../skills/session-events/scripts/inbox.mts";
 import {
   deadSocketFile,
   fakeProc,
@@ -58,7 +58,7 @@ describe("pr-events.mts daemon start", () => {
     const s = new Scenario("ladder");
     const box = await s.inbox("a");
     const env = s.env({ inbox: box.path });
-    delete env.PR_EVENTS_DIR;
+    delete env.SESSION_EVENTS_DIR;
     delete env.XDG_RUNTIME_DIR;
     const result = Bun.spawnSync([process.execPath, SCRIPT, "status"], {
       env: { ...env, CLAUDE_CODE_TMPDIR: join(s.dir, "cc-tmp") },
@@ -68,7 +68,7 @@ describe("pr-events.mts daemon start", () => {
     expect(result.exitCode).toBe(3);
     const uid = process.getuid?.() ?? 0;
     expect(result.stderr.toString()).toContain(
-      ` on ${join(s.dir, "cc-tmp", `pr-events-${uid}`, `${process.pid}.sock`)};`,
+      ` on ${join(s.dir, "cc-tmp", `session-events-${uid}`, `${process.pid}.pr-events.sock`)};`,
     );
   }, 30000);
 
@@ -141,7 +141,7 @@ describe("pr-events.mts daemon start", () => {
     const s = new Scenario("owner-replaced");
     const box = await s.inbox("a");
     const proc = fakeProc("111");
-    const daemon = await s.start({ inbox: box.path, env: { PR_EVENTS_PROC: proc.dir } });
+    const daemon = await s.start({ inbox: box.path, env: { SESSION_EVENTS_PROC: proc.dir } });
     proc.set("222");
     const exited = await Promise.race([daemon.exited, Bun.sleep(4000).then(() => "still alive")]);
     expect(exited).toBe(0);
@@ -153,7 +153,7 @@ describe("pr-events.mts daemon start", () => {
     const s = new Scenario("token-unreadable");
     const box = await s.inbox("a");
     const proc = fakeProc("111");
-    const daemon = await s.start({ inbox: box.path, env: { PR_EVENTS_PROC: proc.dir } });
+    const daemon = await s.start({ inbox: box.path, env: { SESSION_EVENTS_PROC: proc.dir } });
     chmodSync(proc.entry, 0);
     try {
       await Bun.sleep(2500);

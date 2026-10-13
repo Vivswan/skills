@@ -24,6 +24,7 @@ import {
 import {
   Aborted,
   type AnySource,
+  buildSource,
   type Event,
   type EventInput,
   type OptionValues,
@@ -73,8 +74,17 @@ function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException).code;
 }
 
-/** The program as the user runs it: the shim's path alone, or the daemon's with the source's after it. */
+/**
+ * What an entry script hands `main`: the source module's default export, and the program as the
+ * user runs it (the shim's path alone, or the daemon's with the source's after it), for the usage
+ * line and the start command the no-daemon error prints.
+ */
 export interface Entry {
+  exported: unknown;
+  entry: string[];
+}
+
+interface Program {
   source: AnySource;
   entry: string[];
 }
@@ -96,7 +106,7 @@ function commandUsage(source: AnySource): Record<string, string> {
   return lines;
 }
 
-function usageFor({ source, entry }: Entry, command: string | undefined): string {
+function usageFor({ source, entry }: Program, command: string | undefined): string {
   const program = entry.map((part) => basename(part)).join(" ");
   const lines = commandUsage(source);
   if (command !== undefined && Object.hasOwn(lines, command)) {
@@ -162,11 +172,11 @@ function resolveOwner(
 // Linux allows 108 bytes for a Unix socket path and macOS 104; a longer one fails at bind.
 const SOCKET_PATH_MAX = 104;
 
-function filesOf(dir: string, owner: Owner): OwnerFiles {
-  const files = ownerFiles(dir, owner);
+function filesOf(dir: string, owner: Owner, source: AnySource): OwnerFiles {
+  const files = ownerFiles(dir, owner, source.name);
   if (Buffer.byteLength(files.socket) > SOCKET_PATH_MAX) {
     usage(
-      `the socket path ${files.socket} is longer than the ${SOCKET_PATH_MAX} bytes a Unix socket allows; use a shorter --id or PR_EVENTS_DIR`,
+      `the socket path ${files.socket} is longer than the ${SOCKET_PATH_MAX} bytes a Unix socket allows; use a shorter --id or SESSION_EVENTS_DIR`,
     );
   }
   return files;
@@ -176,7 +186,7 @@ function describeOwner(owner: Owner): string {
   return owner.inbox === null ? `file sink ${owner.key}` : `session ${owner.key}`;
 }
 
-function startCommand({ entry }: Entry, owner: Owner): string {
+function startCommand({ entry }: Program, owner: Owner): string {
   const program = entry.map((part) => `"${part}"`).join(" ");
   return `bun ${program} daemon${owner.inbox === null ? ` --id ${owner.key}` : ""}`;
 }
@@ -282,10 +292,14 @@ class Cli {
   readonly source: AnySource;
 
   constructor(
-    readonly program: Entry,
+    readonly program: Program,
     readonly dir: string,
   ) {
     this.source = program.source;
+  }
+
+  files(owner: Owner): OwnerFiles {
+    return filesOf(this.dir, owner, this.source);
   }
 
   // The CLI never starts the daemon: a child of the CLI would outlive it detached, and a detached
@@ -309,9 +323,7 @@ class Cli {
     );
     const target = spec.parse(positionals, values as OptionValues);
     const owner = resolveOwner(values as { id?: string });
-    const reply = unwrap(
-      await this.request(owner, filesOf(this.dir, owner), { cmd: "watch", target }),
-    );
+    const reply = unwrap(await this.request(owner, this.files(owner), { cmd: "watch", target }));
     console.log(
       `watching ${this.source.describeTarget(target)} for ${describeOwner(owner)}; ${reply.watched} target(s)`,
     );
@@ -324,7 +336,7 @@ class Cli {
     const target = values.all === true ? null : this.source.unwatch.parse(positionals[0]);
     const owner = resolveOwner(values);
     unwrap(
-      await this.request(owner, filesOf(this.dir, owner), {
+      await this.request(owner, this.files(owner), {
         cmd: "unwatch",
         key: target === null ? null : target.key,
       }),
@@ -338,7 +350,7 @@ class Cli {
   async poll(args: string[]): Promise<number> {
     const { values } = parse(args, OWNER_OPTIONS, 0);
     const owner = resolveOwner(values);
-    const reply = unwrap(await this.request(owner, filesOf(this.dir, owner), { cmd: "poll" }));
+    const reply = unwrap(await this.request(owner, this.files(owner), { cmd: "poll" }));
     console.log(`polled; ${reply.events} event(s)`);
     return 0;
   }
@@ -346,7 +358,7 @@ class Cli {
   async stop(args: string[]): Promise<number> {
     const { values } = parse(args, OWNER_OPTIONS, 0);
     const owner = resolveOwner(values);
-    const reply = await requestIfRunning(filesOf(this.dir, owner), { cmd: "stop" });
+    const reply = await requestIfRunning(this.files(owner), { cmd: "stop" });
     if (reply === null) {
       console.log(`no daemon running for ${describeOwner(owner)}`);
       return 0;
@@ -359,7 +371,7 @@ class Cli {
   async status(args: string[]): Promise<number> {
     const { values } = parse(args, OWNER_OPTIONS, 0);
     const owner = resolveOwner(values);
-    const files = filesOf(this.dir, owner);
+    const files = this.files(owner);
     const status = unwrap(await this.request(owner, files, { cmd: "status" }))
       .status as StatusReply;
     const { state } = status;
@@ -391,7 +403,7 @@ class Cli {
       0,
     );
     const owner = resolveOwner(values);
-    const files = filesOf(this.dir, owner);
+    const files = this.files(owner);
     // A wait with no daemon would block for its whole timeout on a log nothing appends to.
     const status = unwrap(await this.request(owner, files, { cmd: "status" }))
       .status as StatusReply;
@@ -447,7 +459,7 @@ class Cli {
     if (interval < floor) {
       usage(`--interval must be at least ${floor} seconds, got: ${interval}`);
     }
-    return runDaemon(this.source, owner, filesOf(this.dir, owner), interval);
+    return runDaemon(this.source, owner, this.files(owner), interval);
   }
 }
 
@@ -895,9 +907,17 @@ async function runDaemon(
 
 // --- entry ---------------------------------------------------------------------
 
-export async function main(argv: string[], program: Entry): Promise<number> {
+export async function main(argv: string[], { exported, entry }: Entry): Promise<number> {
   const [command, ...rest] = argv;
+  let program: Program | null = null;
   try {
+    const source = buildSource(exported);
+    if (source === null) {
+      throw new ToolingError(
+        `${entry.at(-1)} does not export a source: its default export must be a source factory, (kit) => ({ ... }), see source.mts`,
+      );
+    }
+    program = { source, entry };
     if (process.platform === "win32") {
       throw new ToolingError(
         "Windows inboxes require an auth token this tool does not send; not supported",
@@ -923,7 +943,7 @@ export async function main(argv: string[], program: Entry): Promise<number> {
         usage(`unknown command: ${command}`);
     }
   } catch (error) {
-    if (error instanceof UsageError) {
+    if (error instanceof UsageError && program !== null) {
       console.error(`${error.message}\n${usageFor(program, command)}`);
       return 2;
     }

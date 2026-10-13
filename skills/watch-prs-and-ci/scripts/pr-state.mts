@@ -1,8 +1,8 @@
 // What the PR source saves between polls: the subscriptions and the last row seen of each PR,
 // with the CI judgment in flight on its head, and the commits watched for their mainline verdict.
 
+import type { Event } from "../../session-events/scripts/source.mts";
 import type { PrKey, Row } from "./pr-rows.mts";
-import type { Event } from "./source.mts";
 
 export type EventKind = "comment" | "review" | "ci" | "head" | "merged" | "closed" | "trouble";
 

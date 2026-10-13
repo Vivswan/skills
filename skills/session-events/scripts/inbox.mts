@@ -22,7 +22,7 @@ export interface InboxFrame {
 }
 
 // The proc mount; a test replaces it to give a live pid another start token, which nothing else can.
-const PROC_ROOT = process.env.PR_EVENTS_PROC ?? "/proc";
+const PROC_ROOT = process.env.SESSION_EVENTS_PROC ?? "/proc";
 
 const ENVELOPE_END = "</cross-session-message>";
 

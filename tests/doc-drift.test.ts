@@ -17,6 +17,7 @@ const FLEET_DOC = join(ROOT, "skills", "orchestrator-mode", "references", "fleet
 const FLEET_SCRIPTS = join(ROOT, "skills", "orchestrator-mode", "scripts");
 const RUBBER_DUCK = join(ROOT, "skills", "rubber-duck-review");
 const WATCH_PRS = join(ROOT, "skills", "watch-prs-and-ci");
+const SESSION_EVENTS = join(ROOT, "skills", "session-events");
 const WORKTREE_HYGIENE = join(ROOT, "skills", "worktree-hygiene");
 const CODEX_BROWSER_FIX = join(ROOT, "skills", "codex-browser-fix");
 
@@ -296,13 +297,75 @@ const SURFACES: Record<string, Surface> = {
       },
     ],
   },
-  "watch-prs-and-ci/SKILL.md <-> daemon.mts": {
+  "session-events/SKILL.md <-> daemon.mts": {
+    docPath: join(SESSION_EVENTS, "SKILL.md"),
+    scriptPath: join(SESSION_EVENTS, "scripts", "daemon.mts"),
+    tokens: [
+      {
+        doc: "session-events.mts <source.mts> daemon [--interval <s>] [--id <name>] [--pid <pid>]",
+        script: '"daemon [--interval <s>] [--id <name>] [--pid <pid>]"',
+      },
+      {
+        doc: "session-events.mts <source.mts> wait [--since <id>] [--timeout <s>] [--id <name>]",
+        script: '"wait [--since <id>] [--timeout <s>] [--id <name>]"',
+      },
+      {
+        doc: "`polling failed 3 times in a row (<where>: <message>); not a verdict.`",
+        script: "const MAX_CONSECUTIVE_POLL_FAILURES = 3;",
+      },
+      {
+        doc: "`Polling retries on the next interval`",
+        script: 'advice ?? "Polling retries on the next interval"',
+      },
+      {
+        doc: "`<path> does not export a source`",
+        script: "does not export a source: its default export must be a source factory",
+      },
+      { doc: "`SESSION_EVENTS_DIR`", script: "use a shorter --id or SESSION_EVENTS_DIR" },
+    ],
+  },
+  "session-events/SKILL.md <-> state.mts": {
+    docPath: join(SESSION_EVENTS, "SKILL.md"),
+    scriptPath: join(SESSION_EVENTS, "scripts", "state.mts"),
+    tokens: [
+      { doc: "`$SESSION_EVENTS_DIR`", script: "if (env.SESSION_EVENTS_DIR) {" },
+      {
+        doc: "`$XDG_RUNTIME_DIR/session-events`",
+        script: 'join(env.XDG_RUNTIME_DIR, "session-events")',
+      },
+      {
+        doc: "`$CLAUDE_CODE_TMPDIR/session-events-<uid>`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "join(env.CLAUDE_CODE_TMPDIR, `session-events-${uid}`)",
+      },
+      {
+        doc: "`/tmp/session-events-<uid>`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "`/tmp/session-events-${uid}`",
+      },
+    ],
+  },
+  "watch-prs-and-ci/SKILL.md <-> session-events daemon.mts": {
     docPath: join(WATCH_PRS, "SKILL.md"),
-    scriptPath: join(WATCH_PRS, "scripts", "daemon.mts"),
+    scriptPath: join(SESSION_EVENTS, "scripts", "daemon.mts"),
     tokens: [
       {
         doc: "pr-events.mts daemon [--interval <s>] [--id <name>] [--pid <pid>]",
         script: '"daemon [--interval <s>] [--id <name>] [--pid <pid>]"',
+      },
+    ],
+  },
+  "watch-prs-and-ci/SKILL.md <-> pr-events.mts": {
+    docPath: join(WATCH_PRS, "SKILL.md"),
+    scriptPath: join(WATCH_PRS, "scripts", "pr-events.mts"),
+    tokens: [
+      {
+        doc: "`install it beside this skill: npx skills add Vivswan/skills -g --skill session-events`",
+        script: 'const INSTALL = "npx skills add Vivswan/skills -g --skill session-events";',
+      },
+      {
+        doc: "`PR_EVENTS_DIR`, this skill's earlier name for the override, still works and prints a deprecation line",
+        script: 'console.error("PR_EVENTS_DIR is deprecated; set SESSION_EVENTS_DIR");',
       },
     ],
   },

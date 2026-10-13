@@ -10,8 +10,8 @@ import {
 import { connect, createServer } from "node:net";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
+import { loadState, ownerFiles } from "../skills/session-events/scripts/state.mts";
 import { restoreSaved } from "../skills/watch-prs-and-ci/scripts/pr-state.mts";
-import { loadState, ownerFiles } from "../skills/watch-prs-and-ci/scripts/state.mts";
 import {
   BOUNDARY,
   CLOSING,
@@ -136,7 +136,7 @@ describe("pr-events.mts", () => {
     const s = new Scenario("quoted-dir");
     const box = await s.inbox("a");
     const dir = join(s.dir, 'a"b<c>d\ne');
-    const env = { PR_EVENTS_DIR: dir };
+    const env = { SESSION_EVENTS_DIR: dir };
     s.fixtures({
       "rows-1": rows({ rollup: "SUCCESS" }),
       "suites-1": suites([["ci", "completed", "success"]]),
@@ -147,14 +147,14 @@ describe("pr-events.mts", () => {
       stderr: "pipe",
     });
     started.push(daemon);
-    const socket = join(dir, `${process.pid}.sock`);
+    const socket = join(dir, `${process.pid}.pr-events.sock`);
     const deadline = Date.now() + 5000;
     while (!existsSync(socket) && Date.now() < deadline) await Bun.sleep(20);
     expect(s.run(["watch", PR7, ...GATE_CI], { inbox: box.path, env }).code).toBe(0);
     const frame = parseFrame((await box.frames(1))[0] as string);
     expect(frame.from).toBe(`uds:${socket}`);
     expect(frame.message.content.split("\n")[0]).toBe(
-      `<cross-session-message from="uds:${join(s.dir, "a&quot;b&lt;c&gt;d&#10;e", `${process.pid}.sock`)}" from-name="pr-events">`,
+      `<cross-session-message from="uds:${join(s.dir, "a&quot;b&lt;c&gt;d&#10;e", `${process.pid}.pr-events.sock`)}" from-name="pr-events">`,
     );
     expect(s.run(["stop"], { inbox: box.path, env }).code).toBe(0);
     expect(await daemon.exited).toBe(0);
@@ -206,9 +206,12 @@ describe("pr-events.mts", () => {
     expect(long.stderr).toContain("longer than the 104 bytes a Unix socket allows");
     // The daemon and the CLI start from different directories; a relative override would name
     // two sockets, and the CLI would ask for a second daemon.
-    const relative = s.run(["watch", PR7], { inbox: box.path, env: { PR_EVENTS_DIR: "runtime" } });
+    const relative = s.run(["watch", PR7], {
+      inbox: box.path,
+      env: { SESSION_EVENTS_DIR: "runtime" },
+    });
     expect(relative.code).toBe(2);
-    expect(relative.stderr).toContain("PR_EVENTS_DIR must be an absolute path");
+    expect(relative.stderr).toContain("SESSION_EVENTS_DIR must be an absolute path");
     expect(s.ghCalls()).toHaveLength(0);
     expect(await box.frames(0)).toHaveLength(0);
     expect(existsSync(s.socketPath())).toBe(false);
@@ -1828,7 +1831,7 @@ describe("pr-events.mts", () => {
     // A PR requiring another gate shares the sha; settling it from the commit's line would skip
     // its judgment and the absent gate's trouble notice.
     const s = new Scenario("log-ahead-target");
-    const files = ownerFiles(s.dir, { key: "probe", inbox: null, pid: null });
+    const files = ownerFiles(s.dir, { key: "probe", inbox: null, pid: null }, "pr-events");
     const pendingRow = {
       repo: REPO,
       number: 7,

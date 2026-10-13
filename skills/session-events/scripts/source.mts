@@ -1,7 +1,9 @@
 // The contract between the daemon and a source. The daemon owns the session: its socket, the
 // delivery with the envelope and the boundary line, the write-ahead log, the saved state, and the
 // schedule. A source owns one polled system: what a target is, how it is read, and what its events
-// say. A source module's default export is `define(...)`, handed to `main` by the entry script.
+// say. A source module's default export is a factory, `(kit) => source`, so the module itself
+// imports only types from here and loads wherever this skill is or is not installed; the entry
+// script that runs the daemon is what needs this folder.
 
 import type { ParseArgsOptionsConfig } from "node:util";
 
@@ -59,7 +61,7 @@ export interface PollResult<Saved, Input extends EventInput> {
 }
 
 export interface Source<Target, Saved, Input extends EventInput = EventInput> {
-  /** The sender the envelope names, the closing line's name, and the msg_id prefix. */
+  /** The sender the envelope names, the closing line's name, the msg_id prefix, and the file stem. */
   name: string;
   /** The floor of `--interval`, and its default. */
   minIntervalSeconds: number;
@@ -100,19 +102,67 @@ export function fenceQuoted(label: string, rows: string[]): string[] {
   return [`${fence}${label}`, ...rows, fence];
 }
 
+/** What a source needs from the daemon, handed to its factory. */
 export interface Kit {
   UsageError: typeof UsageError;
   Aborted: typeof Aborted;
   fenceQuoted: typeof fenceQuoted;
 }
 
-const KIT: Kit = { UsageError, Aborted, fenceQuoted };
+export const KIT: Kit = { UsageError, Aborted, fenceQuoted };
+
+/** A source module's default export. */
+export type SourceFactory<Target, Saved, Input extends EventInput = EventInput> = (
+  kit: Kit,
+) => Source<Target, Saved, Input>;
 
 export type AnySource = Source<unknown, unknown, EventInput>;
 
-/** A source module's default export: the factory receives what a source needs from the daemon. */
-export default function define<Target, Saved, Input extends EventInput = EventInput>(
-  factory: (kit: Kit) => Source<Target, Saved, Input>,
-): Source<Target, Saved, Input> {
-  return factory(KIT);
+const SOURCE_METHODS = [
+  "describeTarget",
+  "subjectOf",
+  "restore",
+  "subscribe",
+  "unsubscribe",
+  "countTargets",
+  "describeStatus",
+  "poll",
+] as const;
+
+/**
+ * The source a module's default export builds, or null when the export is not a factory or what
+ * it builds lacks a member: a class, a plain object, or a half-written source is told apart at
+ * start, by path, instead of failing at the first command that reaches the missing member.
+ */
+export function buildSource(exported: unknown): AnySource | null {
+  if (typeof exported !== "function") return null;
+  let built: unknown;
+  try {
+    built = (exported as SourceFactory<unknown, unknown>)(KIT);
+  } catch {
+    return null;
+  }
+  if (!isRecord(built)) return null;
+  const shaped =
+    typeof built.name === "string" &&
+    typeof built.minIntervalSeconds === "number" &&
+    isRecord(built.blankTarget) &&
+    isRecord(built.commands) &&
+    Object.values(built.commands).every(
+      (spec) =>
+        isRecord(spec) &&
+        typeof spec.usage === "string" &&
+        typeof spec.positionals === "number" &&
+        isRecord(spec.options) &&
+        typeof spec.parse === "function",
+    ) &&
+    isRecord(built.unwatch) &&
+    typeof built.unwatch.usage === "string" &&
+    typeof built.unwatch.parse === "function" &&
+    SOURCE_METHODS.every((method) => typeof built[method] === "function");
+  return shaped ? (built as unknown as AnySource) : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

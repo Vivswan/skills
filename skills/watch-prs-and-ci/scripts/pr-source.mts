@@ -3,6 +3,7 @@
 // mainline verdict. The reads are GraphQL through gh, once a minute at most; the events are the
 // texts the skill page specifies.
 
+import type { Kit, PollError, Source } from "../../session-events/scripts/source.mts";
 import {
   discoverRuns,
   displayName,
@@ -31,7 +32,6 @@ import {
   type SavedRow,
   type SubscribedKind,
 } from "./pr-state.mts";
-import define, { type PollError, UsageError } from "./source.mts";
 
 // The Polling Budget floor: faster polling only spends the shared rate bucket.
 const MIN_INTERVAL_SECONDS = 60;
@@ -153,11 +153,14 @@ function judgingOf(scope: Scope, key: PrKey | CommitKey): Judging {
   return scope === key ? "terminal" : "none";
 }
 
-function usage(message: string): never {
-  throw new UsageError(message);
-}
-
-export default define<WatchTarget, PrSaved, PrEventInput>(({ Aborted, fenceQuoted }) => {
+export default function prSource({
+  UsageError,
+  Aborted,
+  fenceQuoted,
+}: Kit): Source<WatchTarget, PrSaved, PrEventInput> {
+  function usage(message: string): never {
+    throw new UsageError(message);
+  }
   const fence = (rows: string[]): string[] => fenceQuoted(QUOTED_CONTENT.label, rows);
 
   function parseTarget(target: string | undefined): PrRef {
@@ -753,4 +756,4 @@ export default define<WatchTarget, PrSaved, PrEventInput>(({ Aborted, fenceQuote
       return { events: emitted, saved, errors };
     },
   };
-});
+}

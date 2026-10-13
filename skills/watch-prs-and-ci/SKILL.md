@@ -10,6 +10,8 @@ metadata:
 
 One daemon per Claude Code session, started by the session as a background task, polls GitHub for the PRs and commits that session watches. The session subscribes once and keeps working. Comments, reviews, CI verdicts, head moves, merges, and closes arrive as messages in the session, one message per poll, and as lines in a log any other agent can read.
 
+The daemon is the `/session-events` skill's, installed beside this one; this skill is its PR source. That page owns the envelope and the content boundary, the runtime directory and files, the file sink, and the two-hour cap. This page owns what is polled and what the events say.
+
 ## The Specimen
 
 A push went up and its PR is open. Once per session the daemon is started as a background task, then one line subscribes the PR:
@@ -118,8 +120,8 @@ The lifecycle, in full:
 ```text
 start     the session runs `daemon` as a background task; the owner is the session whose inbox
           CLAUDE_CODE_MESSAGING_SOCKET names, and every file the daemon owns is named by that session's pid
-one only  binding `<runtime-dir>/<session-pid>.sock` is the rule: a second daemon of the session finds it
-          answering and exits 0; a socket file nobody answers on was left by a crash and is replaced
+one only  binding `<runtime-dir>/<session-pid>.pr-events.sock` is the rule: a second daemon of the session
+          finds it answering and exits 0; a socket file nobody answers on was left by a crash and is replaced
 poll      once a minute for every target, and at once on `watch`, judging CI for the watched target
           alone; a restart with saved targets polls at once
 stop      the session's pid gone (checked every second, and before every gh read) -> finish the poll
@@ -132,24 +134,16 @@ bun "<skill-dir>/scripts/pr-events.mts" status
 bun "<skill-dir>/scripts/pr-events.mts" stop
 ```
 
-The runtime directory, tried in this order. Each must be creatable as a private directory (mode 0700, owned by the user) or the next is tried; none at all exits 2 asking for `PR_EVENTS_DIR`.
-
-| Tried | When |
-| --- | --- |
-| `$PR_EVENTS_DIR` | set, as an absolute path |
-| `$XDG_RUNTIME_DIR/pr-events` | `XDG_RUNTIME_DIR` set |
-| `$CLAUDE_CODE_TMPDIR/pr-events-<uid>` | `CLAUDE_CODE_TMPDIR` set |
-| `<os tmpdir>/pr-events-<uid>` | the OS temp dir, honouring `TMPDIR` |
-| `/tmp/pr-events-<uid>` | the last resort |
+The runtime directory is the `/session-events` skill's ladder: `$SESSION_EVENTS_DIR` when set, else `$XDG_RUNTIME_DIR/session-events`, else a `session-events-<uid>` directory under the temp roots. `PR_EVENTS_DIR`, this skill's earlier name for the override, still works and prints a deprecation line. The files inside it:
 
 | File | Holds |
 | --- | --- |
-| `<session-pid>.sock` | the control socket, also the daemon's `from` address, where the session reports a held or refused delivery |
-| `<session-pid>.events.jsonl` | the write-ahead log, one line per event, appended from the saved state before a poll's delivery |
-| `<session-pid>.state.json` | the targets, last-seen rows with the activity ids already seen, the newest poll's events, and the last delivery, written tmp-then-rename before the log's lines, again as `sending` before a frame goes out, and again with how it went |
-| `<session-pid>.log` | the daemon's log; the first place to read when something is off |
+| `<session-pid>.pr-events.sock` | the control socket, also the daemon's `from` address, where the session reports a held or refused delivery |
+| `<session-pid>.pr-events.events.jsonl` | the write-ahead log, one line per event, appended from the saved state before a poll's delivery |
+| `<session-pid>.pr-events.state.json` | the last delivery, the newest poll's events, and under `saved` the targets and last-seen rows with the activity ids already seen; written tmp-then-rename before the log's lines, again as `sending` before a frame goes out, and again with how it went |
+| `<session-pid>.pr-events.log` | the daemon's log; the first place to read when something is off |
 
-A file-sink daemon (below) names its files `<id>.` instead. A `gh` call is a fresh process each time, so tokens refresh under gh's control, and the daemon never exits on gh trouble: three consecutive failed polls raise one `trouble` event, and a recovery event follows.
+A file-sink daemon (below) names its files `<id>.pr-events.` instead. A `gh` call is a fresh process each time, so tokens refresh under gh's control, and the daemon never exits on gh trouble: three consecutive failed polls raise one `trouble` event, and a recovery event follows.
 
 A daemon killed between saving a poll's state and appending its log lines completes the log from the state on restart, and judges none of those targets again. One killed before delivering leaves the events in the log, where `status` and `wait` read them.
 
@@ -167,7 +161,7 @@ pr-events.mts poll | status | stop [--id <name>]
 | Exit | Meaning |
 | --- | --- |
 | 0 | ok; `stop` with no daemon running is ok too |
-| 2 | usage (`CLAUDE_CODE_MESSAGING_SOCKET` unset and no `--id`, a bad `--id`, `--pid` without `--id`), gh missing at `daemon`, or no runtime directory |
+| 2 | usage (`CLAUDE_CODE_MESSAGING_SOCKET` unset and no `--id`, a bad `--id`, `--pid` without `--id`), gh missing at `daemon`, no runtime directory, or the `/session-events` skill not installed beside this one: `install it beside this skill: npx skills add Vivswan/skills -g --skill session-events` |
 | 3 | no daemon answers for this session: stderr names the socket and the exact background command that starts one |
 | 4 | `wait` only: the timeout passed with no newer line |
 
@@ -183,9 +177,7 @@ bun "<skill-dir>/scripts/pr-events.mts" watch octocat/repo#12 --id codex-12
 bun "<skill-dir>/scripts/pr-events.mts" wait --id codex-12 --since 0 --timeout 3600 > /tmp/pr-events-wait-codex-12.out 2>&1
 ```
 
-A file-sink daemon runs until `stop`. `--pid <pid>` ends it with that process instead: pass the agent's own pid, never `$$` from a one-shot shell, which becomes the daemon's own pid when the shell execs it (the daemon refuses its own pid).
-
-Run `wait` as a background command and read the file when it exits; the file carries the `--id`, so two agents on one machine never read each other's. Exit 0 printed the new lines and the new cursor; pass that cursor as the next `--since`. Exit 4 is the timeout with nothing new: re-arm, or escalate to the user.
+A file-sink daemon runs until `stop`, or ends with the process `--pid` names. `wait` blocks, then prints the new lines and a cursor for the next `--since`, or exits 4 at its timeout. The sink's rules, `--pid`, the cursor, and the boundary line a forwarding reader adds, are the `/session-events` skill's.
 
 Every event line has the same shape, whichever sink reads it:
 
@@ -238,7 +230,8 @@ When a workflow's runs share a `concurrency` group key, GitHub keeps at most one
 | a `trouble` event: polling failed, polling retries | three consecutive polls failed (gh, network, or GitHub); the daemon keeps polling | wait for the recovery event; read the log if it does not come |
 | a `trouble` event: no merge commit reported | GitHub reported no merge commit for the merged PR within 5 polls | read the merge commit from the PR page and `watch-commit` it |
 | `status` names two daemon pids | a session starts its daemon once; two starts in the same instant on a stale socket can both bind | `stop` both, then start once |
-| the log ends `daemon <pid> stopped: SIGTERM` about two hours after the start, with the session still running | Claude Code ends a background task after two hours, the most it allows | start the daemon again with the same command; the saved state and log carry on, nothing is lost |
+
+The daemon stopping on its own about two hours in, with the session still running, is the harness's cap on a background task: the `/session-events` skill's Gotchas own that row. Start the daemon again with the same command; the saved state and log carry on.
 
 A local subagent spawned with the Agent tool shares its session's inbox socket and pid (`CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_PID` are the session's, with `CLAUDE_CODE_CHILD_SESSION=1`), so a `watch` run inside it subscribes the session's daemon, and the events land with the session, which relays them. A teammate from agent teams is a separate process with its own socket and runs its own daemon.
 

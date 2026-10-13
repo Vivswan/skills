@@ -159,7 +159,7 @@ After each landing on the mainline, and again over the combined delta once all s
 At phase boundaries (a wave finishing, a landing), stop subagents whose work is delivered and delete completed tasks, so the visible lists show only live work.
 
 - **Before stopping an agent**, check nothing still owes output, and copy handoff facts a later step needs into a still-open task first.
-- **Long-lived service agents** (the fleet monitor, the PR relay) stay up until their exit condition. The PR and CI daemon is not one: it is a background task of the relay, or of the session outside a fleet, owned by the `/watch-prs-and-ci` skill, never a subagent, and it exits with the session.
+- **Long-lived service agents** (the fleet monitor, the PR relay) stay up until their exit condition. The PR and CI daemon is not one: it is a background task of the relay, or of the session outside a fleet, the `/session-events` skill's daemon on the `/watch-prs-and-ci` skill's source, never a subagent, and it exits with the session.
 - **Worktree handovers, removals, and fan-out file ownership** have destructive failure modes. Follow the `/worktree-hygiene` skill for those rules.
 
 ## Harness Variations

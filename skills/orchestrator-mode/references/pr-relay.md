@@ -1,6 +1,6 @@
 # PR Relay
 
-In a fleet, the lead's inbox is not the sink for PR events: the user's client renders inbox frames as the user's own messages. One relay subagent owns the fleet's PR daemon as a file sink and forwards every event by message to the agent that acts on it. The daemon is the `/watch-prs-and-ci` skill's; this page is only the relay around it.
+In a fleet, the lead's inbox is not the sink for PR events: the user's client renders inbox frames as the user's own messages. One relay subagent owns the fleet's PR daemon as a file sink and forwards every event by message to the agent that acts on it. The daemon is the `/session-events` skill's, polling the `/watch-prs-and-ci` skill's source; this page is only the relay around it.
 
 ## Spawn Brief
 
