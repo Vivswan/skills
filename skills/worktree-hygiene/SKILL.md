@@ -75,7 +75,7 @@ bun "<skill-dir>/scripts/retire-branch.mts" --branch feature/thing
 ```text
 [fetch] origin/main -> 4f2a9c... (the remote-tracking ref was already current)
 [branch] refs/heads/feature/thing is at 91bd0e...
-[landed] by content equivalence at 7c31f0...: feature/thing matches 4f2a9c on all 3 path(s) it changed
+[landed] by three-way merge: feature/thing merges into 4f2a9c without changing its tree
 [worktree] /repo/.worktrees/thing is clean and idle
 [worktree] would remove /repo/.worktrees/thing (add --execute)
 [delete] would delete refs/heads/feature/thing at 91bd0e... (add --execute)
@@ -103,7 +103,7 @@ Flags:
 --no-writer-check        # a host where lsof cannot answer; the run says so out loud
 ```
 
-A squash or rebase merge leaves the branch's shas off the mainline, so ancestry refuses. The script then settles the landing by content equivalence automatically and prints which gate cleared it: `[landed] by ancestry` or `[landed] by content equivalence at <base>`. Why each gate exists: `references/retire-branch.md`.
+A squash or rebase merge leaves the branch's shas off the mainline, so ancestry refuses. The script merges the branch into the tip (`git merge-tree --write-tree`, git 2.38+): the tip's tree back means the branch carries nothing the mainline lacks, a later mainline edit of the same file included. It prints which gate cleared it: `[landed] by ancestry` or `[landed] by three-way merge`. Why each gate exists: `references/retire-branch.md`.
 
 ## Handing Over a Worktree
 

@@ -207,11 +207,9 @@ function isContainedIn(root: string, args: { subject: string; reference: string 
   return git(root, ["merge-base", "--is-ancestor", "--end-of-options", ...order]).status;
 }
 
-// `--no-renames` splits a rename so a missing deletion cannot hide; no ext diff,
-// textconv, diff.relative or diff.ignoreSubmodules config may narrow or suppress
-// a difference.
-const NAME_ONLY_DIFF = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-relative"];
-const NAME_ONLY_TAIL = ["--ignore-submodules=none", "--name-only", "-z"];
+// `--no-renames` lists both halves of a rename so a surviving source cannot hide;
+// no diff.relative or diff.ignoreSubmodules config may narrow the listing.
+const NAME_ONLY_DIFF = ["diff", "--no-renames", "--no-relative", "--ignore-submodules=none"];
 
 interface Landing {
   readonly root: string;
@@ -221,15 +219,52 @@ interface Landing {
   readonly reference: string;
 }
 
-function namesDiffering(root: string, from: string, to: string, why: string): Buffer[] {
-  const run = git(root, [...NAME_ONLY_DIFF, ...NAME_ONLY_TAIL, from, to, "--"], FETCH_TIMEOUT_MS);
-  if (run.status !== 0) broken(`${why} git diff ${short(from)} ${short(to)}: ${run.err}`);
-  return nulSplit(run.out);
+const showPaths = (paths: Buffer[]): string =>
+  paths
+    .slice(0, 10)
+    .map((path) => path.toString("utf-8"))
+    .join(", ");
+
+// The merge result as `merge-tree --write-tree --name-only -z` prints it:
+// <tree>NUL, then on a conflict each conflicted path NUL-terminated, and after
+// an empty field the informational messages, which are cut at that double NUL.
+// A conflict may name no path at all (a directory rename split), so the
+// verdict is the exit status, never the path count.
+type MergeResult =
+  | { readonly kind: "clean"; readonly tree: string }
+  | { readonly kind: "conflict"; readonly conflicted: Buffer[] };
+
+function mergeInto(root: string, reference: string, subject: string, why: string): MergeResult {
+  // merge-tree prints conflicted paths relative to the cwd, and `root` may be a
+  // nested --repo-root; the refusal names repository paths, so it runs from the top.
+  const top = gitOrBroken(root, ["rev-parse", "--show-toplevel"]).replace(/\n$/, "");
+  const args = ["merge-tree", "--write-tree", "--name-only", "-z", "--end-of-options"];
+  const run = git(top, [...args, reference, subject], FETCH_TIMEOUT_MS);
+  const command = `git merge-tree --write-tree ${short(reference)} ${short(subject)}`;
+  // Exit 1 is also "not something we can merge", printed with no tree; only a
+  // tree id in front makes a 1 a conflict. `--write-tree` arrived in git 2.38.
+  if (run.status !== 0 && run.status !== 1) {
+    const version = git(root, ["--version"]).text.trim() || "git version unknown";
+    broken(
+      `${why} ${command} exited ${run.status} (${version}; 2.38 or newer is required): ${run.err}`,
+    );
+  }
+  const messages = run.out.indexOf(Buffer.from([0, 0]));
+  const [tree = Buffer.alloc(0), ...conflicted] = nulSplit(
+    messages === -1 ? run.out : run.out.subarray(0, messages),
+  );
+  const id = tree.toString("utf-8");
+  if (!COMMIT_ID.test(id))
+    broken(`${why} ${command} printed no tree (exit ${run.status}): ${run.err}`);
+  return run.status === 1 ? { kind: "conflict", conflicted } : { kind: "clean", tree: id };
 }
 
 // ONE place where a containment answer becomes a verdict. Squash and rebase
-// merges never put the branch's shas on the mainline, so content settles them:
-// every path the branch changed since its merge-base must match the mainline tip.
+// merges never put the branch's shas on the mainline, so a three-way merge
+// settles them: merging the branch into the mainline tip must give back that
+// tip's own tree, which means the branch carries nothing the mainline lacks.
+// A two-endpoint diff against the tip is the wrong question: a later mainline
+// edit of a file the branch touched differs there while the branch is landed.
 function requireLanded(check: Landing): string {
   const { root, label, subject, reference } = check;
   const containment = isContainedIn(root, { subject, reference });
@@ -240,27 +275,44 @@ function requireLanded(check: Landing): string {
   if (check.shallow)
     broken(`${label} looks unlanded, but this is a SHALLOW repository: fetch --unshallow first`);
   const notContained = `${label} (${short(subject)}) is NOT contained in the mainline tip (${short(reference)})`;
-  const couldNotRun = `${notContained}, and the content check could not run:`;
-  const mergeBase = git(root, ["merge-base", "--end-of-options", reference, subject]);
-  const base = mergeBase.text.trim();
-  if (mergeBase.status !== 0 || !COMMIT_ID.test(base)) broken(`${couldNotRun} ${mergeBase.err}`);
-  const changed = namesDiffering(root, base, subject, couldNotRun);
-  if (changed.length === 0) refuse(`${notContained}, and there is no delta to judge by content`);
-  // Intersected by raw bytes rather than passed back as pathspecs: a pathspec
-  // round-trip would re-encode the names and is bounded by ARG_MAX.
-  const changedKeys = new Set(changed.map((path) => path.toString("latin1")));
-  const atTip = namesDiffering(root, reference, subject, couldNotRun);
-  const differing = atTip.filter((path) => changedKeys.has(path.toString("latin1")));
-  if (differing.length > 0) {
-    const shown = differing
-      .slice(0, 10)
-      .map((path) => path.toString("utf-8"))
-      .join(", ");
+  const couldNotRun = `${notContained}, and the merge check could not run:`;
+  const mainline = gitOrBroken(root, [
+    "rev-parse",
+    "--verify",
+    "--end-of-options",
+    `${reference}^{tree}`,
+  ]).trim();
+  if (!COMMIT_ID.test(mainline))
+    broken(`${couldNotRun} rev-parse ${short(reference)}^{tree} printed ${mainline}`);
+  const merged = mergeInto(root, reference, subject, couldNotRun);
+  if (merged.kind === "conflict") {
+    const where =
+      merged.conflicted.length > 0
+        ? `on ${merged.conflicted.length} path(s): ${showPaths(merged.conflicted)}`
+        : "without a file-level path (a directory rename split)";
+    refuse(`${notContained}, and merging it there CONFLICTS ${where}`);
+  }
+  if (merged.tree !== mainline) {
+    const listing = git(root, [
+      ...NAME_ONLY_DIFF,
+      "--name-only",
+      "-z",
+      mainline,
+      merged.tree,
+      "--",
+    ]);
+    if (listing.status !== 0)
+      broken(`${couldNotRun} git diff ${short(mainline)} ${short(merged.tree)}: ${listing.err}`);
+    const changed = nulSplit(listing.out);
+    if (changed.length === 0)
+      broken(
+        `${couldNotRun} the merged tree ${short(merged.tree)} differs from ${short(mainline)} on no listed path`,
+      );
     refuse(
-      `${notContained}, and its content differs from that tip on ${differing.length} path(s): ${shown}`,
+      `${notContained}, and merging it there would still change ${changed.length} path(s): ${showPaths(changed)}`,
     );
   }
-  return `by content equivalence at ${short(base)}: ${label} matches ${short(reference)} on all ${changed.length} path(s) it changed`;
+  return `by three-way merge: ${label} merges into ${short(reference)} without changing its tree`;
 }
 
 function isShallow(root: string): boolean {

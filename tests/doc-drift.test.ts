@@ -542,9 +542,9 @@ const SURFACES: Record<string, Surface> = {
         script: { text: "(add --execute)", occurrences: 2 },
       },
       {
-        doc: { text: "[landed] by content equivalence at", occurrences: 2 },
+        doc: { text: "[landed] by three-way merge", occurrences: 2 },
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "by content equivalence at ${short(base)}",
+        script: "by three-way merge: ${label} merges into",
       },
       {
         doc: "`[landed] by ancestry`",
