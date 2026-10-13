@@ -1,0 +1,7 @@
+# Codex sidecar for this skill. The interface block mirrors
+# .codex-plugin/plugin.json (displayName, shortDescription, brandColor) and
+# the SKILL.md H1; the smoke test keeps them identical.
+interface:
+  display_name: "Watch GitHub"
+  short_description: "PR, branch, and CI events as messages, not polls."
+  brand_color: "#0F766E"

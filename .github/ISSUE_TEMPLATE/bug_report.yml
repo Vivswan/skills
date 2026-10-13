@@ -22,8 +22,9 @@ body:
         - project-naming
         - reply-and-review-discipline
         - rubber-duck-review
+        - session-events
         - verify-with-controls
-        - watch-ci-after-push
+        - watch-github
         - worktree-hygiene
         - unslop
         - frontend-design

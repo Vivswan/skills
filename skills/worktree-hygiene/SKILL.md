@@ -66,7 +66,7 @@ Harnesses that auto-clean isolation worktrees remove them when their actor compl
 
 `scripts/retire-branch.mts` runs the retirement as one program, so the destructive step is unreachable from a failed gate. It fetches the mainline into a ref the run owns, proves the branch landed, enforces the removal rules above on the branch's worktree, removes it, and deletes the local ref pinned to the verified sha.
 
-CI verdict first: `/watch-ci-after-push`. Then rehearse. Without `--execute` every gate runs and nothing is destroyed:
+CI verdict first: the `/watch-github` skill delivers it. Then rehearse. Without `--execute` every gate runs and nothing is destroyed:
 
 ```bash
 bun "<skill-dir>/scripts/retire-branch.mts" --branch feature/thing

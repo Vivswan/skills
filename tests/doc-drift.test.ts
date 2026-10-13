@@ -16,7 +16,8 @@ const ROOT = join(import.meta.dir, "..");
 const FLEET_DOC = join(ROOT, "skills", "orchestrator-mode", "references", "fleet-monitor.md");
 const FLEET_SCRIPTS = join(ROOT, "skills", "orchestrator-mode", "scripts");
 const RUBBER_DUCK = join(ROOT, "skills", "rubber-duck-review");
-const WATCH_CI = join(ROOT, "skills", "watch-ci-after-push");
+const SESSION_EVENTS = join(ROOT, "skills", "session-events");
+const WATCH_GITHUB = join(ROOT, "skills", "watch-github");
 const WORKTREE_HYGIENE = join(ROOT, "skills", "worktree-hygiene");
 const CODEX_BROWSER_FIX = join(ROOT, "skills", "codex-browser-fix");
 
@@ -296,210 +297,190 @@ const SURFACES: Record<string, Surface> = {
       },
     ],
   },
-  "watch-ci-after-push/SKILL.md <-> watch-ci.mts": {
-    docPath: join(WATCH_CI, "SKILL.md"),
-    scriptPath: join(WATCH_CI, "scripts", "watch-ci.mts"),
+  "session-events/SKILL.md <-> session-events.mts": {
+    docPath: join(SESSION_EVENTS, "SKILL.md"),
+    scriptPath: join(SESSION_EVENTS, "scripts", "session-events.mts"),
     tokens: [
       {
-        doc: 'bun "<skill-dir>/scripts/watch-ci.mts" --expect-workflow <gate workflow name(s)> <full-sha>',
-        script: "sha: shaToken?.value ?? gitHead() };",
+        doc: "<source.mts> daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]",
+        script: '"  daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]"',
       },
       {
-        doc: "Without it, every workflow that registered a run on the commit is judged, and at least one must have registered",
-        script:
-          "every workflow that registered a run on the commit is judged, and at least one must have",
-      },
-      {
-        doc: "Registration then waits until two consecutive reads agree on the registered workflows",
-        script: "keys === previousKeys",
-      },
-      {
-        doc: "A set still changing after five reads is judged as last read, after a notice on stderr",
-        script:
-          "reads; judging what registered (a later run is still picked up while any run is pending)",
-      },
-      {
-        doc: 'bun "<skill-dir>/scripts/watch-ci.mts" "$(git rev-parse HEAD)" > /tmp/ci-watch.out 2>&1',
-        script: 'spawnSync("git", ["rev-parse", "HEAD"]',
-      },
-      {
-        doc: "**FULL 40-character SHA**: the GraphQL `object(oid:)` lookup rejects short SHAs outright",
-        script: "object(oid: $oid) { ... on Commit {",
-      },
-      {
-        doc: "in one `gh api graphql` request per page of 100 check suites per poll",
-        script: '["api", "graphql", "-f"',
-      },
-      {
-        doc: "in one `gh api graphql` request per page of 100 check suites per poll",
-        script: "checkSuites(first: 100, after: $cursor)",
-      },
-      {
-        doc: 'select(.app.slug == "github-actions" and .workflowRun != null)',
-        script: 'if (app.slug !== "github-actions" || workflowRun === null) continue;',
-      },
-      {
-        doc: "exit 0: latest run per workflow green",
-        script:
-          "  if (failed) return 1;\n  if (missing.length > 0) return 2;\n  if (ghTrouble) return 2;\n  return 0;",
-      },
-      {
-        doc: "a red run (exit 1) outranks a missing expected workflow, which outranks a gh error (both exit 2)",
-        script:
-          "  if (failed) return 1;\n  if (missing.length > 0) return 2;\n  if (ghTrouble) return 2;",
-      },
-      {
-        doc: "Exit 0: all green (skipped runs count as pass)",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "print(`skip: ${run.name} (${run.id})`);",
-      },
-      {
-        doc: "1: some latest run ended with a non-success, non-skipped conclusion",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "failed = true;\n      print(`FAIL(${run.conclusion}): ${run.name} (${run.id})`);",
-      },
-      {
-        doc: "Exit 1: some workflow's latest run ended with any non-success, non-skipped conclusion",
-        script: "if (failed) return 1;",
-      },
-      {
-        doc: "Include the FAIL lines",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "print(`FAIL(${run.conclusion}): ${run.name} (${run.id})`);",
-      },
-      {
-        doc: "older re-triggered runs are reported as superseded, not judged",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "print(`superseded: ${run.name} (${run.id})`);",
-      },
-      {
-        doc: "(log excerpts in the file)",
-        script: `'exec gh run view "$1" --log-failed 2>&1'`,
-      },
-      {
-        doc: "2: no runs registered or gh failed",
+        doc: "`bypass` (the default); one that asks is `prompting`",
         script:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-          "`no workflow runs registered for ${sha} after ~15s (or gh failed; check stderr above, gh auth status, and the remote)`",
+          "usage(`--mode must be bypass or prompting, got: ${mode}`);",
       },
       {
-        doc: "Exit 2: discovery or gh itself failed",
-        script: "if (ghTrouble) return 2;",
+        doc: 'from-mode="<mode>"',
+        script: "from_mode: mode,",
       },
       {
-        doc: "`--expect-workflow <name>` (repeatable or comma-separated)",
-        script: '"expect-workflow": { type: "string", multiple: true }',
+        doc: "<source.mts> watch <target> [the source's flags] [--id <name>]",
+        script: '"  watch <target> [the source\'s flags] [--id <name>]"',
       },
       {
-        doc: "or it exits 2 naming what it did find",
+        doc: "<source.mts> unwatch <target> | --all [--id <name>]",
+        script: '"  unwatch <target> | --all [--id <name>]"',
+      },
+      {
+        doc: "<source.mts> wait [--since <id>] [--timeout <s>] [--id <name>]",
+        script: '"  wait [--since <id>] [--timeout <s>] [--id <name>]"',
+      },
+      {
+        doc: "<source.mts> poll | status | stop [--id <name>]",
+        script: '"  poll | status | stop [--id <name>]"',
+      },
+      {
+        doc: "`<name>: the last 3 polls failed; read the daemon log for the reason`",
         script:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-          '`expected workflow(s) not found for ${sha}: ${missing.join(", ")}; discovered only: ${found}.`',
+          "`${source.name}: the last ${MAX_CONSECUTIVE_POLL_FAILURES} polls failed; read the daemon log for the reason`",
       },
       {
-        doc: "dispatch the missing workflow by hand, e.g. `gh workflow run <gate workflow file> --ref <branch>`",
-        script:
-          "dispatch the missing workflow by hand, e.g. gh workflow run <gate workflow file> --ref <branch>",
+        doc: "`<name>: the last 3 polls failed; read the daemon log for the reason`",
+        script: "const MAX_CONSECUTIVE_POLL_FAILURES = 3;",
       },
+      { doc: "floor 1, cap 86400", script: "const MAX_INTERVAL_SECONDS = 86_400;" },
+      { doc: "at least 1.1 s after the one before", script: "const MIN_DELIVERY_GAP_MS = 1100;" },
       {
-        doc: "Transient gh or network errors mid-watch are retried (3 attempts with a short backoff) before the script concludes anything",
-        script: "const POLL_RETRY_ATTEMPTS = 3;",
+        doc: "`automated notice from <name>; no reply needed`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "`automated notice from ${name}; no reply needed`",
       },
+      { doc: "`SESSION_EVENTS_DIR`", script: "use a shorter --id or SESSION_EVENTS_DIR" },
       {
-        doc: "The bundled script sleeps 60 s between polls (`POLL_INTERVAL_SECONDS = 60`)",
-        script: "const POLL_INTERVAL_SECONDS = 60;",
-      },
-      {
-        doc: "The bundled script sleeps 60 s between polls (`POLL_INTERVAL_SECONDS = 60`)",
-        script: "sleep(POLL_INTERVAL_SECONDS);",
-      },
-      {
-        doc: "touch REST only for failed-job logs (`gh run view <id> --log-failed`, once per failed run)",
-        script: `'exec gh run view "$1" --log-failed 2>&1'`,
+        doc: "the daemon refuses its own pid",
+        script: 'usage("--pid names this very process; pass the agent\'s own pid")',
       },
     ],
   },
-  "watch-ci-after-push/SKILL.md <-> wait-for-pr-event.mts": {
-    docPath: join(WATCH_CI, "SKILL.md"),
-    scriptPath: join(WATCH_CI, "scripts", "wait-for-pr-event.mts"),
+  "session-events/SKILL.md <-> state.mts": {
+    docPath: join(SESSION_EVENTS, "SKILL.md"),
+    scriptPath: join(SESSION_EVENTS, "scripts", "state.mts"),
+    tokens: [
+      { doc: "`$SESSION_EVENTS_DIR`", script: "if (env.SESSION_EVENTS_DIR) {" },
+      {
+        doc: "`$XDG_RUNTIME_DIR/session-events`",
+        script: 'join(env.XDG_RUNTIME_DIR, "session-events")',
+      },
+      {
+        doc: "`$CLAUDE_CODE_TMPDIR/session-events-<uid>`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "join(env.CLAUDE_CODE_TMPDIR, `session-events-${uid}`)",
+      },
+      {
+        doc: "`/tmp/session-events-<uid>`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "`/tmp/session-events-${uid}`",
+      },
+      {
+        doc: "`<pid>-<start>.<source>.state.json`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "`${owner.id ?? `${owner.pid}-${owner.start}`}.${source}`",
+      },
+    ],
+  },
+  "watch-github/SKILL.md <-> github-events.mts": {
+    docPath: join(WATCH_GITHUB, "SKILL.md"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "github-events.mts"),
     tokens: [
       {
-        doc: 'bun "<skill-dir>/scripts/wait-for-pr-event.mts" <pr-number> --repo <owner/name>',
+        doc: "`install it beside this skill: npx skills add Vivswan/skills -g --skill session-events`",
+        script: 'const INSTALL = "npx skills add Vivswan/skills -g --skill session-events";',
+      },
+      {
+        doc: "github-events.mts watch <owner/repo>#<n> | <owner/repo>:<branch> [--expect-workflow <name>]... [--id <name>]",
+        script: "target must be <owner/repo>#<n> or <owner/repo>:<branch>, got:",
+      },
+      {
+        doc: { text: "--expect-workflow", occurrences: ">=1" },
+        script: 'throw new UsageError("--expect-workflow needs a workflow name");',
+      },
+      {
+        doc: "`--interval` is 60 s by default",
+        script: 'name: "github-events", interval: 60, idleInterval: 300',
+      },
+      {
+        doc: "`PR owner/repo#12: 3 reads failed; read the daemon log`",
+        script: "const READ_FAILURES = 3;",
+      },
+      {
+        doc: "`PR owner/repo#12: 3 reads failed; read the daemon log`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label}: ${READ_FAILURES} reads failed; read the daemon log`,",
+      },
+    ],
+  },
+  "watch-github/SKILL.md <-> targets/pr.mts": {
+    docPath: join(WATCH_GITHUB, "SKILL.md"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "targets", "pr.mts"),
+    tokens: [
+      {
+        doc: "`PR owner/repo#12 is not readable; unwatch it or check access`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label} is not readable; unwatch it or check access`,",
+      },
+      {
+        doc: "`PR owner/repo#12: merged into main`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label}: merged into ${row.baseRefName}`,",
+      },
+      {
+        doc: "`PR owner/repo#12: closed without merging`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label}: closed without merging`,",
+      },
+      {
+        doc: "`PR owner/repo#12: head moved to 1a2b3c4d5e6f; last commit by octocat`",
         script:
-          '"usage: wait-for-pr-event.mts <pr-number> [--until <set>] [--interval <sec>] [--timeout <sec>] [--repo <owner/name>]"',
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          'head moved to ${row.headRefOid.slice(0, 12)}; last commit by ${row.headAuthor ?? "an unknown author"}',
       },
       {
-        doc: "`comment,review,checks,merge`",
-        script: 'const WATCHABLE = ["comment", "review", "checks", "merge"] as const;',
-      },
-      {
-        doc: "(default: `comment,review`)",
-        script: 'const DEFAULT_UNTIL = "comment,review";',
-      },
-      {
-        doc: "default 60, minimum 60",
-        script: "const DEFAULT_INTERVAL_SECONDS = 60;",
-      },
-      {
-        doc: "default 60, minimum 60",
-        script: "const MIN_INTERVAL_SECONDS = 60;",
-      },
-      {
-        doc: "a failed poll retries after 2 seconds",
-        script: "const POLL_RETRY_SECONDS = 2;",
-      },
-      {
-        doc: "(default 1800)",
-        script: "const DEFAULT_TIMEOUT_SECONDS = 1800;",
-      },
-      {
-        doc: "review-thread counts via `isResolved`",
-        script: "nodes { isResolved comments { totalCount } }",
-      },
-      {
-        doc: "per-check conclusions from the head commit's `statusCheckRollup`",
-        script: "nodes { commit { oid statusCheckRollup { contexts(first: 100) {",
-      },
-      {
-        doc: "exits 2 instead of waiting when that read fails",
-        script: "baseline read failed; refusing to wait on a PR it cannot see",
-      },
-      {
-        doc: "0 | a watched event happened",
-        script: "for (const line of deltas) print(line);\n        process.exit(0);",
-      },
-      {
-        doc: "`check <name> -> failure`, merged)",
+        doc: "`PR owner/repo#12: review by octocat (CHANGES_REQUESTED), 3 comments`",
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: 'merged at ${snapshot.mergedAt ?? "an unrecorded time"}`);\n      process.exit(0);',
+        script: "text: `${label}: review by ${review.author} (${review.reviewState})${count}`,",
       },
       {
-        doc: "1 | the PR merged or closed while that outcome was not watched; the wait's job ended",
-        script: "but merge is not watched; the wait ended`,\n    );\n    process.exit(1);",
-      },
-      {
-        doc: "1 | the PR merged or closed while that outcome was not watched; the wait's job ended",
-        script: "closed without merging; the wait ended`);\n    process.exit(1);",
-      },
-      {
-        doc: "2 | usage or tooling error (bad args, gh missing or failing)",
+        doc: "`PR owner/repo#12: 2 new comments by octocat at src/x.ts:41, src/y.ts:7`",
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "writeFileSync(2, `${message}\\n${USAGE}\\n`);\n  process.exit(2);",
+        script: 'text: `${label}: ${plural(loose.length, "new comment")} by ${authors}${at}`,',
+      },
+    ],
+  },
+  "watch-github/SKILL.md <-> github/check-suites.mts": {
+    docPath: join(WATCH_GITHUB, "SKILL.md"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "github", "check-suites.mts"),
+    tokens: [
+      { doc: "more than 100 check suites", script: "checkSuites(first: 100, after: $cursor)" },
+    ],
+  },
+  "watch-github/SKILL.md <-> targets/ci.mts": {
+    docPath: join(WATCH_GITHUB, "SKILL.md"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "targets", "ci.mts"),
+    tokens: [
+      {
+        doc: "`PR owner/repo#12: CI green on 1a2b3c4d5e6f: 3 workflows`",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          'text: `${label}: CI green on ${short}: ${plural(verdict.latest.length, "workflow")}`,',
       },
       {
-        doc: "gh missing or failing); it never retries forever",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "writeFileSync(2, `${message}\\n`);\n  process.exit(2);",
+        doc: "`PR owner/repo#12: CI settled on 1a2b3c4d5e6f with no run of checks; check the workflow name`",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          ': CI settled on ${short} with no run of ${verdict.gates.join(", ")}; check the workflow name`',
       },
       {
-        doc: "3 | timeout with no watched change",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "print(`final:    ${renderSnapshot(last)}`);\n    process.exit(3);",
+        doc: "`PR owner/repo#12: CI red on 1a2b3c4d5e6f: checks / check / Run tests`",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          'text: `${label}: CI red on ${short}: ${parts.length > 0 ? parts.join(", ") : "a check outside Actions"}${missing}`,',
       },
       {
-        doc: "the baseline and final snapshots are in the output",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
-        script: "print(`baseline: ${renderSnapshot(baseline)}`);",
+        doc: "after two polls on a head with no checks at all",
+        script: "export const NO_RUN_POLLS = 2;",
       },
     ],
   },

@@ -42,7 +42,7 @@ Confirm what the repo itself answers instead of asking open-ended: branch protec
    - Infer the likely gate from branch protection, CONTRIBUTING docs, and recent history. When unsure, propose PRs (the safer guess on a protected repo).
 2. **Isolation**: a worktree per builder (default), or everyone in the main checkout? A shared tree forces the unique-ownership rules in the `/worktree-hygiene` skill and caps parallelism to disjoint file sets.
 3. **Boundaries**: anything out of scope or do-not-touch (directories, files, configs) beyond what the plan implies?
-4. **Landing cadence**: land each track as it converges without further asks (the default), or pause for approval before each landing or merge? Either way the gates are unconditional: review-before-landing and the CI watcher run on every landing regardless of cadence.
+4. **Landing cadence**: land each track as it converges without further asks (the default), or pause for approval before each landing or merge? Either way the gates are unconditional: review-before-landing and the CI subscription run on every landing regardless of cadence.
 
 ## 2. Decompose, Board, Monitor, Builders
 
@@ -139,13 +139,15 @@ The per-mode procedures, including the stacked-chain loop and the worktree rules
   The fleet adds the wave-level read, since growth accumulates one reasonable PR at a time. After a wave lands, and retroactively over a wave landed before the rule was in force, pull each landing's rows: the skill's `pulls/<n>/files` form per PR, `git diff --numstat <sha>^..<sha>` per direct commit.
 
   Read every landing's sums against its own purpose and the wave's total against the wave's, and report the mismatches with their reasons.
-- **After every push or merge** (a direct landing, a PR update, or a PR merge), spawn a background CI watcher that reports pass/fail with failing-job logs. Never fire-and-forget a push, and never watch CI inline.
+- **After every push or merge** (a direct landing, a PR update, or a PR merge), the PR or the mainline branch is subscribed with the `/watch-github` skill's `watch`, and the verdict arrives as a message naming the failed job and step. Never fire-and-forget a push, and never watch CI inline.
 
-  After a MERGE, the SHA to watch is the MAINLINE tip, never `git rev-parse HEAD` in the worktree. HEAD is still the topic branch's tip, and a squash or merge commit is a new SHA that exists only on the mainline. `git fetch <base-remote> <mainline> && git rev-parse FETCH_HEAD` names it, fetching from the remote the PR merges into, never a fork remote.
+  In a fleet the lead's session runs the daemon as its own background task, `--mode` matching the session, and watches every PR of the fleet (`watch owner/repo#n`); a builder never runs `watch`. When the lead wants a builder to act on a review line, it forwards that line by one SendMessage.
 
-  Where installed, the `/watch-ci-after-push` skill defines the watcher (run discovery, the full-SHA gotcha, the merge recipe, the report format).
+  After a MERGE, the SHA judged is the PR's MERGE COMMIT on the mainline, never `git rev-parse HEAD` in the worktree: HEAD still names the topic tip, and the squash or merge commit exists only on the mainline. The mainline branch target, watched once, reports that tip and its verdict; for a direct landing, `git fetch <base-remote> <mainline> && git rev-parse FETCH_HEAD` names it.
 
-  One CI watcher per session at a time, its sustained watch interval at least 60 s. Queue the next push behind the running watcher, or, when the mainline's runs share a concurrency group key, watch only the newest mainline tip (a newer push cancels an older tip's pending run, so that watcher can end with no verdict).
+  Where installed, the `/watch-github` skill defines the subscription (the two target forms, the gate workflows, the event texts).
+
+  One daemon per session, started as a background task and gone with the session: its interval is 60 s while something moves, and no agent polls beside it. When the mainline's runs share a concurrency group key, only the newest mainline tip gets a verdict (a newer push cancels an older tip's pending run).
 
   Production: parallel watchers at gh's default 3 s refresh drained GitHub's 5000-requests-per-hour REST bucket and blinded every CI verdict for 45 minutes.
 - **Every rebase gets the shared-file content check** ("the rebase is the risk, not the intent"): a clean replay can silently drop a prior landing's lines in files both tracks edit, with no conflict marker to warn anyone. The check is executable, not a prose token recipe: `scripts/baseline.mts pin`/`check` for whole-file ownership, `scripts/probe.mts tokens` for specific-line claims in shared files. Wiring in `references/fleet-monitor.md`, Verifying a Landing.
@@ -157,7 +159,7 @@ After each landing on the mainline, and again over the combined delta once all s
 At phase boundaries (a wave finishing, a landing), stop subagents whose work is delivered and delete completed tasks, so the visible lists show only live work.
 
 - **Before stopping an agent**, check nothing still owes output, and copy handoff facts a later step needs into a still-open task first.
-- **Long-lived service agents** (CI watchers, the fleet monitor) stay up until their exit condition.
+- **Long-lived service agents** (the fleet monitor) stay up until their exit condition. The GitHub daemon is not one: it is a background task of the session, the `/session-events` skill's daemon on the `/watch-github` skill's source, never a subagent, and it exits with the session.
 - **Worktree handovers, removals, and fan-out file ownership** have destructive failure modes. Follow the `/worktree-hygiene` skill for those rules.
 
 ## Harness Variations

@@ -83,7 +83,7 @@ What the block reads, and why:
 
 An open PR is live work until it merges. Bot reviewers (e.g. Copilot code review) and humans leave comments on every push. Per PR, loop until quiescent:
 
-1. Every push gets a CI watcher (Companion Gates, below).
+1. Every push gets its CI verdict through the PR subscription (Companion Gates, below).
 2. When a review lands, triage EVERY comment the same cycle it appears, never batched:
    - A valid finding is fixed in that same round.
    - An invalid or not-valid-here comment gets a reply stating why, and its thread resolved. A comment with nothing to answer (praise, a restated diff) is resolved without one.
@@ -121,7 +121,7 @@ gh api graphql -f query='mutation($pr: ID!) { requestReviews(input: {pullRequest
 
 The REST reviewers endpoint is the fallback. It takes the login `Copilot`, exactly, and on some days answers 201 with an empty `requested_reviewers` and no timeline event, request after request; `copilot-pull-request-reviewer[bot]` always no-ops that way.
 
-GraphQL `reviewRequests` hides a pending Copilot request either way, so the issue timeline is the only confirmation the request registered. Between rounds, never poll. Where the `/watch-ci-after-push` skill is installed, sleep on its `wait-for-pr-event` script, a background waiter whose exit wakes the session and names what changed.
+GraphQL `reviewRequests` hides a pending Copilot request either way, so the issue timeline is the only confirmation the request registered. Between rounds, never poll. Where the `/watch-github` skill is installed, the PR is already subscribed, and each new comment or review arrives as a message naming who wrote where.
 
 Production shape of one round:
 
@@ -133,11 +133,11 @@ Production shape of one round:
 
 ## Companion Gates
 
-- **After every push, a background CI watcher.** Where installed, the `/watch-ci-after-push` skill defines it. A MERGE is watched the same way, on the mainline tip's SHA (fetch the mainline from the remote the PR merged into and watch `FETCH_HEAD`). After `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
+- **After every push, the PR stays subscribed and the CI verdict arrives as a message.** Where installed, the `/watch-github` skill defines the subscription. A MERGE is judged on the PR's merge commit, which the mainline branch target reports as its new tip. After `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
 - **Before anything lands, an independent review that can block the landing.** It is scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.
 - **The gate reads the body for the library line.** A diff that adds, moves, touches, reuses, or depends on a library-shaped category (the list the `/code-standards` skill's `references/design.md` owns) is refused unless `## How` (`## Reasoning` in the measured shape; the landing report with no PR) carries the `**Library:**` bullet in a shape the `/pr-and-issue-discipline` skill names: a library plus what it covers, or the search plus why nothing fits.
 - **A confirmed library the gate or a reviewer names becomes a follow-up task** (an issue or the session's task list) or is done in the PR, never a recorded-not-built line. A large library or an unclear fit is the owner's question first, and the task follows their answer.
-- **Local runs before a push are targeted.** The typecheck, where the language has one, plus the tests the change and its proof touch, with an explicit timeout on a long run, and a process stopped by the PID you spawned, never by pattern. The full suite and the lint-plus-build sweep are the CI watcher's to judge, never run locally when CI runs them anyway.
+- **Local runs before a push are targeted.** The typecheck, where the language has one, plus the tests the change and its proof touch, with an explicit timeout on a long run, and a process stopped by the PID you spawned, never by pattern. The full suite and the lint-plus-build sweep are CI's to judge, never run locally when CI runs them anyway.
 - **The pre-commit hook is a check-only gate:** what it may and may not do is the `/code-standards` skill's "Hooks check, never commit" standard.
 - **Where CI minutes are metered or scarce** (for example a private repository on a metered plan), the full check runs locally once before the push instead. Not sure which kind it is, ask the user, or the lead when one briefed you.
 

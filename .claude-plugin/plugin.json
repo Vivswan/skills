@@ -25,8 +25,9 @@
     "./skills/project-naming",
     "./skills/reply-and-review-discipline",
     "./skills/rubber-duck-review",
+    "./skills/session-events",
     "./skills/verify-with-controls",
-    "./skills/watch-ci-after-push",
+    "./skills/watch-github",
     "./skills/worktree-hygiene"
   ]
 }

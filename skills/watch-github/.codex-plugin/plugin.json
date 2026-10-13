@@ -1,0 +1,37 @@
+{
+  "name": "watch-github",
+  "description": "One daemon per session, a background task of that session, watches pull requests and branch tips and delivers comments, reviews, CI verdicts, head moves, merges, and closes as messages instead of polls.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/watch-github",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "ci",
+    "github-actions",
+    "pull-requests",
+    "branches",
+    "daemon",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Watch GitHub",
+    "shortDescription": "PR, branch, and CI events as messages, not polls.",
+    "longDescription": "After a push or a PR open, one watch call subscribes the session to the PR with its gate workflows; a branch tip is watched the same way through every push. One daemon per session, a background task that ends with it, polls GitHub through GraphQL once a minute while something moves and every five while nothing does. Comments, reviews, CI verdicts, head moves, merges, and closes arrive as messages in the session, structure and URLs only, and as a log agents read with wait.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Execute"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/watch-github",
+    "defaultPrompt": [
+      "Push this and tell me when CI or a review comes back.",
+      "Did the pipeline pass for my last push?",
+      "Watch main and tell me when its CI settles."
+    ],
+    "brandColor": "#0F766E"
+  }
+}
