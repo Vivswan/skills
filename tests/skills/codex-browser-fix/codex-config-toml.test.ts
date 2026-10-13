@@ -83,3 +83,28 @@ test.each([
 ])("refuses to add a value when %s", (_, source, settings, message) => {
   expect(() => withTomlValues(source, settings)).toThrow(message);
 });
+
+// Regression: the edit used to rewrite the whole assignment line, so the
+// trailing comment and the spacing around `=` were lost. Only the value
+// token may change; a `#` inside the quotes is part of the value.
+test.each([
+  [
+    "commented",
+    'CODEX_CLI_PATH = "/old" # selected by preflight',
+    'CODEX_CLI_PATH = "/new#2" # selected by preflight',
+  ],
+  ["tight spacing", 'CODEX_CLI_PATH="/old"#note', 'CODEX_CLI_PATH="/new#2"#note'],
+  [
+    "wide spacing",
+    '  CODEX_CLI_PATH   =   "/old"   # note  ',
+    '  CODEX_CLI_PATH   =   "/new#2"   # note  ',
+  ],
+  ["hash inside the value", 'CODEX_CLI_PATH = "/old#1" # note', 'CODEX_CLI_PATH = "/new#2" # note'],
+  ["literal string", "CODEX_CLI_PATH = '/old#1' # note", 'CODEX_CLI_PATH = "/new#2" # note'],
+  ["quoted key", '"CODEX_CLI_PATH" = "/old" # note', '"CODEX_CLI_PATH" = "/new#2" # note'],
+])("replaces only the value token on a %s line", (_, line, expectedLine) => {
+  const source = `[env]\n${line}\nOTHER = "kept" # other comment\n`;
+  const updated = withTomlValues(source, { "env.CODEX_CLI_PATH": "/new#2" });
+  expect(updated).toBe(`[env]\n${expectedLine}\nOTHER = "kept" # other comment\n`);
+  expect(Bun.TOML.parse(updated)).toEqual({ env: { CODEX_CLI_PATH: "/new#2", OTHER: "kept" } });
+});

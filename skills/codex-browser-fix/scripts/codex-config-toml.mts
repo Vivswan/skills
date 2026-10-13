@@ -22,18 +22,24 @@ function parentTable(config: Toml, segments: readonly string[]): Toml | undefine
   return table;
 }
 
-// Rewrite one `key = ...` assignment so the parsed document equals `expected`.
-// Candidates are every assignment line for that key anywhere in the file; the
-// one in the right table is the one whose replacement parses to `expected`.
+// Replace the value token of one `key = "..."` assignment so the parsed
+// document equals `expected`; the key, the spacing, and a trailing comment
+// stay as written. Candidates are every such line for that key anywhere in
+// the file; the one in the right table is the one whose replacement parses
+// to `expected`.
 function replaceAssignment(source: string, key: string, value: string, expected: Toml): string {
   const escaped = key.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const assignments = source.matchAll(
-    new RegExp(`^[\\t ]*(?:${escaped}|"${escaped}"|'${escaped}')[\\t ]*=[^\\r\\n]*`, "gm"),
+    new RegExp(
+      `^([\\t ]*(?:${escaped}|"${escaped}"|'${escaped}')[\\t ]*=[\\t ]*)("(?:[^"\\\\\\r\\n]|\\\\.)*"|'[^'\\r\\n]*')`,
+      "gm",
+    ),
   );
   for (const match of assignments) {
     const updated =
       source.slice(0, match.index) +
-      `${key} = ${JSON.stringify(value)}` +
+      match[1] +
+      JSON.stringify(value) +
       source.slice(match.index + match[0].length);
     try {
       if (isDeepStrictEqual(Bun.TOML.parse(updated), expected)) return updated;
