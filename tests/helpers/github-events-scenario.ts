@@ -119,6 +119,10 @@ export interface RowSpec {
   comments?: number;
   threads?: number;
   rollup?: string | null;
+  /** The label names as GitHub lists them, in any order. */
+  labels?: string[];
+  /** The merge test's answer; a settled MERGEABLE unless a spec says, so a first sighting is silent. */
+  mergeable?: string;
   /** The head's check suites; present only when the read asked for them, which a fixture cannot know, so a spec says. */
   suites?: RunSpec[];
   suitesNext?: string;
@@ -136,8 +140,10 @@ export function prNode(spec: RowSpec = {}): unknown {
     baseRefName: spec.base ?? "main",
     headRefOid: head,
     updatedAt: spec.updatedAt ?? "2026-01-01T00:00:00Z",
+    mergeable: spec.mergeable ?? "MERGEABLE",
     comments: { totalCount: spec.comments ?? 0 },
     reviewThreads: { totalCount: spec.threads ?? 0 },
+    labels: { nodes: (spec.labels ?? []).map((name) => ({ name })) },
     reviews: { nodes: [] },
     commits: {
       nodes: [

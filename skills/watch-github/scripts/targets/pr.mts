@@ -1,6 +1,6 @@
 // A pull request as a target, `owner/repo#n`: new comments and reviews (who, where, how many,
-// never the words), head moves, CI verdicts judged with the gates named on it, and the merge or
-// close that ends the watch.
+// never the words), head moves, label moves, conflicts with the base, CI verdicts judged with the
+// gates named on it, and the merge or close that ends the watch.
 
 import type { EventInput, Io } from "../../../session-events/scripts/session-events.mts";
 import { discoverRuns, type Suites } from "../github/check-suites.mts";
@@ -26,7 +26,7 @@ export interface PrTarget {
   repo: string;
   number: number;
   gates: string[];
-  /** The cursor: the row at the last poll, where its CI judgment stands, the verdict last delivered on its head, and the activity ids the last two detail reads fetched. */
+  /** The cursor: the row at the last poll, where its CI judgment stands, the verdict last delivered on its head, where the conflict line stands, and the activity ids the last two detail reads fetched. */
   seen: {
     row: Row;
     ci: CiState;
@@ -34,6 +34,8 @@ export interface PrTarget {
     verdict: string | null;
     /** Polls on this head with no checks at all (no rollup), for a named gate that never registers. */
     noRuns: number;
+    /** A conflict line stands unresolved; after a head or base move the test has not settled since, a conflict that survived is said again. */
+    conflict: "told" | "told-before-move" | null;
     activity: string[][];
   } | null;
   /** Set once the row answered null and the trouble event went out; cleared when it reads again. */
@@ -91,6 +93,22 @@ export function describeActivities(label: string, activities: Activity[]): Event
     });
   }
   return events;
+}
+
+/** The label set's moves since the last poll on one line, `labels added: a, b; label removed: x`; null when it stands. */
+export function describeLabels(previous: string[], current: string[]): string | null {
+  const before = new Set(previous);
+  const after = new Set(current);
+  const moves: [string[], string][] = [
+    [current.filter((name) => !before.has(name)), "added"],
+    [[...before].filter((name) => !after.has(name)), "removed"],
+  ];
+  const parts = moves
+    .filter(([names]) => names.length > 0)
+    .map(
+      ([names, verb]) => `${names.length === 1 ? "label" : "labels"} ${verb}: ${names.join(", ")}`,
+    );
+  return parts.length === 0 ? null : parts.join("; ");
 }
 
 export function processPr(
@@ -173,6 +191,33 @@ export function processPr(
       url: `https://github.com/${target.repo}/pull/${target.number}/commits/${row.headRefOid}`,
     });
   }
+  if (previous !== null) {
+    const labelMoves = describeLabels(previous.row.labels, row.labels);
+    if (labelMoves !== null)
+      events.push({ ...fields, kind: "label", text: `${label}: ${labelMoves}`, url: row.url });
+  }
+  // GitHub answers UNKNOWN while it recomputes the merge test after either side moved, so only a
+  // settled answer is judged, and a move keeps the standing conflict line until one arrives.
+  const moved = changes.head || (previous !== null && previous.row.baseRefName !== row.baseRefName);
+  let conflict = previous?.conflict ?? null;
+  if (conflict === "told" && moved) conflict = "told-before-move";
+  if (row.mergeable === "CONFLICTING" && conflict !== "told") {
+    events.push({
+      ...fields,
+      kind: "conflict",
+      text: `${label}: conflicts with ${row.baseRefName}; rebase needed`,
+      url: row.url,
+    });
+    conflict = "told";
+  } else if (row.mergeable === "MERGEABLE" && conflict !== null) {
+    events.push({
+      ...fields,
+      kind: "conflict",
+      text: `${label}: conflicts resolved`,
+      url: row.url,
+    });
+    conflict = null;
+  }
   let ci: CiState = previous?.ci ?? "pending";
   // The verdict last delivered on this head; a new head has none, so its first verdict is news. A
   // rollup that moves after a verdict is judged again, and the same verdict stays silent.
@@ -194,7 +239,7 @@ export function processPr(
     }
   }
   delete target.unreadable;
-  target.seen = { row, ci, verdict, noRuns, activity };
+  target.seen = { row, ci, verdict, noRuns, conflict, activity };
   // Pending CI holds the busy interval; a head with no CI does not. The ci term covers the poll a
   // rollup change is first seen on, and a named gate's run still registering or queued.
   return {

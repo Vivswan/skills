@@ -26,7 +26,13 @@ export type Row = {
   reviewThreads: number;
   latestReview: { id: string; submittedAt: string; state: string; author: string } | null;
   rollupState: string | null;
+  /** The label names, sorted, so two rows compare as sets; one page of 100, GitHub's maximum, so a page shift never reads as a change. */
+  labels: string[];
+  /** GitHub's merge test against the base: UNKNOWN while it recomputes after either side moves. */
+  mergeable: Mergeable;
 };
+
+export type Mergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 
 export type Tip = {
   oid: string;
@@ -51,8 +57,8 @@ export interface RepoReply {
 const COMMIT_FIELDS = "oid author { user { login } } statusCheckRollup { state }";
 
 function rowFields(withSuites: boolean): string {
-  return `number url isDraft state mergedAt baseRefName headRefOid updatedAt
-      comments { totalCount } reviewThreads { totalCount }
+  return `number url isDraft state mergedAt baseRefName headRefOid updatedAt mergeable
+      comments { totalCount } reviewThreads { totalCount } labels(first: 100) { nodes { name } }
       reviews(last: 1) { nodes { fullDatabaseId submittedAt state author { login } } }
       commits(last: 1) { nodes { commit { ${COMMIT_FIELDS}${withSuites ? ` ${SUITES_CONNECTION}` : ""} } } }`;
 }
@@ -100,6 +106,14 @@ function parseRow(pr: unknown): { row: Row; suites: Suites | null } {
     throw new GhError("GraphQL response: reviews.nodes is not an array");
   }
   const review = reviewNodes[reviewNodes.length - 1];
+  const mergeable = requireString(get(pr, "mergeable"), "pullRequest.mergeable");
+  if (mergeable !== "MERGEABLE" && mergeable !== "CONFLICTING" && mergeable !== "UNKNOWN") {
+    throw new GhError(`GraphQL response: pullRequest.mergeable is ${mergeable}`);
+  }
+  const labelNodes = get(get(pr, "labels"), "nodes");
+  if (!Array.isArray(labelNodes)) {
+    throw new GhError("GraphQL response: labels.nodes is not an array");
+  }
   const commitNodes = get(get(pr, "commits"), "nodes");
   const commit = get(Array.isArray(commitNodes) ? commitNodes[0] : undefined, "commit");
   const suites = get(commit, "checkSuites");
@@ -130,6 +144,10 @@ function parseRow(pr: unknown): { row: Row; suites: Suites | null } {
               author: stringOrNull(get(get(review, "author"), "login")) ?? "ghost",
             },
       rollupState: stringOrNull(get(get(commit, "statusCheckRollup"), "state")),
+      labels: labelNodes
+        .map((node, i) => requireString(get(node, "name"), `labels.nodes[${i}].name`))
+        .sort(),
+      mergeable,
     },
     suites: suites === undefined ? null : parseSuites(suites),
   };
