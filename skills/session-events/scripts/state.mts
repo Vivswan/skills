@@ -1,3 +1,6 @@
+// The daemon's files: one private runtime directory per user, and in it the control socket, the
+// events log, the saved state, and the daemon's own log, each named by the owner and the source.
+
 import {
   appendFileSync,
   chmodSync,
@@ -13,70 +16,51 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import type { Event, EventInput } from "./source.mts";
 
-export interface Delivery {
-  eventIds: number[];
-  at: string;
-  /** The frame's msg_id; the receiver's status report names it. */
-  msgId: string;
-  /** `sending` (saved before the frame goes out), `sent`, `failed: <code>`, or the state the receiver reported back: held, released, denied, expired, refused, dropped. */
-  outcome: string;
-}
+/** One line of the events log: `id` and `at` first, then the source's fields in its order. */
+export type Event = { id: number; at: string; kind: string; text: string; url: string } & Record<
+  string,
+  unknown
+>;
 
-/** One incarnation of the owning session: its pid and that process's start token. */
-export interface OwnerIncarnation {
-  pid: number;
-  start: string;
-}
-
-export interface State<Saved = unknown> {
-  /** The session the saved targets belong to; a recycled pid with another start token is a stranger. */
-  owner: OwnerIncarnation | null;
-  /** The last delivery to the owner's inbox, so `status` can show how it went. */
-  delivery: Delivery | null;
+/** Everything the daemon keeps between polls: the targets, each carrying its source's cursor, and the counter. */
+export interface State<Target> {
+  targets: Record<string, Target>;
   lastEventId: number;
-  /** The newest poll's events, saved before they are appended to the log; a restart appends the ones the log lacks. */
-  lastPoll: Event[];
-  /** The source's own: its targets and what it saw of them. */
-  saved: Saved;
-}
-
-function emptyState(): State<unknown> {
-  return { owner: null, delivery: null, lastEventId: 0, lastPoll: [], saved: undefined };
 }
 
 /**
- * The daemon's one owner: the Claude Code session whose inbox it delivers to and whose pid ends it,
- * or a named file-sink reader (a non-Claude agent) that reads the log with `wait`.
+ * The daemon's one owner: the Claude Code session whose inbox it delivers to and whose pid ends
+ * it, or a named file sink (`--id`) a non-Claude agent reads with `wait`, ended by `--pid` or `stop`.
  */
 export interface Owner {
-  /** The session pid, or the `--id` name: the stem of every file the daemon owns. */
-  key: string;
+  id: string | null;
   inbox: string | null;
   pid: number | null;
+  /** The session's start token: with the pid it names one session, since pids are reused. */
+  start: string | null;
 }
 
-export const SOCKET_SUFFIX = ".sock";
-export const EVENTS_SUFFIX = ".events.jsonl";
-export const STATE_SUFFIX = ".state.json";
-export const LOG_SUFFIX = ".log";
-
-export interface OwnerFiles {
+export interface Files {
   socket: string;
   events: string;
   state: string;
   log: string;
 }
 
-/** `<dir>/<owner key>.<source name>.<suffix>`: two sources of one session never share a socket. */
-export function ownerFiles(dir: string, owner: Owner, sourceName: string): OwnerFiles {
-  const stem = join(dir, `${owner.key}.${sourceName}`);
+/**
+ * `<pid>-<start>.<source>.{state.json,events.jsonl,log}` and `<pid>.<source>.sock` for a session;
+ * `<id>.<source>.*` for a file sink. The start token in the stem is what keeps a recycled pid from
+ * inheriting an earlier session's targets: it opens other files and finds them empty.
+ */
+export function ownerFiles(dir: string, owner: Owner, source: string): Files {
+  const key = owner.id ?? String(owner.pid);
+  const stem = join(dir, `${owner.id ?? `${owner.pid}-${owner.start}`}.${source}`);
   return {
-    socket: `${stem}${SOCKET_SUFFIX}`,
-    events: `${stem}${EVENTS_SUFFIX}`,
-    state: `${stem}${STATE_SUFFIX}`,
-    log: `${stem}${LOG_SUFFIX}`,
+    socket: join(dir, `${key}.${source}.sock`),
+    events: `${stem}.events.jsonl`,
+    state: `${stem}.state.json`,
+    log: `${stem}.log`,
   };
 }
 
@@ -125,50 +109,20 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   );
 }
 
-export interface LoadedState<Saved> {
-  state: State<Saved>;
-  /** The saved poll's events the log lacks: the daemon died between saving the state and appending them. */
-  unlogged: Event[];
-  /** When the newest event was written, the unlogged ones included. */
-  newestEventAt: string | null;
-  /** The earlier session whose saved targets were set aside, when the pid was recycled. */
-  staleOwner: OwnerIncarnation | null;
-  /** Where that session's events log went, when it had one. */
-  movedEvents: string | null;
+/** An empty targets map. No prototype: a target typed as `__proto__` is a key like any other, not a setter. */
+export function noTargets<Target>(): Record<string, Target> {
+  return Object.create(null) as Record<string, Target>;
 }
 
-/**
- * An earlier session's state and events files, renamed with a tag before the last extension:
- * `<pid>.events.<tag>.jsonl`. The events path, or null when it had no log. The events go first: a
- * crash between the two leaves the old state, seen stale again at the next start, beside no
- * events; the other order left a fresh start beside the old events, which it would have served.
- */
-function setAside(files: OwnerFiles, tag: string): string | null {
-  const move = (path: string): string | null => {
-    const target = path.replace(/(\.[^.]+)$/, `.${tag}$1`);
-    try {
-      renameSync(path, target);
-      return target;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
-  };
-  const events = move(files.events);
-  move(files.state);
-  return events;
-}
-
-function tagOf(start: string): string {
-  return start.replace(/[^A-Za-z0-9.]+/g, "-");
-}
-
-function readSavedState(files: OwnerFiles): State<unknown> | null {
+/** The saved state, or an empty one on a fresh start. A file that is not a state object is refused by path. */
+export function loadState<Target>(files: Files): State<Target> {
   let text: string;
   try {
     text = readFileSync(files.state, "utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { targets: noTargets(), lastEventId: 0 };
+    }
     throw error;
   }
   let parsed: unknown;
@@ -177,69 +131,23 @@ function readSavedState(files: OwnerFiles): State<unknown> | null {
   } catch {
     throw new Error(`${files.state} is not JSON; move it aside to start fresh`);
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  const state = parsed as Partial<State<Target>> | null;
+  if (typeof state !== "object" || state === null || Array.isArray(state)) {
     throw new Error(`${files.state} is not an object; move it aside to start fresh`);
   }
-  return { ...emptyState(), ...(parsed as Partial<State<unknown>>) };
+  return {
+    targets: Object.assign(noTargets<Target>(), state.targets),
+    lastEventId: state.lastEventId ?? 0,
+  };
 }
 
-/**
- * The state is the source of the log: an id is never reused, so the counter also clears any line
- * a log left by an earlier daemon carries past the saved state. `restore` is the source's: it gets
- * its saved part as the last daemon left it (undefined on a fresh start) and the log lines past the
- * saved counter, the other crash: a verdict appended, the daemon gone before the state that drops
- * its target was saved.
- */
-export function loadState<Saved, Input extends EventInput>(
-  files: OwnerFiles,
-  incarnation: OwnerIncarnation | null,
-  restore: (raw: unknown, logAhead: Event<Input>[]) => Saved,
-): LoadedState<Saved> {
-  const saved = readSavedState(files);
-  let state = saved ?? emptyState();
-  let staleOwner: OwnerIncarnation | null = null;
-  let movedEvents: string | null = null;
-  // A pid comes back around: targets saved by an earlier session that happened to have this pid
-  // are not this session's, and neither are its events. Both files are set aside under its start
-  // token, and this session's counter starts at zero: its readers are new too.
-  if (
-    incarnation &&
-    state.owner &&
-    (state.owner.pid !== incarnation.pid || state.owner.start !== incarnation.start)
-  ) {
-    staleOwner = state.owner;
-    movedEvents = setAside(files, tagOf(staleOwner.start));
-    state = emptyState();
-  } else if (saved === null && readEventsSince(files, 0).length > 0) {
-    // The state is saved before its events are appended, so a log beside no state is not this
-    // daemon's: an earlier session's, left by a half-done rollover or a state file removed by hand.
-    movedEvents = setAside(files, `unknown-${Date.now()}`);
-  }
-  if (incarnation) state.owner = incarnation;
-  const log = readEventsSince(files, 0);
-  const logged = log.at(-1);
-  const unlogged = state.lastPoll.filter((event) => event.id > (logged?.id ?? 0));
-  // The log's lines are the source's own: it wrote them, so it reads them back in its shape.
-  const logAhead = log.filter((event) => event.id > state.lastEventId) as Event<Input>[];
-  const restored: State<Saved> = { ...state, saved: restore(state.saved, logAhead) };
-  const newest = unlogged.at(-1) ?? logged;
-  restored.lastEventId = Math.max(restored.lastEventId, newest?.id ?? 0);
-  return { state: restored, unlogged, newestEventAt: newest?.at ?? null, staleOwner, movedEvents };
-}
-
-export function saveState(files: OwnerFiles, state: State<unknown>): void {
+export function saveState(files: Files, state: State<unknown>): void {
   const tmp = `${files.state}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, files.state);
 }
 
-/** The next event, numbered by the state's counter; `appendEvents` puts it in the log. */
-export function nextEvent(state: State<unknown>, input: EventInput): Event {
-  state.lastEventId += 1;
-  return { id: state.lastEventId, at: new Date().toISOString(), ...input };
-}
-
-export function appendEvents(files: OwnerFiles, events: Event[]): void {
+export function appendEvents(files: Files, events: Event[]): void {
   if (events.length === 0) return;
   // A crash mid-append leaves a line without its newline; the next line must not glue onto it.
   const prefix = endsWithoutNewline(files.events) ? "\n" : "";
@@ -261,7 +169,7 @@ function endsWithoutNewline(path: string): boolean {
 }
 
 /** Every logged event with an id above `sinceId`, oldest first. A line cut short by a crash is skipped. */
-export function readEventsSince(files: OwnerFiles, sinceId: number): Event[] {
+export function readEventsSince(files: Files, sinceId: number): Event[] {
   let text: string;
   try {
     text = readFileSync(files.events, "utf-8");

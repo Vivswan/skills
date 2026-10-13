@@ -26,7 +26,7 @@ The agent applies these on its own when the task matches:
 - [/pr-landing-discipline](./skills/pr-landing-discipline/SKILL.md) - Draft flips, review rounds to convergence, line accounting, and a human-gated merge
 - [/reply-and-review-discipline](./skills/reply-and-review-discipline/SKILL.md) - Plain-first replies to issue reporters and one pending review on someone else's PR
 - [/rubber-duck-review](./skills/rubber-duck-review/SKILL.md) - Cross-model, read-only second-opinion code review
-- [/session-events](./skills/session-events/SKILL.md) - One daemon per session delivers events from any polled source as messages in the peer envelope, the polled system's text fenced as untrusted; the daemon behind /watch-prs-and-ci
+- [/session-events](./skills/session-events/SKILL.md) - One daemon per session delivers events from any polled source as messages in the peer envelope, quoting nothing from the polled system; the daemon behind /watch-prs-and-ci
 - [/verify-with-controls](./skills/verify-with-controls/SKILL.md) - Controls and evidence before a zero, alarm, success claim, or stillness becomes a conclusion
 - [/watch-prs-and-ci](./skills/watch-prs-and-ci/SKILL.md) - One daemon per session, a background task of that session, delivers PR comments, reviews, CI verdicts, and merges as messages instead of polls
 - [/working-text](./skills/working-text/SKILL.md) - Working text a colleague scans to get work done, from a README or a comment to a PR or a diagram: shape rules, a paragraph-cap and path probe, and an architecture page that cannot rot
