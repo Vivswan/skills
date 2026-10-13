@@ -3,20 +3,78 @@
 // takes by eye, made exact.
 //   a paragraph or list item over the word cap (default 70)  -> finding, exit 1
 //   a repository path the prose names that does not exist    -> finding, exit 1
-// Block structure comes from Bun's Markdown renderer, so what counts as prose
-// is what Markdown renders as a paragraph or a tight list item: headings,
-// code (fenced or indented), tables, raw HTML, and images contribute nothing.
-// Front matter is blanked before rendering; a BEGIN/END GENERATED region is
-// dropped where the renderer sees its markers as HTML blocks, so a marker
-// quoted inside a fence is code and changes nothing.
+// Block structure is the page's Markdown tree (CommonMark plus GFM tables), so
+// what counts as prose is what Markdown makes a paragraph or a tight list item:
+// headings, code (fenced or indented), tables, raw HTML, and images contribute
+// nothing. Front matter is blanked before parsing; a BEGIN/END GENERATED region
+// is dropped where its markers are top-level HTML blocks, so a marker quoted
+// inside a fence, under >, or mid-paragraph is text and changes nothing.
 // A path is a backticked token with a slash and an extension (or ./, ../, a
 // trailing slash), or a relative link destination; placeholders (<...>),
 // globs, owner/repo slugs, and bare file names are left alone, since a page
 // may name files the reader will create.
 
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { List, Nodes, RootContent } from "mdast";
+import type { Position } from "unist";
+
+const SKILL_DIR = join(import.meta.dir, "..");
+const SKILL = basename(SKILL_DIR);
+if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
+  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
+  process.exit(2);
+}
+const DEPS_HASH = createHash("sha256")
+  .update(readFileSync(join(SKILL_DIR, "package.json")))
+  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
+  .digest("hex")
+  .slice(0, 12);
+const DEPS_DIR = join(
+  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
+  "skills-deps",
+  `${SKILL}-${DEPS_HASH}`,
+);
+// One shell word, so the printed recovery command runs as printed whatever the path holds.
+const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
+if (!existsSync(join(DEPS_DIR, "node_modules"))) {
+  mkdirSync(DEPS_DIR, { recursive: true });
+  for (const file of ["package.json", "bun.lock"]) {
+    copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
+  }
+  const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], {
+    encoding: "utf8",
+  });
+  if (install.status !== 0) {
+    process.stderr.write(install.stderr ?? "");
+    console.error(
+      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+    );
+    process.exit(2);
+  }
+}
+// Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
+for (const name of ["mdast-util-from-markdown", "mdast-util-gfm", "micromark-extension-gfm"]) {
+  if (!existsSync(join(DEPS_DIR, "node_modules", name))) {
+    console.error(
+      `${SKILL} scripts need ${name}: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+    );
+    process.exit(2);
+  }
+}
+const { fromMarkdown }: typeof import("mdast-util-from-markdown") = await import(
+  Bun.resolveSync("mdast-util-from-markdown", DEPS_DIR)
+);
+const { gfmFromMarkdown }: typeof import("mdast-util-gfm") = await import(
+  Bun.resolveSync("mdast-util-gfm", DEPS_DIR)
+);
+const { gfm }: typeof import("micromark-extension-gfm") = await import(
+  Bun.resolveSync("micromark-extension-gfm", DEPS_DIR)
+);
 
 export const DEFAULT_MAX_WORDS = 70;
 
@@ -50,13 +108,6 @@ export interface Scan {
   readonly links: { readonly href: string; readonly line: number }[];
 }
 
-// Marker bytes the renderer callbacks emit; blocks nest, inlines do not. P and L are prose
-// (paragraph, list item); N is a block whose paths and links are checked but whose words are not counted.
-const OPEN = "";
-const INLINE_END = "";
-const BLOCK_END = "";
-const isBlockKind = (ch: string | undefined) => ch === "P" || ch === "L" || ch === "N";
-
 /** The page with front matter blanked, line for line, so line numbers still match the file. */
 function blankFrontMatter(text: string): string[] {
   const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
@@ -69,150 +120,94 @@ function blankFrontMatter(text: string): string[] {
   return out;
 }
 
-const ENTITIES: Record<string, string> = {
-  "&amp;": "&",
-  "&lt;": "<",
-  "&gt;": ">",
-  "&quot;": '"',
-  "&#39;": "'",
-};
-const unescapeEntities = (s: string) =>
-  s.replace(/&(?:amp|lt|gt|quot|#39);/g, (m) => ENTITIES[m] ?? m);
+// A marker line as the renderer that splices regions reads it: up to three spaces in, the name, an optional hint on BEGIN.
+const MARKER = /^ {0,3}<!-- (BEGIN|END) GENERATED: (\S+?)(?: \([^)\r\n]*\))? -->[ \t]*$/;
 
-/** Characters at block depth 0 of `s`: nested block segments (and their contents) removed, inline markers kept. */
-function ownText(s: string): string {
-  let out = "";
-  let depth = 0;
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i] as string;
-    if (ch === OPEN && isBlockKind(s[i + 1])) depth++;
-    else if (ch === BLOCK_END) depth--;
-    else if (depth === 0) out += ch;
-  }
-  return out;
+/** The region name a top-level HTML block opens or closes; a comment that only begins like a marker is not one. */
+function markerName(node: RootContent, kind: "BEGIN" | "END"): string | undefined {
+  const marker = node.type === "html" ? MARKER.exec(node.value) : null;
+  return marker?.[1] === kind ? marker[2] : undefined;
 }
 
-/** The nested block segments of `s`, in order, each with its markers. */
-function nestedBlocks(s: string): string[] {
-  const blocks: string[] = [];
-  let depth = 0;
-  let start = -1;
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (ch === OPEN && isBlockKind(s[i + 1])) {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === BLOCK_END) {
-      depth--;
-      if (depth === 0 && start !== -1) {
-        blocks.push(s.slice(start, i + 1));
-        start = -1;
-      }
-    }
+/** `blocks` without each BEGIN region through the END marker of the same name; a BEGIN with no matching END, or a stray END, hides nothing. */
+function withoutGenerated(blocks: readonly RootContent[]): RootContent[] {
+  const kept: RootContent[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i] as RootContent;
+    const name = markerName(block, "BEGIN");
+    const close =
+      name === undefined ? -1 : blocks.findIndex((n, j) => j > i && markerName(n, "END") === name);
+    if (close !== -1) i = close;
+    else kept.push(block);
   }
-  return blocks;
+  return kept;
 }
 
-/** Removes HTML comments innermost-first until none opens, so remains never reassemble into one. */
-function stripComments(text: string): string {
-  let out = text;
-  for (let open = out.indexOf("<!--"); open !== -1; open = out.indexOf("<!--")) {
-    const close = out.indexOf("-->", open + 4);
-    out = close === -1 ? out.slice(0, open) : out.slice(0, open) + out.slice(close + 3);
-  }
-  return out;
+/** A tight list renders its items' text bare; one blank line anywhere in it makes every item a paragraph. */
+function isTight(list: List): boolean {
+  return !list.spread && !list.children.some((item) => item.spread);
 }
 
-/** Cuts each BEGIN region through the END marker of the same name; a BEGIN with no matching END, or a stray END, hides nothing. */
-function dropGeneratedRegions(stream: string): string {
-  let out = stream;
-  const begin = new RegExp(`${OPEN}G([^${BLOCK_END}]*)${BLOCK_END}`);
-  for (let m = begin.exec(out); m; m = begin.exec(out)) {
-    const close = `${OPEN}g${m[1]}${BLOCK_END}`;
-    const at = out.indexOf(close, m.index + m[0].length);
-    out =
-      at === -1
-        ? out.slice(0, m.index) + out.slice(m.index + m[0].length)
-        : out.slice(0, m.index) + out.slice(at + close.length);
-  }
-  return out.replace(new RegExp(`${OPEN}g[^${BLOCK_END}]*${BLOCK_END}`, "g"), "");
+/** fromMarkdown positions every node; the type leaves it optional for trees built by hand. */
+function startLine(node: Nodes): number {
+  const position: Position | undefined = node.position;
+  if (position === undefined) throw new Error(`${node.type} node without a position`);
+  return position.start.line;
+}
+
+/** Every node under `node`, itself first, in page order. */
+function* descendants(node: Nodes): Generator<Nodes> {
+  yield node;
+  if ("children" in node) for (const child of node.children) yield* descendants(child);
+}
+
+/**
+ * The text a reader sees: a comment is nothing (it joins what it sits between), any other inline
+ * HTML is at most a break, a hard break is a line, an image is nothing.
+ */
+function visibleText(node: Nodes): string {
+  if (node.type === "html") return node.value.startsWith("<!--") ? "" : " ";
+  if (node.type === "break") return "\n";
+  if ("value" in node) return node.value;
+  return "children" in node ? node.children.map(visibleText).join("") : "";
 }
 
 export function scanPage(text: string): Scan {
-  const lines = blankFrontMatter(text);
-  const nothing = () => "";
-  const same = (c: string) => c;
-  const stream = Bun.markdown.render(lines.join("\n"), {
-    text: same,
-    strong: same,
-    emphasis: same,
-    strikethrough: same,
-    blockquote: same,
-    list: same,
-    heading: (c: string) => `${OPEN}N${c}${BLOCK_END}`,
-    code: nothing,
-    table: (c: string) => `${OPEN}N${c}${BLOCK_END}`,
-    html: (c: string) => {
-      // Only the documented marker comment, with its name, opens or closes a region.
-      const begin = /^\s*<!-- BEGIN GENERATED: (\S+)/.exec(c);
-      const end = /^\s*<!-- END GENERATED: (\S+)/.exec(c);
-      if (begin) return `${OPEN}G${begin[1]}${BLOCK_END}`;
-      if (end) return `${OPEN}g${end[1]}${BLOCK_END}`;
-      return "";
-    },
-    hr: nothing,
-    image: nothing,
-    codespan: (c: string) => `${OPEN}C${c}${INLINE_END}`,
-    link: (c: string, attrs: { href?: string }) => `${OPEN}A${attrs.href ?? ""}${INLINE_END}${c}`,
-    paragraph: (c: string) => `${OPEN}P${c}${BLOCK_END}`,
-    listItem: (c: string) => `${OPEN}L${c}${BLOCK_END}`,
+  const tree = fromMarkdown(blankFrontMatter(text).join("\n"), {
+    extensions: [gfm()],
+    mdastExtensions: [gfmFromMarkdown()],
   });
-
-  const prose = dropGeneratedRegions(stream);
-
+  // A definition resolves references anywhere on the page, a generated region included; one no reference uses renders no link.
+  const definitions = new Map<string, string>();
+  for (const node of descendants(tree)) {
+    if (node.type === "definition" && !definitions.has(node.identifier)) {
+      definitions.set(node.identifier, node.url);
+    }
+  }
   const scan: Scan = { units: [], codespans: [], links: [] };
-  let cursor = 0;
-  // Rendered text has lost its markup (**bold**, [label](url) with the url between label and text),
-  // so a line matches when it carries the unit's first two words, letters and digits only.
-  const letters = (text: string) => text.replace(/[^A-Za-z0-9]+/g, "");
-  const locate = (needle: string): number => {
-    const probes = unescapeEntities(needle).split(/\s+/).map(letters).filter(Boolean).slice(0, 2);
-    if (probes.length === 0) return cursor;
-    for (let i = cursor; i < lines.length; i++) {
-      const line = letters(lines[i] ?? "");
-      if (probes.every((probe) => line.includes(probe))) return i;
+  const walk = (nodes: readonly RootContent[], itemText: boolean) => {
+    for (const node of nodes) {
+      const line = startLine(node);
+      if (node.type === "paragraph") {
+        const prose = visibleText(node);
+        if (prose.trim() !== "") {
+          scan.units.push({ kind: itemText ? "item" : "paragraph", line, text: prose });
+        }
+      } else if (node.type === "inlineCode") {
+        scan.codespans.push({ text: node.value, line });
+      } else if (node.type === "link") {
+        scan.links.push({ href: node.url, line });
+      } else if (node.type === "linkReference") {
+        const href = definitions.get(node.identifier);
+        if (href !== undefined) scan.links.push({ href, line });
+      }
+      if (!("children" in node)) continue;
+      const tight = node.type === "list" ? isTight(node) : node.type === "listItem" && itemText;
+      walk(node.children, tight);
     }
-    return cursor;
   };
-  const visit = (block: string) => {
-    const prose = block[1] !== "N";
-    const kind = block[1] === "L" ? "item" : "paragraph";
-    const inner = block.slice(2, -1);
-    const own = ownText(inner);
-    // Inline HTML is invisible to the reader: a comment says nothing, a tag is at most a break.
-    const withoutTags = own
-      .replace(new RegExp(`${OPEN}A[^${INLINE_END}]*${INLINE_END}`, "g"), "")
-      .replace(new RegExp(`${OPEN}C([^${INLINE_END}]*)${INLINE_END}`, "g"), "$1")
-      .replace(/<\/?[a-zA-Z][^>]*>/g, " ");
-    const plain = stripComments(withoutTags);
-    const firstLine = plain.split("\n").find((l) => l.trim() !== "") ?? "";
-    const line = locate(firstLine);
-    if (prose && plain.trim() !== "") {
-      scan.units.push({ kind, line: line + 1, text: unescapeEntities(plain) });
-    }
-    for (const m of own.matchAll(new RegExp(`${OPEN}C([^${INLINE_END}]*)${INLINE_END}`, "g"))) {
-      const code = unescapeEntities(m[1] ?? "");
-      scan.codespans.push({ text: code, line: locate(`\`${code}\``) + 1 });
-    }
-    for (const m of own.matchAll(new RegExp(`${OPEN}A([^${INLINE_END}]*)${INLINE_END}`, "g"))) {
-      const href = unescapeEntities(m[1] ?? "");
-      scan.links.push({ href, line: locate(href) + 1 });
-    }
-    // The next unit starts after this one, so a repeated opening line finds its own line, not this one again.
-    if (plain.trim() !== "") cursor = line + plain.trim().split("\n").length;
-    for (const nested of nestedBlocks(inner)) visit(nested);
-  };
-  for (const block of nestedBlocks(prose)) visit(block);
+  // Only a top-level pair is a region, as the renderer splices it; one under > or in a list is quoted text.
+  walk(withoutGenerated(tree.children), false);
   return scan;
 }
 

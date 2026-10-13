@@ -12,9 +12,74 @@
 // Diagrams inside a generated region are the declaration's, not the author's,
 // and need no demonstration line.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import type { Nodes, Paragraph, Root } from "mdast";
 import { parseSync, pathLabel, resolveImport, SOURCE_EXTENSIONS } from "./arch-lint.mts";
+
+const SKILL_DIR = join(import.meta.dir, "..");
+const SKILL = basename(SKILL_DIR);
+if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
+  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
+  process.exit(2);
+}
+const DEPS_HASH = createHash("sha256")
+  .update(readFileSync(join(SKILL_DIR, "package.json")))
+  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
+  .digest("hex")
+  .slice(0, 12);
+const DEPS_DIR = join(
+  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
+  "skills-deps",
+  `${SKILL}-${DEPS_HASH}`,
+);
+// One shell word, so the printed recovery command runs as printed whatever the path holds.
+const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
+if (!existsSync(join(DEPS_DIR, "node_modules"))) {
+  mkdirSync(DEPS_DIR, { recursive: true });
+  for (const file of ["package.json", "bun.lock"]) {
+    copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
+  }
+  const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], {
+    encoding: "utf8",
+  });
+  if (install.status !== 0) {
+    process.stderr.write(install.stderr ?? "");
+    console.error(
+      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+    );
+    process.exit(2);
+  }
+}
+// Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
+for (const name of [
+  "mdast-util-from-markdown",
+  "mdast-util-gfm",
+  "mdast-util-to-string",
+  "micromark-extension-gfm",
+]) {
+  if (!existsSync(join(DEPS_DIR, "node_modules", name))) {
+    console.error(
+      `${SKILL} scripts need ${name}: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+    );
+    process.exit(2);
+  }
+}
+const { fromMarkdown }: typeof import("mdast-util-from-markdown") = await import(
+  Bun.resolveSync("mdast-util-from-markdown", DEPS_DIR)
+);
+const { gfmFromMarkdown }: typeof import("mdast-util-gfm") = await import(
+  Bun.resolveSync("mdast-util-gfm", DEPS_DIR)
+);
+const { toString: plainText }: typeof import("mdast-util-to-string") = await import(
+  Bun.resolveSync("mdast-util-to-string", DEPS_DIR)
+);
+const { gfm }: typeof import("micromark-extension-gfm") = await import(
+  Bun.resolveSync("micromark-extension-gfm", DEPS_DIR)
+);
 
 // An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
 const SYMBOL_TOKEN = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*(?:\(\))?$/u;
@@ -81,85 +146,131 @@ export function exportedNames(file: string): ReadonlySet<string> {
 }
 
 export interface Fence {
-  /** Zero-based line of the opening fence. */
+  /** One-based line of the opening fence. */
   line: number;
-  /** Zero-based line of the closing fence (or the last line when the fence never closes). */
+  /** One-based line of the closing fence (or the last line when the fence never closes). */
   end: number;
   /** The info string names mermaid; other fences are text the page quotes. */
   mermaid: boolean;
   body: string;
+  /** Between a BEGIN and an END GENERATED marker: the declaration's diagram, not the author's. */
+  generated: boolean;
 }
 
-// A fence may sit inside block quotes (`> `), then up to three spaces of indent, as Markdown allows;
-// four spaces make indented code, which is quoted text. The closer carries the same quote prefix.
-const FENCE_OPEN = /^((?:>[ ]?)*)( {0,3})(`{3,}|~{3,})(.*)$/;
-const MERMAID_INFO = /^\s*mermaid\s*$/;
-
-/** `markdown` with CRLF line ends folded, so every reader counts the same lines. */
-function normalizedLines(markdown: string): string[] {
-  return markdown.replace(/\r\n/g, "\n").split("\n");
-}
-
-/**
- * Every fence in `lines`, whatever its language. A fence runs to a closer at
- * least as long as its opener, so a ```mermaid example nested inside a
- * ````markdown block is that block's text, not a diagram. The body drops the
- * indentation the opener has.
- */
-function fences(lines: readonly string[]): Fence[] {
-  const found: Fence[] = [];
-  for (let index = 0; index < lines.length; index++) {
-    const open = FENCE_OPEN.exec(lines[index] ?? "");
-    if (open === null) continue;
-    // Block-quote depth is what carries over line to line; the space after each `>` is optional on every line.
-    const depth = (open[1] ?? "").split(">").length - 1;
-    const quotePrefix = new RegExp(`^(?:>[ ]?){${depth}}`);
-    const indent = open[2] ?? "";
-    const ticks = open[3] ?? "```";
-    // A closer repeats the opener's marker character at least as many times, at the same quote depth and at most three spaces in.
-    const close = new RegExp(
-      `^(?:>[ ]?){${depth}} {0,3}${ticks[0] === "~" ? "~" : "`"}{${ticks.length},}[ \\t]*$`,
-    );
-    const body: string[] = [];
-    let cursor = index + 1;
-    while (cursor < lines.length && !close.test(lines[cursor] ?? "")) {
-      const text = (lines[cursor] ?? "").replace(quotePrefix, "");
-      body.push(text.startsWith(indent) ? text.slice(indent.length) : text);
-      cursor += 1;
-    }
-    found.push({
-      line: index,
-      end: Math.min(cursor, lines.length - 1),
-      mermaid: MERMAID_INFO.test(open[4] ?? ""),
-      body: body.join("\n"),
-    });
-    index = cursor;
-  }
-  return found;
-}
-
-/** The live mermaid diagrams of `markdown`. */
-export function mermaidFences(markdown: string): Fence[] {
-  return readPage(markdown).fences.filter((fence) => fence.mermaid);
+export interface Marker {
+  kind: "BEGIN" | "END";
+  name: string;
+  /** One-based line of the marker. */
+  line: number;
+  /** Offsets of the marker in the page text, from its line's first character (indent included) to its last. */
+  start: number;
+  end: number;
 }
 
 export interface Page {
-  lines: readonly string[];
+  /** Every fence, whatever its language, at any depth. */
   fences: readonly Fence[];
-  /**
-   * `lines[i]` when line i is page text, undefined inside any fence: headings, region markers, and
-   * demonstration lines are read from here only, so a quoted example never steers the walk.
-   */
-  text: ReadonlyArray<string | undefined>;
+  /** The region markers, in page order: a top-level HTML block that is one marker line. */
+  markers: readonly Marker[];
+  /** One-based lines of the top-level headings, ATX and Setext alike. */
+  headings: readonly number[];
+  /** Top-level paragraphs opening with "Demonstrated by:", each with the destinations it links. */
+  demonstrations: readonly { line: number; links: string[] }[];
 }
 
+// A marker line as the renderer reads it: up to three spaces in, the name, an optional hint on BEGIN.
+const MARKER = /^ {0,3}<!-- (BEGIN|END) GENERATED: (\S+?)(?: \([^)\r\n]*\))? -->[ \t]*$/;
+
+/** A node's extent, with the offsets a splice needs. */
+interface Span {
+  start: { line: number; offset: number };
+  end: { line: number; offset: number };
+}
+
+/** fromMarkdown positions every node, offsets included; the types leave both optional for trees built by hand. */
+function positionOf(node: Nodes): Span {
+  const { position } = node;
+  if (position?.start.offset === undefined || position.end.offset === undefined) {
+    throw new Error(`${node.type} node without a position`);
+  }
+  return {
+    start: { line: position.start.line, offset: position.start.offset },
+    end: { line: position.end.line, offset: position.end.offset },
+  };
+}
+
+/** Every node under `node`, itself first, in page order. */
+function* descendants(node: Nodes): Generator<Nodes> {
+  yield node;
+  if ("children" in node) for (const child of node.children) yield* descendants(child);
+}
+
+/** The destinations a paragraph links, a reference link through its definition. */
+function linkTargets(paragraph: Paragraph, definitions: ReadonlyMap<string, string>): string[] {
+  const links: string[] = [];
+  for (const node of descendants(paragraph)) {
+    if (node.type === "link") links.push(node.url);
+    else if (node.type === "linkReference") {
+      const url = definitions.get(node.identifier);
+      if (url !== undefined) links.push(url);
+    }
+  }
+  return links;
+}
+
+/**
+ * The page as Markdown reads it: a marker quoted in a fence is code, one under `> ` is quoted
+ * text, and a heading or fence inside a longer fence is that fence's text, so none of them steers
+ * the walk. Only a top-level marker opens or closes a region, as the renderer splices it.
+ */
 export function readPage(markdown: string): Page {
-  const lines = normalizedLines(markdown);
-  const all = fences(lines);
-  const text = lines.map((line, index) =>
-    all.some((fence) => index >= fence.line && index <= fence.end) ? undefined : line,
-  );
-  return { lines, fences: all, text };
+  const root: Root = fromMarkdown(markdown, {
+    extensions: [gfm()],
+    mdastExtensions: [gfmFromMarkdown()],
+  });
+  const definitions = new Map<string, string>();
+  for (const node of descendants(root)) {
+    if (node.type === "definition" && !definitions.has(node.identifier)) {
+      definitions.set(node.identifier, node.url);
+    }
+  }
+  const fences: Fence[] = [];
+  const markers: Marker[] = [];
+  const headings: number[] = [];
+  const demonstrations: { line: number; links: string[] }[] = [];
+  let generated = false;
+  for (const block of root.children) {
+    const { start, end } = positionOf(block);
+    const marker = block.type === "html" ? MARKER.exec(block.value) : null;
+    if (marker) {
+      const kind = marker[1] === "BEGIN" ? "BEGIN" : "END";
+      markers.push({
+        kind,
+        name: marker[2] ?? "",
+        line: start.line,
+        start: start.offset,
+        end: end.offset,
+      });
+      generated = kind === "BEGIN";
+      continue;
+    }
+    if (block.type === "heading") headings.push(start.line);
+    if (block.type === "paragraph" && plainText(block).startsWith(DEMONSTRATED)) {
+      demonstrations.push({ line: start.line, links: linkTargets(block, definitions) });
+    }
+    for (const node of descendants(block)) {
+      if (node.type !== "code") continue;
+      const at = positionOf(node);
+      fences.push({
+        line: at.start.line,
+        end: at.end.line,
+        mermaid: node.lang === "mermaid",
+        body: node.value,
+        generated,
+      });
+    }
+  }
+  return { fences, markers, headings, demonstrations };
 }
 
 // A node definition wherever it sits: an id, an opening shape run (`[`, `((`, `{{`, `[/`, `[\`, `>` ...), and what follows it.
@@ -315,47 +426,29 @@ export function labelProblems(
   return problems;
 }
 
-// A marker line as the renderer reads it: up to three spaces in, the name, an optional hint on BEGIN.
-const MARKER = /^ {0,3}<!-- (BEGIN|END) GENERATED: (\S+?)(?: \([^)]*\))? -->\s*$/;
-
 /** Every BEGIN GENERATED marker needs the END marker of the same name after it; an unmatched one would hide every later diagram. */
-function regionProblems(page: Page): string[] {
+function regionProblems(markers: readonly Marker[]): string[] {
   const problems: string[] = [];
-  let open: { name: string; line: number } | undefined;
-  for (const [index, text] of page.text.entries()) {
-    if (text === undefined) continue;
-    const marker = MARKER.exec(text);
-    const begin = marker?.[1] === "BEGIN" ? marker : null;
-    const end = marker?.[1] === "END" ? marker : null;
-    if (begin) {
+  let open: Marker | undefined;
+  for (const marker of markers) {
+    if (marker.kind === "BEGIN") {
       if (open)
         problems.push(
-          `line ${index + 1}: BEGIN GENERATED: ${begin[2]} opens inside the region ${open.name} opened at line ${open.line + 1}`,
+          `line ${marker.line}: BEGIN GENERATED: ${marker.name} opens inside the region ${open.name} opened at line ${open.line}`,
         );
-      open = { name: begin[2] ?? "", line: index };
-    } else if (end) {
-      if (!open) problems.push(`line ${index + 1}: END GENERATED: ${end[2]} closes no open region`);
-      else if (open.name !== end[2])
+      open = marker;
+    } else {
+      if (!open)
+        problems.push(`line ${marker.line}: END GENERATED: ${marker.name} closes no open region`);
+      else if (open.name !== marker.name)
         problems.push(
-          `line ${index + 1}: END GENERATED: ${end[2]} closes the region ${open.name} opened at line ${open.line + 1}`,
+          `line ${marker.line}: END GENERATED: ${marker.name} closes the region ${open.name} opened at line ${open.line}`,
         );
       open = undefined;
     }
   }
-  if (open) problems.push(`line ${open.line + 1}: BEGIN GENERATED: ${open.name} is never closed`);
+  if (open) problems.push(`line ${open.line}: BEGIN GENERATED: ${open.name} is never closed`);
   return problems;
-}
-
-function insideGeneratedRegion(page: Page, line: number): boolean {
-  let open = false;
-  for (const [index, text] of page.text.entries()) {
-    if (index === line) return open;
-    if (text === undefined) continue;
-    const marker = MARKER.exec(text);
-    if (marker?.[1] === "BEGIN") open = true;
-    else if (marker?.[1] === "END") open = false;
-  }
-  return open;
 }
 
 /** True when `file` is `root` or sits under it, judged by the relative path so the host's separator does not matter. */
@@ -406,31 +499,7 @@ function resolveLink(
 
 /** The concept diagrams of a page: the mermaid fences outside generated regions. */
 function conceptFences(page: Page): Fence[] {
-  return page.fences.filter((fence) => fence.mermaid && !insideGeneratedRegion(page, fence.line));
-}
-
-/** The lines of page text matching `pattern`. */
-/** Link destinations as Markdown reads them, so a title or angle brackets never become part of the path. */
-function markdownLinks(line: string, page: Page): string[] {
-  const links: string[] = [];
-  // Reference-style links resolve through definitions elsewhere on the page, so those ride along.
-  const definitions = page.text.filter(
-    (text): text is string => text !== undefined && /^ {0,3}\[[^\]]+\]:\s+\S/.test(text),
-  );
-  Bun.markdown.render([line, "", ...definitions].join("\n"), {
-    link: (children: string, attrs: { href?: string }) => {
-      links.push(attrs.href ?? "");
-      return children;
-    },
-  });
-  return links;
-}
-
-function textLines(page: Page, pattern: RegExp): number[] {
-  return [...page.text.keys()].filter((line) => {
-    const text = page.text[line];
-    return text !== undefined && pattern.test(text);
-  });
+  return page.fences.filter((fence) => fence.mermaid && !fence.generated);
 }
 
 /**
@@ -442,7 +511,7 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
   const pathRoots = options.pathRoots ?? defaultPathRoots(options.root);
   const problems: string[] = [];
   const page = readPage(markdown);
-  problems.push(...regionProblems(page));
+  problems.push(...regionProblems(page.markers));
   for (const fence of page.fences) {
     if (!fence.mermaid) continue;
     const nodes = nodeLabels(fence.body);
@@ -451,40 +520,23 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
       problems.push(...labelProblems(label, options.root, pathRoots));
     }
   }
-  // ATX headings, plus Setext ones: a text line under a line of = or - signs.
-  const headings = [
-    // Up to three leading spaces and an empty heading are still ATX headings to Markdown.
-    ...textLines(page, /^ {0,3}#{1,6}(?:\s|$)/),
-    ...textLines(page, /\S/).filter((line) => {
-      const under = page.text[line + 1];
-      const text = page.text[line] ?? "";
-      return (
-        under !== undefined &&
-        /^ {0,3}(=+|-+)\s*$/.test(under) &&
-        !/^\s*([-*+]|\d+\.)\s|^\s*\|/.test(text)
-      );
-    }),
-  ].sort((x, y) => x - y);
-  const demonstrations = textLines(page, /^Demonstrated by:/);
   // One demonstration line proves one diagram: two fences under one heading need two lines.
   const claimed = new Set<number>();
   for (const fence of conceptFences(page)) {
-    const sectionEnd = headings.find((line) => line > fence.end) ?? page.lines.length;
-    const demoLine = demonstrations.find(
-      (line) => line > fence.end && line < sectionEnd && !claimed.has(line),
+    const sectionEnd = page.headings.find((line) => line > fence.end) ?? Number.POSITIVE_INFINITY;
+    const demo = page.demonstrations.find(
+      ({ line }) => line > fence.end && line < sectionEnd && !claimed.has(line),
     );
-    if (demoLine !== undefined) claimed.add(demoLine);
-    const at = `line ${fence.line + 1}`;
-    if (demoLine === undefined) {
+    if (demo !== undefined) claimed.add(demo.line);
+    const at = `line ${fence.line}`;
+    if (demo === undefined) {
       problems.push(`${at}: the diagram has no "${DEMONSTRATED}" line before the next heading`);
       continue;
     }
-    const demo = page.lines[demoLine] ?? "";
-    const links = markdownLinks(demo, page);
-    if (links.length === 0) {
+    if (demo.links.length === 0) {
       problems.push(`${at}: the "${DEMONSTRATED}" line links nothing`);
     }
-    for (const link of links) {
+    for (const link of demo.links) {
       const resolved = resolveLink(link, options);
       if ("problem" in resolved) {
         problems.push(`${at}: ${resolved.problem}`);
@@ -501,10 +553,7 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
 /** The concept diagrams and demonstration lines a page carries. */
 export function conceptCounts(markdown: string): { diagrams: number; demonstrations: number } {
   const page = readPage(markdown);
-  return {
-    diagrams: conceptFences(page).length,
-    demonstrations: textLines(page, /^Demonstrated by:/).length,
-  };
+  return { diagrams: conceptFences(page).length, demonstrations: page.demonstrations.length };
 }
 
 const USAGE = [
