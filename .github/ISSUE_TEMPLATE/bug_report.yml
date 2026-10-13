@@ -24,7 +24,7 @@ body:
         - rubber-duck-review
         - session-events
         - verify-with-controls
-        - watch-prs-and-ci
+        - watch-github
         - worktree-hygiene
         - unslop
         - frontend-design

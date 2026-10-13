@@ -3,38 +3,30 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   discoverRuns,
-  excerptFailedLog,
-  failedJobLog,
-  judgeRuns,
+  judgeHead,
+  parseSuites,
   type Run,
-} from "../skills/watch-prs-and-ci/scripts/check-suites.mts";
-import { GhError, gh } from "../skills/watch-prs-and-ci/scripts/gh.mts";
+  verdictKey,
+} from "../skills/watch-github/scripts/check-suites.mts";
+import { GhError, gh } from "../skills/watch-github/scripts/gh.mts";
 import {
   type Activity,
   newActivity,
   readPrDetail,
-  viewerLogin,
-} from "../skills/watch-prs-and-ci/scripts/pr-detail.mts";
-import {
-  type PrRef,
-  type Row,
-  readRows,
-  rowChanged,
-} from "../skills/watch-prs-and-ci/scripts/pr-rows.mts";
+} from "../skills/watch-github/scripts/pr-detail.mts";
+import { type Row, readRepository, rowChanged } from "../skills/watch-github/scripts/pr-rows.mts";
 import { tempDirs } from "./helpers/temp-dirs";
 
 // Contract tests for the GitHub read modules: a fake `gh` on PATH validates the exact invocation
 // it receives, serves hand-written GitHub-shaped JSON (uppercase enums, external suites, null
-// PRs), and records every Actions REST call other than `run view <id> --log-failed` as a
-// violation, since the modules must never reach those endpoints. Each test names what would
-// drift silently without it. The reply is the raw body GitHub would send, so the modules' own
-// parsing is under test.
+// PRs), and records every REST call as a violation, since the modules never reach those
+// endpoints. Each test names what would drift silently without it. The reply is the raw body
+// GitHub would send, so the modules' own parsing is under test.
 //   <kind>-<n>.json   the body for call n of that kind (the last lower n serves when n is absent)
 //   <kind>-<n>.fail   call n dies with no body, like a network failure
 //   <kind>-<n>.exit1  call n prints its body, then this file to stderr, and exits 1: gh's
 //                     behavior on a reply carrying an `errors` entry
 //   <kind>-<n>.sleep  call n answers late
-//   log-<id>.txt      the merged --log-failed stream for run <id> (.stderr, .exit alongside)
 const FAKE_GH = `#!/usr/bin/env bash
 { printf '%s' "$*" | tr '\\n' ' '; printf '\\n'; } >> "\${STUB_ARGS_LOG}"
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
@@ -73,6 +65,11 @@ if [ "$1 $2" = "api graphql" ]; then
     shift 2
   done
   case "$query" in
+    *'r: repository('*)
+      [ -z "$owner$name$oid$number$cursor" ] || { violate "rows query must inline its targets: $owner/$name/$oid/$number/$cursor"; exit 64; }
+      serve rows "$(next rows)";;
+    *'nodes(ids:'*)
+      serve jobs "$(next jobs)";;
     *'checkSuites('*)
       [ "$owner/$name/$oid/$number" = "octocat/repo/deadbeef/" ] || { violate "suites target: $owner/$name/$oid/$number"; exit 64; }
       serve suites "$(next suites)";;
@@ -88,19 +85,10 @@ if [ "$1 $2" = "api graphql" ]; then
     *'query OlderThreadComments('*)
       [ -n "$id" ] && [ -n "$cursor" ] && [ -z "$owner$name$oid$number" ] || { violate "older thread comments target: $id before $cursor"; exit 64; }
       serve older-thread "$(next older-thread)";;
-    *'pullRequest(number:'*)
-      [ -z "$owner$name$oid$number$cursor" ] || { violate "rows query must inline its targets: $owner/$name/$oid/$number/$cursor"; exit 64; }
-      serve rows "$(next rows)";;
     *viewer*)
       serve viewer "$(next viewer)";;
     *) violate "graphql query: $query"; exit 64;;
   esac
-fi
-if [ "$*" = "run view $3 --log-failed --repo octocat/repo" ]; then
-  [ ! -f "\${STUB_DIR}/log-$3.txt" ] || cat "\${STUB_DIR}/log-$3.txt"
-  [ ! -f "\${STUB_DIR}/log-$3.sleep" ] || sleep 5
-  [ ! -f "\${STUB_DIR}/log-$3.stderr" ] || cat "\${STUB_DIR}/log-$3.stderr" >&2
-  exit "$(cat "\${STUB_DIR}/log-$3.exit" 2>/dev/null || echo 0)"
 fi
 case "$1 $2" in
   "run list" | "run watch" | "run view") violate "actions rest: $*"; echo "HTTP 403: API rate limit exceeded for user ID 1" >&2; exit 1;;
@@ -151,11 +139,12 @@ type SuiteSpec =
   | { id: number; status?: string; conclusion?: string | null; wf?: number | null; name?: string }
   | { external: true };
 
-/** A checkSuites page as GitHub renders it: uppercase enums, a null workflowRun on external suites. */
-function suitesPage(specs: SuiteSpec[], nextCursor: string | null = null): string {
-  const nodes = specs.map((spec) => {
+/** The nodes of a checkSuites connection as GitHub renders them: uppercase enums, a null workflowRun on external suites. */
+function suiteNodes(specs: SuiteSpec[]): unknown[] {
+  return specs.map((spec) => {
     if ("external" in spec) {
       return {
+        id: "S-external",
         status: "COMPLETED",
         conclusion: "FAILURE",
         app: { slug: "codeql" },
@@ -168,11 +157,13 @@ function suitesPage(specs: SuiteSpec[], nextCursor: string | null = null): strin
         ? null
         : (spec.conclusion ?? "success").toUpperCase();
     return {
+      id: `S${spec.id}`,
       status,
       conclusion,
       app: { slug: "github-actions" },
       workflowRun: {
         databaseId: spec.id,
+        url: `https://github.com/octocat/repo/actions/runs/${spec.id}`,
         updatedAt: "2026-03-01T10:00:00Z",
         workflow: {
           databaseId: spec.wf === undefined ? 1000 + spec.id : spec.wf,
@@ -181,9 +172,19 @@ function suitesPage(specs: SuiteSpec[], nextCursor: string | null = null): strin
       },
     };
   });
-  const pageInfo = { hasNextPage: nextCursor !== null, endCursor: nextCursor };
+}
+
+function suitesConnection(specs: SuiteSpec[], nextCursor: string | null = null): unknown {
+  return {
+    nodes: suiteNodes(specs),
+    pageInfo: { hasNextPage: nextCursor !== null, endCursor: nextCursor },
+  };
+}
+
+/** One reply of the paged suites query. */
+function suitesPage(specs: SuiteSpec[], nextCursor: string | null = null): string {
   return JSON.stringify({
-    data: { repository: { object: { checkSuites: { nodes, pageInfo } } } },
+    data: { repository: { object: { checkSuites: suitesConnection(specs, nextCursor) } } },
   });
 }
 
@@ -191,12 +192,14 @@ function run(spec: Exclude<SuiteSpec, { external: true }>): Run {
   const status = spec.status ?? "completed";
   return {
     id: spec.id,
+    suiteId: `S${spec.id}`,
     status,
     conclusion:
       status !== "completed" || spec.conclusion === null ? null : (spec.conclusion ?? "success"),
     workflowId: spec.wf === undefined ? 1000 + spec.id : spec.wf,
     updatedAt: "2026-03-01T10:00:00Z",
     name: spec.name ?? `CI-${spec.id}`,
+    url: `https://github.com/octocat/repo/actions/runs/${spec.id}`,
   };
 }
 
@@ -206,25 +209,30 @@ type PrNodeSpec = Partial<{
   isDraft: boolean;
   state: string;
   mergedAt: string | null;
-  mergeCommitOid: string | null;
+  baseRefName: string;
   headRefOid: string;
+  author: string | null;
   updatedAt: string;
   comments: number;
   threads: number;
   review: { id: string; submittedAt: string | null; state: string; login: string | null } | null;
   rollup: string | null;
+  /** The head's check suites, present only when the read asked for them. */
+  suites: SuiteSpec[];
+  suitesNext: string;
 }>;
 
-/** One pullRequest node of the rows query, GitHub-shaped. */
+/** One pullRequest node of the per-repository query, GitHub-shaped. */
 function prNode(spec: PrNodeSpec = {}): unknown {
   const review = spec.review === undefined ? null : spec.review;
+  const author = spec.author === undefined ? "octocat" : spec.author;
   return {
     number: spec.number ?? 1,
     url: spec.url ?? `https://example.com/octocat/repo/pull/${spec.number ?? 1}`,
     isDraft: spec.isDraft ?? false,
     state: spec.state ?? "OPEN",
     mergedAt: spec.mergedAt ?? null,
-    mergeCommit: spec.mergeCommitOid === undefined ? null : { oid: spec.mergeCommitOid },
+    baseRefName: spec.baseRefName ?? "main",
     headRefOid: spec.headRefOid ?? "head0001",
     updatedAt: spec.updatedAt ?? "2026-03-01T10:00:00Z",
     comments: { totalCount: spec.comments ?? 0 },
@@ -246,8 +254,13 @@ function prNode(spec: PrNodeSpec = {}): unknown {
       nodes: [
         {
           commit: {
+            oid: spec.headRefOid ?? "head0001",
+            author: { user: author === null ? null : { login: author } },
             statusCheckRollup:
               spec.rollup === undefined || spec.rollup === null ? null : { state: spec.rollup },
+            ...(spec.suites === undefined
+              ? {}
+              : { checkSuites: suitesConnection(spec.suites, spec.suitesNext ?? null) }),
           },
         },
       ],
@@ -257,14 +270,14 @@ function prNode(spec: PrNodeSpec = {}): unknown {
 
 function row(spec: Partial<Row> = {}): Row {
   return {
-    repo: "octocat/repo",
     number: 1,
     url: "https://example.com/octocat/repo/pull/1",
     isDraft: false,
     state: "OPEN",
     mergedAt: null,
-    mergeCommitOid: null,
+    baseRefName: "main",
     headRefOid: "head0001",
+    headAuthor: "octocat",
     updatedAt: "2026-03-01T10:00:00Z",
     issueComments: 0,
     reviewThreads: 0,
@@ -346,7 +359,6 @@ function detailPage(spec: {
   reviewsBefore?: string;
   threads: ThreadSpec[];
   nextCursor?: string | null;
-  commitAuthor?: string | null;
 }): string {
   return JSON.stringify({
     data: {
@@ -369,20 +381,6 @@ function detailPage(spec: {
               hasNextPage: (spec.nextCursor ?? null) !== null,
               endCursor: spec.nextCursor ?? null,
             },
-          },
-          commits: {
-            nodes: [
-              {
-                commit: {
-                  author: {
-                    user:
-                      spec.commitAuthor === undefined || spec.commitAuthor === null
-                        ? null
-                        : { login: spec.commitAuthor },
-                  },
-                },
-              },
-            ],
           },
         },
       },
@@ -482,9 +480,9 @@ describe("discoverRuns", () => {
     });
     const runs = discoverRuns("octocat/repo", "deadbeef");
     expect(runs).toEqual([run({ id: 1 }), run({ id: 2 })]);
-    expect(judgeRuns(runs, [])).toEqual({
+    expect(judgeHead("SUCCESS", runs, [])).toEqual({
       kind: "green",
-      lines: ["pass: CI-2 (2)", "pass: CI-1 (1)"],
+      latest: [run({ id: 2 }), run({ id: 1 })],
     });
     expect(s.calls()).toHaveLength(1);
     expect(s.calls()[0]).toContain("-f owner=octocat -f name=repo -f oid=deadbeef");
@@ -567,416 +565,227 @@ describe("discoverRuns", () => {
   });
 });
 
-describe("judgeRuns", () => {
-  // The verdict kinds rank red > missing > pending > trouble > green; every row below would
-  // read differently under another order or under per-run (not per-workflow) judgment.
+describe("parseSuites", () => {
+  test("a connection with more pages is incomplete and carries the cursor; a null connection is an empty complete page", () => {
+    expect(parseSuites(suitesConnection([{ id: 1 }], "page2"))).toEqual({
+      runs: [run({ id: 1 })],
+      complete: false,
+      nextCursor: "page2",
+    });
+    expect(parseSuites(null)).toEqual({ runs: [], complete: true, nextCursor: null });
+  });
+});
+
+describe("judgeHead", () => {
+  // With no gate named the aggregate rollup decides; with gates, their latest runs do, and the
+  // rollup only says when a gate that never registered is missing rather than late.
   const sameWorkflow = { wf: 77, name: "CI" };
   const cases: {
     id: string;
+    rollup: string | null;
     runs: Run[];
-    expected: string[];
-    verdict: ReturnType<typeof judgeRuns>;
+    gates: string[];
+    verdict: ReturnType<typeof judgeHead>;
   }[] = [
     {
-      id: "red outranks missing outranks trouble, all three reported",
-      runs: [run({ id: 1, conclusion: "failure" }), run({ id: 2, conclusion: null })],
-      expected: ["CI-1", "Gate"],
+      id: "no gate: rollup SUCCESS is green, the latest runs counted newest first",
+      rollup: "SUCCESS",
+      runs: [run({ id: 1 }), run({ id: 2 })],
+      gates: [],
+      verdict: { kind: "green", latest: [run({ id: 2 }), run({ id: 1 })] },
+    },
+    {
+      id: "no gate: rollup FAILURE is red naming the failed latest runs",
+      rollup: "FAILURE",
+      runs: [run({ id: 1, conclusion: "failure" }), run({ id: 2 })],
+      gates: [],
       verdict: {
         kind: "red",
-        lines: [
-          "run 2 (CI-2) is completed but carries no conclusion (gh or GitHub trouble?)",
-          "FAIL(failure): CI-1 (1)",
-          "no run registered for Gate",
+        latest: [run({ id: 2 }), run({ id: 1, conclusion: "failure" })],
+        failed: [run({ id: 1, conclusion: "failure" })],
+        missing: [],
+      },
+    },
+    {
+      id: "no gate: rollup ERROR is red even when no Actions run failed (a check outside Actions did)",
+      rollup: "ERROR",
+      runs: [run({ id: 1 })],
+      gates: [],
+      verdict: { kind: "red", latest: [run({ id: 1 })], failed: [], missing: [] },
+    },
+    {
+      id: "no gate: no rollup is pending whatever the runs say",
+      rollup: null,
+      runs: [run({ id: 1 })],
+      gates: [],
+      verdict: { kind: "pending" },
+    },
+    {
+      id: "a gate's failed latest run is red at once, while another gate runs and the rollup is pending",
+      rollup: "PENDING",
+      runs: [
+        run({ id: 1, conclusion: "failure", name: "Gate" }),
+        run({ id: 2, status: "in_progress", name: "Other" }),
+      ],
+      gates: ["Gate", "Other"],
+      verdict: {
+        kind: "red",
+        latest: [
+          run({ id: 2, status: "in_progress", name: "Other" }),
+          run({ id: 1, conclusion: "failure", name: "Gate" }),
+        ],
+        failed: [run({ id: 1, conclusion: "failure", name: "Gate" })],
+        missing: [],
+      },
+    },
+    {
+      id: "a failed gate beside one with no run once the rollup settled: red, naming the absent gate so the red does not hide it",
+      rollup: "FAILURE",
+      runs: [run({ id: 1, conclusion: "failure", name: "Gate" })],
+      gates: ["Gate", "MissingGate"],
+      verdict: {
+        kind: "red",
+        latest: [run({ id: 1, conclusion: "failure", name: "Gate" })],
+        failed: [run({ id: 1, conclusion: "failure", name: "Gate" })],
+        missing: ["MissingGate"],
+      },
+    },
+    {
+      id: "two workflow files sharing a gate's name are both that gate: one failed is red, never a green by the other",
+      rollup: "FAILURE",
+      runs: [
+        run({ id: 1, conclusion: "failure", wf: 101, name: "checks" }),
+        run({ id: 2, wf: 102, name: "checks" }),
+      ],
+      gates: ["checks"],
+      verdict: {
+        kind: "red",
+        latest: [
+          run({ id: 2, wf: 102, name: "checks" }),
+          run({ id: 1, conclusion: "failure", wf: 101, name: "checks" }),
+        ],
+        failed: [run({ id: 1, conclusion: "failure", wf: 101, name: "checks" })],
+        missing: [],
+      },
+    },
+    {
+      id: "a gate still running is pending even when the rollup already reads SUCCESS",
+      rollup: "SUCCESS",
+      runs: [run({ id: 1, status: "in_progress", name: "Gate" })],
+      gates: ["Gate"],
+      verdict: { kind: "pending" },
+    },
+    {
+      id: "every gate passed is green; a bystander's failure is not judged",
+      rollup: "FAILURE",
+      runs: [run({ id: 1, name: "Gate" }), run({ id: 2, conclusion: "failure", name: "Other" })],
+      gates: ["Gate"],
+      verdict: {
+        kind: "green",
+        latest: [
+          run({ id: 2, conclusion: "failure", name: "Other" }),
+          run({ id: 1, name: "Gate" }),
         ],
       },
     },
     {
-      id: "missing outranks trouble",
-      runs: [run({ id: 1 }), run({ id: 2, conclusion: null })],
-      expected: ["Gate"],
-      verdict: {
-        kind: "missing",
-        lines: [
-          "run 2 (CI-2) is completed but carries no conclusion (gh or GitHub trouble?)",
-          "pass: CI-1 (1)",
-          "no run registered for Gate",
-        ],
-      },
+      id: "a gate with no run is pending while the rollup is pending: it can still register",
+      rollup: "PENDING",
+      runs: [run({ id: 1, name: "Other" })],
+      gates: ["Gate"],
+      verdict: { kind: "pending" },
     },
     {
-      id: "a completed run without a conclusion alone is trouble, never red or green",
-      runs: [run({ id: 1, conclusion: null })],
-      expected: [],
-      verdict: {
-        kind: "trouble",
-        lines: ["run 1 (CI-1) is completed but carries no conclusion (gh or GitHub trouble?)"],
-      },
-    },
-    {
-      id: "missing outranks pending: a gate absent while a bystander runs is reported, not waited on for as long as anything runs",
-      runs: [run({ id: 1, status: "in_progress" }), run({ id: 2 })],
-      expected: ["Gate"],
-      verdict: {
-        kind: "missing",
-        lines: ["pass: CI-2 (2)", "pending(in_progress): CI-1 (1)", "no run registered for Gate"],
-      },
-    },
-    {
-      id: "red outranks pending: a failed run is reported while others still run",
-      runs: [run({ id: 1, conclusion: "failure" }), run({ id: 2, status: "queued" })],
-      expected: [],
-      verdict: { kind: "red", lines: ["pending(queued): CI-2 (2)", "FAIL(failure): CI-1 (1)"] },
-    },
-    {
-      id: "green with a skipped run",
-      runs: [run({ id: 1 }), run({ id: 2, conclusion: "skipped" })],
-      expected: ["CI-1", "CI-2"],
-      verdict: { kind: "green", lines: ["skip: CI-2 (2)", "pass: CI-1 (1)"] },
+      id: "a gate with no run once the rollup settled is missing, by name",
+      rollup: "SUCCESS",
+      runs: [run({ id: 1, name: "Other" })],
+      gates: ["Gate", "Other"],
+      verdict: { kind: "missing", gates: ["Gate"] },
     },
     {
       id: "an older cancelled run of a re-triggered workflow is superseded, not red (numeric newest pick)",
+      rollup: "PENDING",
       runs: [
         run({ id: 9, conclusion: "cancelled", ...sameWorkflow }),
         run({ id: 100, ...sameWorkflow }),
       ],
-      expected: ["CI"],
-      verdict: { kind: "green", lines: ["superseded: CI (9)", "pass: CI (100)"] },
+      gates: ["CI"],
+      verdict: { kind: "green", latest: [run({ id: 100, ...sameWorkflow })] },
     },
     {
-      id: "a cancelled latest run with no newer run is a real failure",
-      runs: [run({ id: 1, conclusion: "cancelled" })],
-      expected: [],
-      verdict: { kind: "red", lines: ["FAIL(cancelled): CI-1 (1)"] },
-    },
-    {
-      id: "runs without a workflow id are judged individually, never superseded",
-      runs: [run({ id: 1, conclusion: "cancelled", wf: null }), run({ id: 2, wf: null })],
-      expected: [],
-      verdict: { kind: "red", lines: ["pass: CI-2 (2)", "FAIL(cancelled): CI-1 (1)"] },
-    },
-    {
-      id: "expected names match exactly, never by prefix",
-      runs: [run({ id: 1 }), run({ id: 2 })],
-      expected: ["CI"],
+      id: "a cancelled latest run with no newer run is red: no verdict was ever delivered",
+      rollup: "PENDING",
+      runs: [run({ id: 1, conclusion: "cancelled", name: "CI" })],
+      gates: ["CI"],
       verdict: {
-        kind: "missing",
-        lines: ["pass: CI-2 (2)", "pass: CI-1 (1)", "no run registered for CI"],
+        kind: "red",
+        latest: [run({ id: 1, conclusion: "cancelled", name: "CI" })],
+        failed: [run({ id: 1, conclusion: "cancelled", name: "CI" })],
+        missing: [],
       },
     },
     {
-      id: "no runs and nothing expected is pending, never a vacuous green",
-      runs: [],
-      expected: [],
-      verdict: { kind: "pending", lines: ["no workflow runs registered"] },
+      id: "a skipped gate counts as passed",
+      rollup: "SUCCESS",
+      runs: [run({ id: 1, conclusion: "skipped", name: "CI" })],
+      gates: ["CI"],
+      verdict: { kind: "green", latest: [run({ id: 1, conclusion: "skipped", name: "CI" })] },
     },
     {
-      id: "no runs with an expected workflow is missing",
-      runs: [],
-      expected: ["CI"],
-      verdict: { kind: "missing", lines: ["no run registered for CI"] },
+      id: "gate names match exactly, never by prefix",
+      rollup: "SUCCESS",
+      runs: [run({ id: 1, name: "CI-1" })],
+      gates: ["CI"],
+      verdict: { kind: "missing", gates: ["CI"] },
+    },
+    {
+      id: "a gate completed with no conclusion is pending, never green or red",
+      rollup: "SUCCESS",
+      runs: [run({ id: 1, conclusion: null, name: "CI" })],
+      gates: ["CI"],
+      verdict: { kind: "pending" },
     },
   ];
   test.each(cases)("$id", (c) => {
-    expect(judgeRuns(c.runs, c.expected), c.id).toEqual(c.verdict);
+    expect(judgeHead(c.rollup, c.runs, c.gates), c.id).toEqual(c.verdict);
+  });
+
+  test("a verdict's key tells a red that found a gate absent from a plain red, and either from pending", () => {
+    const failed = run({ id: 1, conclusion: "failure", name: "Gate" });
+    expect(verdictKey(judgeHead("PENDING", [failed], ["Gate", "Lint"]))).toBe("red");
+    expect(verdictKey(judgeHead("FAILURE", [failed], ["Gate", "Lint"]))).toBe(
+      "red; no run of Lint",
+    );
+    expect(verdictKey(judgeHead("SUCCESS", [], ["Lint"]))).toBe("missing Lint");
+    expect(verdictKey(judgeHead("PENDING", [], ["Lint"]))).toBeNull();
+    expect(verdictKey(judgeHead("SUCCESS", [run({ id: 2 })], []))).toBe("green");
   });
 });
 
-describe("failedJobLog", () => {
-  test("the excerpt is read from the whole of gh's merged stream, kept through a nonzero exit; the only REST call", () => {
-    // The stderr line keeps its place in the merged stream, a log past spawnSync's 1 MiB default
-    // buffer still ends with its final lines instead of a truncated prefix's tail, and
-    // --log-failed's nonzero exit (a run with no failed step) never loses the text. The run's
-    // repository is named on the call, since the daemon's working directory is not the run's.
-    // The fake records every other Actions REST endpoint, and an unnamed repository, as a
-    // violation.
-    const lines = Array.from(
-      { length: 20000 },
-      (_, i) => `log line ${i + 1} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`,
-    );
-    const s = scenario({
-      "log-7.txt": `${lines.join("\n")}\n`,
-      "log-7.stderr": "warning after the log\n",
-      "log-7.exit": "3",
-    });
-    expect(failedJobLog("octocat/repo", 7)).toBe(
-      [...lines.slice(-19), "warning after the log"].join("\n"),
-    );
-    expect(s.calls()).toEqual(["run view 7 --log-failed --repo octocat/repo"]);
-    expect(s.violations()).toBe("");
-  });
+describe("readRepository", () => {
+  const PENDING_SUITE: SuiteSpec = { id: 5, status: "in_progress" };
 
-  test("a hung log fetch is cut off at the timeout, keeping what gh printed and noting the cut", () => {
-    // The excerpt is informational, so a hung gh must not stall the caller: spawnSync reports
-    // the kill as an ETIMEDOUT error with the partial stdout still attached.
-    const s = scenario({ "log-7.txt": "first line\nsecond line\n", "log-7.sleep": "" });
-    expect(failedJobLog("octocat/repo", 7, 300)).toBe(
-      "first line\nsecond line\ngh run view 7 --log-failed: no answer within 300 ms",
-    );
-    expect(s.violations()).toBe("");
-  });
-});
-
-describe("excerptFailedLog", () => {
-  // gh renders the stream as `<job>\t<step>\t<timestamp> <text>`; the fixtures are written in
-  // that shape by hand. A run's last lines are its wind-down (the summary job's rows, credential
-  // cleanup), so the tail of a real stream never showed the failing assertion.
-  const row = (job: string, step: string, text: string, second = 0) =>
-    `${job}\t${step}\t2026-01-01T00:00:${String(second).padStart(2, "0")}.0000000Z ${text}`;
-  const windDown = [
-    ...Array.from({ length: 30 }, (_, i) =>
-      row("all-green", "Summarize", `checks ${i + 1}: passed`),
-    ),
-    row("all-green", "Post Checkout", "Post job cleanup."),
-    row("all-green", "Post Checkout", "Removing credentials from the git config"),
-  ];
-  const cases: Array<[string, string[], string]> = [
-    [
-      "the lines naming an error are kept under their job and step, the wind-down tail and the runner's exit-code line are not",
-      [
-        row("test", "Run tests", "$ bun test", 1),
-        row("test", "Run tests", "FAIL tests/sum.test.ts > adds two numbers", 2),
-        row("test", "Run tests", "error: expect(received).toBe(expected)", 2),
-        row("test", "Run tests", "Ran 12 tests across 3 files.", 3),
-        row("test", "Run tests", "##[error]Process completed with exit code 1.", 3),
-        ...windDown,
-      ],
-      [
-        "test / Run tests:",
-        "  FAIL tests/sum.test.ts > adds two numbers",
-        "  error: expect(received).toBe(expected)",
-      ].join("\n"),
-    ],
-    [
-      "a compiler diagnostic names an error, and the exit-code line after it does not crowd it out",
-      [
-        row("build", "Typecheck", "$ tsc -p ."),
-        row("build", "Typecheck", "src/a.ts(12,3): error TS2304: Cannot find name 'missing'."),
-        row("build", "Typecheck", "##[error]Process completed with exit code 2."),
-      ],
-      ["build / Typecheck:", "  src/a.ts(12,3): error TS2304: Cannot find name 'missing'."].join(
-        "\n",
-      ),
-    ],
-    [
-      "with no line naming an error, the last 20 lines of the step that failed last, its exit-code line among them",
-      [
-        ...Array.from({ length: 5 }, (_, i) => row("build", "Checkout", `checkout ${i + 1}`)),
-        ...Array.from({ length: 25 }, (_, i) => row("build", "Compile", `compiling unit ${i + 1}`)),
-        row("build", "Compile", "##[error]Process completed with exit code 1."),
-      ],
-      [
-        "build / Compile:",
-        ...Array.from({ length: 19 }, (_, i) => `  compiling unit ${i + 7}`),
-        "  ##[error]Process completed with exit code 1.",
-      ].join("\n"),
-    ],
-    [
-      "a whole-job segment (gh's UNKNOWN STEP when step logs are unavailable) is cut at the runner's exit-code line, so the tail is the failing command's output, not the cleanup after it",
-      [
-        ...Array.from({ length: 5 }, (_, i) =>
-          row("test", "UNKNOWN STEP", `expected ${i + 1}, received ${i + 2}`),
-        ),
-        row("test", "UNKNOWN STEP", "##[error]Process completed with exit code 1."),
-        ...Array.from({ length: 30 }, (_, i) => row("test", "UNKNOWN STEP", `cleanup ${i + 1}`)),
-      ],
-      [
-        "test / UNKNOWN STEP:",
-        ...Array.from({ length: 5 }, (_, i) => `  expected ${i + 1}, received ${i + 2}`),
-        "  ##[error]Process completed with exit code 1.",
-      ].join("\n"),
-    ],
-    [
-      "a failing step whose output names no error word keeps its own tail up to the exit-code line, not the wind-down's: the failure is there in any wording",
-      [
-        row("test", "Run tests", "Failure: 1 test failed", 2),
-        row("test", "Run tests", "##[error]Process completed with exit code 1.", 3),
-        ...windDown,
-      ],
-      [
-        "test / Run tests:",
-        "  Failure: 1 test failed",
-        "  ##[error]Process completed with exit code 1.",
-      ].join("\n"),
-    ],
-    [
-      "an error word in a passing step does not stand in for the failing step: with exit-code lines naming the failing step, only its lines are matched, else its tail",
-      [
-        row("setup", "Probe", "Error count: 0", 1),
-        row("test", "Unit", "1 test failed", 2),
-        row("test", "Unit", "##[error]Process completed with exit code 1.", 3),
-        ...windDown,
-      ],
-      ["test / Unit:", "  1 test failed", "  ##[error]Process completed with exit code 1."].join(
-        "\n",
-      ),
-    ],
-    [
-      "an error word inside the failing step is the excerpt, not the passing step's error word before it",
-      [
-        row("setup", "Probe", "Error count: 0", 1),
-        row("test", "Unit", "Error: expected 1, received 2", 2),
-        row("test", "Unit", "1 test failed", 3),
-        row("test", "Unit", "##[error]Process completed with exit code 1.", 4),
-        ...windDown,
-      ],
-      ["test / Unit:", "  Error: expected 1, received 2"].join("\n"),
-    ],
-    [
-      "a cleanup step that itself fails without an error word keeps its own tail: a passing step's zero error count is a summary, not an error line",
-      [
-        row("test", "Probe", "Error count: 0", 1),
-        row(
-          "test",
-          "Post Checkout",
-          "fatal: could not lock config file .git/config: Permission denied",
-          2,
-        ),
-        row("test", "Post Checkout", "##[error]Process completed with exit code 128.", 3),
-        ...windDown,
-      ],
-      [
-        "test / Post Checkout:",
-        "  fatal: could not lock config file .git/config: Permission denied",
-        "  ##[error]Process completed with exit code 128.",
-      ].join("\n"),
-    ],
-    [
-      "an assertion line that begins with a zero is an error line, not a zero count: only a count ending the line is a summary",
-      [
-        row("test", "Unit", "Error: 0 == 1", 1),
-        row("test", "Unit", "##[error]Process completed with exit code 1.", 2),
-        row("test", "Cleanup", "::error::cleanup failed", 3),
-        ...windDown,
-      ],
-      ["test / Unit:", "  Error: 0 == 1", "test / Cleanup:", "  ::error::cleanup failed"].join(
-        "\n",
-      ),
-    ],
-    [
-      "an annotated step with no error line beside a passing step's error word in another job: the failing step's tail, whatever the job is called",
-      [
-        row("CI / Post checks", "Probe", "Error count: 0", 1),
-        row("CI / Post checks", "Unit", "1 test failed", 2),
-        row("CI / Post checks", "Unit", "##[error]Process completed with exit code 1.", 3),
-        ...windDown,
-      ],
-      [
-        "CI / Post checks / Unit:",
-        "  1 test failed",
-        "  ##[error]Process completed with exit code 1.",
-      ].join("\n"),
-    ],
-    [
-      "an exit code landing on a cleanup step while the job's own step printed the error unannotated: that error line is the excerpt",
-      [
-        row("test", "Unit", "Error: expected 1, received 2", 1),
-        row("test", "Post Checkout", "Removing credentials from the git config", 2),
-        row("test", "Post Checkout", "##[error]Process completed with exit code 1.", 3),
-        ...windDown,
-      ],
-      ["test / Unit:", "  Error: expected 1, received 2"].join("\n"),
-    ],
-    [
-      "a failing step annotated by the runner keeps its own error line when the exit code lands on a later post step",
-      [
-        row("test", "Unit action", "##[error]Error: expected 1, received 2", 1),
-        row("test", "Post Checkout", "Removing credentials from the git config", 2),
-        row("test", "Post Checkout", "##[error]Process completed with exit code 1.", 3),
-        ...windDown,
-      ],
-      ["test / Unit action:", "  ##[error]Error: expected 1, received 2"].join("\n"),
-    ],
-    [
-      "a carriage return is a line break: a job name or text that hides a fence line behind one gives that line its own row",
-      [
-        row("test", "Run tests", "boom\r```\rafter", 2),
-        row("test", "Run tests", "##[error]Process completed with exit code 1.", 3),
-        ...windDown,
-      ],
-      [
-        "test / Run tests:",
-        "  boom",
-        "  ```",
-        "  after",
-        "  ##[error]Process completed with exit code 1.",
-      ].join("\n"),
-    ],
-    [
-      "a passing suite's summary saying `0 failed` in the failing step is not an error line, so the assertion after it is still in the tail",
-      [
-        row("test", "ctest", "100% tests passed, 0 tests failed out of 1", 1),
-        row("test", "ctest", "AssertionError: expected 1, received 2", 2),
-        row("test", "ctest", "##[error]Process completed with exit code 1.", 3),
-        ...windDown,
-      ],
-      [
-        "test / ctest:",
-        "  100% tests passed, 0 tests failed out of 1",
-        "  AssertionError: expected 1, received 2",
-        "  ##[error]Process completed with exit code 1.",
-      ].join("\n"),
-    ],
-    [
-      "error lines from two steps carry each step's heading",
-      [
-        row("test", "Unit", "::error file=a.ts::expected 1"),
-        row("test", "Integration", "##[error]The integration run timed out"),
-      ],
-      [
-        "test / Unit:",
-        "  ::error file=a.ts::expected 1",
-        "test / Integration:",
-        "  ##[error]The integration run timed out",
-      ].join("\n"),
-    ],
-  ];
-  for (const [name, lines, expected] of cases) {
-    test(name, () => {
-      expect(excerptFailedLog(`${lines.join("\n")}\n`)).toBe(expected);
-    });
-  }
-});
-
-// --- pr-rows.mts -------------------------------------------------------------
-
-describe("readRows", () => {
-  test("31 refs across two repositories go out as two aliased requests; a null PR is absent while its batch survives gh's exit 1", () => {
-    // Chunk 1 holds 29 PRs of one repository plus one of another, chunk 2 the 31st. PR 17 is
-    // deleted: GitHub answers null for it with an `errors` entry, on which gh exits 1 with the
-    // body still on stdout. A batch that failed on that exit would blind 29 PRs for one deletion.
-    const refs: PrRef[] = Array.from({ length: 29 }, (_, i) => ({
-      repo: "octocat/repo",
-      number: i + 1,
-    }));
-    refs.push({ repo: "octocat/other", number: 5 }, { repo: "octocat/repo", number: 30 });
-    const r0: Record<string, unknown> = {};
-    for (let n = 1; n <= 29; n += 1) r0[`p${n}`] = n === 17 ? null : prNode({ number: n });
+  test("one request carries the rows, the branch tips, the suites of the heads still being judged, and the viewer; 31 PRs go as two chunks; a null PR is null while its batch survives gh's exit 1", () => {
+    // PR 17 is deleted: GitHub answers null for it with an `errors` entry, on which gh exits 1
+    // with the body still on stdout. A batch that failed on that exit would blind 30 PRs for one
+    // deletion. Only PR 1 and the main tip are pending, so only they carry their suites.
+    const r: Record<string, unknown> = {};
+    for (let n = 1; n <= 30; n += 1) {
+      r[`p${n}`] =
+        n === 17 ? null : prNode({ number: n, suites: n === 1 ? [{ id: 1 }] : undefined });
+    }
+    r.b0 = {
+      target: {
+        oid: "tip00001",
+        author: { user: { login: "hubot" } },
+        statusCheckRollup: { state: "PENDING" },
+        checkSuites: suitesConnection([PENDING_SUITE]),
+      },
+    };
+    r.b1 = null;
     const s = scenario({
       "rows-1.json": JSON.stringify({
-        data: {
-          r0,
-          r1: {
-            p5: prNode({
-              number: 5,
-              url: "https://example.com/octocat/other/pull/5",
-              isDraft: true,
-              state: "MERGED",
-              mergedAt: "2026-03-02T12:00:00Z",
-              mergeCommitOid: "merge0005",
-              headRefOid: "head0005",
-              updatedAt: "2026-03-02T12:00:00Z",
-              comments: 4,
-              threads: 2,
-              review: {
-                id: "900",
-                submittedAt: "2026-03-02T11:00:00Z",
-                state: "APPROVED",
-                login: "work-bot",
-              },
-              rollup: "SUCCESS",
-            }),
-          },
-        },
+        data: { viewer: { login: "me" }, r },
         errors: [
           {
             type: "NOT_FOUND",
@@ -987,69 +796,95 @@ describe("readRows", () => {
       "rows-1.exit1": "gh: Could not resolve to a PullRequest with the number of 17.\n",
       "rows-2.json": JSON.stringify({
         data: {
-          r0: {
-            p30: prNode({
-              number: 30,
+          r: {
+            p31: prNode({
+              number: 31,
+              author: null,
               review: { id: "901", submittedAt: null, state: "PENDING", login: null },
             }),
           },
         },
       }),
     });
-    const rows = readRows(refs);
-    expect(rows.size).toBe(30);
-    expect(rows.has("octocat/repo#17")).toBe(false);
-    expect(rows.get("octocat/repo#1")).toEqual(row());
-    expect(rows.get("octocat/other#5")).toEqual({
-      repo: "octocat/other",
-      number: 5,
-      url: "https://example.com/octocat/other/pull/5",
-      isDraft: true,
-      state: "MERGED",
-      mergedAt: "2026-03-02T12:00:00Z",
-      mergeCommitOid: "merge0005",
-      headRefOid: "head0005",
-      updatedAt: "2026-03-02T12:00:00Z",
-      issueComments: 4,
-      reviewThreads: 2,
-      latestReview: {
-        id: "900",
-        submittedAt: "2026-03-02T11:00:00Z",
-        state: "APPROVED",
-        author: "work-bot",
-      },
-      rollupState: "SUCCESS",
+    const reply = readRepository("octocat/repo", {
+      prs: Array.from({ length: 31 }, (_, i) => i + 1),
+      branches: ["main", "gone"],
+      suitesFor: { prs: new Set([1]), branches: new Set(["main"]) },
+    });
+    expect(reply.viewer).toBe("me");
+    expect(reply.rows.size).toBe(31);
+    expect(reply.rows.get(17)).toBeNull();
+    expect(reply.rows.get(1)).toEqual({
+      row: row({ number: 1 }),
+      suites: { runs: [run({ id: 1 })], complete: true, nextCursor: null },
+    });
+    expect(reply.rows.get(2)).toEqual({
+      row: row({ number: 2, url: "https://example.com/octocat/repo/pull/2" }),
+      suites: null,
     });
     // A deleted account nulls the author; a PENDING review has no submittedAt.
-    expect(rows.get("octocat/repo#30")?.latestReview).toEqual({
-      id: "901",
-      submittedAt: "unsubmitted",
-      state: "PENDING",
-      author: "ghost",
+    expect(reply.rows.get(31)?.row).toMatchObject({
+      headAuthor: null,
+      latestReview: { id: "901", submittedAt: "unsubmitted", state: "PENDING", author: "ghost" },
     });
+    expect(reply.tips.get("main")).toEqual({
+      tip: { oid: "tip00001", author: "hubot", rollupState: "PENDING" },
+      suites: { runs: [run(PENDING_SUITE)], complete: true, nextCursor: null },
+    });
+    expect(reply.tips.get("gone")).toBeNull();
     const calls = s.calls();
     expect(calls).toHaveLength(2);
-    // The coordinates leave the program inlined in the query text, by repository alias.
-    expect(calls[0]).toContain('r0: repository(owner: "octocat", name: "repo")');
-    expect(calls[0]).toContain('r1: repository(owner: "octocat", name: "other")');
-    expect(calls[0]).toContain("p17: pullRequest(number: 17)");
-    expect(calls[1]).toContain("p30: pullRequest(number: 30)");
-    expect(calls[1]).not.toContain("pullRequest(number: 17)");
+    const first = calls[0] as string;
+    expect(first).toContain("viewer { login }");
+    expect(first).toContain('r: repository(owner: "octocat", name: "repo")');
+    expect(first).toContain("p17: pullRequest(number: 17)");
+    expect(first).toContain('b0: ref(qualifiedName: "refs/heads/main")');
+    expect(first).toContain('b1: ref(qualifiedName: "refs/heads/gone")');
+    expect(first.split("checkSuites(first: 100)")).toHaveLength(3);
+    expect(calls[1]).toContain("p31: pullRequest(number: 31)");
+    expect(calls[1]).not.toContain("viewer");
+    expect(calls[1]).not.toContain("ref(");
     expect(s.violations()).toBe("");
   });
 
-  test("a chunk whose every PR is null is an error naming them, never an empty map", () => {
+  test("a head with more than one page of suites is marked incomplete, for the paged read to follow", () => {
     const s = scenario({
-      "rows-1.json": JSON.stringify({ data: { r0: { p1: null, p2: null } } }),
+      "rows-1.json": JSON.stringify({
+        data: { r: { p1: prNode({ suites: [{ id: 1 }], suitesNext: "page2" }) } },
+      }),
+    });
+    const reply = readRepository("octocat/repo", {
+      prs: [1],
+      branches: [],
+      suitesFor: { prs: new Set([1]), branches: new Set() },
+    });
+    expect(reply.rows.get(1)?.suites).toEqual({
+      runs: [run({ id: 1 })],
+      complete: false,
+      nextCursor: "page2",
+    });
+    expect(reply.viewer).toBeNull();
+    expect(s.violations()).toBe("");
+  });
+
+  test("a repository that answers null is the failed read it is, carrying gh's own error, never a batch of unreadable targets", () => {
+    // An error at the repository's path (gone, no access, or GitHub's own) nulls the alias with
+    // the viewer still answered; read as every target unreadable, a transient error would end
+    // every watch on the repository with a trouble event each.
+    const s = scenario({
+      "rows-1.json": JSON.stringify({
+        data: { viewer: { login: "me" }, r: null },
+        errors: [{ type: "INTERNAL", path: ["r"], message: "Something went wrong" }],
+      }),
+      "rows-1.exit1": "gh: Something went wrong\n",
     });
     expect(() =>
-      readRows([
-        { repo: "octocat/repo", number: 1 },
-        { repo: "octocat/repo", number: 2 },
-      ]),
-    ).toThrow(
-      new GhError("GraphQL response has no pullRequest for octocat/repo#1, octocat/repo#2"),
-    );
+      readRepository("octocat/gone", {
+        prs: [1, 2],
+        branches: ["main"],
+        suitesFor: { prs: new Set(), branches: new Set() },
+      }),
+    ).toThrow(new GhError("gh api graphql exited 1: gh: Something went wrong"));
     expect(s.violations()).toBe("");
   });
 
@@ -1062,9 +897,13 @@ describe("readRows", () => {
       }),
       "rows-1.exit1": "gh: API rate limit exceeded\n",
     });
-    expect(() => readRows([{ repo: "octocat/repo", number: 1 }])).toThrow(
-      new GhError("gh api graphql exited 1: gh: API rate limit exceeded"),
-    );
+    expect(() =>
+      readRepository("octocat/repo", {
+        prs: [1],
+        branches: [],
+        suitesFor: { prs: new Set(), branches: new Set() },
+      }),
+    ).toThrow(new GhError("gh api graphql exited 1: gh: API rate limit exceeded"));
     expect(s.violations()).toBe("");
   });
 });
@@ -1163,7 +1002,7 @@ describe("readPrDetail", () => {
     // publication and they name that review. Thread C on page 2 is two long and fully fetched: a
     // review-comment then a reply. The empty-bodied COMMENTED review 2 is activity, for the
     // renderer to headline its inline comments under; the unsubmitted PENDING review is not. The
-    // issue comments, reviews, and commit author come from the first page only.
+    // issue comments and reviews come from the first page only.
     const s = scenario({
       "detail-1.json": detailPage({
         comments: [
@@ -1261,7 +1100,6 @@ describe("readPrDetail", () => {
           },
         ],
         nextCursor: "c1",
-        commitAuthor: "octocat",
       }),
       "detail-2.json": detailPage({
         comments: [
@@ -1297,7 +1135,6 @@ describe("readPrDetail", () => {
             ],
           },
         ],
-        commitAuthor: null,
       }),
     });
     const detail = readPrDetail({ repo: "octocat/repo", number: 7 }, null);
@@ -1307,7 +1144,7 @@ describe("readPrDetail", () => {
         kind: "review-comment",
         at: "2026-03-01T10:01:00Z",
         author: "work-bot",
-        body: "nit",
+        hasBody: true,
         url: "https://example.com/t1-1",
         path: "src/a.ts",
         line: 12,
@@ -1317,7 +1154,7 @@ describe("readPrDetail", () => {
         kind: "reply",
         at: "2026-03-01T10:02:00Z",
         author: "work-bot",
-        body: "three",
+        hasBody: true,
         url: "https://example.com/t2-3",
         path: "src/b.ts",
         line: null,
@@ -1328,7 +1165,7 @@ describe("readPrDetail", () => {
         kind: "reply",
         at: "2026-03-01T10:03:00Z",
         author: "octocat",
-        body: "four",
+        hasBody: true,
         url: "https://example.com/t2-4",
         path: "src/b.ts",
         line: null,
@@ -1339,7 +1176,7 @@ describe("readPrDetail", () => {
         kind: "reply",
         at: "2026-03-01T10:04:00Z",
         author: "work-bot",
-        body: "five",
+        hasBody: true,
         url: "https://example.com/t2-5",
         path: "src/b.ts",
         line: null,
@@ -1350,7 +1187,7 @@ describe("readPrDetail", () => {
         kind: "review-comment",
         at: "2026-03-01T10:10:00Z",
         author: "work-bot",
-        body: "first",
+        hasBody: true,
         url: "https://example.com/t3-1",
         path: "src/c.ts",
         line: 3,
@@ -1360,7 +1197,7 @@ describe("readPrDetail", () => {
         kind: "reply",
         at: "2026-03-01T10:11:00Z",
         author: "octocat",
-        body: "second",
+        hasBody: true,
         url: "https://example.com/t3-2",
         path: "src/c.ts",
         line: 3,
@@ -1370,7 +1207,7 @@ describe("readPrDetail", () => {
         kind: "comment",
         at: "2026-03-01T10:05:00Z",
         author: "work-bot",
-        body: "ping",
+        hasBody: true,
         url: "https://example.com/c1",
       },
       {
@@ -1378,7 +1215,7 @@ describe("readPrDetail", () => {
         kind: "comment",
         at: "2026-03-01T10:06:00Z",
         author: "ghost",
-        body: "gone",
+        hasBody: true,
         url: "https://example.com/c2",
       },
       {
@@ -1386,7 +1223,7 @@ describe("readPrDetail", () => {
         kind: "review",
         at: "2026-03-01T10:07:00Z",
         author: "work-bot",
-        body: "LGTM",
+        hasBody: true,
         url: "https://example.com/r1",
         reviewState: "APPROVED",
       },
@@ -1395,13 +1232,12 @@ describe("readPrDetail", () => {
         kind: "review",
         at: "2026-03-01T10:08:00Z",
         author: "work-bot",
-        body: "",
+        hasBody: false,
         url: "https://example.com/r2",
         reviewState: "COMMENTED",
       },
     ];
     expect(detail).toEqual({
-      lastCommitAuthor: "octocat",
       unresolvedThreads: 2,
       activities: expected,
       fetchedIds: [
@@ -1480,7 +1316,6 @@ describe("readPrDetail", () => {
             before: "t203",
           },
         ],
-        commitAuthor: "octocat",
       }),
       "older-comments-1.json": olderPage("comments", [comment(100, 9), missed[0] as CommentSpec]),
       "older-thread-1.json": olderThreadPage([
@@ -1552,7 +1387,7 @@ describe("newActivity", () => {
     kind: "comment",
     at,
     author,
-    body: "",
+    hasBody: false,
     url: "https://example.com/c",
   });
 
@@ -1561,7 +1396,6 @@ describe("newActivity", () => {
     // comment 5 (published in that same second) would never be reported, and comment 1 (read
     // ahead of its row last time) would be reported again.
     const detail = {
-      lastCommitAuthor: null,
       unresolvedThreads: 0,
       fetchedIds: [],
       gaps: [],
@@ -1584,16 +1418,5 @@ describe("newActivity", () => {
       activity("comment:5", "2026-03-01T10:00:00Z", "example-user"),
       activity("comment:1", "2026-03-01T10:00:02Z", "work-bot"),
     ]);
-  });
-});
-
-describe("viewerLogin", () => {
-  test("reads the login through GraphQL", () => {
-    const s = scenario({
-      "viewer-1.json": JSON.stringify({ data: { viewer: { login: "octocat" } } }),
-    });
-    expect(viewerLogin()).toBe("octocat");
-    expect(s.calls()).toHaveLength(1);
-    expect(s.violations()).toBe("");
   });
 });

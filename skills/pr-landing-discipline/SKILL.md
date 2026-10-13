@@ -121,7 +121,7 @@ gh api graphql -f query='mutation($pr: ID!) { requestReviews(input: {pullRequest
 
 The REST reviewers endpoint is the fallback. It takes the login `Copilot`, exactly, and on some days answers 201 with an empty `requested_reviewers` and no timeline event, request after request; `copilot-pull-request-reviewer[bot]` always no-ops that way.
 
-GraphQL `reviewRequests` hides a pending Copilot request either way, so the issue timeline is the only confirmation the request registered. Between rounds, never poll. Where the `/watch-prs-and-ci` skill is installed, the PR is already subscribed, and each new comment or review arrives as a message naming what changed.
+GraphQL `reviewRequests` hides a pending Copilot request either way, so the issue timeline is the only confirmation the request registered. Between rounds, never poll. Where the `/watch-github` skill is installed, the PR is already subscribed, and each new comment or review arrives as a message naming who wrote where.
 
 Production shape of one round:
 
@@ -133,7 +133,7 @@ Production shape of one round:
 
 ## Companion Gates
 
-- **After every push, the PR stays subscribed and the CI verdict arrives as a message.** Where installed, the `/watch-prs-and-ci` skill defines the subscription. A MERGE is judged on the PR's merge commit: the merge event carries it, and the daemon follows its mainline CI. After `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
+- **After every push, the PR stays subscribed and the CI verdict arrives as a message.** Where installed, the `/watch-github` skill defines the subscription. A MERGE is judged on the PR's merge commit, which the mainline branch target reports as its new tip. After `gh pr merge`, `git rev-parse HEAD` still names the topic tip, and the squash or merge commit exists only on the mainline.
 - **Before anything lands, an independent review that can block the landing.** It is scoped to the exact content being landed, never the working tree: the branch or PR diff (`base...HEAD`) once committed, the staged diff before that. Where installed, the `/rubber-duck-review` skill defines that review and its convergence.
 - **The gate reads the body for the library line.** A diff that adds, moves, touches, reuses, or depends on a library-shaped category (the list the `/code-standards` skill's `references/design.md` owns) is refused unless `## How` (`## Reasoning` in the measured shape; the landing report with no PR) carries the `**Library:**` bullet in a shape the `/pr-and-issue-discipline` skill names: a library plus what it covers, or the search plus why nothing fits.
 - **A confirmed library the gate or a reviewer names becomes a follow-up task** (an issue or the session's task list) or is done in the PR, never a recorded-not-built line. A large library or an unclear fit is the owner's question first, and the task follows their answer.

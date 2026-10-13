@@ -1,24 +1,9 @@
-// Read-only gh plumbing shared by the watch-prs-and-ci modules: one spawnSync wrapper with an
-// explicit timeout, and the response-shape helpers that turn a GraphQL reply into typed values.
+// Read-only gh plumbing shared by the watch-github modules: one spawnSync wrapper with an explicit
+// timeout, and the response-shape helpers that turn a GraphQL reply into typed values.
 
 import { spawnSync } from "node:child_process";
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
-
-let guard: (() => void) | null = null;
-
-/**
- * Installs a check made before every gh spawn; what it throws refuses the read. Every read is
- * synchronous and holds the event loop, so a caller whose owner may go away between reads (the
- * daemon's session) notices at the next read instead of at the end of a poll.
- */
-export function guardReads(check: (() => void) | null): void {
-  guard = check;
-}
-
-export function beforeRead(): void {
-  guard?.();
-}
 
 /** A gh call or response-shape failure. The caller decides whether it retries. */
 export class GhError extends Error {
@@ -36,7 +21,6 @@ export class GhError extends Error {
 }
 
 export function gh(args: string[], timeoutMs: number = DEFAULT_TIMEOUT_MS): string {
-  beforeRead();
   const result = spawnSync("gh", args, {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -63,6 +47,15 @@ export function gh(args: string[], timeoutMs: number = DEFAULT_TIMEOUT_MS): stri
   return result.stdout;
 }
 
+/** One GraphQL request through gh; variables go as `-f` (strings) or `-F` (numbers). */
+export function graphql(query: string, variables: Record<string, string | number> = {}): unknown {
+  const args = ["api", "graphql", "-f", `query=${query}`];
+  for (const [key, value] of Object.entries(variables)) {
+    args.push(typeof value === "number" ? "-F" : "-f", `${key}=${value}`);
+  }
+  return parseJson(gh(args), "gh api graphql");
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -79,6 +72,10 @@ export function requireNumber(value: unknown, what: string): number {
 export function requireString(value: unknown, what: string): string {
   if (typeof value !== "string") throw new GhError(`GraphQL response: ${what} is not a string`);
   return value;
+}
+
+export function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 export function parseJson(raw: string, what: string): unknown {

@@ -26,9 +26,9 @@ The agent applies these on its own when the task matches:
 - [/pr-landing-discipline](./skills/pr-landing-discipline/SKILL.md) - Draft flips, review rounds to convergence, line accounting, and a human-gated merge
 - [/reply-and-review-discipline](./skills/reply-and-review-discipline/SKILL.md) - Plain-first replies to issue reporters and one pending review on someone else's PR
 - [/rubber-duck-review](./skills/rubber-duck-review/SKILL.md) - Cross-model, read-only second-opinion code review
-- [/session-events](./skills/session-events/SKILL.md) - One daemon per session delivers events from any polled source as messages in the peer envelope, quoting nothing from the polled system; the daemon behind /watch-prs-and-ci
+- [/session-events](./skills/session-events/SKILL.md) - One daemon per session delivers events from any polled source as messages in the peer envelope, quoting nothing from the polled system; the daemon behind /watch-github
 - [/verify-with-controls](./skills/verify-with-controls/SKILL.md) - Controls and evidence before a zero, alarm, success claim, or stillness becomes a conclusion
-- [/watch-prs-and-ci](./skills/watch-prs-and-ci/SKILL.md) - One daemon per session, a background task of that session, delivers PR comments, reviews, CI verdicts, and merges as messages instead of polls
+- [/watch-github](./skills/watch-github/SKILL.md) - One daemon per session, a background task of that session, delivers PR comments, reviews, CI verdicts, head moves, and merges, and branch tips' CI, as messages instead of polls
 - [/working-text](./skills/working-text/SKILL.md) - Working text a colleague scans to get work done, from a README or a comment to a PR or a diagram: shape rules, a paragraph-cap and path probe, and an architecture page that cannot rot
 - [/worktree-hygiene](./skills/worktree-hygiene/SKILL.md) - Safe worktree removal, gated retirement of landed branches, explicit handovers, shared-repo rules
 
@@ -71,7 +71,7 @@ graph LR
   nt["/never-twice"]
   vwc["/verify-with-controls"]
   csm["/craft-skills-and-memories"]
-  wpc["/watch-prs-and-ci"]
+  wgh["/watch-github"]
   se["/session-events"]
   wh["/worktree-hygiene"]
   us["/unslop"]
@@ -87,7 +87,7 @@ graph LR
   nt <--> rdr
   pid <--> pld
   pid <--> rrd
-  pld <--> wpc
+  pld <--> wgh
   rdr <--> rrd
   rdr <--> vwc
 
@@ -95,8 +95,8 @@ graph LR
   wt --> pid
   nw --> wt
   om --> rdr
-  om --> wpc
-  wpc --> se
+  om --> wgh
+  wgh --> se
   om --> cs
   om --> pid
   om --> pld
@@ -129,7 +129,7 @@ graph LR
   click nt "./skills/never-twice/SKILL.md"
   click vwc "./skills/verify-with-controls/SKILL.md"
   click csm "./skills/craft-skills-and-memories/SKILL.md"
-  click wpc "./skills/watch-prs-and-ci/SKILL.md"
+  click wgh "./skills/watch-github/SKILL.md"
   click se "./skills/session-events/SKILL.md"
   click wh "./skills/worktree-hygiene/SKILL.md"
   click us "./xeno/unslop/SKILL.md"

@@ -16,8 +16,8 @@ const FILES = new Map<string, string>([
   ["tests/sync-xeno.test.ts", 'import { update } from "../scripts/sync-xeno.mts";'],
   ["tests/probe.test.ts", 'import { probe } from "../scripts/probe";'],
   [
-    "tests/pr-events.test.ts",
-    'const SCRIPT = join(ROOT, "skills", "watch-prs-and-ci", "scripts", "pr-events.mts");',
+    "tests/github-events.test.ts",
+    'const SCRIPT = join(ROOT, "skills", "watch-github", "scripts", "github-events.mts");',
   ],
   [
     "tests/doc-drift.test.ts",
@@ -38,14 +38,14 @@ describe("selectTests", () => {
     ["the preload selects every test even when it is not in the map", ["tests/preload.ts"], ALL],
     [
       "a skill script run by path selects the test that names it",
-      ["skills/watch-prs-and-ci/scripts/pr-events.mts"],
-      ["tests/pr-events.test.ts"],
+      ["skills/watch-github/scripts/github-events.mts"],
+      ["tests/github-events.test.ts"],
     ],
     ["a staged test runs itself", ["tests/doc-drift.test.ts"], ["tests/doc-drift.test.ts"]],
     [
       "a deleted script, absent from the map, still selects the test that names it",
-      ["scripts/gone.mts", "skills/watch-prs-and-ci/scripts/pr-events.mts"],
-      ["tests/pr-events.test.ts"],
+      ["scripts/gone.mts", "skills/watch-github/scripts/github-events.mts"],
+      ["tests/github-events.test.ts"],
     ],
     [
       "a SKILL.md selects the doc pin only",

@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Session Events",
     "shortDescription": "Events from any polled system delivered as messages, not polls.",
-    "longDescription": "One daemon per Claude Code session, a background task that ends with it, polls a source for the targets the session watches and delivers each poll's events as one message in the peer envelope, with no text quoted from the polled system, and as a log agents read with wait. A source is a script of a few lines: what a target is, how it is read, what its events say. The GitHub source ships as the watch-prs-and-ci skill; a file source ships as the worked example.",
+    "longDescription": "One daemon per Claude Code session, a background task that ends with it, polls a source for the targets the session watches and delivers each poll's events as one message in the peer envelope, with no text quoted from the polled system, and as a log agents read with wait. A source is a script of a few lines: what a target is, how it is read, what its events say. The GitHub source ships as the watch-github skill; a file source ships as the worked example.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
     "capabilities": ["Read", "Execute"],

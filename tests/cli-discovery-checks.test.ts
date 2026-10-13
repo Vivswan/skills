@@ -36,13 +36,13 @@ function listing(entries: readonly Entry[], group = GROUP): string {
   return lines.join("\n");
 }
 
-// watch-prs-and-ci has NO row here, but no-sleep's description names it -
+// watch-github has NO row here, but no-sleep's description names it -
 // the exact shape of the reproduced silent vanish.
 const VANISHED = listing([
   { name: "code-standards", description: "Use when writing code changes." },
   {
     name: "no-sleep-waiting-on-subagents",
-    description: "Use when waiting (CI runs belong to /watch-prs-and-ci).",
+    description: "Use when waiting (CI runs belong to /watch-github).",
   },
 ]);
 const VANISHED_EXPECTED = ["code-standards", "no-sleep-waiting-on-subagents"];
@@ -79,13 +79,13 @@ describe("listingRows", () => {
       GROUP,
       `${GUTTER}    no-sleep-waiting-on-subagents`,
       `${GUTTER}      Use when waiting (CI runs belong to`,
-      `${GUTTER}      watch-prs-and-ci`,
+      `${GUTTER}      watch-github`,
       `${GUTTER}      instead).`,
     ].join("\n");
     expect(listingRows(wrapped)).toEqual([{ name: "no-sleep-waiting-on-subagents", group: GROUP }]);
     expect(() =>
-      checkListing(["no-sleep-waiting-on-subagents", "watch-prs-and-ci"], GROUP, TEMPLATE, wrapped),
-    ).toThrow(/skill 'watch-prs-and-ci' missing from the CLI listing rows/);
+      checkListing(["no-sleep-waiting-on-subagents", "watch-github"], GROUP, TEMPLATE, wrapped),
+    ).toThrow(/skill 'watch-github' missing from the CLI listing rows/);
   });
 
   test("a bare name without the exact gutter-plus-indent row prefix is not a row", () => {
@@ -94,12 +94,12 @@ describe("listingRows", () => {
     // fail to impersonate a row.
     const bullet = String.fromCharCode(0x2022); // U+2022 bullet
     const impostors = [
-      "watch-prs-and-ci",
-      " watch-prs-and-ci",
-      "    watch-prs-and-ci",
-      `${GUTTER}watch-prs-and-ci`,
-      `${GUTTER}   watch-prs-and-ci`,
-      `${bullet}    watch-prs-and-ci`,
+      "watch-github",
+      " watch-github",
+      "    watch-github",
+      `${GUTTER}watch-github`,
+      `${GUTTER}   watch-github`,
+      `${bullet}    watch-github`,
     ].join("\n");
     expect(listingRows(impostors)).toEqual([]);
   });
@@ -112,7 +112,7 @@ describe("checkListing", () => {
 
   test.each([
     {
-      id: "watch-prs-and-ci",
+      id: "watch-github",
       mentioned: true,
       reason: "named only inside another skill's description",
     },

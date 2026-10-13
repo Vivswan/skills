@@ -27,7 +27,7 @@
     "./skills/rubber-duck-review",
     "./skills/session-events",
     "./skills/verify-with-controls",
-    "./skills/watch-prs-and-ci",
+    "./skills/watch-github",
     "./skills/worktree-hygiene"
   ]
 }

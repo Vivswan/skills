@@ -1,8 +1,10 @@
 // The detail read for one pull request whose row moved: recent comments, reviews, and review
-// threads as a flat activity list, so the daemon can say what is new since the last poll.
+// threads as a flat activity list, so the source can say what is new since the last poll. The
+// activities carry who, where, and when, and whether a body exists; never the body itself.
 
-import { GhError, get, gh, parseJson, requireNumber, requireString } from "./gh.mts";
-import type { PrRef } from "./pr-rows.mts";
+import { GhError, get, graphql, requireNumber, requireString } from "./gh.mts";
+
+export type PrRef = { repo: string; number: number };
 
 // 100 threads per page; a PR with more than 5000 is a broken measurement.
 const MAX_THREAD_PAGES = 50;
@@ -11,12 +13,13 @@ const MAX_THREAD_PAGES = 50;
 const MAX_BACK_PAGES = 10;
 
 export type Activity = {
-  /** `<kind class>:<GitHub database id>`; the daemon's cursor is the set of these its reads have fetched. */
+  /** `<kind class>:<GitHub database id>`; the source's cursor is the set of these its reads have fetched. */
   id: string;
   kind: "comment" | "review" | "review-comment" | "reply";
   at: string;
   author: string;
-  body: string;
+  /** Whether the author wrote anything: an empty COMMENTED review is the wrapper GitHub puts around inline comments. */
+  hasBody: boolean;
   url: string;
   path?: string;
   line?: number | null;
@@ -26,11 +29,10 @@ export type Activity = {
 };
 
 export type PrDetail = {
-  lastCommitAuthor: string | null;
   unresolvedThreads: number;
   /** What the read fetched, cut below the newest id already seen: the candidates for news. */
   activities: Activity[];
-  /** Every id the read fetched, the cut ones included: what the daemon has now seen. */
+  /** Every id the read fetched, the cut ones included: what the source has now seen. */
   fetchedIds: string[];
   /** One line per connection whose older activity was left unread at the paging cap. */
   gaps: string[];
@@ -55,7 +57,6 @@ const DETAIL_QUERY = `query PrDetail($owner: String!, $name: String!, $number: I
         }
         pageInfo { hasNextPage endCursor }
       }
-      commits(last: 1) { nodes { commit { author { user { login } } } } }
     }
   }
 }`;
@@ -129,13 +130,17 @@ function loginOf(node: unknown): string {
   return typeof login === "string" ? login : "ghost";
 }
 
+function hasBody(node: unknown): boolean {
+  const body = get(node, "body");
+  return typeof body === "string" && body.trim() !== "";
+}
+
 function commentActivity(
   node: unknown,
   kind: Activity["kind"],
   what: string,
   thread?: { path: string; line: number | null },
 ): Activity {
-  const body = get(node, "body");
   // An inline comment is created while its review is a draft and published when the review is
   // submitted; only the publication instant is news to anyone but its author.
   const publishedAt = get(node, "publishedAt");
@@ -147,7 +152,7 @@ function commentActivity(
         ? publishedAt
         : requireString(get(node, "createdAt"), `${what} createdAt`),
     author: loginOf(node),
-    body: typeof body === "string" ? body : "",
+    hasBody: hasBody(node),
     url: requireString(get(node, "url"), `${what} url`),
   };
   if (thread !== undefined) {
@@ -161,21 +166,18 @@ function commentActivity(
   return activity;
 }
 
-// A PENDING review (no submittedAt) is the viewer's own unsubmitted draft. The empty COMMENTED
-// review GitHub wraps a batch of inline comments in stays: the renderer headlines the batch under
-// it, and drops it when no inline comment of its own is new.
+// A PENDING review (no submittedAt) is the viewer's own unsubmitted draft.
 function reviewActivities(nodes: unknown[]): Activity[] {
   const activities: Activity[] = [];
   for (const node of nodes) {
     const submittedAt = get(node, "submittedAt");
     if (typeof submittedAt !== "string") continue;
-    const body = get(node, "body");
     activities.push({
       id: reviewId(node, "review"),
       kind: "review",
       at: submittedAt,
       author: loginOf(node),
-      body: typeof body === "string" ? body : "",
+      hasBody: hasBody(node),
       url: requireString(get(node, "url"), "review url"),
       reviewState: requireString(get(node, "state"), "review state"),
     });
@@ -200,7 +202,7 @@ function threadActivities(
   );
 }
 
-/** The daemon's cursor: the ids its earlier reads fetched. `null` at a first sighting, where nothing is news. */
+/** The source's cursor: the ids its earlier reads fetched. `null` at a first sighting, where nothing is news. */
 export type Seen = ReadonlySet<string> | null;
 
 class DetailReader {
@@ -214,14 +216,6 @@ class DetailReader {
     private readonly seen: Seen,
   ) {
     [this.owner, this.name] = ref.repo.split("/") as [string, string];
-  }
-
-  private graphql(query: string, variables: Record<string, string | number>): unknown {
-    const args = ["api", "graphql", "-f", `query=${query}`];
-    for (const [key, value] of Object.entries(variables)) {
-      args.push(typeof value === "number" ? "-F" : "-f", `${key}=${value}`);
-    }
-    return parseJson(gh(args), "gh api graphql");
   }
 
   private prVariables(cursor?: string): Record<string, string | number> {
@@ -268,17 +262,17 @@ class DetailReader {
   }
 
   private olderComments(cursor: string): Connection {
-    const pr = pullRequestOf(this.graphql(OLDER_COMMENTS_QUERY, this.prVariables(cursor)));
+    const pr = pullRequestOf(graphql(OLDER_COMMENTS_QUERY, this.prVariables(cursor)));
     return connectionOf(get(pr, "comments"), "comments");
   }
 
   private olderReviews(cursor: string): Connection {
-    const pr = pullRequestOf(this.graphql(OLDER_REVIEWS_QUERY, this.prVariables(cursor)));
+    const pr = pullRequestOf(graphql(OLDER_REVIEWS_QUERY, this.prVariables(cursor)));
     return connectionOf(get(pr, "reviews"), "reviews");
   }
 
   private olderThreadComments(threadId: string, cursor: string): Connection {
-    const body = this.graphql(OLDER_THREAD_COMMENTS_QUERY, { id: threadId, cursor });
+    const body = graphql(OLDER_THREAD_COMMENTS_QUERY, { id: threadId, cursor });
     return connectionOf(
       get(get(get(body, "data"), "node"), "comments"),
       `thread ${threadId} comments`,
@@ -320,7 +314,7 @@ class DetailReader {
       if (pageCount > MAX_THREAD_PAGES) {
         throw new GhError(`review-thread pagination did not end after ${MAX_THREAD_PAGES} pages`);
       }
-      const pr = pullRequestOf(this.graphql(DETAIL_QUERY, this.prVariables(cursor)));
+      const pr = pullRequestOf(graphql(DETAIL_QUERY, this.prVariables(cursor)));
       first ??= pr;
       unresolvedThreads += this.threads(pr, threadsRead, activities);
       threadsRead += nodesOf(get(pr, "reviewThreads"), "reviewThreads").length;
@@ -350,15 +344,7 @@ class DetailReader {
       (c) => this.olderReviews(c),
     );
     activities.push(...reviewActivities(reviews));
-    const commit = get(nodesOf(get(first, "commits"), "commits")[0], "commit");
-    const commitAuthor = get(get(get(commit, "author"), "user"), "login");
-    return {
-      lastCommitAuthor: typeof commitAuthor === "string" ? commitAuthor : null,
-      unresolvedThreads,
-      activities,
-      fetchedIds: this.fetchedIds,
-      gaps: this.gaps,
-    };
+    return { unresolvedThreads, activities, fetchedIds: this.fetchedIds, gaps: this.gaps };
   }
 }
 
@@ -374,17 +360,9 @@ export function readPrDetail(ref: PrRef, seen: Seen): PrDetail {
 export function newActivity(
   detail: PrDetail,
   seen: ReadonlySet<string>,
-  viewer: string,
+  viewer: string | null,
 ): Activity[] {
   return detail.activities
     .filter((activity) => activity.author !== viewer && !seen.has(activity.id))
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-}
-
-export function viewerLogin(): string {
-  const raw = gh(["api", "graphql", "-f", "query={ viewer { login } }"]);
-  return requireString(
-    get(get(get(parseJson(raw, "gh api graphql"), "data"), "viewer"), "login"),
-    "viewer.login",
-  );
 }

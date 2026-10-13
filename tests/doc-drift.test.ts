@@ -17,6 +17,7 @@ const FLEET_DOC = join(ROOT, "skills", "orchestrator-mode", "references", "fleet
 const FLEET_SCRIPTS = join(ROOT, "skills", "orchestrator-mode", "scripts");
 const RUBBER_DUCK = join(ROOT, "skills", "rubber-duck-review");
 const SESSION_EVENTS = join(ROOT, "skills", "session-events");
+const WATCH_GITHUB = join(ROOT, "skills", "watch-github");
 const WORKTREE_HYGIENE = join(ROOT, "skills", "worktree-hygiene");
 const CODEX_BROWSER_FIX = join(ROOT, "skills", "codex-browser-fix");
 
@@ -368,6 +369,90 @@ const SURFACES: Record<string, Surface> = {
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
         script: "`${owner.id ?? `${owner.pid}-${owner.start}`}.${source}`",
       },
+    ],
+  },
+  "watch-github/SKILL.md <-> github-events.mts": {
+    docPath: join(WATCH_GITHUB, "SKILL.md"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "github-events.mts"),
+    tokens: [
+      {
+        doc: "`install it beside this skill: npx skills add Vivswan/skills -g --skill session-events`",
+        script: 'const INSTALL = "npx skills add Vivswan/skills -g --skill session-events";',
+      },
+      {
+        doc: "github-events.mts watch <owner/repo>#<n> | <owner/repo>:<branch> [--expect-workflow <name>]... [--id <name>]",
+        script: "target must be <owner/repo>#<n> or <owner/repo>:<branch>, got:",
+      },
+      {
+        doc: { text: "--expect-workflow", occurrences: ">=1" },
+        script: 'throw new UsageError("--expect-workflow needs a workflow name");',
+      },
+      {
+        doc: "`--interval` is 60 s by default",
+        script: 'name: "github-events", interval: 60, idleInterval: 300',
+      },
+    ],
+  },
+  "watch-github/SKILL.md <-> targets/pr.mts": {
+    docPath: join(WATCH_GITHUB, "SKILL.md"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "targets", "pr.mts"),
+    tokens: [
+      {
+        doc: "`PR owner/repo#12 is not readable; unwatch it or check access`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label} is not readable; unwatch it or check access`,",
+      },
+      {
+        doc: "`PR owner/repo#12: merged into main`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label}: merged into ${row.baseRefName}`,",
+      },
+      {
+        doc: "`PR owner/repo#12: closed without merging`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label}: closed without merging`,",
+      },
+      {
+        doc: "`PR owner/repo#12: head moved to 1a2b3c4d5e6f; last commit by octocat`",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          'head moved to ${row.headRefOid.slice(0, 12)}; last commit by ${row.headAuthor ?? "an unknown author"}',
+      },
+      {
+        doc: "`PR owner/repo#12: review by octocat (CHANGES_REQUESTED), 3 comments`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: "text: `${label}: review by ${review.author} (${review.reviewState})${count}`,",
+      },
+      {
+        doc: "`PR owner/repo#12: 2 new comments by octocat at src/x.ts:41, src/y.ts:7`",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+        script: 'text: `${label}: ${plural(loose.length, "new comment")} by ${authors}${at}`,',
+      },
+    ],
+  },
+  "watch-github/SKILL.md <-> check-suites.mts": {
+    docPath: join(WATCH_GITHUB, "SKILL.md"),
+    scriptPath: join(WATCH_GITHUB, "scripts", "check-suites.mts"),
+    tokens: [
+      {
+        doc: "`PR owner/repo#12: CI green on 1a2b3c4d5e6f: 3 workflows`",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          'text: `${label}: CI green on ${short}: ${plural(verdict.latest.length, "workflow")}`,',
+      },
+      {
+        doc: "`PR owner/repo#12: CI settled on 1a2b3c4d5e6f with no run of checks; check the workflow name`",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          'text: `${label}: CI settled on ${short} with no run of ${verdict.gates.join(", ")}; check the workflow name`,',
+      },
+      {
+        doc: "`PR owner/repo#12: CI red on 1a2b3c4d5e6f: checks / check / Run tests`",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          'text: `${label}: CI red on ${short}: ${parts.length > 0 ? parts.join(", ") : "a check outside Actions"}${missing}`,',
+      },
+      { doc: "more than 100 check suites", script: "checkSuites(first: 100, after: $cursor)" },
     ],
   },
   "worktree-hygiene/SKILL.md <-> retire-branch.mts": {

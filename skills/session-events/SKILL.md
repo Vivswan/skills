@@ -10,7 +10,7 @@ metadata:
 
 One daemon per Claude Code session, started by the session as a background task, polls a system for the targets that session watches and delivers what changed as messages, one per poll, and as lines in a log any agent can read. What it polls is a source: a script of a few lines that says what a target is, how it is read, and what its events say.
 
-Two sources ship in this catalog: the `/watch-prs-and-ci` skill polls GitHub for PRs and CI, and `scripts/examples/log-source.mts` watches a file's size. A session writes its own source for anything else that must be polled.
+Two sources ship in this catalog: the `/watch-github` skill polls GitHub for PRs and branch tips, and `scripts/examples/log-source.mts` watches a file's size. A session writes its own source for anything else that must be polled.
 
 Operating envelope: one Claude Code session, one user, the daemon started once by that session, the polled system reachable.
 
@@ -70,7 +70,7 @@ runEvents<File>({
 ## When to Apply
 
 - A session is waiting on something outside it that has to be polled: a build log, a queue, a deployment, a ticket. One daemon polls; the session keeps working and reads the messages.
-- PRs and CI: the `/watch-prs-and-ci` skill, a source of this daemon with its own page. Start there, not here.
+- PRs, branch tips, and CI: the `/watch-github` skill, a source of this daemon with its own page. Start there, not here.
 - Writing a source: the contract below, with the file source as the worked example.
 
 ## The Source Contract
@@ -182,7 +182,7 @@ A file-sink daemon runs until `stop`. `--pid <pid>` ends it with that process in
 
 `wait` blocks in the foreground with a timeout under the tool's own cap, and prints the new lines and `cursor: <id>` on exit 0; pass that cursor as the next `--since`. Exit 4 is the timeout with nothing new: re-arm. Exit 3 is the daemon gone: start it again, then re-arm.
 
-In a fleet, the lead's inbox is not the sink: the user's client renders inbox frames as the user's own messages. A relay subagent runs a file-sink daemon as its background task and forwards each event by message; the `/orchestrator-mode` skill's `references/pr-relay.md` is that pattern, written for the GitHub source.
+In a fleet, the lead's inbox is not the sink: the user's client renders inbox frames as the user's own messages. A relay subagent runs a file-sink daemon as its background task and forwards each event by message; the `/orchestrator-mode` skill's `references/github-relay.md` is that pattern, written for the GitHub source.
 
 ## Gotchas
 
