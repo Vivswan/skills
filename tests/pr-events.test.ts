@@ -10,6 +10,7 @@ import {
 import { connect, createServer } from "node:net";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
+import { restoreSaved } from "../skills/watch-prs-and-ci/scripts/pr-state.mts";
 import { loadState, ownerFiles } from "../skills/watch-prs-and-ci/scripts/state.mts";
 import {
   BOUNDARY,
@@ -317,7 +318,7 @@ describe("pr-events.mts", () => {
       })}\n`,
     );
     expect(await replied).toBe('{"ok":false,"error":"daemon stopping; retry"}\n');
-    expect(JSON.parse(readFileSync(s.file("state.json"), "utf-8")).prs).toEqual({});
+    expect(JSON.parse(readFileSync(s.file("state.json"), "utf-8")).saved.prs).toEqual({});
   }, 30000);
 
   test("two polls seconds apart deliver two messages at least a second apart, so the receiver keeps both", async () => {
@@ -444,9 +445,9 @@ describe("pr-events.mts", () => {
     expect(existsSync(s.socketPath())).toBe(false);
     expect(headlines(await box.frames(2))).toHaveLength(2);
     expect(s.events().map((e) => e.sha)).toEqual([HEAD_A, HEAD_B]);
-    expect(Object.keys(JSON.parse(readFileSync(s.file("state.json"), "utf-8")).commits)).toEqual([
-      `${REPO}@${MERGE_C}`,
-    ]);
+    expect(
+      Object.keys(JSON.parse(readFileSync(s.file("state.json"), "utf-8")).saved.commits),
+    ).toEqual([`${REPO}@${MERGE_C}`]);
   }, 30000);
 
   test("two watches queued behind one poll each get their own read before they return", async () => {
@@ -1800,7 +1801,7 @@ describe("pr-events.mts", () => {
     await s.start({ inbox: box.path });
     expect(s.run(["watch-commit", REPO, HEAD_A, ...GATE_CI], { inbox: box.path }).code).toBe(0);
     const pending = readFileSync(s.file("state.json"), "utf-8");
-    expect(JSON.parse(pending).commits).toHaveProperty(`${REPO}@${HEAD_A}`);
+    expect(JSON.parse(pending).saved.commits).toHaveProperty(`${REPO}@${HEAD_A}`);
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
     expect(await box.frames(1)).toHaveLength(1);
     s.stop({ inbox: box.path });
@@ -1850,25 +1851,27 @@ describe("pr-events.mts", () => {
       files.state,
       JSON.stringify({
         lastEventId: 0,
-        commits: {
-          [`${REPO}@${HEAD_A}`]: {
-            repo: REPO,
-            sha: HEAD_A,
-            expected: ["ci"],
-            grace: { missingPolls: 0, registered: [] },
+        saved: {
+          commits: {
+            [`${REPO}@${HEAD_A}`]: {
+              repo: REPO,
+              sha: HEAD_A,
+              expected: ["ci"],
+              grace: { missingPolls: 0, registered: [] },
+            },
           },
+          rows: { [`${REPO}#7`]: pendingRow },
         },
-        rows: { [`${REPO}#7`]: pendingRow },
       }),
     );
     const line = (id: number, pr: number | null) =>
       `${JSON.stringify({ id, at: T1, repo: REPO, pr, sha: HEAD_A, kind: "ci", text: "CI green", url: "", runs: "1:completed:success" })}\n`;
     writeFileSync(files.events, line(1, null));
-    const afterCommitLine = loadState(files).state;
+    const afterCommitLine = loadState(files, null, restoreSaved).state.saved;
     expect(Object.keys(afterCommitLine.commits)).toEqual([]);
     expect(afterCommitLine.rows[`${REPO}#7`]?.ci.pending).toBe(true);
     appendFileSync(files.events, line(2, 7));
-    const afterPrLine = loadState(files).state;
+    const afterPrLine = loadState(files, null, restoreSaved).state.saved;
     // The line's runs come back with the verdict: a re-judgment seeing the same runs stays silent.
     expect(afterPrLine.rows[`${REPO}#7`]?.ci).toEqual({
       pending: false,

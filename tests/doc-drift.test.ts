@@ -296,14 +296,20 @@ const SURFACES: Record<string, Surface> = {
       },
     ],
   },
-  "watch-prs-and-ci/SKILL.md <-> pr-events.mts": {
+  "watch-prs-and-ci/SKILL.md <-> daemon.mts": {
     docPath: join(WATCH_PRS, "SKILL.md"),
-    scriptPath: join(WATCH_PRS, "scripts", "pr-events.mts"),
+    scriptPath: join(WATCH_PRS, "scripts", "daemon.mts"),
     tokens: [
       {
         doc: "pr-events.mts daemon [--interval <s>] [--id <name>] [--pid <pid>]",
         script: '"daemon [--interval <s>] [--id <name>] [--pid <pid>]"',
       },
+    ],
+  },
+  "watch-prs-and-ci/SKILL.md <-> pr-source.mts": {
+    docPath: join(WATCH_PRS, "SKILL.md"),
+    scriptPath: join(WATCH_PRS, "scripts", "pr-source.mts"),
+    tokens: [
       {
         doc: "pr-events.mts watch <owner/repo>#<n> [--head <sha>] [--expect-workflow <name>]... [--events <kinds>]... [--id <name>]",
         script:

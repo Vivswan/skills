@@ -13,106 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import type { PrKey, Row } from "./pr-rows.mts";
-
-export type EventKind = "comment" | "review" | "ci" | "head" | "merged" | "closed" | "trouble";
-
-/** The kinds a PR subscription can narrow to; `trouble` is tooling news and always comes. */
-export type SubscribedKind = Exclude<EventKind, "trouble">;
-export const ALL_SUBSCRIBED: readonly SubscribedKind[] = [
-  "comment",
-  "review",
-  "ci",
-  "head",
-  "merged",
-  "closed",
-];
-
-export function isSubscribedKind(value: string): value is SubscribedKind {
-  return (ALL_SUBSCRIBED as readonly string[]).includes(value);
-}
-
-/** One line of the write-ahead log; every line is addressed to the daemon's one owner. */
-export interface PrEvent {
-  id: number;
-  at: string;
-  repo: string;
-  pr: number | null;
-  sha: string | null;
-  kind: EventKind;
-  text: string;
-  url: string;
-  /** On a `ci` line: the GitHub Actions runs the verdict rests on, `id:status:conclusion:updatedAt` sorted and comma-joined. */
-  runs?: string;
-}
-
-export type EventInput = Omit<PrEvent, "id" | "at">;
-
-/** What the owner asked for on a PR: the head they pushed, the complete gate set, and the kinds they hear about, sorted. */
-export interface PrWatch {
-  head: string | null;
-  expected: string[];
-  events: SubscribedKind[];
-}
-
-/** `${repo}@${sha}`: a fork shares its commits' shas with the upstream repository. */
-export type CommitKey = string;
-
-export function commitKey(repo: string, sha: string): CommitKey {
-  return `${repo}@${sha}`;
-}
-
-/**
- * What a head still being judged carries between full polls: the polls in a row on which no run had
- * registered (the grace before a trouble event), and the workflow ids the last poll saw (a green
- * with no gate named is terminal only once two polls agree on that set). The read a `watch`
- * triggers leaves both alone.
- */
-export interface Grace {
-  missingPolls: number;
-  registered: string[];
-}
-
-export function freshGrace(): Grace {
-  return { missingPolls: 0, registered: [] };
-}
-
-export interface CommitWatch {
-  repo: string;
-  sha: string;
-  expected: string[];
-  firstSeenAt: string;
-  grace: Grace;
-}
-
-/** What a settled verdict said, so a rollup that only catches up with it is told from a new result. */
-export type CiOutcome = "green" | "red";
-
-/**
- * A settled judgment: what it said, and a fingerprint of the GitHub Actions runs it judged (id,
- * status, conclusion, last change), so a later re-judgment that sees the same runs says nothing new. A head
- * being judged again after a verdict (a rollup move) carries that verdict's runs as `priorRuns`
- * for as many polls as the re-judgment stays pending; null when nothing was delivered on the head.
- */
-export type RowCi =
-  | { pending: true; grace: Grace; priorRuns: string | null }
-  | { pending: false; outcome: CiOutcome; runs: string };
-
-export function pendingCi(priorRuns: string | null = null): RowCi {
-  return { pending: true, grace: freshGrace(), priorRuns };
-}
-
-export function outcomeOfVerdict(text: string): CiOutcome {
-  return text.startsWith("CI green") ? "green" : "red";
-}
-
-export interface SavedRow extends Row {
-  ci: RowCi;
-  /** The activity ids the last two detail reads returned, oldest read first; what is in neither is news. */
-  seenActivity: string[][];
-  /** Polls spent on a merged row whose merge commit GitHub has not reported yet. */
-  mergeCommitPolls: number;
-}
+import type { Event, EventInput } from "./source.mts";
 
 export interface Delivery {
   eventIds: number[];
@@ -129,29 +30,20 @@ export interface OwnerIncarnation {
   start: string;
 }
 
-export interface State {
+export interface State<Saved = unknown> {
   /** The session the saved targets belong to; a recycled pid with another start token is a stranger. */
   owner: OwnerIncarnation | null;
-  prs: Record<PrKey, PrWatch>;
-  commits: Record<CommitKey, CommitWatch>;
-  rows: Record<PrKey, SavedRow>;
   /** The last delivery to the owner's inbox, so `status` can show how it went. */
   delivery: Delivery | null;
   lastEventId: number;
   /** The newest poll's events, saved before they are appended to the log; a restart appends the ones the log lacks. */
-  lastPoll: PrEvent[];
+  lastPoll: Event[];
+  /** The source's own: its targets and what it saw of them. */
+  saved: Saved;
 }
 
-export function emptyState(): State {
-  return {
-    owner: null,
-    prs: {},
-    commits: {},
-    rows: {},
-    delivery: null,
-    lastEventId: 0,
-    lastPoll: [],
-  };
+function emptyState(): State<unknown> {
+  return { owner: null, delivery: null, lastEventId: 0, lastPoll: [], saved: undefined };
 }
 
 /**
@@ -230,10 +122,10 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   );
 }
 
-export interface LoadedState {
-  state: State;
+export interface LoadedState<Saved> {
+  state: State<Saved>;
   /** The saved poll's events the log lacks: the daemon died between saving the state and appending them. */
-  unlogged: PrEvent[];
+  unlogged: Event[];
   /** When the newest event was written, the unlogged ones included. */
   newestEventAt: string | null;
   /** The earlier session whose saved targets were set aside, when the pid was recycled. */
@@ -268,7 +160,7 @@ function tagOf(start: string): string {
   return start.replace(/[^A-Za-z0-9.]+/g, "-");
 }
 
-function readSavedState(files: OwnerFiles): State | null {
+function readSavedState(files: OwnerFiles): State<unknown> | null {
   let text: string;
   try {
     text = readFileSync(files.state, "utf-8");
@@ -285,20 +177,21 @@ function readSavedState(files: OwnerFiles): State | null {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`${files.state} is not an object; move it aside to start fresh`);
   }
-  const state = { ...emptyState(), ...(parsed as Partial<State>) };
-  // A subscription saved before kinds could be narrowed hears everything, as it did then.
-  for (const watch of Object.values(state.prs) as Array<Partial<PrWatch>>) {
-    watch.events ??= [...ALL_SUBSCRIBED].sort();
-  }
-  return state;
+  return { ...emptyState(), ...(parsed as Partial<State<unknown>>) };
 }
 
-// The state is the source of the log: an id is never reused, so the counter also clears any line
-// a log left by an earlier daemon carries past the saved state.
-export function loadState(
+/**
+ * The state is the source of the log: an id is never reused, so the counter also clears any line
+ * a log left by an earlier daemon carries past the saved state. `restore` is the source's: it gets
+ * its saved part as the last daemon left it (undefined on a fresh start) and the log lines past the
+ * saved counter, the other crash: a verdict appended, the daemon gone before the state that drops
+ * its target was saved.
+ */
+export function loadState<Saved, Input extends EventInput>(
   files: OwnerFiles,
-  incarnation: OwnerIncarnation | null = null,
-): LoadedState {
+  incarnation: OwnerIncarnation | null,
+  restore: (raw: unknown, logAhead: Event<Input>[]) => Saved,
+): LoadedState<Saved> {
   const saved = readSavedState(files);
   let state = saved ?? emptyState();
   let staleOwner: OwnerIncarnation | null = null;
@@ -323,39 +216,27 @@ export function loadState(
   const log = readEventsSince(files, 0);
   const logged = log.at(-1);
   const unlogged = state.lastPoll.filter((event) => event.id > (logged?.id ?? 0));
-  // The log ahead of the state is the other crash: a verdict appended, the daemon gone before the
-  // state that drops its target was saved. The log carries the verdict, so the target is settled.
-  // A line names its one target: a commit watch (no pr) or a PR; another watch on the same sha
-  // may require other gates, so it keeps its own judgment.
-  for (const event of log) {
-    if (event.id <= state.lastEventId || event.kind !== "ci" || event.sha === null) continue;
-    if (event.pr === null) {
-      delete state.commits[commitKey(event.repo, event.sha)];
-      continue;
-    }
-    const row = state.rows[`${event.repo}#${event.pr}`];
-    if (row && row.headRefOid === event.sha && row.ci.pending) {
-      row.ci = { pending: false, outcome: outcomeOfVerdict(event.text), runs: event.runs ?? "" };
-    }
-  }
+  // The log's lines are the source's own: it wrote them, so it reads them back in its shape.
+  const logAhead = log.filter((event) => event.id > state.lastEventId) as Event<Input>[];
+  const restored: State<Saved> = { ...state, saved: restore(state.saved, logAhead) };
   const newest = unlogged.at(-1) ?? logged;
-  state.lastEventId = Math.max(state.lastEventId, newest?.id ?? 0);
-  return { state, unlogged, newestEventAt: newest?.at ?? null, staleOwner, movedEvents };
+  restored.lastEventId = Math.max(restored.lastEventId, newest?.id ?? 0);
+  return { state: restored, unlogged, newestEventAt: newest?.at ?? null, staleOwner, movedEvents };
 }
 
-export function saveState(files: OwnerFiles, state: State): void {
+export function saveState(files: OwnerFiles, state: State<unknown>): void {
   const tmp = `${files.state}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, files.state);
 }
 
 /** The next event, numbered by the state's counter; `appendEvents` puts it in the log. */
-export function nextEvent(state: State, input: EventInput): PrEvent {
+export function nextEvent(state: State<unknown>, input: EventInput): Event {
   state.lastEventId += 1;
   return { id: state.lastEventId, at: new Date().toISOString(), ...input };
 }
 
-export function appendEvents(files: OwnerFiles, events: PrEvent[]): void {
+export function appendEvents(files: OwnerFiles, events: Event[]): void {
   if (events.length === 0) return;
   // A crash mid-append leaves a line without its newline; the next line must not glue onto it.
   const prefix = endsWithoutNewline(files.events) ? "\n" : "";
@@ -377,7 +258,7 @@ function endsWithoutNewline(path: string): boolean {
 }
 
 /** Every logged event with an id above `sinceId`, oldest first. A line cut short by a crash is skipped. */
-export function readEventsSince(files: OwnerFiles, sinceId: number): PrEvent[] {
+export function readEventsSince(files: OwnerFiles, sinceId: number): Event[] {
   let text: string;
   try {
     text = readFileSync(files.events, "utf-8");
@@ -385,7 +266,7 @@ export function readEventsSince(files: OwnerFiles, sinceId: number): PrEvent[] {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  const events: PrEvent[] = [];
+  const events: Event[] = [];
   for (const line of text.split("\n")) {
     if (line === "") continue;
     let parsed: unknown;
@@ -394,12 +275,8 @@ export function readEventsSince(files: OwnerFiles, sinceId: number): PrEvent[] {
     } catch {
       continue;
     }
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      typeof (parsed as PrEvent).id === "number"
-    ) {
-      const event = parsed as PrEvent;
+    if (typeof parsed === "object" && parsed !== null && typeof (parsed as Event).id === "number") {
+      const event = parsed as Event;
       if (event.id > sinceId) events.push(event);
     }
   }
