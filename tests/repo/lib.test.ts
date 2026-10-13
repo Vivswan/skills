@@ -1,3 +1,4 @@
+// reaches: skills/*/SKILL.md
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
