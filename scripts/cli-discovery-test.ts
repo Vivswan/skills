@@ -13,8 +13,9 @@
 
 import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { SKILLS_CLI_VERSION } from "../.github/actions/validate-skills/validate_skills";
-import { checkListing, stripAnsi } from "./cli-discovery-checks";
+import { checkListing } from "./cli-discovery-checks";
 import {
   fail,
   KEBAB_CASE,
@@ -61,7 +62,7 @@ function main(): void {
     timeout: 300_000,
   });
   if (proc.error) fail(`npx skills failed to launch: ${proc.error.message}`);
-  const output = stripAnsi(`${proc.stdout ?? ""}\n${proc.stderr ?? ""}`);
+  const output = stripVTControlCharacters(`${proc.stdout ?? ""}\n${proc.stderr ?? ""}`);
   if (proc.status !== 0) fail(`npx skills exited with ${proc.status}:\n${output}`);
 
   checkListing(expected, groupTitle, templateName, output, groups);

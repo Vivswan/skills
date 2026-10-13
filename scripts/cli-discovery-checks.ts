@@ -14,18 +14,8 @@
  * nearest group heading above it - and every assertion runs against rows.
  */
 
+import { stripVTControlCharacters } from "node:util";
 import { fail, KEBAB_CASE } from "./lib";
-
-const ESC = String.fromCharCode(27);
-const BEL = String.fromCharCode(7);
-// ECMA-48 shapes: CSI is parameter bytes 0x30-0x3F, intermediates 0x20-0x2F,
-// one final byte 0x40-0x7E; OSC runs to BEL or the ESC \ string terminator.
-const CSI_SEQUENCE = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "g");
-const OSC_SEQUENCE = new RegExp(`${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`, "g");
-
-export function stripAnsi(text: string): string {
-  return text.replace(CSI_SEQUENCE, "").replace(OSC_SEQUENCE, "");
-}
 
 export interface ListingRow {
   readonly name: string;
@@ -59,7 +49,7 @@ const HEADING = /^[!-~][ -~]*$/;
 export function listingRows(output: string): ListingRow[] {
   const rows: ListingRow[] = [];
   let group = "";
-  for (const line of stripAnsi(output).split("\n")) {
+  for (const line of stripVTControlCharacters(output).split("\n")) {
     const row = ROW.exec(line);
     if (row?.[1] !== undefined) {
       rows.push({ name: row[1], group });

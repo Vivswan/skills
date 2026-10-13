@@ -33,6 +33,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
+import { parseArgs } from "node:util";
 import { Document, isMap, parse, parseDocument } from "yaml";
 import { ROOT, XENO_DIR } from "./lib";
 
@@ -728,22 +729,18 @@ const USAGE = [
 ].join("\n");
 
 if (import.meta.main) {
-  const args = process.argv.slice(2);
   let checkOnly = false;
   let reportFile: string | undefined;
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === "--check") checkOnly = true;
-    else if (arg === "--report") {
-      reportFile = args[++index];
-      if (reportFile === undefined) {
-        console.error(`--report needs a file\n${USAGE}`);
-        process.exit(2);
-      }
-    } else {
-      console.error(`unknown argument ${arg}\n${USAGE}`);
-      process.exit(2);
-    }
+  try {
+    const { values } = parseArgs({
+      options: { check: { type: "boolean" }, report: { type: "string" } },
+      allowPositionals: false,
+    });
+    checkOnly = values.check ?? false;
+    reportFile = values.report;
+  } catch (error) {
+    console.error(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
+    process.exit(2);
   }
   let reports: Report[];
   try {

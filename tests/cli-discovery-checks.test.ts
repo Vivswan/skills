@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { checkListing, listingRows, stripAnsi } from "../scripts/cli-discovery-checks";
+import { stripVTControlCharacters } from "node:util";
+import { checkListing, listingRows } from "../scripts/cli-discovery-checks";
 import { CheckFailure } from "../scripts/lib";
 
 // Incident-class tests for the CLI discovery checks. The old checks searched
@@ -57,7 +58,7 @@ describe("listingRows", () => {
   test("parses through ANSI decoration without a separate strip step", () => {
     const decorated = `${GROUP}\n${GUTTER}    ${ESC}[36mcode-standards${ESC}[39m\n`;
     expect(listingRows(decorated)).toEqual([{ name: "code-standards", group: GROUP }]);
-    expect(listingRows(stripAnsi(decorated))).toEqual(listingRows(decorated));
+    expect(listingRows(stripVTControlCharacters(decorated))).toEqual(listingRows(decorated));
   });
 
   test("a hyperlinked row name (OSC 8, BEL- or ESC-backslash-terminated) still parses", () => {
