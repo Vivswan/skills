@@ -1,3 +1,4 @@
+// reaches: skills/working-text/scripts/docs-probe.mts
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";

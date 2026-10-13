@@ -1,23 +1,28 @@
 #!/usr/bin/env bun
 // The targeted gate the pre-commit hook runs: the fast static checks always, then only the test
-// files a staged file can reach (by import, by name in the test's text, or by a glob the test's
-// `// reaches:` line declares). The full suite is CI's (checks.yml runs `bun run check`
-// on every push and PR), so a commit here stays seconds long.
+// files a staged file can reach (by import, by its skill's test folder, by its file name in the
+// test's text, or by a glob the test's `// reaches:` line declares). The full suite is CI's
+// (checks.yml runs `bun run check` on every push and PR), so a commit here stays seconds long.
 //   check-staged.mts               staged paths read from the index, deletions included (a deleted
 //                                  script's test still runs, and fails, which is the point)
 //   check-staged.mts <paths...>    the hook passes them, read before it scrubs GIT_INDEX_FILE
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
-import { basename, dirname, extname, join, normalize, relative } from "node:path";
+import { basename, dirname, join, normalize, relative } from "node:path";
 import { ROOT } from "./lib.mts";
 
 export const STATIC_CHECKS = ["typecheck", "lint", "check:docs", "validate", "smoke"] as const;
 
-/** A path's file name without its last extension: scripts/sync-xeno.mts -> sync-xeno, SKILL.md -> SKILL. */
-export function stem(path: string): string {
-  const name = basename(path);
-  return name.slice(0, name.length - extname(name).length);
+/** The file-name-shaped tokens of a test's text: `retire/read.mts` holds `read.mts`, `reread.mts` and `read` do not. */
+export function nameTokens(text: string): Set<string> {
+  return new Set(text.match(/[\w.-]+/g));
+}
+
+/** The tests folder a skill's files select: skills/<skill>/... -> tests/skills/<skill>/, undefined off the skills tree. */
+export function skillTestDir(path: string): string | undefined {
+  const match = /^skills\/([^/]+)\//.exec(path);
+  return match ? `tests/skills/${match[1]}/` : undefined;
 }
 
 /** The launcher every test runs under; a change anywhere in its import closure reaches every test. */
@@ -53,11 +58,10 @@ function closure(roots: readonly string[], files: ReadonlyMap<string, string>): 
 }
 
 /**
- * The test files to run for a staging: every staged test; every test whose import closure reaches a
- * staged file; every test whose text names a staged file's stem (a script a test runs by path, a
- * SKILL.md a doc test pins); every test whose `// reaches:` line declares a glob a staged path matches
- * (a test that discovers pages or scripts by pattern). A staged file in the launcher's closure selects
- * every test. A stem under three characters names too little to select by.
+ * The test files the pre-commit hook runs for a staging. A skill's files select the skill's test folder
+ * rather than tests naming them: skill scripts share names (lib.mts) and generic stems (read, page), and
+ * the name rule once selected most of the suite for them. A test that reads outside its imports and its
+ * folder declares what it reads on its first line (reachesOf).
  */
 export function selectTests(
   staged: readonly string[],
@@ -71,14 +75,19 @@ export function selectTests(
   if (staged.some((p) => launcher.has(p) || (LAUNCHER_ROOTS as readonly string[]).includes(p))) {
     return tests;
   }
-  const stems = [...new Set(staged.map(stem))].filter((s) => s.length >= 3);
-  return tests.filter(
-    (t) =>
+  const skillDirs = staged.map(skillTestDir).filter((d): d is string => d !== undefined);
+  const names = staged.filter((p) => skillTestDir(p) === undefined).map((p) => basename(p));
+  return tests.filter((t) => {
+    const text = files.get(t) as string;
+    const tokens = nameTokens(text);
+    return (
       stagedSet.has(t) ||
       [...closure([t], files)].some((f) => stagedSet.has(f)) ||
-      stems.some((s) => (files.get(t) as string).includes(s)) ||
-      reachesOf(files.get(t) as string).some((g) => staged.some((p) => new Bun.Glob(g).match(p))),
-  );
+      skillDirs.some((d) => t.startsWith(d)) ||
+      names.some((n) => tokens.has(n)) ||
+      reachesOf(text).some((g) => staged.some((p) => new Bun.Glob(g).match(p)))
+    );
+  });
 }
 
 const REACHES = /^\/\/ reaches: (.+)$/;

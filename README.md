@@ -216,7 +216,7 @@ The pre-commit hook runs the targeted checks on every commit; run them by hand w
 bun run check:staged
 ```
 
-That runs the static checks listed in [`scripts/check-staged.mts`](./scripts/check-staged.mts), then only the tests a staged file reaches, by import or by name in the test's text.
+That runs the static checks listed in [`scripts/check-staged.mts`](./scripts/check-staged.mts), then only the tests a staged file reaches, by import, by its skill's test folder, by file name in the test's text, or by a glob the test's first line declares.
 
 CI runs the full `bun run check` (its steps are the `check` script in [`package.json`](./package.json)) through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery.mts`](./scripts/cli-discovery.mts)).
 
