@@ -318,12 +318,13 @@ export function closingLine(name: string): string {
   return `automated notice from ${name}; no reply needed`;
 }
 
-/** The digest inside a frame's peer envelope: the envelope names the frame's own sender. */
-export function digest(raw: string, name: string): string {
+/** The digest inside a frame's peer envelope: the envelope names the frame's own sender and its mode. */
+export function digest(raw: string, name: string, mode = "bypass"): string {
   const frame = parseFrame(raw);
   const lines = frame.message.content.split("\n");
+  expect(frame.from_mode).toBe(mode);
   expect(lines[0]).toBe(
-    `<cross-session-message from="${attribute(frame.from as string)}" from-name="${name}">`,
+    `<cross-session-message from="${attribute(frame.from as string)}" from-name="${name}" from-mode="${mode}">`,
   );
   expect(lines.at(-1)).toBe("</cross-session-message>");
   return lines.slice(1, -1).join("\n");

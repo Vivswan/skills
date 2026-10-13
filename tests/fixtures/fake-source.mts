@@ -44,7 +44,8 @@ function pollsSoFar(): number {
 }
 
 runEvents<Target>({
-  name: "fake-events",
+  // A test gives the daemon a name it must refuse.
+  name: process.env.FAKE_SOURCE_NAME ?? "fake-events",
   interval: 1,
   idleInterval: 3,
   parseTarget([name, ...flags]) {
@@ -62,9 +63,10 @@ runEvents<Target>({
     );
     const fixture = readFixture(n);
     if (fixture.sleepMs !== undefined) await Bun.sleep(fixture.sleepMs);
-    if (fixture.fail !== undefined) throw new Error(fixture.fail);
-    // The cursor a real source keeps: how many polls have seen each target.
+    // The cursor a real source keeps: how many polls have seen each target. Moved before a
+    // failure throws, the way a careless source would: the daemon must not save it.
     for (const target of Object.values(targets)) target.polls += 1;
+    if (fixture.fail !== undefined) throw new Error(fixture.fail);
     return { events: fixture.events ?? [], busy: fixture.busy ?? false };
   },
 });

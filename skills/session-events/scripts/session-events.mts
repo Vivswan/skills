@@ -12,7 +12,15 @@ import { once } from "node:events";
 import { appendFileSync, chmodSync, existsSync, rmSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
-import { deliver, envelope, type InboxFrame, isProcessAlive, pidOf, startToken } from "./inbox.mts";
+import {
+  deliver,
+  envelope,
+  type InboxFrame,
+  isProcessAlive,
+  type Mode,
+  pidOf,
+  startToken,
+} from "./inbox.mts";
 import {
   appendEvents,
   type Event,
@@ -132,13 +140,14 @@ interface Context<Target extends object> {
 function usageText(entry: string, source: Source<object>): string {
   return [
     `usage: ${entry} <command> [options]`,
-    "  daemon [--interval <s>] [--id <name> [--pid <pid>]]",
+    "  daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]",
     "  watch <target> [the source's flags] [--id <name>]",
     "  unwatch <target> | --all [--id <name>]",
     "  wait [--since <id>] [--timeout <s>] [--id <name>]",
     "  poll | status | stop [--id <name>]",
     "the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET and exits with it;",
     "--id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;",
+    "--mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;",
     `--interval is ${source.interval} s by default, ${MIN_INTERVAL_SECONDS} to ${MAX_INTERVAL_SECONDS}`,
   ].join("\n");
 }
@@ -432,7 +441,11 @@ async function daemon<Target extends object>(
 ): Promise<number> {
   const owner = resolveOwner(takeValue(args, "id"), takeValue(args, "pid"));
   const interval = parsePositiveInt(takeValue(args, "interval"), "--interval");
+  const mode = takeValue(args, "mode") ?? "bypass";
   positionals(args, 0);
+  if (mode !== "bypass" && mode !== "prompting") {
+    usage(`--mode must be bypass or prompting, got: ${mode}`);
+  }
   if (
     interval !== undefined &&
     (interval < MIN_INTERVAL_SECONDS || interval > MAX_INTERVAL_SECONDS)
@@ -443,7 +456,7 @@ async function daemon<Target extends object>(
   }
   const busy = interval ?? ctx.source.interval;
   const idle = Math.max(busy, ctx.source.idleInterval ?? busy);
-  return runDaemon(ctx, owner, filesOf(ctx, owner), busy, idle);
+  return runDaemon(ctx, owner, filesOf(ctx, owner), busy, idle, mode);
 }
 
 // --- daemon -------------------------------------------------------------------
@@ -508,6 +521,7 @@ async function runDaemon<Target extends object>(
   files: Files,
   busyInterval: number,
   idleInterval: number,
+  mode: Mode,
 ): Promise<number> {
   const { source } = ctx;
   const log = (line: string) => appendFileSync(files.log, `${new Date().toISOString()} ${line}\n`);
@@ -524,7 +538,7 @@ async function runDaemon<Target extends object>(
     rmSync(files.socket, { force: true });
     throw new ToolingError(errorText(error));
   }
-  const banner = `${source.name} daemon ${process.pid} for ${describeOwner(owner)}; socket ${files.socket}; log ${files.log}; poll every ${busyInterval} s busy, ${idleInterval} s idle`;
+  const banner = `${source.name} daemon ${process.pid} for ${describeOwner(owner)}; socket ${files.socket}; log ${files.log}; poll every ${busyInterval} s busy, ${idleInterval} s idle; mode ${mode}`;
   console.log(banner);
   log(banner);
 
@@ -568,9 +582,13 @@ async function runDaemon<Target extends object>(
     const from = `uds:${files.socket}`;
     const frame: InboxFrame = {
       type: "user",
-      message: { role: "user", content: envelope(from, source.name, digest(source.name, events)) },
+      message: {
+        role: "user",
+        content: envelope(from, source.name, mode, digest(source.name, events)),
+      },
       from,
       from_name: source.name,
+      from_mode: mode,
       msg_id: `${source.name}-${(events[0] as Event).id}-${randomUUID()}`,
     };
     try {
@@ -581,10 +599,16 @@ async function runDaemon<Target extends object>(
     }
   };
 
+  // The source works on a copy: a poll that throws has moved nothing, and a `watch` or `unwatch`
+  // served while the poll ran is not undone when its cursors come back. Each polled target's
+  // cursor lands on the current map if the very object polled is still there; one the source
+  // dropped (a merged PR) goes; one watched or replaced meanwhile stays as the watch left it.
   const poll = async (): Promise<number> => {
     let result: PollResult;
+    const polled = new Map(Object.entries(state.targets));
+    const working = structuredClone(state.targets);
     try {
-      result = await source.poll(state.targets, { log });
+      result = await source.poll(working, { log });
     } catch (error) {
       failures += 1;
       log(`poll failed (${failures} in a row): ${errorText(error)}`);
@@ -601,6 +625,11 @@ async function runDaemon<Target extends object>(
       return trouble.length;
     }
     failures = 0;
+    for (const [key, original] of polled) {
+      if (state.targets[key] !== original) continue;
+      if (Object.hasOwn(working, key)) state.targets[key] = working[key] as Target;
+      else delete state.targets[key];
+    }
     nextInterval = result.busy ? busyInterval : idleInterval;
     const events = number(result.events);
     commit(events);

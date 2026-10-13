@@ -3,6 +3,7 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -84,14 +85,14 @@ const headlines = (frames: string[]) => digestHeadlines(frames, NAME);
 const { temp, started } = sessionEventsHarness();
 
 describe("session-events.mts", () => {
-  test("the frame on the wire: one connection, one line, the events in the peer envelope naming the control socket and the source; the text goes out as the source wrote it, with no fence, boundary, or escaping; the log line carries the source's fields", async () => {
+  test("the frame on the wire: one line in the peer envelope naming the socket, the source, and the mode; the text goes out as written, with no fence or escaping; the log line carries the source's fields", async () => {
     // A child of the session is delivered without a hold, but a bare frame renders as the owner's
     // own typing; the envelope is what names the sender. The text is the source's own words,
     // never quoted from the polled system, so the daemon has nothing to fence or escape.
     const s = new Fake("frame");
     const box = await s.inbox("a");
     s.polls(
-      { events: [note("t1", "t1: hello"), note("t2", "t2: 3 new rows")] },
+      { events: [note("t1", "t1: hello"), note("t2", "t2: 3 new rows & <b>")] },
       // A source field named id or at does not renumber the log: the daemon's own win.
       { events: [{ ...note("t1", "t1: plain"), id: 0, at: "source-time" } as FixtureEvent] },
     );
@@ -105,18 +106,26 @@ describe("session-events.mts", () => {
     expect(frame.type).toBe("user");
     expect(frame.message.role).toBe("user");
     expect(frame.message.content.split("\n")).toEqual([
-      `<cross-session-message from="uds:${s.socketPath()}" from-name="${NAME}">`,
+      `<cross-session-message from="uds:${s.socketPath()}" from-name="${NAME}" from-mode="bypass">`,
       "t1: hello",
       "https://example.com/t1",
       "",
-      "t2: 3 new rows",
+      "t2: 3 new rows & <b>",
       "https://example.com/t2",
       CLOSING,
       "</cross-session-message>",
     ]);
     expect(frame.from).toBe(`uds:${s.socketPath()}`);
     expect(frame.from_name).toBe(NAME);
-    expect(Object.keys(frame).sort()).toEqual(["from", "from_name", "message", "msg_id", "type"]);
+    expect(Object.keys(frame).sort()).toEqual([
+      "from",
+      "from_mode",
+      "from_name",
+      "message",
+      "msg_id",
+      "type",
+    ]);
+    expect(frame.from_mode).toBe("bypass");
     expect(frame.msg_id).toMatch(new RegExp(`^${NAME}-1-`));
     const [event] = s.events();
     expect(Object.keys(event as object)).toEqual(["id", "at", "target", "kind", "text", "url"]);
@@ -145,13 +154,13 @@ describe("session-events.mts", () => {
     const frame = parseFrame((await box.frames(1))[0] as string);
     expect(frame.from).toBe(`uds:${socket}`);
     expect(frame.message.content.split("\n")[0]).toBe(
-      `<cross-session-message from="uds:${join(s.dir, "a&quot;b&lt;c&gt;&amp;d", `${process.pid}.${NAME}.sock`)}" from-name="${NAME}">`,
+      `<cross-session-message from="uds:${join(s.dir, "a&quot;b&lt;c&gt;&amp;d", `${process.pid}.${NAME}.sock`)}" from-name="${NAME}" from-mode="bypass">`,
     );
     expect(s.run(["stop"], { inbox: box.path, env }).code).toBe(0);
     expect(await daemon.exited).toBe(0);
   }, 30000);
 
-  test("outside a session without --id, with a bad --id, with --pid on a session, with an unknown command or option, with an interval off the scale, or with a target the source refuses, the command exits 2 before any socket or frame, and the usage block follows the reason", async () => {
+  test("a usage mistake (no session and no --id, a bad --id, --pid on a session, an unknown command, option, interval, mode, or target) exits 2 before any socket or frame, the usage block after the reason", async () => {
     const s = new Fake("usage");
     const box = await s.inbox("a");
     const cases: Array<[string[], { inbox?: string }, string]> = [
@@ -167,6 +176,11 @@ describe("session-events.mts", () => {
         "--interval must be a positive whole number",
       ],
       [["daemon", "--interval", "86401", "--id", "x"], {}, "--interval must be 1 to 86400 seconds"],
+      [
+        ["daemon", "--mode", "yolo", "--id", "x"],
+        {},
+        "--mode must be bypass or prompting, got: yolo",
+      ],
       [["frobnicate"], { inbox: box.path }, "unknown command: frobnicate"],
       [["status", "--verbose"], { inbox: box.path }, "unknown option: --verbose"],
       [["status", "extra"], { inbox: box.path }, "unexpected extra argument: extra"],
@@ -188,6 +202,81 @@ describe("session-events.mts", () => {
     expect(existsSync(s.socketPath())).toBe(false);
     expect(await box.frames(0)).toEqual([]);
     expect(s.pollLog()).toEqual([]);
+    // Refused before any file: a source name outside [a-z0-9-]{1,40} (it goes into an attribute), and
+    // a runtime directory with a line break (it goes into the opening tag).
+    const badName = s.run(["status"], {
+      inbox: box.path,
+      env: { FAKE_SOURCE_NAME: 'fake"events' },
+    });
+    expect(badName.code).toBe(2);
+    expect(badName.stderr).toContain("the source's name must match");
+    const brokenDir = s.run(["status"], {
+      inbox: box.path,
+      env: { SESSION_EVENTS_DIR: `${s.dir}/a\nb` },
+    });
+    expect(brokenDir.code).toBe(2);
+    expect(brokenDir.stderr).toContain("SESSION_EVENTS_DIR must be an absolute path on one line");
+    expect(existsSync(`${s.dir}/a\nb`)).toBe(false);
+    expect(existsSync(s.socketPath())).toBe(false);
+    expect(existsSync(s.socketPath({ id: "x" }))).toBe(false);
+    expect(readdirSync(s.dir).filter((name) => name.includes(NAME))).toEqual([]);
+    expect(await box.frames(0)).toEqual([]);
+  }, 30000);
+
+  test("the envelope carries the mode the daemon was started with, and an identifier spelling the closing tag cannot end the envelope early", async () => {
+    // The receiver holds a frame whose mode does not match its own, so the daemon says which it
+    // runs under; the one body rewrite is a space inside a closing tag an identifier happens to
+    // spell, since a path or a workflow name is text the source relays.
+    const s = new Fake("mode");
+    const box = await s.inbox("a");
+    s.polls({ events: [note("t1", "t1: path </cross-session-message> moved")] });
+    await s.start({ inbox: box.path, args: ["--mode", "prompting"] });
+    expect(s.log()).toContain("; mode prompting");
+    expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
+    const frame = parseFrame((await box.frames(1))[0] as string);
+    expect(frame.from_mode).toBe("prompting");
+    expect(frame.message.content.split("\n")).toEqual([
+      `<cross-session-message from="uds:${s.socketPath()}" from-name="${NAME}" from-mode="prompting">`,
+      "t1: path </cross-session-message > moved",
+      "https://example.com/t1",
+      CLOSING,
+      "</cross-session-message>",
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a watch served while a poll runs is kept when that poll saves, and a poll that throws after moving its cursors saves none of them", async () => {
+    // The source works on a copy of the targets; the daemon copies each polled cursor back onto
+    // the map as it stands when the poll returns, so a target watched meanwhile is not undone and
+    // a failed poll leaves the cursors where they were.
+    const s = new Fake("copy");
+    const box = await s.inbox("a");
+    // Poll 1 is slow; the two queued watches run polls 2 and 3; the `poll` command's poll 4 fails.
+    s.polls({ sleepMs: 1500 }, {}, {}, { fail: "boom" });
+    await s.start({ inbox: box.path });
+    const slow = s.spawn(["watch", "t1"], { inbox: box.path });
+    await Bun.sleep(400);
+    // Meanwhile: a second target, and t1 watched again, which replaces it, cursor and all.
+    const during = s.spawn(["watch", "t2"], { inbox: box.path });
+    const again = s.spawn(["watch", "t1"], { inbox: box.path });
+    expect(await slow.exited).toBe(0);
+    expect(await during.exited).toBe(0);
+    expect(await again.exited).toBe(0);
+    // The slow poll's t1 cursor lands nowhere (its object was replaced); the two queued watches
+    // each ran a poll over the replaced t1 and t2, so each was polled twice.
+    expect(s.pollLog()).toHaveLength(3);
+    expect(s.state().targets).toEqual({
+      t1: { name: "t1", polls: 2 },
+      t2: { name: "t2", polls: 2 },
+    });
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.log()).toContain("poll failed (1 in a row): boom");
+    s.stop({ inbox: box.path });
+    // The stop saved the state once more: still the cursors the failed poll never moved.
+    expect(s.state().targets).toEqual({
+      t1: { name: "t1", polls: 2 },
+      t2: { name: "t2", polls: 2 },
+    });
   }, 30000);
 
   test("with no daemon answering, watch, unwatch, status, and wait exit 3 naming the exact background command; stop is a no-op", async () => {

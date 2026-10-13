@@ -302,8 +302,18 @@ const SURFACES: Record<string, Surface> = {
     scriptPath: join(SESSION_EVENTS, "scripts", "session-events.mts"),
     tokens: [
       {
-        doc: "<source.mts> daemon [--interval <s>] [--id <name> [--pid <pid>]]",
-        script: '"  daemon [--interval <s>] [--id <name> [--pid <pid>]]"',
+        doc: "<source.mts> daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]",
+        script: '"  daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]"',
+      },
+      {
+        doc: "`bypass` (the default); one that asks is `prompting`",
+        script:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
+          "usage(`--mode must be bypass or prompting, got: ${mode}`);",
+      },
+      {
+        doc: 'from-mode="<mode>"',
+        script: "from_mode: mode,",
       },
       {
         doc: "<source.mts> watch <target> [the source's flags] [--id <name>]",

@@ -76,9 +76,9 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   const uid = process.getuid?.() ?? 0;
   const candidates: string[] = [];
   if (env.SESSION_EVENTS_DIR) {
-    if (!isAbsolute(env.SESSION_EVENTS_DIR)) {
+    if (!isAbsolute(env.SESSION_EVENTS_DIR) || /[\r\n]/.test(env.SESSION_EVENTS_DIR)) {
       throw new RuntimeDirError(
-        `SESSION_EVENTS_DIR must be an absolute path, got: ${env.SESSION_EVENTS_DIR}`,
+        `SESSION_EVENTS_DIR must be an absolute path on one line, got: ${JSON.stringify(env.SESSION_EVENTS_DIR)}`,
       );
     }
     candidates.push(env.SESSION_EVENTS_DIR);

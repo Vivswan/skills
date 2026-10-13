@@ -9,11 +9,15 @@ import { connect } from "node:net";
 import { basename } from "node:path";
 import { finished } from "node:stream/promises";
 
+/** The sending session's permission mode, as the receiver compares it with its own. */
+export type Mode = "bypass" | "prompting";
+
 export interface InboxFrame {
   type: "user";
   message: { role: "user"; content: string };
   from: string;
   from_name: string;
+  from_mode: Mode;
   msg_id: string;
 }
 
@@ -29,12 +33,17 @@ function attribute(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
+const CLOSER = "</cross-session-message>";
+
 /**
- * The text in the peer envelope the receiving session renders with the sender's name. The text is
- * the source's own words, never quoted from the polled system, so nothing in it is escaped.
+ * The text in the peer envelope the receiving session renders as a named sender: the envelope
+ * with its mode is the one frame shape measured to render so. The text is the source's own words,
+ * never quoted from the polled system; an identifier the source relays (a path, a workflow name)
+ * that spells the closing tag gets a space before its bracket, so the envelope ends once.
  */
-export function envelope(from: string, fromName: string, text: string): string {
-  return `<cross-session-message from="${attribute(from)}" from-name="${attribute(fromName)}">\n${text}\n</cross-session-message>`;
+export function envelope(from: string, fromName: string, mode: Mode, text: string): string {
+  const body = text.replaceAll(CLOSER, `${CLOSER.slice(0, -1)} >`);
+  return `<cross-session-message from="${attribute(from)}" from-name="${attribute(fromName)}" from-mode="${mode}">\n${body}\n${CLOSER}`;
 }
 
 // A delivery is complete once the line is flushed and the write side closed; whether the receiver

@@ -26,7 +26,7 @@ bun "<skill-dir>/scripts/examples/log-source.mts" watch /var/log/build.log
 The session goes back to work. The build appends a line, and the next poll delivers this frame to the session's inbox, which renders it as a message from `log-events`:
 
 ```text
-<cross-session-message from="uds:/run/user/1000/session-events/4242.log-events.sock" from-name="log-events">
+<cross-session-message from="uds:/run/user/1000/session-events/4242.log-events.sock" from-name="log-events" from-mode="bypass">
 /var/log/build.log: 0 to 1097 bytes
 file:///var/log/build.log
 automated notice from log-events; no reply needed
@@ -99,7 +99,7 @@ Rules a poll keeps:
 ## Commands
 
 ```text
-<source.mts> daemon [--interval <s>] [--id <name> [--pid <pid>]]
+<source.mts> daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]
 <source.mts> watch <target> [the source's flags] [--id <name>]
 <source.mts> unwatch <target> | --all [--id <name>]
 <source.mts> wait [--since <id>] [--timeout <s>] [--id <name>]
@@ -113,14 +113,15 @@ Rules a poll keeps:
 | 3 | no daemon answers for this session: stderr names the socket and the exact background command that starts one |
 | 4 | `wait` only: the timeout passed with no newer line |
 
-`watch` saves the target and polls at once, so it returns after that poll. A second `watch` of the same text replaces the target, cursor included. `poll` runs one poll now, for tests and debugging. `--interval` moves the busy interval; the idle one never drops below it.
+`watch` saves the target and polls at once, so it returns after that poll. A second `watch` of the same text replaces the target, cursor included. `poll` runs one poll now, for tests and debugging. `--interval` moves the busy interval; the idle one never drops below it. `--mode` is the session's permission mode (below), `bypass` by default.
 
 ## The Envelope and the Text
 
 A frame to a session's inbox is user-role text: the same channel the owner types in, with no data channel. Two rules follow.
 
-- **The envelope names the sender.** A bare frame renders as the owner's own typing. The daemon wraps every message in `<cross-session-message from="uds:<socket>" from-name="<source name>">` ... `</cross-session-message>`; the attribute values escape `&`, `"`, `<`, and `>`.
-- **Nothing in the text is quoted from the polled system.** A comment body or a log line in a message would read as something the owner wrote, so a source never puts one there: it says what moved and where (an identifier, a count, a state, a URL), and the reader opens the URL. With nothing quoted there is nothing to fence or escape.
+- **The envelope names the sender and its mode.** The daemon wraps every message in `<cross-session-message from="uds:<socket>" from-name="<source name>" from-mode="<mode>">` ... `</cross-session-message>`, with `from_mode` on the frame too; measured against the other frame shapes, this is the one the client renders as a named sender. The attribute values escape `&`, `"`, `<`, and `>`.
+- **The mode is the session's permission mode.** A session that bypasses permission prompts is `bypass` (the default); one that asks is `prompting`. The receiver holds a frame whose mode does not match its own, so start the daemon with the mode of the session it serves.
+- **Nothing in the text is quoted from the polled system.** A comment body or a log line in a message would read as something the owner wrote, so a source never puts one there: it says what moved and where (an identifier, a count, a state, a URL). An identifier that spells the closing tag gets a space before its bracket; nothing else in the body is rewritten.
 
 The daemon is the session's own child, so its frames are delivered with no permission hold, and it exits on its own when the session does. Started detached (`nohup`, `setsid`, `disown`, a shell that exits), it is a cross-session sender and every message is held (Gotchas below).
 
@@ -182,7 +183,7 @@ A file-sink daemon runs until `stop`. `--pid <pid>` ends it with that process in
 
 `wait` blocks in the foreground with a timeout under the tool's own cap, and prints the new lines and `cursor: <id>` on exit 0; pass that cursor as the next `--since`. Exit 4 is the timeout with nothing new: re-arm. Exit 3 is the daemon gone: start it again, then re-arm.
 
-In a fleet, the lead's inbox is not the sink: the user's client renders inbox frames as the user's own messages. A relay subagent runs a file-sink daemon as its background task and forwards each event by message; the `/orchestrator-mode` skill's `references/github-relay.md` is that pattern, written for the GitHub source.
+In a fleet, the lead's session runs the daemon as its own background task, with `--mode` matching the session, and watches on behalf of everyone; a builder never runs `watch` there. The lead forwards a line to a builder by one message when it wants that builder to act. The file sink is for non-Claude agents only.
 
 ## Gotchas
 
