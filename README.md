@@ -22,6 +22,7 @@ The agent applies these on its own when the task matches:
 - [/never-twice](./skills/never-twice/SKILL.md) - Climb every repeated failure to the most durable fix reachable
 - [/no-invalid-states](./skills/no-invalid-states/SKILL.md) - Invariants in the type system instead of runtime checks
 - [/pr-and-issue-discipline](./skills/pr-and-issue-discipline/SKILL.md) - PRs and issues that show the change instead of describing it
+- [/project-naming](./skills/project-naming/SKILL.md) - A name for a project, package, or paper from one table of checked, scored candidates
 - [/pr-landing-discipline](./skills/pr-landing-discipline/SKILL.md) - Draft flips, review rounds to convergence, line accounting, and a human-gated merge
 - [/reply-and-review-discipline](./skills/reply-and-review-discipline/SKILL.md) - Plain-first replies to issue reporters and one pending review on someone else's PR
 - [/rubber-duck-review](./skills/rubber-duck-review/SKILL.md) - Cross-model, read-only second-opinion code review
@@ -64,6 +65,7 @@ graph LR
   rrd["/reply-and-review-discipline"]
   rdr["/rubber-duck-review"]
   pld["/pr-landing-discipline"]
+  pnm["/project-naming"]
   nis["/no-invalid-states"]
   nt["/never-twice"]
   vwc["/verify-with-controls"]
@@ -102,6 +104,8 @@ graph LR
   cs --> nis
   nt --> nis
   om --> vwc
+  pnm --> vwc
+  pnm --> om
   csm --> nw
   csm --> wt
   om --> wt
@@ -117,6 +121,7 @@ graph LR
   click rrd "./skills/reply-and-review-discipline/SKILL.md"
   click rdr "./skills/rubber-duck-review/SKILL.md"
   click pld "./skills/pr-landing-discipline/SKILL.md"
+  click pnm "./skills/project-naming/SKILL.md"
   click nis "./skills/no-invalid-states/SKILL.md"
   click nt "./skills/never-twice/SKILL.md"
   click vwc "./skills/verify-with-controls/SKILL.md"
