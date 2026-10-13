@@ -14,9 +14,10 @@ From the collection, both skills:
 npx skills add Vivswan/skills -g --skill session-events --skill watch-github
 ```
 
-Directly from this folder:
+Directly from the folders, the base first:
 
 ```bash
+npx skills add https://github.com/Vivswan/skills/tree/main/skills/session-events -g
 npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-github -g
 ```
 
