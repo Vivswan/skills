@@ -1,15 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { browserAuthLauncher } from "../../../skills/codex-browser-fix/scripts/browser-auth-launcher.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
 
-const temporaryDirectories: string[] = [];
-
-afterEach(async () => {
-  for (const directory of temporaryDirectories.splice(0))
-    await fs.rm(directory, { recursive: true });
-});
+const temp = tempDirs();
 
 test.each([
   [
@@ -31,8 +26,7 @@ test.each([
 ] as Array<[string, string[], string[]]>)(
   "launcher scopes the override to %s and preserves process behavior",
   async (_, args, expected) => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "browser-launcher-test-"));
-    temporaryDirectories.push(directory);
+    const directory = temp.dir("browser-launcher-test-");
     const executable = path.join(directory, "CLI with 'quotes' and $spaces");
     const launcher = path.join(directory, "browser-cli");
     await fs.writeFile(executable, '#!/bin/sh\nprintf "%s\\n" "$@"\nexit 23\n', { mode: 0o700 });

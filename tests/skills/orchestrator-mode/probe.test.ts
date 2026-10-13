@@ -1,16 +1,10 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // Contract tests for the orchestrator-mode probe tool: every result is
 // either evidence-bearing or a loud error, never a bare number. The tests
@@ -55,8 +49,7 @@ interface ProbeOutput {
   sources?: { committed: string[]; dirty: string[] };
 }
 
-const fixtures = mkdtempSync(join(tmpdir(), "probe-test-"));
-afterAll(() => rmSync(fixtures, { recursive: true, force: true }));
+const fixtures = temp.dir("probe-test-");
 
 let fixtureId = 0;
 function fixtureDir(): string {

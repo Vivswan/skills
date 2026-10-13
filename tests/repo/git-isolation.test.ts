@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { ROOT } from "../../scripts/lib.mts";
+import { tempDirs } from "../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // Regression tests for the hermetic git test environment (the launcher in
 // scripts/run-tests.mts plus the tests/preload.ts interlock), the structural
@@ -118,37 +121,25 @@ describe("test git isolation (launcher + preload)", () => {
     // A non-repo fixture directory inside the real working tree: without the
     // ceiling, git discovery climbs up, finds this repository, and writes
     // into its config - the incident shape, live-confirmed by the canary.
-    const leaky = mkdtempSync(join(ROOT, ".leaky-fixture-"));
-    try {
-      const r = run(leaky, "config", "user.name", "leaky-test-wrote-this");
-      expect(r.code).not.toBe(0);
-    } finally {
-      rmSync(leaky, { recursive: true, force: true });
-    }
+    const leaky = temp.dir(".leaky-fixture-", ROOT);
+    const r = run(leaky, "config", "user.name", "leaky-test-wrote-this");
+    expect(r.code).not.toBe(0);
     expect(readFileSync(config, "utf-8")).not.toContain("leaky-test-wrote-this");
   });
 
   test("the machine's global git config cannot leak into fixtures", () => {
     // A fixture repo with no identity of its own: user.name must be unset
     // (exit 1) even on machines whose ~/.gitconfig sets one.
-    const dir = mkdtempSync(join(tmpdir(), "isolation-fixture-"));
-    try {
-      expect(run(dir, "init", "-q", "-b", "main").code).toBe(0);
-      expect(run(dir, "config", "--get", "user.name").code).toBe(1);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const dir = temp.dir("isolation-fixture-");
+    expect(run(dir, "init", "-q", "-b", "main").code).toBe(0);
+    expect(run(dir, "config", "--get", "user.name").code).toBe(1);
   });
 
   test("fixture commits without per-suite identity are deterministic", () => {
-    const dir = mkdtempSync(join(tmpdir(), "isolation-fixture-"));
-    try {
-      expect(run(dir, "init", "-q", "-b", "main").code).toBe(0);
-      expect(run(dir, "commit", "-q", "--allow-empty", "-m", "fixture").code).toBe(0);
-      const r = run(dir, "log", "-1", "--format=%an <%ae> %cn <%ce>");
-      expect(r.stdout).toBe("fixture <fixture@example.com> fixture <fixture@example.com>");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const dir = temp.dir("isolation-fixture-");
+    expect(run(dir, "init", "-q", "-b", "main").code).toBe(0);
+    expect(run(dir, "commit", "-q", "--allow-empty", "-m", "fixture").code).toBe(0);
+    const r = run(dir, "log", "-1", "--format=%an <%ae> %cn <%ce>");
+    expect(r.stdout).toBe("fixture <fixture@example.com> fixture <fixture@example.com>");
   });
 });

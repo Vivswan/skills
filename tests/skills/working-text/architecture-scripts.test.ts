@@ -1,18 +1,15 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
 import { renderArchitectureMermaid } from "../../../skills/working-text/scripts/architecture/declaration.mts";
@@ -20,6 +17,9 @@ import {
   importSpecifiers,
   parseModule,
 } from "../../../skills/working-text/scripts/architecture/sources.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // Contract tests for the architecture-page scripts of /working-text against a small fixture
 // tree. Every CLI case asserts the whole outcome (exit code, full stdout, full
@@ -151,14 +151,10 @@ const USAGE = {
 };
 
 beforeAll(() => {
-  scratch = mkdtempSync(join(tmpdir(), "working-text-"));
+  scratch = temp.dir("working-text-");
   fixture = join(scratch, "fixture");
   mkdirSync(fixture);
   writeTree(fixture, FILES);
-});
-
-afterAll(() => {
-  rmSync(scratch, { recursive: true, force: true });
 });
 
 describe("architecture/lint.mts", () => {

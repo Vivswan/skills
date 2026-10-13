@@ -1,25 +1,32 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { availableParallelism, tmpdir } from "node:os";
-import { join } from "node:path";
+import { availableParallelism } from "node:os";
+import { dirname, join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
 
 // Every verdict branch of retire-branch.mts is forced by a scratch repository
 // built to produce it, run through the REAL entry point as a child. Cases are
 // independent (own repository under the launcher's TMPDIR) and run in a pool.
 
 const SCRIPT = join(ROOT, "skills", "worktree-hygiene", "scripts", "retire-branch.mts");
+// The entry plus the two modules it imports: the whole program the discipline checks scan.
+const MODULES = [
+  SCRIPT,
+  join(dirname(SCRIPT), "retire", "read.mts"),
+  join(dirname(SCRIPT), "retire", "judge.mts"),
+];
 const REAL_GIT = Bun.which("git") ?? "/usr/bin/git";
 const CASE_TIMEOUT_MS = 240_000;
+const temp = tempDirs();
 
 const EXIT_OK = 0;
 const EXIT_REFUSED = 1;
@@ -43,7 +50,6 @@ const USAGE = [
 
 // --- pool -------------------------------------------------------------------
 
-const workspaces: string[] = [];
 let running = 0;
 const waiting: Array<() => void> = [];
 const POOL_SIZE = availableParallelism();
@@ -60,21 +66,8 @@ async function withSlot<T>(body: () => Promise<T>): Promise<T> {
 }
 
 function scenario(name: string, body: (workspace: string) => Promise<void>): void {
-  test.concurrent(
-    name,
-    () =>
-      withSlot(async () => {
-        const workspace = mkdtempSync(join(tmpdir(), "retire-branch-"));
-        workspaces.push(workspace);
-        await body(workspace);
-      }),
-    CASE_TIMEOUT_MS,
-  );
+  test.concurrent(name, () => withSlot(() => body(temp.dir("retire-branch-"))), CASE_TIMEOUT_MS);
 }
-
-afterAll(() => {
-  for (const workspace of workspaces) rmSync(workspace, { recursive: true, force: true });
-});
 
 // --- child processes --------------------------------------------------------
 
@@ -1725,9 +1718,8 @@ describe("retire-branch.mts worktree gates", () => {
 
   scenario("SAFETY: the script runs from an install path containing a space", async (ws) => {
     const spacedDir = join(ws, "dir with space");
-    mkdirSync(spacedDir, { recursive: true });
+    cpSync(dirname(SCRIPT), spacedDir, { recursive: true });
     const copy = join(spacedDir, "retire-branch.mts");
-    writeFileSync(copy, readFileSync(SCRIPT, "utf-8"));
     const { repo } = await buildRepo(ws, "spaced");
     await commitOnBranch(repo, "topic", "t.txt", "topic\n");
     await landTopic(repo);
@@ -2165,7 +2157,7 @@ describe("retire-branch.mts usage", () => {
 });
 
 describe("retire-branch.mts process discipline", () => {
-  const source = readFileSync(SCRIPT, "utf-8");
+  const source = MODULES.map((file) => readFileSync(file, "utf-8")).join("\n");
   // Whole-line comments are dropped first: the script explains the `jobs -p`
   // trap in prose, and a guard that fired on its own explanation would have to
   // be weakened to pass.

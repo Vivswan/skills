@@ -9,8 +9,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export interface TempDirs {
-  /** The prefix names the suite in the launcher's leftover listing, so keep it specific. */
-  dir(prefix: string): string;
+  /**
+   * A fresh directory under the OS temp dir, or under `parent` when a case needs it elsewhere
+   * (a fixture planted inside the repository to prove the launcher's git ceiling holds).
+   * The prefix names the suite in a leftover's path, so keep it specific.
+   */
+  dir(prefix: string, parent?: string): string;
 }
 
 export function tempDirs(): TempDirs {
@@ -29,8 +33,8 @@ export function tempDirs(): TempDirs {
     }
   });
   return {
-    dir(prefix: string): string {
-      const dir = mkdtempSync(join(tmpdir(), prefix));
+    dir(prefix: string, parent: string = tmpdir()): string {
+      const dir = mkdtempSync(join(parent, prefix));
       made.push(dir);
       return dir;
     },

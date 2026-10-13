@@ -2,14 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readlinkSync,
   realpathSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { CheckFailure } from "../../scripts/lib.mts";
 import {
@@ -23,6 +21,9 @@ import {
   repoSourceIds,
 } from "../../scripts/link-agents.mts";
 import { expectCheckFailure } from "../helpers/check-failure";
+import { tempDirs } from "../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 interface Fixture {
   readonly repoSkill: string;
@@ -30,7 +31,7 @@ interface Fixture {
 }
 
 function fixture(): Fixture {
-  const root = mkdtempSync(join(tmpdir(), "skills-link-test-"));
+  const root = temp.dir("skills-link-test-");
   const repoSkill = join(root, "repo", "skills", "demo-skill");
   mkdirSync(repoSkill, { recursive: true });
   writeFileSync(join(repoSkill, "SKILL.md"), "---\nname: demo-skill\n---\nbody\n");
@@ -147,7 +148,7 @@ interface PruneFixture {
 }
 
 function pruneFixture(): PruneFixture {
-  const root = mkdtempSync(join(tmpdir(), "skills-prune-test-"));
+  const root = temp.dir("skills-prune-test-");
   const repoSkills = join(root, "repo", "skills");
   const demoSkill = join(repoSkills, "demo-skill");
   mkdirSync(demoSkill, { recursive: true });
@@ -530,7 +531,7 @@ describe("pruneStaleSkills", () => {
 
 describe("discoverAgentSkillDirs", () => {
   test("finds dot-dir skills directories and skips the canonical one", () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-discover-test-"));
+    const root = temp.dir("skills-discover-test-");
     const agentsSkills = join(root, ".agents", "skills");
     mkdirSync(agentsSkills, { recursive: true });
     mkdirSync(join(root, ".claude", "skills"), { recursive: true });
@@ -570,7 +571,7 @@ describe("lockfile attribution", () => {
   });
 
   test("attributes by source slug or sourceUrl, case- and .git-insensitive", () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-lock-test-"));
+    const root = temp.dir("skills-lock-test-");
     const lockfile = join(root, ".skill-lock.json");
     writeFileSync(
       lockfile,
@@ -604,13 +605,13 @@ describe("lockfile attribution", () => {
   });
 
   test("a missing lockfile yields no attributions", () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-lock-test-"));
+    const root = temp.dir("skills-lock-test-");
 
     expect(loadLockAttribution(join(root, "nope.json"), repoIds).size).toBe(0);
   });
 
   test("a malformed lockfile fails instead of guessing", () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-lock-test-"));
+    const root = temp.dir("skills-lock-test-");
     const lockfile = join(root, ".skill-lock.json");
     writeFileSync(lockfile, "not json");
 
@@ -618,7 +619,7 @@ describe("lockfile attribution", () => {
   });
 
   test("a drifted lockfile shape fails instead of guessing", () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-lock-test-"));
+    const root = temp.dir("skills-lock-test-");
     const lockfile = join(root, ".skill-lock.json");
     writeFileSync(lockfile, JSON.stringify({ version: 3, skills: ["flat", "list"] }));
 
@@ -626,7 +627,7 @@ describe("lockfile attribution", () => {
   });
 
   test("an unsupported lockfile version fails instead of guessing", () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-lock-test-"));
+    const root = temp.dir("skills-lock-test-");
     const lockfile = join(root, ".skill-lock.json");
     writeFileSync(
       lockfile,

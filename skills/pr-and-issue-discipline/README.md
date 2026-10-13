@@ -16,7 +16,7 @@
   - `## How` is 3 to 6 bullets by default, `## Proof` 2 to 4. More when the change needs it.
   - Part two is one collapsed `Technical details` section at the bottom, for anything written for a bot reviewer or another agent. No length cap, one fact per line.
   - A PR without such detail has no part two.
-- **Readable as an accessibility requirement.** Readers include people with dyslexia.
+- **Readable as an accessibility requirement.** Readers include people who take in pictures faster than prose.
   - A mix of devices the reader can skim: short paragraphs, bullets for lists, tables, fenced blocks.
   - Short sentences, no semicolon chains, no nesting past one level, anywhere in the body.
 - **Review rounds replace, never append.**

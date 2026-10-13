@@ -1,9 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { browserAuthLauncher } from "../../../skills/codex-browser-fix/scripts/browser-auth-launcher.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 /**
  * Behavioral coverage for browser-plugin-preflight.mts against a fixture app
@@ -27,13 +29,6 @@ const OLD_VERSION = "1.0.0";
 const NEW_VERSION = "2.0.0";
 const NEW_CLIENT = "export const client = 'new';\n";
 const OLD_CLIENT = "export const client = 'old';\n";
-
-const temporaryDirectories: string[] = [];
-
-afterEach(async () => {
-  for (const directory of temporaryDirectories.splice(0))
-    await fs.rm(directory, { recursive: true });
-});
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -80,10 +75,7 @@ async function staleFixture(
 ): Promise<Fixture> {
   // realpath: the preflight canonicalizes the plugin dir, so expected config
   // values must be built from the same canonical form (macOS tmp is a symlink).
-  const root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "browser-preflight-test-")),
-  );
-  temporaryDirectories.push(root);
+  const root = await fs.realpath(temp.dir("browser-preflight-test-"));
   const home = path.join(root, "codex-home");
   const resources = path.join(root, "App.app", "Contents", "Resources");
   const pluginsDir = path.join(resources, "plugins", "openai-bundled", "plugins");
