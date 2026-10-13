@@ -17,10 +17,9 @@ import {
 } from "../skills/project-naming/scripts/check-name.mts";
 import {
   GITHUB_STARS_TAKEN,
-  REGISTRIES,
-  type Registry,
   WIKTIONARY_FLAG,
-} from "../skills/project-naming/scripts/registries.mts";
+} from "../skills/project-naming/scripts/registries/readers.mts";
+import { REGISTRIES, type Registry } from "../skills/project-naming/scripts/registries/table.mts";
 import { sayAsSpelled } from "../skills/project-naming/scripts/say.mts";
 import { oneEditApart, PYPI_TOP_URL } from "../skills/project-naming/scripts/typosquat.mts";
 import { tempDirs } from "./helpers/temp-dirs";
