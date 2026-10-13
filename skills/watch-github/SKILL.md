@@ -57,7 +57,7 @@ Issues and security alerts are future target forms of this source, never new com
 
 `--expect-workflow <name>`, repeatable, names a gate: the `name:` of a workflow file under `.github/workflows/` that gates the target. The flags of one call are the complete gate set. A repeated `watch` of the same target replaces it, gates and cursor: its CI is judged again, and its activity baseline is taken afresh.
 
-Without a daemon, `watch` exits 3 and prints the exact start command. A PR's first sighting reads what is already on it and reports none of it; only what lands afterwards is an event.
+Without a daemon, `watch` exits 3 and prints the exact start command. A PR's first sighting reports none of the comments or reviews already on it; only what lands afterwards is an event. Its CI verdict and its merged or closed state are judged at once.
 
 ## Events
 
@@ -79,8 +79,9 @@ A branch target's lines open with `branch owner/repo:main:` instead. The comment
 ### The CI rules
 
 - **Green** is every named gate's latest run passed (skipped counts), or, with no gate named, the PR's aggregate rollup `SUCCESS`.
-- **Red** is any named gate's latest run failed or cancelled with no newer run, or, with no gate, the rollup `FAILURE` or `ERROR`. The red line names each failed job's workflow, job, and first failed step, and any gate with no run after `; no run of`.
+- **Red** is any named gate's latest run failed or cancelled with no newer run, or, with no gate, the rollup `FAILURE` or `ERROR`. The red line names up to 50 failed jobs per suite, each as workflow, job, and first failed step, and any gate with no run after `; no run of`.
 - **A gate with no run** is pending while the rollup is pending, and one `trouble` event once the rollup settled without it, or after two polls on a head with no checks at all: a typo in the name, or a workflow that does not trigger on this ref.
+- **No checks and no gate** is no CI, not pending: nothing is said, and the head idles until a rollup appears. Name the gate with `--expect-workflow` when a run must register.
 - **The unit is the workflow.** Re-triggers stack runs on one SHA; the newest run of each workflow is judged, and an older cancelled one is superseded.
 - **After a verdict**, the head is judged again when something moves: a gated head on every poll (a gate's re-run need not move the rollup), a gateless one when the rollup changes. The same verdict stays silent; a different one is a new `ci` event. A new head is judged from nothing.
 
@@ -92,7 +93,7 @@ One poll costs one request per repository: every watched PR's row, every watched
 
 - one detail read per PR whose row moved (comments, reviews, threads), paged back only to the last activity already seen
 - one paged read for a head with more than 100 check suites
-- one read per red verdict, naming the failed jobs and steps
+- one read per red verdict, naming up to 50 failed jobs per suite with their steps
 
 At steady state, nothing moving, that is one request per repository every five minutes. Never run `gh run watch`, spawn a watcher subagent, or read the PR by hand between messages: the daemon is the one poller for this session.
 

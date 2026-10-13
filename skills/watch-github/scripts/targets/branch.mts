@@ -29,7 +29,7 @@ export interface BranchTarget {
     ci: CiState;
     /** The last delivered verdict's key (check-suites.mts verdictKey). */
     verdict: string | null;
-    /** Polls on this head with no checks at all, for a named gate that never registers. */
+    /** Polls on this head with no checks at all (no rollup), for a named gate that never registers. */
     noRuns: number;
   } | null;
   /** Set once the tip answered null and the trouble event went out; cleared when it reads again. */
@@ -109,7 +109,7 @@ export function processBranch(
   }
   if (suites !== null) {
     const runs = suites.complete ? suites.runs : discoverRuns(target.repo, sha);
-    noRuns = runs.length === 0 && tip.rollupState === null ? noRuns + 1 : 0;
+    noRuns = tip.rollupState === null ? noRuns + 1 : 0;
     const judged = judgeHead(tip.rollupState, runs, target.gates, noRuns >= NO_RUN_POLLS);
     const key = verdictKey(judged);
     ci = judged.kind;
@@ -124,9 +124,11 @@ export function processBranch(
   }
   delete target.unreadable;
   target.seen = { oid: sha, rollupState: tip.rollupState, ci, verdict, noRuns };
+  // Pending CI holds the busy interval; a head with no CI does not. The ci term covers the poll a
+  // rollup change is first seen on, and a named gate's run still registering or queued.
   return {
     events,
-    busy: ci === "pending" || rollupPending(tip.rollupState) || events.length > 0,
+    busy: rollupPending(tip.rollupState) || events.length > 0 || ci === "pending",
     done: false,
   };
 }

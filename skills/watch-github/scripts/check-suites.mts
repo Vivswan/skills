@@ -11,7 +11,7 @@ import { GhError, get, graphql, requireNumber, requireString, stringOrNull } fro
 const MAX_SUITE_PAGES = 10;
 const MAX_SNAPSHOT_ROUNDS = 5;
 const TERMINAL_ROLLUPS = new Set(["SUCCESS", "FAILURE", "ERROR"]);
-/** Polls a head may show no checks at all before a named gate is called missing; a run can register seconds after a push. */
+/** Polls a head may show no checks at all (no rollup) before a named gate is called missing; a run can register seconds after a push. */
 export const NO_RUN_POLLS = 2;
 
 // External apps (CodeQL, Semgrep) register check suites without a workflowRun; only github-actions
@@ -177,14 +177,18 @@ export type Verdict =
   | { kind: "red"; latest: Run[]; failed: Run[]; missing: string[] }
   | { kind: "pending" }
   /** A named gate has no run once CI settled, or after two polls on a head with no checks at all: a typo in the name, or a workflow that does not trigger here. */
-  | { kind: "missing"; gates: string[]; settled: boolean };
+  | { kind: "missing"; gates: string[]; settled: boolean }
+  /** No checks at all and no gate named: a head nothing runs on, with nothing to judge and nothing to say. */
+  | { kind: "none" };
 
 /**
  * Green is every named gate's latest run passed, or, with no gate named, the aggregate rollup
  * SUCCESS. Red is any named gate's latest run failed, or the rollup FAILURE or ERROR with no gate.
  * A named gate with no run is pending until the rollup settles, then missing; `waited` says the
  * head has had no checks at all for long enough (two polls) to call the gate missing without a
- * rollup, since a head nothing runs on never settles.
+ * rollup, since a head nothing runs on never settles. With no gate, a head with no rollup has no
+ * CI, whatever suites it lists (a run with no job yet makes none): read as pending it would hold
+ * the busy interval and a suites read every poll for good.
  */
 export function judgeHead(
   rollup: string | null,
@@ -197,6 +201,7 @@ export function judgeHead(
   if (gates.length === 0) {
     if (rollup === "SUCCESS") return { kind: "green", latest };
     if (settled) return { kind: "red", latest, failed: latest.filter(isFailed), missing: [] };
+    if (rollup === null) return { kind: "none" };
     return { kind: "pending" };
   }
   // Two workflow files can share a name: every latest run under a gate's name is that gate's.
@@ -218,7 +223,8 @@ export function judgeHead(
 export type FailedJob = { workflow: string; job: string; step: string | null };
 
 /**
- * The failed jobs and their first failed step, one request for every failed run of a verdict.
+ * The failed jobs and their first failed step, one request for all the failed runs of a verdict;
+ * the read is one page of 50 jobs per suite, never paged, so a run with more names its first 50.
  * Informational: a read that fails names the workflows alone and changes no verdict.
  */
 export function readFailedJobs(failed: Run[]): FailedJob[] {
@@ -250,7 +256,7 @@ export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-export type CiState = "pending" | "green" | "red" | "missing";
+export type CiState = Verdict["kind"];
 
 /** A head's CI is still moving: pending or expected, not settled and not absent. */
 export function rollupPending(rollup: string | null): boolean {
@@ -261,16 +267,17 @@ export type CiEvent = {
   kind: "ci" | "trouble";
   text: string;
   url: string;
-  state: Exclude<CiState, "pending">;
+  state: Exclude<CiState, "pending" | "none">;
 };
 
 /**
  * What a settled verdict says, as one string a target keeps to tell the same verdict from a new
- * one: the kind, and the gates it found absent. Null while pending.
+ * one: the kind, and the gates it found absent. Null while pending, and for a head with no CI.
  */
 export function verdictKey(verdict: Verdict): string | null {
   switch (verdict.kind) {
     case "pending":
+    case "none":
       return null;
     case "green":
       return "green";
@@ -284,7 +291,7 @@ export function verdictKey(verdict: Verdict): string | null {
 /**
  * The verdict as the event line says it, for a head labelled `label`. A red names each failed
  * job's workflow, job, and first failed step from one more read; when that read fails, the
- * workflows alone, and the verdict stands. Null while pending.
+ * workflows alone, and the verdict stands. Null while pending, and for a head with no CI.
  */
 export function describeVerdict(
   label: string,
@@ -296,6 +303,7 @@ export function describeVerdict(
   const short = sha.slice(0, 12);
   switch (verdict.kind) {
     case "pending":
+    case "none":
       return null;
     case "green":
       return {

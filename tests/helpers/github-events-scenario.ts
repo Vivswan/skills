@@ -4,7 +4,8 @@
 // the sequence runs out). The per-repository read is served per repository name when a fixture
 // `rows-<name>-<n>.json` exists, else from `rows-<n>.json`; a `<kind>-<n>.exit1` beside a fixture
 // makes gh exit 1 with that text on stderr after the body, as it does on a reply with an `errors`
-// entry. Anything but `gh api graphql` is a violation. A PR's
+// entry, and a `fail-<kind>` file fails every call of the class outright while it exists. Anything
+// but `gh api graphql` is a violation. A PR's
 // first sighting reads its detail as the baseline, so every scenario starts with an empty
 // `detail-1` and a scenario's own detail fixtures begin at 2. Call githubEventsHarness() at the
 // file's top level.

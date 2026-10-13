@@ -46,7 +46,7 @@ describe("github-events.mts", () => {
     s.fixtures({
       "rows-example-1": rows({
         p7: prNode({ suites: [["ci", "IN_PROGRESS", null]], rollup: "PENDING" }),
-        p8: prNode({ number: 8, suites: [] }),
+        p8: prNode({ number: 8, rollup: "PENDING", suites: [] }),
         b0: refNode({ rollup: "SUCCESS", suites: [] }),
       }),
       "rows-fork-1": rows({ p3: prNode({ number: 3, suites: [] }) }),
@@ -126,7 +126,6 @@ describe("github-events.mts", () => {
         notFound,
       ),
       "rows-3.exit1": "gh: Could not resolve to a PullRequest with the number of 7.\n",
-      "rows-4.exit1": "gh: Could not resolve to a PullRequest with the number of 7.\n",
       "rows-5": rows({
         p7: prNode({ rollup: "PENDING", suites: [] }),
         p8: prNode({ number: 8, rollup: "SUCCESS", suites: [] }),
@@ -545,7 +544,7 @@ describe("a head nothing runs on, and a target whose own reads keep failing", ()
     const box = await s.inbox("a");
     s.fixtures({
       "rows-1": rows({
-        p7: prNode({ rollup: null, suites: [] }),
+        p7: prNode({ rollup: null, suites: [["lint", "QUEUED", null]] }),
         p8: prNode({ number: 8, rollup: "SUCCESS", suites: [["lint", "COMPLETED", "SUCCESS"]] }),
       }),
     });
@@ -571,6 +570,74 @@ describe("a head nothing runs on, and a target whose own reads keep failing", ()
       ].join("\n"),
     ]);
     expect(s.events().map((e) => e.kind)).toEqual(["trouble", "trouble"]);
+    expect(s.violations()).toBe("");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a head with no checks and no gate has no CI: nothing is said, its suites are not asked for again, and the watch idles until a rollup appears, when it is judged again", async () => {
+    const s = new Scenario("no-ci");
+    const box = await s.inbox("a");
+    s.fixtures({
+      // A run with no job yet lists a suite and leaves the rollup null: no checks, so no CI.
+      "rows-1": rows({ b0: refNode({ rollup: null, suites: [["ci", "QUEUED", null]] }) }),
+      "rows-3": rows({ b0: refNode({ rollup: "PENDING", suites: [] }) }),
+    });
+    // Busy polls are 1 s apart, idle ones the source's 300 s: a read of its own inside 3 s is busy.
+    await s.start({ inbox: box.path, args: ["--interval", "1"] });
+    expect(s.run(["watch", MAIN], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    await Bun.sleep(3000);
+    expect(s.rowsCalls()).toEqual(["example", "example"]);
+    expect(s.ghCalls().filter((call) => call.includes("checkSuites("))).toHaveLength(1);
+    expect(s.state().targets[MAIN]).toMatchObject({ seen: { ci: "none", verdict: null } });
+    // The rollup appears: that poll is busy, the next asks for the suites, and the head is pending.
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    const deadline = Date.now() + 3000;
+    while (s.rowsCalls().length < 4 && Date.now() < deadline) await Bun.sleep(50);
+    expect(s.rowsCalls().length).toBeGreaterThanOrEqual(4);
+    expect(s.ghCalls().filter((call) => call.includes("checkSuites(")).length).toBeGreaterThan(1);
+    expect(s.state().targets[MAIN]).toMatchObject({ seen: { ci: "pending" } });
+    expect(s.events()).toEqual([]);
+    // The rollup settles: the head that was no CI gets its verdict like any other. The stub serves
+    // this fixture to every read from the fifth on, so whichever poll reads it first says green.
+    s.fixtures({
+      "rows-5": rows({
+        b0: refNode({ rollup: "SUCCESS", suites: [["ci", "COMPLETED", "SUCCESS"]] }),
+      }),
+    });
+    s.run(["poll"], { inbox: box.path });
+    expect(headlines(await box.frames(1))).toEqual([
+      `branch ${MAIN}: CI green on ${SHORT_A}: 1 workflow`,
+    ]);
+    expect(s.state().targets[MAIN]).toMatchObject({ seen: { ci: "green", verdict: "green" } });
+    expect(s.violations()).toBe("");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a repository read that fails three polls in a row is the daemon's one trouble line naming its log; no cursor moves, and the read coming back judges the head", async () => {
+    const s = new Scenario("fail-rows");
+    const box = await s.inbox("a");
+    s.fixtures({ "rows-1": rows({ b0: refNode({ rollup: "SUCCESS", suites: [] }) }) });
+    writeFileSync(join(s.fixtureDir, "fail-rows"), "HTTP 502");
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", MAIN], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect((await box.frames(1)).map(text)).toEqual([
+      [
+        "github-events: the last 3 polls failed; read the daemon log for the reason",
+        s.files().log,
+        CLOSING,
+      ].join("\n"),
+    ]);
+    expect(s.log()).toContain("poll failed (3 in a row): gh api graphql exited 1: gh: HTTP 502");
+    expect(s.state().targets[MAIN]).toMatchObject({ seen: null });
+    expect(s.state().targets[MAIN]).not.toHaveProperty("readFailures");
+    rmSync(join(s.fixtureDir, "fail-rows"));
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await box.frames(2))[1]).toBe(
+      `branch ${MAIN}: CI green on ${SHORT_A}: 0 workflows`,
+    );
     expect(s.violations()).toBe("");
     s.stop({ inbox: box.path });
   }, 30000);

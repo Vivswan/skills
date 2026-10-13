@@ -736,6 +736,10 @@ describe("the example source", () => {
     expect(s.run(["watch", "relative.log", ...id]).stderr).toContain(
       "watch needs an absolute path",
     );
+    expect(s.run(["watch", file, "--follow", ...id])).toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("unknown option: --follow"),
+    });
     expect(s.run(["watch", file, ...id]).stdout).toContain(
       `watching ${file} for file sink example`,
     );

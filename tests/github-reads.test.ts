@@ -614,11 +614,11 @@ describe("judgeHead", () => {
       verdict: { kind: "red", latest: [run({ id: 1 })], failed: [], missing: [] },
     },
     {
-      id: "no gate: no rollup is pending whatever the runs say",
+      id: "no gate: no rollup is no CI whatever the runs say, so nothing is pending or said",
       rollup: null,
       runs: [run({ id: 1 })],
       gates: [],
-      verdict: { kind: "pending" },
+      verdict: { kind: "none" },
     },
     {
       id: "a gate's failed latest run is red at once, while another gate runs and the rollup is pending",

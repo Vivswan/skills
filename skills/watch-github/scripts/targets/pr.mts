@@ -33,7 +33,7 @@ export interface PrTarget {
     ci: CiState;
     /** The last delivered verdict's key (check-suites.mts verdictKey). */
     verdict: string | null;
-    /** Polls on this head with no checks at all, for a named gate that never registers. */
+    /** Polls on this head with no checks at all (no rollup), for a named gate that never registers. */
     noRuns: number;
     activity: string[][];
   } | null;
@@ -182,7 +182,7 @@ export function processPr(
   if (previous !== null && (changes.head || changes.rollup)) ci = "pending";
   if (suites !== null) {
     const runs = suites.complete ? suites.runs : discoverRuns(target.repo, row.headRefOid);
-    noRuns = runs.length === 0 && row.rollupState === null ? noRuns + 1 : 0;
+    noRuns = row.rollupState === null ? noRuns + 1 : 0;
     const judged = judgeHead(row.rollupState, runs, target.gates, noRuns >= NO_RUN_POLLS);
     const key = verdictKey(judged);
     ci = judged.kind;
@@ -196,9 +196,11 @@ export function processPr(
   }
   delete target.unreadable;
   target.seen = { row, ci, verdict, noRuns, activity };
+  // Pending CI holds the busy interval; a head with no CI does not. The ci term covers the poll a
+  // rollup change is first seen on, and a named gate's run still registering or queued.
   return {
     events,
-    busy: ci === "pending" || rollupPending(row.rollupState) || events.length > 0,
+    busy: rollupPending(row.rollupState) || events.length > 0 || ci === "pending",
     done: false,
   };
 }

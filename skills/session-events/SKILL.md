@@ -45,9 +45,10 @@ type File = { path: string; size: number | null };
 runEvents<File>({
   name: "log-events",
   interval: 5,
-  parseTarget([path]) {
+  parseTarget([path, ...rest]) {
     if (path === undefined || !path.startsWith("/"))
       throw new UsageError("watch needs an absolute path");
+    if (rest.length > 0) throw new UsageError(`unknown option: ${rest[0]}`);
     return { path, size: null };
   },
   async poll(targets) {
