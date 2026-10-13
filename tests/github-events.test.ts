@@ -513,6 +513,9 @@ describe("the target modules", () => {
       seen: null,
     });
     expect(parsePrTarget("octo/example:main", [])).toBeNull();
+    // Past GraphQL's Int the whole repository query would be invalid, every target with it.
+    expect(parsePrTarget("octo/example#2147483647", [])).toMatchObject({ number: 2147483647 });
+    expect(parsePrTarget("octo/example#2147483648", [])).toBeNull();
     expect(parseBranchTarget("octo/example:release/2", [])).toEqual({
       form: "branch",
       repo: "octo/example",
@@ -617,6 +620,22 @@ describe("a head nothing runs on, and a target whose own reads keep failing", ()
         .filter((line) => line.includes(`${PR7}: gh api graphql exited 1`)),
     ).toHaveLength(4);
     expect(s.state().targets[PR7]).toMatchObject({ readFailures: 4, seen: null });
+    // A merge ends the watch whether or not the detail read works: the finished PR must not stay.
+    const merged = new Scenario("merged-unreadable");
+    const mergedBox = await merged.inbox("a");
+    merged.fixtures({
+      "rows-1": rows({ p7: prNode({ rollup: "SUCCESS", suites: [] }) }),
+      "rows-2": rows({
+        p7: prNode({ state: "MERGED", mergedAt: "2026-01-01T01:00:00Z", rollup: "SUCCESS" }),
+      }),
+    });
+    writeFileSync(join(merged.fixtureDir, "fail-detail"), "GraphQL 502");
+    await merged.start({ inbox: mergedBox.path });
+    expect(merged.run(["watch", PR7], { inbox: mergedBox.path }).code).toBe(0);
+    expect(merged.run(["poll"], { inbox: mergedBox.path }).stdout).toContain("1 event(s)");
+    expect(headlines(await mergedBox.frames(1))).toEqual([`PR ${PR7}: merged into main`]);
+    expect(merged.run(["status"], { inbox: mergedBox.path }).stdout).toContain("targets: 0");
+    merged.stop({ inbox: mergedBox.path });
     // The read comes back: the baseline is taken, the gateless SUCCESS rollup is green, the count goes.
     rmSync(join(s.fixtureDir, "fail-detail"));
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");

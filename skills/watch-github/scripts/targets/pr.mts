@@ -19,6 +19,8 @@ import { type Row, rowChanged } from "../pr-rows.mts";
 import type { Outcome } from "./branch.mts";
 
 const PR_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
+// GraphQL's Int: a number past it makes the whole repository query invalid, every target with it.
+const MAX_PR_NUMBER = 2_147_483_647;
 
 export interface PrTarget {
   form: "pr";
@@ -45,7 +47,7 @@ export function parsePrTarget(text: string, gates: string[]): PrTarget | null {
   const match = PR_PATTERN.exec(text);
   if (match === null) return null;
   const number = Number(match[2]);
-  if (!Number.isSafeInteger(number)) return null;
+  if (number > MAX_PR_NUMBER) return null;
   return { form: "pr", repo: match[1] as string, number, gates, seen: null };
 }
 
@@ -123,6 +125,26 @@ export function processPr(
   const fields = { repo: target.repo, pr: target.number, sha: row.headRefOid };
   const changes = rowChanged(previous?.row, row);
   const events: EventInput[] = [];
+  // A merged or closed row ends the watch before any other read: a detail read that keeps
+  // failing (a PR past the paging cap) must not keep a finished PR watched for good.
+  if (row.state === "MERGED") {
+    events.push({
+      ...fields,
+      kind: "merged",
+      text: `${label}: merged into ${row.baseRefName}`,
+      url: row.url,
+    });
+    return { events, busy: true, done: true };
+  }
+  if (row.state === "CLOSED") {
+    events.push({
+      ...fields,
+      kind: "closed",
+      text: `${label}: closed without merging`,
+      url: row.url,
+    });
+    return { events, busy: true, done: true };
+  }
   let activity = previous?.activity ?? [];
   // A first sighting reads the detail too: what is on the PR now is the baseline, by id.
   if (previous === null || changes.activity) {
@@ -151,24 +173,6 @@ export function processPr(
       text: `${label}: head moved to ${row.headRefOid.slice(0, 12)}; last commit by ${row.headAuthor ?? "an unknown author"}`,
       url: `https://github.com/${target.repo}/pull/${target.number}/commits/${row.headRefOid}`,
     });
-  }
-  if (row.state === "MERGED") {
-    events.push({
-      ...fields,
-      kind: "merged",
-      text: `${label}: merged into ${row.baseRefName}`,
-      url: row.url,
-    });
-    return { events, busy: true, done: true };
-  }
-  if (row.state === "CLOSED") {
-    events.push({
-      ...fields,
-      kind: "closed",
-      text: `${label}: closed without merging`,
-      url: row.url,
-    });
-    return { events, busy: true, done: true };
   }
   let ci: CiState = previous?.ci ?? "pending";
   // The verdict last delivered on this head; a new head has none, so its first verdict is news. A
