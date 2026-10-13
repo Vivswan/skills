@@ -9,11 +9,18 @@ Companion to `scripts/retire-branch.mts`: the incidents behind its gates, one en
 
   The script fetches into `refs/retire-branch/<pid>/mainline` and drops it on every exit path. It clears that name with `--no-deref` first: a fetch force-updating a symbolic ref writes its target (verified, main lost a commit).
 - **Ancestry: the argument order is the whole gate.** `git merge-base --is-ancestor <branch> <reference>` asks the right question. The swap exits 0 on exactly the unlanded work the gate protects, and both orders agree after a fast-forward merge, so the tests force an UNMERGED branch. One call site, named parameters. The UNMERGED scenario with its swapped-argument mutation is the proof.
-- **Content equivalence settles squash and rebase merges.** The branch's shas never reach the mainline, so ancestry refuses every landed branch there. The paths changed since the merge-base are intersected, by raw bytes, with the paths that differ at the mainline tip. Any intersection is a refusal naming the paths, an empty delta is a refusal (nothing to judge), and a failed diff is exit 3.
+- **A three-way merge settles squash and rebase merges.** The branch's shas never reach the mainline, so ancestry refuses every landed branch there. `git merge-tree --write-tree <mainline-tip> <branch>` merges the branch into the tip without touching a worktree, and the tree it prints is the verdict:
 
-  `--no-renames` keeps a missing deletion from hiding. `--no-ext-diff --no-textconv --no-relative --ignore-submodules=none` keep any filter or config from suppressing or narrowing a difference. Raw bytes keep a non-UTF-8 filename from being re-encoded into a path that does not exist (which would diff nothing and pass).
+  ```text
+  the tip's own tree, exit 0 -> landed: the branch carries nothing the mainline lacks
+  another tree, exit 0       -> refused, naming the paths (git diff --name-only between the two trees)
+  a tree, exit 1             -> refused: a conflict, naming the conflicted paths (a directory rename split names none)
+  no tree, or exit >= 2      -> exit 3 (merge-tree's "not something we can merge" is also a 1; --write-tree needs git 2.38)
+  ```
 
-  A later mainline commit to one of the branch's paths refuses too. That is the fail-closed direction, settled by reading the mainline history, never by forcing the deletion.
+  The per-path diff it replaced compared each path the branch changed against the mainline tip, so a later mainline commit to one of those files refused a landed branch (one sentence another PR changed in a file this one had edited). The merge asks the right question: does the mainline already hold everything the branch adds?
+
+  `--no-renames --no-relative --ignore-submodules=none` on the listing keep a rename, `diff.relative`, or `diff.ignoreSubmodules` from hiding a path the refusal should name, and raw bytes keep a non-UTF-8 filename in it. merge-tree runs from the toplevel, since it prints conflicted paths relative to the cwd.
 - **A shallow clone can never refuse.** Git treats the grafted boundary as a root, so history it cannot see reads as "not contained" with a plain exit 1. That negative is exit 3, with `git fetch --unshallow` as the remedy.
 - **Delete by explicit ref, pinned to the judged sha.** `git branch -D` deletes whatever the name points at now. `update-ref -d --no-deref <ref> <sha>` refuses a push that landed between the gate and the deletion.
 

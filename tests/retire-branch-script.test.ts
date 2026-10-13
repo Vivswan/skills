@@ -248,8 +248,8 @@ const REHEARSED = "REHEARSED: every gate passed for topic; nothing was destroyed
 const SKIPPED = "[worktree] live-writer probe SKIPPED (--no-writer-check): no evidence either way";
 const ALLOW_NO_TREE = lines(FETCH, BRANCH, LANDED, NO_TREE, HELD, DELETED, RETIRED);
 
-const landedByContent = (paths: number, label = "topic"): string =>
-  `[landed] by content equivalence at <sha3>: ${label} matches <sha1> on all ${paths} path(s) it changed`;
+const landedByMerge = (label = "topic"): string =>
+  `[landed] by three-way merge: ${label} merges into <sha1> without changing its tree`;
 /** Placeholders name commits by first appearance: <sha1> the fetched mainline, <sha2> the branch tip. */
 const notContained = (label = "topic", subject = "<sha2>", reference = "<sha1>"): string =>
   `${label} (${subject}) is NOT contained in the mainline tip (${reference})`;
@@ -259,7 +259,10 @@ const differs = (
   subject = "<sha2>",
   reference = "<sha1>",
 ): string =>
-  `REFUSED: ${notContained(label, subject, reference)}, and its content differs from that tip on ${paths.split(", ").length} path(s): ${paths}`;
+  `REFUSED: ${notContained(label, subject, reference)}, and merging it there would still change ${paths.split(", ").length} path(s): ${paths}`;
+const conflicts = (paths: string): string =>
+  `REFUSED: ${notContained()}, and merging it there CONFLICTS on ${paths.split(", ").length} path(s): ${paths}`;
+const mergeCouldNotRun = `BROKEN: ${notContained()}, and the merge check could not run: git merge-tree --write-tree <sha1> <sha2>`;
 const clean = (tree: string): string => `[worktree] ${tree} is clean and idle`;
 const removed = (tree: string): string => `[worktree] removed ${tree}`;
 const allowWithTree = (tree: string): string =>
@@ -584,7 +587,7 @@ describe("retire-branch.mts landing gates", () => {
     },
   );
 
-  scenario("ALLOW: a SQUASH-merged branch passes by content equivalence", async (ws) => {
+  scenario("ALLOW: a SQUASH-merged branch passes by three-way merge", async (ws) => {
     const { repo } = await buildRepo(ws, "squash");
     await commitOnBranch(repo, "topic", "t.txt", "topic\n");
     await squashLandTopic(repo);
@@ -598,7 +601,7 @@ describe("retire-branch.mts landing gates", () => {
     }).toEqual({
       ancestry: 1,
       status: EXIT_OK,
-      stdout: lines(FETCH, BRANCH, landedByContent(1), NO_TREE, HELD, DELETED, RETIRED),
+      stdout: lines(FETCH, BRANCH, landedByMerge(), NO_TREE, HELD, DELETED, RETIRED),
       stderr: "",
       branch: "absent",
       tree: "none",
@@ -624,7 +627,132 @@ describe("retire-branch.mts landing gates", () => {
     },
   );
 
-  scenario("ALLOW: a REBASE-merged branch passes by content equivalence", async (ws) => {
+  scenario(
+    "REFUSE: a squash landing the mainline then REVERTED is not landed; the refusal names every path",
+    async (ws) => {
+      // The mainline no longer holds what the branch adds, so merging the
+      // branch back in would re-apply it: the fail-closed direction of the
+      // three-way merge, pinned so a "once landed, always landed" shortcut
+      // cannot creep in.
+      const { repo } = await buildRepo(ws, "reverted");
+      await commitOnBranch(repo, "topic", "F", "f\n");
+      await commitOnBranch(repo, "topic", "G", "g\n");
+      await squashLandTopic(repo);
+      await git(repo, "revert", "--no-edit", "HEAD");
+      await git(repo, "push", "-q", "origin", "main");
+      expect(
+        await retire(ws, { repo }, ["--repo-root", repo, "--branch", "topic", "--execute"]),
+      ).toEqual({
+        status: EXIT_REFUSED,
+        stdout: lines(FETCH, BRANCH),
+        stderr: differs("F, G"),
+        branch: "unchanged",
+        tree: "none",
+      });
+    },
+  );
+
+  scenario(
+    "ALLOW: a squash-landed branch stays landed after a later mainline edit of a file it changed",
+    async (ws) => {
+      // The two-endpoint check refused this shape: the branch's version of F
+      // differs from the mainline tip's, yet every line it added is there.
+      const { repo } = await buildRepo(ws, "specimen");
+      await commitOnMain(repo, "F", "one\ntwo\nthree\nfour\nfive\n");
+      await git(repo, "push", "-q", "origin", "main");
+      await git(repo, "branch", "-f", "topic", "main");
+      const tree = join(ws, "specimen-tree");
+      await git(repo, "worktree", "add", "-q", tree, "topic");
+      writeFileSync(join(tree, "F"), "one\ntwo\nthree\nfour\nFIVE\n");
+      writeFileSync(join(tree, "G"), "added\n");
+      await git(tree, "add", "-A");
+      await git(tree, "commit", "-qm", "edit F, add G");
+      await git(repo, "worktree", "remove", "--force", tree);
+      await squashLandTopic(repo);
+      await commitOnMain(repo, "F", "ONE\ntwo\nthree\nfour\nFIVE\n");
+      await git(repo, "push", "-q", "origin", "main");
+      const twoEndpointDiff = await gitStatus(repo, "diff", "--quiet", "main", "topic", "--", "F");
+      expect({
+        twoEndpointDiff,
+        ...(await retire(ws, { repo }, ["--repo-root", repo, "--branch", "topic", "--execute"])),
+      }).toEqual({
+        twoEndpointDiff: 1,
+        status: EXIT_OK,
+        stdout: lines(FETCH, BRANCH, landedByMerge(), NO_TREE, HELD, DELETED, RETIRED),
+        stderr: "",
+        branch: "absent",
+        tree: "none",
+      });
+    },
+  );
+
+  scenario(
+    "REFUSE: a directory rename split is a conflict that names no path, refused, not broken",
+    async (ws) => {
+      // merge-tree exits 1 with a tree and an EMPTY conflicted-file list here
+      // (git's own documented case); the verdict is the exit status, so this is
+      // a refusal, not "reported a conflict but named no path".
+      const { repo } = await buildRepo(ws, "dirsplit");
+      mkdirSync(join(repo, "z"));
+      writeFileSync(join(repo, "z", "b"), "b\n");
+      writeFileSync(join(repo, "z", "c"), "c\n");
+      await git(repo, "add", "-A");
+      await git(repo, "commit", "-qm", "z/b and z/c");
+      await git(repo, "push", "-q", "origin", "main");
+      await git(repo, "branch", "-f", "topic", "main");
+      await commitOnBranch(repo, "topic", join("z", "d"), "d\n");
+      mkdirSync(join(repo, "y"));
+      mkdirSync(join(repo, "w"));
+      await git(repo, "mv", join("z", "b"), join("y", "b"));
+      await git(repo, "mv", join("z", "c"), join("w", "c"));
+      await git(repo, "commit", "-qm", "split z");
+      await git(repo, "push", "-q", "origin", "main");
+      expect(
+        await retire(ws, { repo }, ["--repo-root", repo, "--branch", "topic", "--execute"]),
+      ).toEqual({
+        status: EXIT_REFUSED,
+        stdout: lines(FETCH, BRANCH),
+        stderr: `REFUSED: ${notContained()}, and merging it there CONFLICTS without a file-level path (a directory rename split)`,
+        branch: "unchanged",
+        tree: "none",
+      });
+    },
+  );
+
+  scenario(
+    "REFUSE: a branch whose change CONFLICTS with the mainline's is refused with the conflict",
+    async (ws) => {
+      // Neither tree contains the other's version of the line, so nothing proves
+      // the branch landed; the refusal says conflict, not "would change". From a
+      // nested --repo-root, merge-tree prints cwd-relative names (`../base.txt`);
+      // the refusal still names the repository path.
+      const { repo } = await buildRepo(ws, "conflict");
+      mkdirSync(join(repo, "sub"));
+      await commitOnMain(repo, join("sub", "keep.txt"), "kept\n");
+      await git(repo, "push", "-q", "origin", "main");
+      await git(repo, "branch", "-f", "topic", "main");
+      await commitOnBranch(repo, "topic", "base.txt", "topic\n");
+      await commitOnMain(repo, "base.txt", "mainline\n");
+      await git(repo, "push", "-q", "origin", "main");
+      expect(
+        await retire(ws, { repo }, [
+          "--repo-root",
+          join(repo, "sub"),
+          "--branch",
+          "topic",
+          "--execute",
+        ]),
+      ).toEqual({
+        status: EXIT_REFUSED,
+        stdout: lines(FETCH, BRANCH),
+        stderr: conflicts("base.txt"),
+        branch: "unchanged",
+        tree: "none",
+      });
+    },
+  );
+
+  scenario("ALLOW: a REBASE-merged branch passes by three-way merge", async (ws) => {
     const { repo } = await buildRepo(ws, "rebase");
     await commitOnMain(repo, "other.txt", "moved ahead\n");
     await commitOnBranch(repo, "topic", "t.txt", "topic\n");
@@ -637,33 +765,72 @@ describe("retire-branch.mts landing gates", () => {
     }).toEqual({
       ancestry: 1,
       status: EXIT_OK,
-      stdout: lines(FETCH, BRANCH, landedByContent(1), NO_TREE, HELD, DELETED, RETIRED),
+      stdout: lines(FETCH, BRANCH, landedByMerge(), NO_TREE, HELD, DELETED, RETIRED),
       stderr: "",
       branch: "absent",
       tree: "none",
     });
   });
 
-  scenario("BROKEN: a content check whose diff command fails is exit 3", async (ws) => {
-    const { repo } = await buildRepo(ws, "diffbroken");
-    await commitOnBranch(repo, "topic", "t.txt", "topic\n");
-    await squashLandTopic(repo);
-    const env = gitFailingShim(ws, "diffbroken", "--no-textconv");
-    expect(
-      await retire(ws, { repo }, ["--repo-root", repo, "--branch", "topic", "--execute"], { env }),
-    ).toEqual({
-      status: EXIT_BROKEN,
-      stdout: lines(FETCH, BRANCH),
-      stderr: `BROKEN: ${notContained()}, and the content check could not run: git diff <sha3> <sha2>: shim: refusing --no-textconv`,
-      branch: "unchanged",
-      tree: "none",
-    });
-  });
+  scenario(
+    "BROKEN: a merge-tree that fails, or a git without --write-tree, is exit 3, never a refusal",
+    async (ws) => {
+      // merge-tree exits 1 for a conflict AND for an argument it cannot merge;
+      // only a printed tree id makes the 1 a conflict. An unknown option is
+      // git's exit 129, which must name the version floor instead of refusing.
+      // Unrelated histories are git's own 128: the message passes through
+      // without the version hint, which would mislead there.
+      const { repo } = await buildRepo(ws, "mergebroken");
+      await commitOnBranch(repo, "topic", "t.txt", "topic\n");
+      await squashLandTopic(repo);
+      const version = (await git(repo, "--version")).trim();
+      const args = ["--repo-root", repo, "--branch", "topic", "--execute"];
+      const failing = await retire(ws, { repo }, args, {
+        env: gitFailingShim(ws, "mergefail", "merge-tree"),
+      });
+      const old = await retire(ws, { repo }, args, {
+        env: gitShim(
+          ws,
+          "mergeold",
+          `  *"merge-tree"*) echo "error: unknown option \\\`write-tree'" >&2; exit 129 ;;`,
+        ),
+      });
+      const emptyTree = (await git(repo, "hash-object", "-t", "tree", "/dev/null")).trim();
+      const root = (await git(repo, "commit-tree", emptyTree, "-m", "orphan")).trim();
+      await git(repo, "branch", "-f", "topic", root);
+      const orphan = await retire(ws, { repo }, args);
+      expect({ failing, old, orphan }).toEqual({
+        failing: {
+          status: EXIT_BROKEN,
+          stdout: lines(FETCH, BRANCH),
+          stderr: `${mergeCouldNotRun} printed no tree (exit 1): shim: refusing merge-tree`,
+          branch: "unchanged",
+          tree: "none",
+        },
+        old: {
+          status: EXIT_BROKEN,
+          stdout: lines(FETCH, BRANCH),
+          stderr: `${mergeCouldNotRun} exited 129 (${version}; 2.38 or newer is required): error: unknown option \`write-tree'`,
+          branch: "unchanged",
+          tree: "none",
+        },
+        orphan: {
+          status: EXIT_BROKEN,
+          stdout: lines(FETCH, BRANCH),
+          stderr: `${mergeCouldNotRun} exited 128: fatal: refusing to merge unrelated histories`,
+          branch: "unchanged",
+          tree: "none",
+        },
+      });
+    },
+  );
 
   scenario(
-    "REFUSE: an unlanded branch whose commits net to NO delta is not judged landed",
+    "ALLOW: a branch whose commits net to NO delta carries nothing the mainline lacks",
     async (ws) => {
-      // An empty delta is not equivalence: there is nothing to compare.
+      // Its tree is the mainline's own, so the merge gives that tree back; the
+      // per-path check used to refuse this as "no delta to judge", a vacuity
+      // guard the whole-tree comparison no longer needs.
       const { repo } = await buildRepo(ws, "nodelta");
       const tree = join(ws, "nodelta-tree");
       await git(repo, "worktree", "add", "-q", tree, "topic");
@@ -672,21 +839,22 @@ describe("retire-branch.mts landing gates", () => {
       expect(
         await retire(ws, { repo }, ["--repo-root", repo, "--branch", "topic", "--execute"]),
       ).toEqual({
-        status: EXIT_REFUSED,
-        stdout: lines(FETCH, BRANCH),
-        stderr: `REFUSED: ${notContained()}, and there is no delta to judge by content`,
-        branch: "unchanged",
+        status: EXIT_OK,
+        stdout: lines(FETCH, BRANCH, landedByMerge(), NO_TREE, HELD, DELETED, RETIRED),
+        stderr: "",
+        branch: "absent",
         tree: "none",
       });
     },
   );
 
   scenario(
-    "REFUSE: a gitlink that differs at the tip is judged even under diff.ignoreSubmodules=all",
+    "REFUSE: a gitlink the mainline re-pointed after the squash is a conflict even under diff.ignoreSubmodules=all",
     async (ws) => {
-      // The branch bumps a submodule pointer and adds a file; both squash-land,
-      // then the mainline moves the pointer back. With the config honoured the
-      // gitlink difference would be hidden and the file alone would look landed.
+      // The branch adds a submodule pointer and a file; both squash-land, then
+      // the mainline points the gitlink elsewhere. Both sides added the gitlink
+      // with different ids, so the merge conflicts on it; diff config does not
+      // reach the merge, and a plain diff under that config would hide the gitlink.
       const { repo } = await buildRepo(ws, "gitlink");
       const first = "1111111111111111111111111111111111111111";
       const second = "2222222222222222222222222222222222222222";
@@ -699,7 +867,7 @@ describe("retire-branch.mts landing gates", () => {
       await git(repo, "worktree", "remove", "--force", tree);
       await squashLandTopic(repo);
       await git(repo, "update-index", "--add", "--cacheinfo", `160000,${second},sub`);
-      await git(repo, "commit", "-qm", "move the pointer back");
+      await git(repo, "commit", "-qm", "point the gitlink elsewhere");
       await git(repo, "push", "-q", "origin", "main");
       await git(repo, "config", "diff.ignoreSubmodules", "all");
       const hiddenByConfig = (await git(repo, "diff", "--name-only", "main", "topic")).trim();
@@ -710,7 +878,7 @@ describe("retire-branch.mts landing gates", () => {
         hiddenByConfig: "",
         status: EXIT_REFUSED,
         stdout: lines(FETCH, BRANCH),
-        stderr: differs("sub"),
+        stderr: conflicts("sub"),
         branch: "unchanged",
         tree: "none",
       });
@@ -718,7 +886,7 @@ describe("retire-branch.mts landing gates", () => {
   );
 
   scenario(
-    "REFUSE: an unlanded file whose name is not valid UTF-8 is still judged by content",
+    "REFUSE: an unlanded file whose name is not valid UTF-8 is still named by the merge check",
     async (ws) => {
       // The name is built through `mktree -z` from raw bytes, since the
       // filesystem may refuse it; decoding it and passing it back to git as a
@@ -808,7 +976,7 @@ describe("retire-branch.mts landing gates", () => {
   });
 
   scenario(
-    "REFUSE: a pre-rebase original tip that is not contained is judged by content and refused when it differs",
+    "REFUSE: a pre-rebase original tip that is not contained is judged by merge and refused when it would change the tip",
     async (ws) => {
       const { repo } = await buildRepo(ws, "rebased");
       await commitOnBranch(repo, "topic", "t.txt", "topic\n");
@@ -1013,7 +1181,7 @@ describe("retire-branch.mts landing gates", () => {
       await git(tree, "commit", "-qm", "inside and outside");
       await git(repo, "worktree", "remove", "--force", tree);
       await squashLandTopic(repo);
-      await commitOnBranch(repo, "topic", "out.txt", "changed again, not landed\n");
+      await commitOnBranch(repo, "topic", "out2.txt", "also outside, not landed\n");
       await git(repo, "config", "diff.relative", "true");
       expect(
         await retire(ws, { repo }, [
@@ -1026,7 +1194,7 @@ describe("retire-branch.mts landing gates", () => {
       ).toEqual({
         status: EXIT_REFUSED,
         stdout: lines(FETCH, BRANCH),
-        stderr: differs("out.txt"),
+        stderr: differs("out2.txt"),
         branch: "unchanged",
         tree: "none",
       });

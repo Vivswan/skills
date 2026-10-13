@@ -3,7 +3,7 @@
 `/worktree-hygiene` fires when a session creates, removes, hands over, or shares git worktrees. A worktree is shared mutable state, and every rule guards against a destructive failure seen in production:
 
 - **Removal safety**: fresh status codes (never a stale dirty count), no live process with its cwd inside the tree, no locked tree removed blind
-- **Branch retirement**: `scripts/retire-branch.mts` retires a landed branch as one gated program. It fetches into a private ref, proves the landing by ancestry or by content equivalence for squash and rebase merges, enforces the removal rules on the worktree, removes it, and deletes the ref pinned to the verified sha. It rehearses by default and destroys only with `--execute`.
+- **Branch retirement**: `scripts/retire-branch.mts` retires a landed branch as one gated program. It fetches into a private ref, proves the landing by ancestry or by a three-way merge (`git merge-tree`) for squash and rebase merges, enforces the removal rules on the worktree, removes it, and deletes the ref pinned to the verified sha. It rehearses by default and destroys only with `--execute`.
 - **Handover**: ownership transfers explicitly. Stop the predecessor first, check for a live writer before editing, never message a stopped actor whose directory is gone.
 - **File ownership**: one owner per file across all rounds when several actors share a tree
 - **One branch, one worktree**: git refuses a checkout a sibling tree holds. Release before taking it elsewhere.

@@ -77,14 +77,21 @@ Every brief includes:
     ```text
     threads resolved    -> the GraphQL read: every node `isResolved: true` AND `hasNextPage: false` (else page on with `after:`; the API decides, never the reply you posted):
                            gh api graphql -f query='{repository(owner:"OWNER",name:"REPO"){pullRequest(number:N){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}'
+    a thread reply      -> the reply's own review state, since `gh api .../pulls/<n>/comments/<id>/replies` can file it into a PENDING review nobody else sees (replies from several builders sat unpublished while the threads showed resolved):
+                           gh api graphql -f query='{node(id:"<the node_id the reply call returned>"){... on PullRequestReviewComment{pullRequestReview{id state}}}}'
+                           `state` is COMMENTED, not PENDING; a PENDING one is submitted, `mutation{submitPullRequestReview(input:{pullRequestReviewId:"<id>",event:COMMENT}){pullRequestReview{state}}}`, then read back again
     a watch subscribed  -> the daemon's `status` line, quoted, naming the new target
     a push              -> `git -C <worktree> ls-remote origin refs/heads/<branch>`, equal to the HEAD it was meant to carry (never `rev-parse origin/<branch>`: a rejected push leaves that cached ref where it was)
     a PR opened/flipped -> `gh pr view <n> --json state,isDraft,url`
     worktree clean      -> `git -C <worktree> status --porcelain=v1 --untracked-files=all` prints nothing
     tests green         -> the launcher's own summary line, quoted (`bun run --cwd <worktree> test <files>` ends `N pass` / `0 fail` here), plus its exit code
-    a merge             -> `git -C <worktree> fetch <base-remote> <mainline>` (the remote the PR merges into, never a fork remote), then `git -C <worktree> merge-base --is-ancestor <track-tip> FETCH_HEAD`: exit 0 means a merge commit or fast-forward kept the ids and it landed, done. Exit 1 is a squash or nothing landed, so prove content: `<base>` is what `git -C <worktree> merge-base FETCH_HEAD <track-tip>` prints (the branch point; a squash leaves it there), and for every path `git -C <worktree> diff --no-renames --name-only <base>...<track-tip>` prints (the track's own list, read, never typed from memory; an EMPTY list is a broken read, never a pass, since with no paths the final command compares whole trees; `--no-renames` because rename detection lists only the destination, so a rename's source deletion would go unchecked),
-                           `git -C <worktree> diff --quiet <base>...<track-tip> -- <path>` exits 1 (three-dot, the list's own endpoints; added, edited, or deleted alike exit 1; a misspelled path exits 0 and is refused, since it would make the next check pass vacuously; never an existence check on FETCH_HEAD, which rejects every landed deletion), then
-                           `git -C <worktree> diff --quiet FETCH_HEAD <track-tip> -- <those paths>` exits 0 (ancestry is conclusive only while ids survive, and a squash rewrites them, hence content here; plain commands only, since item 13's sandbox refuses `xargs` or `$(...)` around git)
+    a merge             -> `git -C <worktree> fetch <base-remote> <mainline>` (the remote the PR merges into, never a fork remote), then
+                           `git -C <worktree> merge-base --is-ancestor <track-tip> FETCH_HEAD`: exit 0 means a merge commit or fast-forward kept the ids and it landed, done.
+                           Exit 1 is a squash or nothing landed, so prove content with a three-way merge, never a two-endpoint diff (a later mainline edit of a file the track touched fails that diff on a landed track):
+                           `git -C <worktree> merge-tree --write-tree FETCH_HEAD <track-tip>` exits 0 and prints the id that `git -C <worktree> rev-parse 'FETCH_HEAD^{tree}'` prints = landed, the track adds nothing the mainline lacks.
+                           A different id = not landed; name the paths: `git -C <worktree> diff --no-renames --name-only <FETCH_HEAD tree> <printed id>`. Exit 1 with a tree printed = a conflict; say so and name the paths it lists.
+                           Exit 1 with no tree ("not something we can merge"), or any other exit, is a broken read, never a pass
+                           (`--write-tree` needs git 2.38; plain commands only, since item 13's sandbox refuses `xargs` or `$(...)` around git)
     ```
 
     Three times in one session, each costing the lead a discovery cycle: a builder signaled "nothing pending" with four briefed review threads still open; a relay acknowledged two watch subscriptions the daemon never took (its `status` listed only the old target), so a merge went unseen; a builder reported threads "replied and resolved" before the API said so.
