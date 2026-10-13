@@ -101,7 +101,7 @@ const USAGE = [
   "       run-review.mts prepare <section>",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
   "codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir",
-  "prints: the JSON report (verdict, tool_calls, capture, sandbox, trajectory); --background prints output-file: <path> and pid: <n>",
+  "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
   "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
   "       1 review FAILED - relaunch: no usable verdict, whatever the cause, or --wait timed out; never a clean pass;",
   "       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository",
