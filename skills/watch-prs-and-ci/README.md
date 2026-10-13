@@ -20,7 +20,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-prs-and-
 
 ## What It Does
 
-- **One daemon per session**, started once as a background task; it is the session's own child, so its messages render as plain text, and it exits when the session does.
+- **One daemon per session**, started once as a background task; it is the session's own child, so its messages render as plain text, and it exits when the session does. The harness also ends a background task after two hours; the saved state survives, so the session starts it again.
 - **One `watch` per PR**, with the head it pushed and the complete gate set; a repeated call replaces the gates.
 - **Seven event kinds** as messages: comment, review, CI verdict with a log excerpt for up to three failed runs (the rest are counted), head moved to a SHA the session did not record, merged, closed, and tooling trouble. A poll's events arrive in one message.
 - **The merge commit's mainline CI** follows a merge event automatically. `watch-commit` covers a direct mainline push with no PR.

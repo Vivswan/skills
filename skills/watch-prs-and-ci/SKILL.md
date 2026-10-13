@@ -238,6 +238,7 @@ When a workflow's runs share a `concurrency` group key, GitHub keeps at most one
 | a `trouble` event: polling failed, polling retries | three consecutive polls failed (gh, network, or GitHub); the daemon keeps polling | wait for the recovery event; read the log if it does not come |
 | a `trouble` event: no merge commit reported | GitHub reported no merge commit for the merged PR within 5 polls | read the merge commit from the PR page and `watch-commit` it |
 | `status` names two daemon pids | a session starts its daemon once; two starts in the same instant on a stale socket can both bind | `stop` both, then start once |
+| the log ends `daemon <pid> stopped: SIGTERM` about two hours after the start, with the session still running | Claude Code ends a background task after two hours, the most it allows | start the daemon again with the same command; the saved state and log carry on, nothing is lost |
 
 A local subagent spawned with the Agent tool shares its session's inbox socket and pid (`CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_PID` are the session's, with `CLAUDE_CODE_CHILD_SESSION=1`), so a `watch` run inside it subscribes the session's daemon, and the events land with the session, which relays them. A teammate from agent teams is a separate process with its own socket and runs its own daemon.
 

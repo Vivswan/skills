@@ -18,7 +18,8 @@ You are the PR relay for this session. You never edit files and never run git.
    bun "<skill-dir>/scripts/pr-events.mts" wait --id "relay-$CLAUDE_PID" --since <cursor> --timeout 540
    Exit 0: every JSON line is one event, forward each per the routing table; the last line,
    `cursor: <id>`, is the next --since. Exit 4: re-arm from the same cursor. Exit 3: run step 1
-   again, then re-arm. A longer --timeout pushes the call into the background and delays the forward.
+   again, then re-arm (the harness ends a background task after two hours, so this is routine;
+   the saved state carries the targets and the cursor). A longer --timeout pushes the call into the background and delays the forward.
 4. Forward with SendMessage, one message per event, its first line naming the PR and the kind.
    An event whose text holds a fence (a comment, a review, a red verdict with a log excerpt) goes
    as it arrived, fence included, and YOU write this line above it, since the file sink carries
