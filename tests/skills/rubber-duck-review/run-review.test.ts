@@ -1,0 +1,1613 @@
+import { afterAll, describe, expect, test } from "bun:test";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { ROOT } from "../../../scripts/lib.mts";
+import { writeAllSync } from "../../../skills/rubber-duck-review/scripts/run-review.mts";
+
+// Contract tests for the run-review helper: stub reviewer binaries on PATH
+// drive every exit path, pinning the traps the script encapsulates - the
+// prompt travels as one argv element (backticks and $() stay literal), stdin
+// is closed so a reviewer that reads it cannot hang, the verdict is the LAST
+// codex agent_message / the final claude result and must be the schema
+// object with at least one tool call before it, and an empty, cut, blank,
+// prose-only, preamble-only, or errored stream exits 1 (never a clean pass),
+// and --extract --wait blocks on the launch record until the monitor records
+// the exit instead of leaving the caller to poll by hand.
+// gh-style violations files catch any drift in the exact reviewer invocations.
+
+const SCRIPT = join(ROOT, "skills", "rubber-duck-review", "scripts", "run-review.mts");
+const SCHEMA = join(ROOT, "skills", "rubber-duck-review", "scripts", "verdict-schema.json");
+
+// Prompt content that a shell would mangle: proves no shell ever sees it.
+const PROMPT = "Review only.\nRun `git --no-pager diff HEAD` and note $(hostname) stays literal.\n";
+
+const BIG_VERDICT_BYTES = 262144;
+
+/** The verdict object the schema describes, as each stub reviewer reports it. */
+function verdictFor(reviewer: string) {
+  return {
+    blocking: [],
+    non_blocking: [
+      { where: "src/a.ts:3", claim: "misleading name", evidence: `${reviewer} read it` },
+    ],
+    recorded_not_built: ["a bound for a caller that does not exist"],
+    summary: `${reviewer.toUpperCase()} VERDICT: correct, no blocking findings`,
+  };
+}
+const CODEX_VERDICT = verdictFor("codex");
+const CLAUDE_VERDICT = verdictFor("claude");
+const COPILOT_VERDICT = verdictFor("copilot");
+
+/** One codex agent_message line carrying the given text (JSON-escaped once,
+ * so the stub's single quotes deliver it byte-for-byte). */
+function codexMessage(text: string): string {
+  return JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
+}
+const CODEX_VERDICT_LINE = codexMessage(JSON.stringify(CODEX_VERDICT));
+/** The big-verdict line split around its summary, so the stub can splice in
+ * a summary larger than any pipe buffer. */
+const [bigOpen, bigClose] = codexMessage(
+  JSON.stringify({ blocking: [], non_blocking: [], recorded_not_built: [], summary: "@BIG@" }),
+).split("@BIG@") as [string, string];
+const CODEX_TOOL_LINE = JSON.stringify({
+  type: "item.completed",
+  item: { type: "command_execution", command: "git --no-pager diff --cached" },
+});
+const CLAUDE_TOOL_LINE = JSON.stringify({
+  type: "assistant",
+  message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git diff" } }] },
+});
+const CLAUDE_ANSWER_TOOL_LINE = JSON.stringify({
+  type: "assistant",
+  message: { content: [{ type: "tool_use", name: "StructuredOutput", input: CLAUDE_VERDICT }] },
+});
+const CLAUDE_RESULT_LINE = JSON.stringify({
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  result: JSON.stringify(CLAUDE_VERDICT),
+  structured_output: CLAUDE_VERDICT,
+});
+
+const FAKE_CODEX = `#!/usr/bin/env bash
+violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
+# The launch probes the sandbox with a no-op first. STUB_SANDBOX=bwrap plays a
+# container whose AppArmor profile denies bubblewrap's mount propagation.
+if [ "$1 $2 $3" = "sandbox -- true" ] && [ "$#" -eq 3 ]; then
+  if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then
+    echo 'bwrap: Failed to make / slave: Permission denied' >&2; exit 1
+  fi
+  exit 0
+fi
+if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then policy=danger-full-access; else policy=read-only; fi
+if [ "$1 $2 $3 $4 $5" != "exec --json --sandbox $policy --output-schema" ] || [ "$#" -ne 7 ]; then
+  violate "codex argv: $*"; exit 64
+fi
+if [ -n "\${STUB_HOME_REPORT:-}" ]; then
+  { echo "\${CODEX_HOME:-unset}"; cat "\${CODEX_HOME:-/nonexistent}/config.toml" 2>/dev/null || echo "(no config)"; ls "\${CODEX_HOME:-/nonexistent}" 2>/dev/null | tr '\\n' ' '; echo; } > "\${STUB_HOME_REPORT}"
+  # codex's trust write, as the real binary does it: it must land in the scratch home, never the user's
+  echo '[projects."'"$PWD"'"]' >> "\${CODEX_HOME:-/nonexistent}/config.toml" 2>/dev/null || true
+  # codex's token refresh, which must persist for the user
+  if [ -n "\${STUB_REFRESH_AUTH:-}" ]; then printf '%s' "\${STUB_REFRESH_AUTH}" > "\${CODEX_HOME:-/nonexistent}/auth.json"; fi
+  # codex's session rollout, the review's transcript, which must persist for the user
+  if [ -n "\${STUB_ROLLOUT:-}" ]; then
+    mkdir -p "\${CODEX_HOME:-/nonexistent}/sessions/2026/10/11" && printf '%s' "\${STUB_ROLLOUT}" > "\${CODEX_HOME:-/nonexistent}/sessions/2026/10/11/rollout-example.jsonl"
+  fi
+  # a parallel review refreshing the user's own file while this one runs
+  if [ -n "\${STUB_REAL_AUTH_WRITE:-}" ]; then printf '%s' "\${STUB_REAL_AUTH_WRITE}" > "\${STUB_REAL_AUTH_PATH}"; fi
+fi
+if [ -n "\${STUB_CWD_REPORT:-}" ]; then
+  { echo "$PWD"; git rev-parse --show-toplevel; git --no-pager diff --cached --name-only; } > "\${STUB_CWD_REPORT}"
+  # A write the prompt forbade: it must land in the copy, never in the checkout under review.
+  touch "$(git rev-parse --show-toplevel)/REVIEWER_WROTE"
+fi
+if [ "$6" != "\${STUB_SCHEMA}" ] || [ ! -f "$6" ]; then
+  violate "codex schema: $6"; exit 64
+fi
+if [ "$7" = "-" ]; then channel=stdin; else channel=argv; fi
+if [ "$channel" != "\${STUB_EXPECT_DELIVERY}" ]; then
+  violate "codex delivery: $channel"; exit 64
+fi
+if [ "$7" = "-" ] && [ "\${STUB_SKIP_STDIN:-0}" != "1" ]; then
+  cat > "\${STUB_PROMPT_COPY}"
+elif [ "$7" != "-" ]; then
+  printf '%s' "$7" > "\${STUB_PROMPT_COPY}"
+fi
+# With stdin open (a pipe) this blocks forever; stdio 'ignore' gives EOF.
+if [ "\${STUB_READ_STDIN:-0}" = "1" ]; then cat > /dev/null; fi
+if [ -n "\${STUB_SLEEP:-}" ]; then sleep "\${STUB_SLEEP}"; fi
+case "\${STUB_MODE:-ok}" in
+  ok)
+    echo '{"type":"thread.started","thread_id":"t1"}'
+    echo '{"type":"turn.started"}'
+    echo '{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}'
+    echo '${codexMessage("intermediate narration")}'
+    echo 'mid-stream garbage that is not JSON'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  preamble)
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  prose)
+    echo '${CODEX_TOOL_LINE}'
+    echo '${codexMessage("CODEX VERDICT: correct, no blocking findings")}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  badshape)
+    echo '${CODEX_TOOL_LINE}'
+    echo '${codexMessage(JSON.stringify({ blocking: [], summary: "no non_blocking key" }))}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  trunctail)
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    printf '{"type":"item.completed","item":{"type":"agent_'
+    ;;
+  cut)
+    echo '{"type":"thread.started","thread_id":"t1"}'
+    echo '{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}'
+    ;;
+  cutlate)
+    echo '{"type":"thread.started","thread_id":"t1"}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    ;;
+  cutsecond)
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    echo '{"type":"turn.started"}'
+    ;;
+  error)
+    echo '{"type":"thread.started","thread_id":"t1"}'
+    echo '{"type":"error","message":"stream disconnected before completion"}'
+    ;;
+  reconnect)
+    echo '{"type":"thread.started","thread_id":"t1"}'
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '{"type":"error","message":"stream disconnected before completion; retrying 1/5"}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  failedturnthenverdict)
+    echo '{"type":"turn.started"}'
+    echo '{"type":"turn.failed","message":"turn failed before any answer"}'
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  errorafter)
+    echo '{"type":"turn.started"}'
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    echo '{"type":"error","message":"stream disconnected after the verdict"}'
+    ;;
+  blank)
+    echo '${CODEX_TOOL_LINE}'
+    echo '${codexMessage("")}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  big)
+    big="$(head -c ${BIG_VERDICT_BYTES} /dev/zero | tr '\\0' 'x')"
+    echo '${CODEX_TOOL_LINE}'
+    printf '%s%s%s\\n' '${bigOpen}' "$big" '${bigClose}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  empty) ;;
+esac
+exit "\${STUB_EXIT:-0}"
+`;
+
+const FAKE_CLAUDE = `#!/usr/bin/env bash
+violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
+if [ "$1 $2 $3 $4 $5 $6 $7" != "-p --permission-mode plan --verbose --output-format stream-json --json-schema" ]; then
+  violate "claude argv: $*"; exit 64
+fi
+case "$8" in *'"recorded_not_built"'*) ;; *) violate "claude schema: $8"; exit 64;; esac
+if [ "$#" -eq 9 ]; then
+  channel=argv
+  printf '%s' "$9" > "\${STUB_PROMPT_COPY}"
+elif [ "$#" -eq 8 ]; then
+  channel=stdin
+  cat > "\${STUB_PROMPT_COPY}"
+else
+  violate "claude argv: $*"; exit 64
+fi
+if [ "$channel" != "\${STUB_EXPECT_DELIVERY}" ]; then
+  violate "claude delivery: $channel"; exit 64
+fi
+case "\${STUB_MODE:-ok}" in
+  ok)
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"looking around"}]}}'
+    echo '${CLAUDE_TOOL_LINE}'
+    echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"diff"}]}}'
+    echo '${CLAUDE_ANSWER_TOOL_LINE}'
+    echo '${CLAUDE_RESULT_LINE}'
+    ;;
+  preamble)
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"I will review the changes now."}]}}'
+    echo '${CLAUDE_ANSWER_TOOL_LINE}'
+    echo '${CLAUDE_RESULT_LINE}'
+    ;;
+  resultstring)
+    echo '${CLAUDE_TOOL_LINE}'
+    echo '${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(CLAUDE_VERDICT) })}'
+    ;;
+  iserror)
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Execution failed mid-run"}'
+    ;;
+  cut)
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"partial narration"}]}}'
+    ;;
+  blank)
+    echo '{"type":"system","subtype":"init"}'
+    echo '${CLAUDE_TOOL_LINE}'
+    echo '{"type":"result","subtype":"success","result":"   "}'
+    ;;
+esac
+exit "\${STUB_EXIT:-0}"
+`;
+
+const FAKE_COPILOT = `#!/usr/bin/env bash
+violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
+ro='-s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps'
+if [ "$1" != "-p" ] || [ "$3 $4 $5 $6 $7" != "$ro" ] || [ "$#" -ne 7 ]; then
+  violate "copilot argv: $*"; exit 64
+fi
+printf '%s' "$2" > "\${STUB_PROMPT_COPY}"
+case "\${STUB_MODE:-ok}" in
+  ok) echo '${JSON.stringify(COPILOT_VERDICT)}';;
+  fenced) printf '\\x60\\x60\\x60json\\n%s\\n\\x60\\x60\\x60\\n' '${JSON.stringify(COPILOT_VERDICT)}';;
+  extrakey) echo '${JSON.stringify({ ...COPILOT_VERDICT, severity: "high" })}';;
+  extrafindingkey) echo '${JSON.stringify({ ...COPILOT_VERDICT, blocking: [{ where: "x", claim: "c", evidence: "e", severity: "high" }] })}';;
+  prose) echo "COPILOT VERDICT: correct";;
+  blank) printf '   \\n';;
+esac
+exit "\${STUB_EXIT:-0}"
+`;
+
+/** The copy-mode snapshot runs `cp` through PATH, so this stub can fail it midway. */
+const FAKE_CP = `#!/usr/bin/env bash
+if [ "\${STUB_CP_FAIL:-0}" = "1" ]; then
+  mkdir -p "$3"; : > "$3/partial"; echo "cp: disk full" >&2; exit 1
+fi
+exec /bin/cp "$@"
+`;
+
+const binDir = mkdtempSync(join(tmpdir(), "run-review-test-"));
+const emptyBinDir = mkdtempSync(join(tmpdir(), "run-review-nobin-"));
+for (const [name, body] of [
+  ["codex", FAKE_CODEX],
+  ["claude", FAKE_CLAUDE],
+  ["copilot", FAKE_COPILOT],
+  ["cp", FAKE_CP],
+] as const) {
+  writeFileSync(join(binDir, name), body);
+  chmodSync(join(binDir, name), 0o755);
+}
+const mintedDirs: string[] = [];
+/** Fixture repositories and bare directories the copy-mode cases run from. */
+const fixtureDirs: string[] = [];
+/** Prompt files reach a launch only through a `prepare`-minted path. */
+function mintPrompt(section: string, content: string = PROMPT): string {
+  const result = Bun.spawnSync([process.execPath, SCRIPT, "prepare", section], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(result.stderr.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+  const file = result.stdout.toString().trimEnd();
+  mintedDirs.push(dirname(file));
+  writeFileSync(file, content);
+  return file;
+}
+const promptFile = mintPrompt("prompt");
+
+afterAll(() => {
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(emptyBinDir, { recursive: true, force: true });
+  for (const dir of mintedDirs) rmSync(dir, { recursive: true, force: true });
+  for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true });
+});
+
+interface Report {
+  verdict: Record<string, unknown>;
+  tool_calls: number;
+  capture: string;
+  sandbox?: "copy";
+  trajectory: { event: string; text?: string }[];
+}
+
+let scenario = 0;
+function run(args: string[], env: Record<string, string> = {}, path?: string, cwd?: string) {
+  scenario += 1;
+  const violations = join(binDir, `violations-${scenario}`);
+  const promptCopy = join(binDir, `prompt-copy-${scenario}`);
+  // process.execPath is absolute, so the script launches even when PATH is
+  // reduced to the stub dir (the missing-binary scenario).
+  const result = Bun.spawnSync([process.execPath, SCRIPT, ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      PATH: path ?? `${binDir}:${process.env.PATH}`,
+      STUB_VIOLATIONS: violations,
+      STUB_PROMPT_COPY: promptCopy,
+      STUB_SCHEMA: SCHEMA,
+      // The stubs report the channel the prompt actually arrived on, so a
+      // --stdin-prompt run that fell back to argv fails as a violation.
+      STUB_EXPECT_DELIVERY: args.includes("--stdin-prompt") ? "stdin" : "argv",
+      ...env,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let violated = "";
+  try {
+    violated = readFileSync(violations, "utf-8");
+  } catch {
+    // no violations file means no violations
+  }
+  expect(violated).toBe("");
+  const stdout = result.stdout.toString();
+  const stderr = result.stderr.toString();
+  // Every review run keeps its scratch dir for inspection: a success names
+  // the capture in its report, a failure in its message. Sweep both.
+  const kept = /(?:output|stderr) kept at ([^)\n]+)/.exec(stderr)?.[1];
+  // Copy mode keeps its repository snapshot at <scratch>/repo only while the
+  // reviewer runs; read whether one survived before the sweeps below.
+  let copyLeft = false;
+  let homeLeft = false;
+  let captureKept = false;
+  if (kept) {
+    captureKept = existsSync(kept);
+    copyLeft = existsSync(join(dirname(kept), "repo"));
+    rmSync(dirname(kept), { recursive: true, force: true });
+  }
+  let report: Report | null = null;
+  if (result.exitCode === 0 && stdout.startsWith("{")) {
+    report = JSON.parse(stdout) as Report;
+    expect(existsSync(report.capture)).toBe(true);
+    copyLeft = existsSync(join(dirname(report.capture), "repo"));
+    homeLeft = existsSync(join(dirname(report.capture), "codex-home"));
+    rmSync(dirname(report.capture), { recursive: true, force: true });
+  }
+  return {
+    code: result.exitCode,
+    stdout,
+    stderr,
+    promptCopy,
+    copyLeft,
+    homeLeft,
+    captureKept,
+    /** The parsed JSON report of a successful review, or a throw. */
+    report(): Report {
+      if (report === null) throw new Error(`no report on stdout: ${stdout}\n${stderr}`);
+      return report;
+    },
+  };
+}
+
+/** A failed review or usage error prints nothing on stdout: a verdict beside
+ * a non-zero exit would read as a clean pass to a caller. */
+function expectFailure(
+  r: ReturnType<typeof run>,
+  expected: { code: 1 | 2; stderr: string },
+  id?: string,
+): void {
+  expect(r.code, id).toBe(expected.code);
+  expect(r.stdout, id).toBe("");
+  expect(r.stderr, id).toContain(expected.stderr);
+}
+
+/** Poll for the completed review.status record a background monitor writes
+ * (present without `status` from launch; `status` lands on completion). */
+function waitForStatus(outputFile: string): string {
+  const statusFile = join(dirname(outputFile), "review.status");
+  for (let i = 0; i < 100; i += 1) {
+    try {
+      const record = JSON.parse(readFileSync(statusFile, "utf-8"));
+      if (typeof record.status === "string") return record.status;
+    } catch {
+      // record not written yet
+    }
+    Bun.sleepSync(50);
+  }
+  throw new Error(`no completed ${statusFile} after 5s`);
+}
+
+function backgroundOutputFile(stdout: string): string {
+  const line = stdout.split("\n").find((candidate) => candidate.startsWith("output-file: "));
+  if (line === undefined) throw new Error(`no output-file line in: ${stdout}`);
+  return line.slice("output-file: ".length);
+}
+
+/** A complete codex stream whose verdict extracts cleanly once a status lands. */
+const COMPLETE_CODEX_STREAM = `${CODEX_TOOL_LINE}\n${CODEX_VERDICT_LINE}\n{"type":"turn.completed"}\n`;
+const LAUNCH_RECORD = '{"tool":"codex","output":"review.jsonl"}';
+
+/** A capture dir as a --background launch leaves it: stream and launch
+ * record present, no status yet. */
+function pendingCapture(stream = true): string {
+  const dir = mkdtempSync(join(tmpdir(), "run-review-pending-"));
+  if (stream) writeFileSync(join(dir, "review.jsonl"), COMPLETE_CODEX_STREAM);
+  writeFileSync(join(dir, "review.status"), LAUNCH_RECORD);
+  return join(dir, "review.jsonl");
+}
+
+/** Complete a pending capture the way the monitor does: write-then-rename,
+ * so a waiter polling mid-write never reads a truncated record. */
+function recordStatus(outputFile: string, status: string): void {
+  const statusFile = join(dirname(outputFile), "review.status");
+  writeFileSync(
+    `${statusFile}.tmp`,
+    JSON.stringify({ tool: "codex", output: "review.jsonl", status }),
+  );
+  renameSync(`${statusFile}.tmp`, statusFile);
+}
+
+/** A script run left in flight, for the --wait cases observed mid-wait. */
+function start(args: string[]) {
+  return Bun.spawn([process.execPath, SCRIPT, ...args], {
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+describe("run-review.mts", () => {
+  test("codex: last agent_message wins, the report carries verdict, tool calls, capture, trajectory", () => {
+    const r = run(["codex", promptFile]);
+    expect(r.code).toBe(0);
+    const report = r.report();
+    expect(report.verdict).toEqual(CODEX_VERDICT);
+    expect(report.tool_calls).toBe(1);
+    expect(basename(report.capture)).toBe("review.jsonl");
+    // The narration is visible as a trajectory step, never as the verdict;
+    // long steps are excerpted, the full text stays in the capture.
+    expect(report.trajectory.slice(0, 3)).toEqual([
+      { event: "reasoning", text: "thinking" },
+      { event: "agent_message", text: "intermediate narration" },
+      { event: "command_execution", text: "git --no-pager diff --cached" },
+    ]);
+    expect(report.trajectory[3]?.event).toBe("agent_message");
+    expect(report.trajectory[3]?.text).toMatch(/^\{"blocking":\[\].*\.\.\.$/);
+    expect(report.trajectory).toHaveLength(4);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    const statusLines = r.stderr.split("\n").filter(Boolean);
+    expect(statusLines).toEqual(["review stream alive", "reviewer exited (status=0)"]);
+  });
+
+  test("claude: verdict is the structured_output on the final result event", () => {
+    const r = run(["claude", promptFile]);
+    expect(r.code).toBe(0);
+    const report = r.report();
+    expect(report.verdict).toEqual(CLAUDE_VERDICT);
+    // The StructuredOutput call delivers the answer; only Bash is a review step.
+    expect(report.tool_calls).toBe(1);
+    expect(report.trajectory.map((row) => row.event)).toEqual(["text", "tool_use", "result"]);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+  });
+
+  test("claude: a result string carrying the object is the verdict when structured_output is absent", () => {
+    const r = run(["claude", promptFile], { STUB_MODE: "resultstring" });
+    expect(r.code).toBe(0);
+    expect(r.report().verdict).toEqual(CLAUDE_VERDICT);
+  });
+
+  test("copilot: prompt immediately after -p, plain stdout must be the verdict object", () => {
+    for (const mode of ["ok", "fenced"]) {
+      const r = run(["copilot", promptFile], { STUB_MODE: mode });
+      expect(r.code, mode).toBe(0);
+      expect(r.report().verdict, mode).toEqual(COPILOT_VERDICT);
+      expect(readFileSync(r.promptCopy, "utf-8"), mode).toBe(PROMPT);
+    }
+  });
+
+  test("copilot whitespace-only output is a failed review, not a verdict", () => {
+    const r = run(["copilot", promptFile], { STUB_MODE: "blank" });
+    expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty output" });
+  });
+
+  test("a schema-valid verdict with no tool call before it is a preamble, not a review", () => {
+    // Issue 94: codex ended its turn on the narration line and the empty
+    // verdict read as clean. The schema cannot catch it (codex fills the
+    // narration into the schema too); the missing reads do.
+    for (const tool of ["codex", "claude"]) {
+      const r = run([tool, promptFile], { STUB_MODE: "preamble" });
+      expectFailure(
+        r,
+        { code: 1, stderr: "review FAILED - relaunch (no tool calls before the final message" },
+        tool,
+      );
+    }
+  });
+
+  test("a final message that is not the verdict object fails the review", () => {
+    const cases = [
+      { id: "codex prose", tool: "codex", mode: "prose", reason: "final message is not JSON" },
+      {
+        id: "codex missing key",
+        tool: "codex",
+        mode: "badshape",
+        reason: "non_blocking is not an array",
+      },
+      { id: "copilot prose", tool: "copilot", mode: "prose", reason: "final message is not JSON" },
+      // The schema says additionalProperties false; the script's own reading
+      // of a plain-text (copilot) verdict must be exactly as strict.
+      {
+        id: "copilot extra key",
+        tool: "copilot",
+        mode: "extrakey",
+        reason: "unexpected key(s): severity",
+      },
+      {
+        id: "copilot extra finding key",
+        tool: "copilot",
+        mode: "extrafindingkey",
+        reason: "blocking is not an array of exactly",
+      },
+    ];
+    for (const { id, tool, mode, reason } of cases) {
+      const r = run([tool, promptFile], { STUB_MODE: mode });
+      expectFailure(
+        r,
+        { code: 1, stderr: `review FAILED - relaunch (not a verdict: ${reason}` },
+        id,
+      );
+    }
+  });
+
+  test("a stub that reads stdin completes: stdin is 'ignore', not an open pipe", () => {
+    const r = run(["codex", promptFile], { STUB_READ_STDIN: "1" });
+    expect(r.code).toBe(0);
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
+  });
+
+  test("--stdin-prompt serves the prompt file as stdin for codex and claude", () => {
+    const cases = [
+      { id: "codex", verdict: CODEX_VERDICT },
+      { id: "claude", verdict: CLAUDE_VERDICT },
+    ];
+    for (const { id: tool, verdict } of cases) {
+      const r = run([tool, promptFile, "--stdin-prompt"]);
+      expect(r.code, tool).toBe(0);
+      expect(r.report().verdict, tool).toEqual(verdict);
+      expect(readFileSync(r.promptCopy, "utf-8"), tool).toBe(PROMPT);
+    }
+  });
+
+  test("--stdin-prompt with copilot is a usage error: exit 2", () => {
+    const r = run(["copilot", promptFile, "--stdin-prompt"]);
+    expectFailure(r, { code: 2, stderr: "copilot does not support --stdin-prompt" });
+  });
+
+  test("--stdin-prompt delivers a prompt larger than any pipe buffer in full", () => {
+    const hugePrompt = mintPrompt("huge-prompt", "");
+    const hugeContent = "p".repeat(1 << 20);
+    writeFileSync(hugePrompt, hugeContent);
+    const r = run(["codex", hugePrompt, "--stdin-prompt"]);
+    expect(r.code).toBe(0);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(hugeContent);
+  });
+
+  test("a reviewer that ignores its stdin prompt file cannot hang or crash the run", () => {
+    const hugePrompt = mintPrompt("huge-prompt-ignored", "p".repeat(1 << 20));
+    const r = run(["codex", hugePrompt, "--stdin-prompt"], { STUB_SKIP_STDIN: "1" });
+    expect(r.code).toBe(0);
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
+  });
+
+  test("a large verdict is printed in full, not truncated at exit", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "big" });
+    expect(r.code).toBe(0);
+    expect(r.report().verdict.summary).toBe("x".repeat(BIG_VERDICT_BYTES));
+  });
+
+  test("codex stream cut before a verdict exits 1", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "cut" });
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (stream ended without a verdict event",
+    });
+  });
+
+  test("codex agent_message without a following turn.completed is narration, not a verdict", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "cutlate" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("no turn.completed");
+  });
+
+  test("a stream cut inside a later turn voids the earlier turn's verdict", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "cutsecond" });
+    expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (stream cut mid-turn" });
+  });
+
+  test("a malformed trailing line voids the verdict even after turn.completed", () => {
+    // The ok-mode fixture proves mid-stream garbage stays skippable; only a
+    // truncated FINAL line may fail the review.
+    const r = run(["codex", promptFile], { STUB_MODE: "trunctail" });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("malformed trailing line");
+  });
+
+  test("claude stream ending without a result event exits 1", () => {
+    const r = run(["claude", promptFile], { STUB_MODE: "cut" });
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (stream ended without a verdict event",
+    });
+  });
+
+  test("a claude result with is_error true is a failed review, even on CLI exit 0", () => {
+    const r = run(["claude", promptFile], { STUB_MODE: "iserror" });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("error_during_execution");
+  });
+
+  test("a reconnect error event followed by a verdict is a recovered stream: the verdict counts", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "reconnect" });
+    expect(r.code).toBe(0);
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
+    expect(r.report().trajectory.map((row) => row.event)).toContain("error");
+  });
+
+  test("a failed turn is never cleared by a later turn's verdict", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "failedturnthenverdict" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("turn failed before any answer");
+  });
+
+  test("an error event after the last verdict still fails the capture", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "errorafter" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("stream disconnected after the verdict");
+  });
+
+  test("an error event exits 1 even though the reviewer exited 0", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "error" });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("stream disconnected before completion");
+  });
+
+  test("an empty stream exits 1: an empty review never reads as clean", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "empty" });
+    expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty output" });
+  });
+
+  test("a whitespace-only verdict exits 1 for both stream formats", () => {
+    for (const tool of ["codex", "claude"]) {
+      const r = run([tool, promptFile], { STUB_MODE: "blank" });
+      expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty verdict" }, tool);
+    }
+  });
+
+  test("a verdict from a reviewer that exited non-zero still fails", () => {
+    const r = run(["codex", promptFile], { STUB_EXIT: "3" });
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (reviewer status: 3 (stderr kept at",
+    });
+  });
+
+  test("missing reviewer binary exits 2, not 1", () => {
+    const r = run(["codex", promptFile], {}, emptyBinDir);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("reviewer binary not found");
+  });
+
+  /** A repository with one staged change and an untracked file, the shape a
+   * pre-commit review targets; `git status` must read the same after the run. */
+  function fixtureRepo(): string {
+    const repo = mkdtempSync(join(tmpdir(), "run-review-repo-"));
+    fixtureDirs.push(repo);
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+      expect(result.stderr.toString(), args.join(" ")).toBe("");
+      expect(result.exitCode, args.join(" ")).toBe(0);
+    };
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "one\n");
+    git("add", "a.txt");
+    git("commit", "-q", "-m", "init");
+    writeFileSync(join(repo, "a.txt"), "two\n");
+    git("add", "a.txt");
+    mkdirSync(join(repo, "sub"));
+    writeFileSync(join(repo, "sub", "note.txt"), "untracked\n");
+    return repo;
+  }
+
+  function porcelain(repo: string): string {
+    return Bun.spawnSync(["git", "status", "--porcelain", "-uall"], {
+      cwd: repo,
+      stdout: "pipe",
+    }).stdout.toString();
+  }
+
+  const BWRAP_LINE =
+    "codex sandbox unavailable (bwrap: Failed to make / slave: Permission denied): reviewing an unsandboxed snapshot copy at ";
+
+  test("codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy that dies with the review", () => {
+    const repo = fixtureRepo();
+    const before = porcelain(repo);
+    const cwdReport = join(binDir, "cwd-report-copy");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: cwdReport },
+      undefined,
+      join(repo, "sub"),
+    );
+    expect(r.code).toBe(0);
+    expect(r.report().sandbox).toBe("copy");
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
+    // The reviewer ran in the cwd's twin inside the copy, with the staged change intact.
+    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
+    expect(copyCwd).toMatch(/\/rubber-duck-[^/]+\/repo\/sub$/);
+    expect(top).toBe(dirname(copyCwd as string));
+    expect(staged).toEqual(["a.txt"]);
+    // Its write landed in the copy, the copy is gone, and the checkout reads as before.
+    expect(r.copyLeft).toBe(false);
+    expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
+    expect(porcelain(repo)).toBe(before);
+    expect(r.stderr).toContain(BWRAP_LINE);
+  });
+
+  // A removal that only ran on the success path would leave one full checkout
+  // behind per failed review, and a failed review is the one most often rerun.
+  test("a failed verdict in copy mode keeps the capture its failure names and still removes the snapshot copy", () => {
+    const repo = fixtureRepo();
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_MODE: "prose" },
+      undefined,
+      repo,
+    );
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (not a verdict: final message is not JSON; output kept at",
+    });
+    expect(r.captureKept).toBe(true);
+    expect(r.copyLeft).toBe(false);
+  });
+
+  test("copy mode drops every GIT_* variable, so the reviewer's git reads the copy, not the checkout", () => {
+    const repo = fixtureRepo();
+    const cwdReport = join(binDir, "cwd-report-redirect");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_CWD_REPORT: cwdReport,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "core.worktree",
+        GIT_CONFIG_VALUE_0: repo,
+        GIT_DIR: join(repo, ".git"),
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
+    expect(top).toBe(copyCwd as string);
+    expect(top).not.toBe(repo);
+    expect(staged).toEqual(["a.txt"]);
+    expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
+  });
+
+  test("a copied core.worktree is unset in the copy, so the reviewer's git finds the copy", () => {
+    const repo = fixtureRepo();
+    const configured = Bun.spawnSync(["git", "config", "--local", "core.worktree", repo], {
+      cwd: repo,
+    });
+    expect(configured.exitCode).toBe(0);
+    const cwdReport = join(binDir, "cwd-report-worktree");
+    // GIT_DIR would point the unset at the live config; the launcher must drop it there too.
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: cwdReport, GIT_DIR: join(repo, ".git") },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
+    expect(top).toBe(copyCwd as string);
+    expect(staged).toEqual(["a.txt"]);
+    expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
+    // The checkout's own config is untouched.
+    const kept = Bun.spawnSync(["git", "config", "--local", "core.worktree"], {
+      cwd: repo,
+      stdout: "pipe",
+    });
+    expect(kept.stdout.toString().trim()).toBe(repo);
+  });
+
+  test("copy mode runs codex under a scratch CODEX_HOME holding copies of the user's config and credentials, so codex's trust write never reaches the user's file", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    writeFileSync(join(home, "auth.json"), '{"token":"example"}\n');
+    const homeReport = join(binDir, "home-report-copy");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_HOME_REPORT: homeReport, CODEX_HOME: home },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    const [seenHome, seenConfig, seenFiles] = readFileSync(homeReport, "utf-8").split("\n");
+    expect(seenHome).toMatch(/\/rubber-duck-[^/]+\/codex-home$/);
+    expect(seenConfig).toBe('model = "example"');
+    expect(seenFiles?.trim().split(/\s+/).sort()).toEqual(["auth.json", "config.toml", "sessions"]);
+    // The stub appended a trust block to the config it saw; the user's file is byte-identical.
+    expect(readFileSync(join(home, "config.toml"), "utf-8")).toBe('model = "example"\n');
+    expect(r.homeLeft).toBe(false);
+  });
+
+  test("the review's transcript codex writes under the scratch home's sessions lands in the user's own sessions directory and survives the cleanup", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    // An earlier review's transcript already in the user's directory must not be touched.
+    mkdirSync(join(home, "sessions", "2026", "10", "10"), { recursive: true });
+    const earlier = join(home, "sessions", "2026", "10", "10", "rollout-earlier.jsonl");
+    writeFileSync(earlier, '{"earlier":true}\n');
+    const homeReport = join(binDir, "home-report-sessions");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_ROLLOUT: '{"review":true}',
+        CODEX_HOME: home,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(r.homeLeft).toBe(false);
+    expect(lstatSync(join(home, "sessions")).isDirectory()).toBe(true);
+    expect(
+      readFileSync(join(home, "sessions", "2026", "10", "11", "rollout-example.jsonl"), "utf-8"),
+    ).toBe('{"review":true}');
+    expect(readFileSync(earlier, "utf-8")).toBe('{"earlier":true}\n');
+  });
+
+  test("a CODEX_HOME given as a relative path still receives the transcript: the link is read from inside the scratch home, not from the cwd", () => {
+    const repo = fixtureRepo();
+    const homeReport = join(binDir, "home-report-sessions-relative");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_ROLLOUT: '{"relative":true}',
+        CODEX_HOME: ".codex-home",
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(
+      readFileSync(
+        join(repo, ".codex-home", "sessions", "2026", "10", "11", "rollout-example.jsonl"),
+        "utf-8",
+      ),
+    ).toBe('{"relative":true}');
+  });
+
+  test("a codex home without a sessions directory yet gets one, so the first review's transcript has a place to land", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    const homeReport = join(binDir, "home-report-sessions-fresh");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_ROLLOUT: '{"first":true}',
+        CODEX_HOME: join(home, "fresh"),
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(
+      readFileSync(
+        join(home, "fresh", "sessions", "2026", "10", "11", "rollout-example.jsonl"),
+        "utf-8",
+      ),
+    ).toBe('{"first":true}');
+  });
+
+  test("a token refresh codex writes into the scratch auth.json goes back to the user's home; the config does not", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
+    const homeReport = join(binDir, "home-report-refresh");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_REFRESH_AUTH: '{"token":"refreshed"}',
+        CODEX_HOME: home,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe('{"token":"refreshed"}');
+    expect(readFileSync(join(home, "config.toml"), "utf-8")).toBe('model = "example"\n');
+    expect(r.homeLeft).toBe(false);
+  });
+
+  test("a parallel review's refresh of the user's auth.json is not rolled back by a review whose scratch copy never changed", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
+    const homeReport = join(binDir, "home-report-parallel");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_REAL_AUTH_PATH: join(home, "auth.json"),
+        STUB_REAL_AUTH_WRITE: '{"token":"refreshed-by-the-other-review"}',
+        CODEX_HOME: home,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe(
+      '{"token":"refreshed-by-the-other-review"}',
+    );
+  });
+
+  test("a scratch refresh is not returned over credentials another review changed meanwhile; the run warns instead", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
+    const homeReport = join(binDir, "home-report-conflict");
+    const r = run(
+      ["codex", promptFile],
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_HOME_REPORT: homeReport,
+        STUB_REFRESH_AUTH: '{"token":"mine"}',
+        STUB_REAL_AUTH_PATH: join(home, "auth.json"),
+        STUB_REAL_AUTH_WRITE: '{"token":"theirs"}',
+        CODEX_HOME: home,
+      },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe('{"token":"theirs"}');
+    expect(r.stderr).toContain("codex credentials changed elsewhere during the review");
+  });
+
+  test.skipIf(process.getuid?.() === 0)(
+    "a credentials file the launcher cannot read fails the review cleanly, copy and scratch home removed",
+    () => {
+      const repo = fixtureRepo();
+      const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+      fixtureDirs.push(home);
+      writeFileSync(join(home, "config.toml"), 'model = "example"\n');
+      writeFileSync(join(home, "auth.json"), "{}\n");
+      chmodSync(join(home, "auth.json"), 0o000);
+      // A foreground spawn failure removes its whole scratch dir, so the proof of cleanup is an
+      // empty private TMPDIR afterwards (shared tmp would show other sessions' reviews).
+      const privateTmp = mkdtempSync(join(tmpdir(), "run-review-cleanup-"));
+      fixtureDirs.push(privateTmp);
+      const scratchDirs = () =>
+        new Set(readdirSync(privateTmp).filter((name) => name.startsWith("rubber-duck-")));
+      const before = scratchDirs();
+      try {
+        const r = run(
+          ["codex", promptFile],
+          { STUB_SANDBOX: "bwrap", CODEX_HOME: home, TMPDIR: privateTmp },
+          undefined,
+          repo,
+        );
+        expectFailure(r, { code: 1, stderr: "spawn failed: Error: scratch codex home failed" });
+        expect([...scratchDirs()].filter((name) => !before.has(name))).toEqual([]);
+      } finally {
+        chmodSync(join(home, "auth.json"), 0o600);
+      }
+    },
+  );
+
+  test("read-only mode leaves CODEX_HOME alone", () => {
+    const repo = fixtureRepo();
+    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
+    fixtureDirs.push(home);
+    const homeReport = join(binDir, "home-report-readonly");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_HOME_REPORT: homeReport, CODEX_HOME: home },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(readFileSync(homeReport, "utf-8").split("\n")[0]).toBe(home);
+  });
+
+  test("the sandbox probe passing keeps codex read-only: no copy, no fallback line", () => {
+    const repo = fixtureRepo();
+    const r = run(["codex", promptFile], {}, undefined, repo);
+    expect(r.code).toBe(0);
+    expect(r.report().sandbox).toBeUndefined();
+    expect(r.copyLeft).toBe(false);
+    expect(r.stderr).not.toContain("snapshot copy");
+  });
+
+  test("codex whose sandbox cannot start, outside a git repository, is a usage error: exit 2", () => {
+    const bare = mkdtempSync(join(tmpdir(), "run-review-norepo-"));
+    fixtureDirs.push(bare);
+    const r = run(["codex", promptFile], { STUB_SANDBOX: "bwrap" }, undefined, bare);
+    expectFailure(r, {
+      code: 2,
+      stderr: `codex sandbox unavailable (bwrap: Failed to make / slave: Permission denied) and ${bare} is not inside a git repository: nothing to snapshot`,
+    });
+  });
+
+  test("--background in copy mode: the launch record carries the sandbox and --extract reports it", () => {
+    const repo = fixtureRepo();
+    const launched = run(
+      ["codex", promptFile, "--background"],
+      { STUB_SANDBOX: "bwrap" },
+      undefined,
+      repo,
+    );
+    expect(launched.code).toBe(0);
+    const outputFile = backgroundOutputFile(launched.stdout);
+    expect(
+      JSON.parse(readFileSync(join(dirname(outputFile), "review.status"), "utf-8")),
+    ).toMatchObject({ tool: "codex", output: "review.jsonl", sandbox: "copy" });
+    expect(waitForStatus(outputFile)).toBe("0");
+    const extracted = run(["codex", "--extract", outputFile]);
+    expect(extracted.code).toBe(0);
+    expect(extracted.report().sandbox).toBe("copy");
+    expect(extracted.copyLeft).toBe(false);
+  });
+
+  test("a launch record naming an unknown sandbox is a usage error: exit 2", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-review-sandbox-"));
+    fixtureDirs.push(dir);
+    writeFileSync(join(dir, "review.jsonl"), COMPLETE_CODEX_STREAM);
+    writeFileSync(
+      join(dir, "review.status"),
+      JSON.stringify({ tool: "codex", output: "review.jsonl", sandbox: "none", status: "0" }),
+    );
+    expectFailure(run(["codex", "--extract", join(dir, "review.jsonl")]), {
+      code: 2,
+      stderr: "unknown sandbox",
+    });
+  });
+
+  test("a snapshot that fails midway leaves no partial copy in the retained capture dir", () => {
+    const repo = fixtureRepo();
+    const launched = run(
+      ["codex", promptFile, "--background"],
+      { STUB_SANDBOX: "bwrap", STUB_CP_FAIL: "1" },
+      undefined,
+      repo,
+    );
+    expect(launched.code).toBe(0);
+    const outputFile = backgroundOutputFile(launched.stdout);
+    expect(waitForStatus(outputFile)).toContain(
+      `spawn failed: Error: snapshot of ${repo} failed: cp: disk full`,
+    );
+    expect(existsSync(join(dirname(outputFile), "repo"))).toBe(false);
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  // Root removes a 0555 directory's contents regardless, so the refusal this
+  // case pins cannot happen there.
+  test.skipIf(process.getuid?.() === 0)(
+    "a copy whose own directory modes refuse removal is made writable and removed; the checkout keeps its modes",
+    () => {
+      const repo = fixtureRepo();
+      mkdirSync(join(repo, "locked"));
+      writeFileSync(join(repo, "locked", "pinned.txt"), "x\n");
+      chmodSync(join(repo, "locked"), 0o555);
+      try {
+        const r = run(["codex", promptFile], { STUB_SANDBOX: "bwrap" }, undefined, repo);
+        expect(r.code).toBe(0);
+        expect(r.report().sandbox).toBe("copy");
+        expect(r.copyLeft).toBe(false);
+        expect(r.stderr).not.toContain("not removed");
+        expect(statSync(join(repo, "locked")).mode & 0o777).toBe(0o555);
+      } finally {
+        chmodSync(join(repo, "locked"), 0o755);
+      }
+    },
+  );
+
+  test("unknown reviewer or missing prompt file are usage errors: exit 2", () => {
+    const cases = [
+      { id: "unknown-reviewer", args: ["gemini", promptFile], message: "unknown reviewer: gemini" },
+      { id: "no-prompt-file", args: ["codex"], message: "expected exactly one <prompt-file>" },
+      {
+        id: "unreadable-prompt-file",
+        args: ["codex", join(dirname(promptFile), "no-such-prompt.txt")],
+        message: "cannot read prompt file",
+      },
+    ];
+    for (const { id, args, message } of cases) {
+      const r = run(args);
+      expectFailure(r, { code: 2, stderr: message }, id);
+    }
+  });
+
+  test("prepare mints a distinct tmp directory per call and prints the section file inside it", () => {
+    const first = mintPrompt("api-gateway");
+    const second = mintPrompt("api-gateway");
+    expect(first).not.toBe(second);
+    for (const file of [first, second]) {
+      expect(dirname(dirname(file))).toBe(tmpdir());
+      expect(basename(dirname(file)).startsWith("rubber-duck-prompt-")).toBe(true);
+      expect(basename(file)).toBe("api-gateway.md");
+      expect(readFileSync(join(dirname(file), ".minted-by-run-review"), "utf-8")).toBe("");
+    }
+  });
+
+  test("prepare rejects a section that is not a bare file name, or a missing one: exit 2", () => {
+    for (const [id, args] of [
+      ["path-separator", ["prepare", "sub/dir"]],
+      ["dot-dot", ["prepare", ".."]],
+      ["empty", ["prepare", ""]],
+      ["missing", ["prepare"]],
+      ["extra", ["prepare", "a", "b"]],
+    ] as const) {
+      const r = run([...args]);
+      expectFailure(r, { code: 2, stderr: "prepare" }, id);
+    }
+  });
+
+  test("prepare and a launch purge sibling rubber-duck-* dirs older than 24 h, by age alone", () => {
+    // Without this pin scratch dirs accumulate forever, or a purge that reaches
+    // by name instead of age removes another session's in-flight review, or
+    // follows a symlink out of tmp.
+    const privateTmp = mkdtempSync(join(tmpdir(), "run-review-purge-"));
+    const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const makeDir = (name: string, stale: boolean): string => {
+      const dir = join(privateTmp, name);
+      mkdirSync(dir);
+      writeFileSync(join(dir, "review.jsonl"), "");
+      if (stale) utimesSync(dir, dayAgo, dayAgo);
+      return dir;
+    };
+    try {
+      const staleCapture = makeDir("rubber-duck-stale", true);
+      const stalePrompt = makeDir("rubber-duck-prompt-stale", true);
+      const fresh = makeDir("rubber-duck-fresh", false);
+      const unrelated = makeDir("other-tool-stale", true);
+      const linkTarget = makeDir("not-rubber-duck-target", true);
+      const link = join(privateTmp, "rubber-duck-link");
+      symlinkSync(linkTarget, link);
+      const staleFile = join(privateTmp, "rubber-duck-file");
+      writeFileSync(staleFile, "");
+      utimesSync(staleFile, dayAgo, dayAgo);
+
+      const prepared = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
+      expect(prepared.code).toBe(0);
+      expect(prepared.stderr).toBe("");
+      expect(dirname(prepared.stdout.trimEnd())).toStartWith(
+        join(privateTmp, "rubber-duck-prompt-"),
+      );
+      expect(existsSync(staleCapture)).toBe(false);
+      expect(existsSync(stalePrompt)).toBe(false);
+      for (const kept of [fresh, unrelated, linkTarget, link, staleFile]) {
+        expect(existsSync(kept), kept).toBe(true);
+      }
+
+      // A launch purges too, and its own fresh capture dir survives its own purge.
+      const staleAgain = makeDir("rubber-duck-stale-again", true);
+      const launched = run(["codex", promptFile], { TMPDIR: privateTmp });
+      expect(launched.code).toBe(0);
+      expect(dirname(launched.report().capture)).toStartWith(join(privateTmp, "rubber-duck-"));
+      expect(existsSync(staleAgain)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(link)).toBe(true);
+
+      // A stale dir whose own modes refuse removal is made writable and removed, silently.
+      if (process.getuid?.() !== 0) {
+        const locked = makeDir("rubber-duck-locked", false);
+        writeFileSync(join(locked, "pinned"), "");
+        chmodSync(locked, 0o555);
+        utimesSync(locked, dayAgo, dayAgo);
+        try {
+          const r = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
+          expect(r.code).toBe(0);
+          expect(r.stdout).toStartWith(join(privateTmp, "rubber-duck-prompt-"));
+          expect(r.stderr).toBe("");
+          expect(existsSync(locked)).toBe(false);
+        } finally {
+          if (existsSync(locked)) chmodSync(locked, 0o755);
+        }
+      }
+    } finally {
+      rmSync(privateTmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a prompt file that prepare did not mint is refused: exit 2", () => {
+    // Negative controls for the collision guard. Each row is a way a shared
+    // or predictable prompt could reach a launch without going through prepare.
+    const predictable = join(binDir, "prompt.txt");
+    writeFileSync(predictable, PROMPT);
+    const nested = join(dirname(promptFile), "nested");
+    mkdirSync(nested);
+    writeFileSync(join(nested, "prompt.md"), PROMPT);
+    // Right prefix, hand-made: no marker.
+    const handMade = mkdtempSync(join(tmpdir(), "rubber-duck-prompt-"));
+    mintedDirs.push(handMade);
+    writeFileSync(join(handMade, "prompt.md"), PROMPT);
+    // A symlink inside a minted dir that points at a shared file elsewhere.
+    const linked = join(dirname(promptFile), "linked.md");
+    symlinkSync(predictable, linked);
+    // A hard link inside a minted dir to a shared file elsewhere.
+    const hardLinked = join(dirname(promptFile), "hard-linked.md");
+    linkSync(predictable, hardLinked);
+    // A symlinked directory, prefix-named, pointing at a genuine minted dir.
+    const aliasDir = join(tmpdir(), `rubber-duck-prompt-alias-${process.pid}`);
+    symlinkSync(dirname(promptFile), aliasDir);
+    mintedDirs.push(aliasDir);
+    const notMinted = "prompt file must live in a directory minted by";
+    for (const [id, file, message] of [
+      ["hand-picked-tmp-path", predictable, notMinted],
+      ["nested-inside-minted-dir", join(nested, "prompt.md"), notMinted],
+      ["prefix-without-marker", join(handMade, "prompt.md"), notMinted],
+      ["symlinked-minted-dir", join(aliasDir, basename(promptFile)), notMinted],
+      ["symlink-out-of-minted-dir", linked, "not a symlink or hard link"],
+      ["hard-link-to-shared-file", hardLinked, "not a symlink or hard link"],
+    ] as const) {
+      expectFailure(run(["codex", file]), { code: 2, stderr: message }, id);
+    }
+    // --background is a caller-facing launch too, not the internal capture.
+    expectFailure(run(["codex", predictable, "--background"]), { code: 2, stderr: notMinted });
+  });
+
+  test("--capture without its --background launch record is refused: exit 2", () => {
+    // --capture must not be a side door around the minted-prompt guard.
+    const predictable = join(binDir, "capture-prompt.txt");
+    writeFileSync(predictable, PROMPT);
+    const scratch = mkdtempSync(join(tmpdir(), "rubber-duck-"));
+    mintedDirs.push(scratch);
+    const snapshot = join(scratch, "prompt.txt");
+    writeFileSync(snapshot, PROMPT);
+    const refused = { code: 2, stderr: "--capture is internal to --background" } as const;
+    // Each row sets up the scratch dir, then launches against exactly that state.
+    for (const [id, record, prompt] of [
+      ["no-record", null, snapshot],
+      ["record-for-other-reviewer", '{"tool":"claude","output":"review.jsonl"}', snapshot],
+      ["record-for-other-output-file", '{"tool":"codex","output":"review.out"}', snapshot],
+      ["prompt-not-the-snapshot", '{"tool":"codex","output":"review.jsonl"}', predictable],
+    ] as const) {
+      if (record === null) rmSync(join(scratch, "review.status"), { force: true });
+      else writeFileSync(join(scratch, "review.status"), record);
+      expectFailure(run(["codex", prompt, "--capture", scratch]), refused, id);
+    }
+  });
+
+  test("--background prints output-file and pid; --extract --wait returns the verdict once the monitor records the exit", () => {
+    // A private prompt file, deleted right after launch: the monitor must
+    // review its snapshot, not re-read the caller's (now gone) file. The
+    // stub sleeps so the wait starts on a record that has no status yet.
+    const bgPrompt = mintPrompt("bg-prompt");
+    const r = run(["codex", bgPrompt, "--background"], { STUB_SLEEP: "1" });
+    rmSync(bgPrompt);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toMatch(/^output-file: \S+\/review\.jsonl\npid: \d+\n$/);
+    const outputFile = backgroundOutputFile(r.stdout);
+    const extracted = run(["codex", "--extract", "--wait", outputFile]);
+    expect(extracted.code).toBe(0);
+    expect(extracted.stderr).toBe("");
+    expect(extracted.report().verdict).toEqual(CODEX_VERDICT);
+    expect(extracted.report().capture).toBe(outputFile);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  }, 15000);
+
+  test("--extract --wait blocks on a launch record without a status, then reports the status that lands", async () => {
+    const cases = [
+      { status: "0", code: 0, stderr: "" },
+      {
+        status: "3",
+        code: 1,
+        stderr: "review FAILED - relaunch (recorded reviewer status: 3; output kept at <file>)\n",
+      },
+      { status: "not-found", code: 2, stderr: "reviewer binary not found: codex\n" },
+    ];
+    for (const { status, code, stderr } of cases) {
+      const outputFile = pendingCapture();
+      const proc = start(["codex", "--extract", "--wait", outputFile]);
+      await Bun.sleep(1000);
+      expect(proc.exitCode, status).toBeNull();
+      recordStatus(outputFile, status);
+      expect(await proc.exited, status).toBe(code);
+      const stdout = await new Response(proc.stdout).text();
+      expect(await new Response(proc.stderr).text(), status).toBe(
+        stderr.replace("<file>", outputFile),
+      );
+      if (code === 0) {
+        const report = JSON.parse(stdout) as Report;
+        expect(report.verdict, status).toEqual(CODEX_VERDICT);
+        expect(report.capture, status).toBe(outputFile);
+      } else {
+        expect(stdout, status).toBe("");
+      }
+      rmSync(dirname(outputFile), { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("--extract --wait --timeout 1 on a record that never completes exits 1 naming the file and the seconds", () => {
+    for (const stream of [true, false]) {
+      const outputFile = pendingCapture(stream);
+      const started = Date.now();
+      const r = run(["codex", "--extract", "--wait", "--timeout", "1", outputFile]);
+      expect(Date.now() - started, String(stream)).toBeGreaterThanOrEqual(1000);
+      expect(r.code, String(stream)).toBe(1);
+      expect(r.stdout, String(stream)).toBe("");
+      const file = escapeRegExp(outputFile);
+      const kept = stream ? `; output kept at ${file}` : "";
+      expect(r.stderr, String(stream)).toMatch(
+        new RegExp(
+          `^review FAILED - relaunch \\(--wait timed out: no exit status recorded beside ${file} after \\d+ s${kept}\\)\\n$`,
+        ),
+      );
+      rmSync(dirname(outputFile), { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("--extract --wait fails at once, exit 2, when the record is missing or names another launch", () => {
+    // The launch writes the record before printing the output-file line, so
+    // no record on the first read is a wrong path: it must not poll for an hour.
+    const missingDir = join(tmpdir(), `run-review-missing-${process.pid}`, "review.jsonl");
+    const bareDir = mkdtempSync(join(tmpdir(), "run-review-bare-"));
+    writeFileSync(join(bareDir, "review.jsonl"), COMPLETE_CODEX_STREAM);
+    const codexCapture = pendingCapture();
+    const noRecord = "no launch record beside";
+    for (const [id, tool, file, message] of [
+      ["missing-directory", "codex", missingDir, noRecord],
+      ["directory-without-record", "codex", join(bareDir, "review.jsonl"), noRecord],
+      ["other-reviewer", "claude", codexCapture, "launched with reviewer 'codex', not 'claude'"],
+      [
+        "other-file",
+        "codex",
+        join(dirname(codexCapture), "prompt.txt"),
+        "output file is 'review.jsonl'",
+      ],
+    ] as const) {
+      const started = Date.now();
+      const r = run([tool, "--extract", "--wait", file]);
+      expect(Date.now() - started, id).toBeLessThan(1900);
+      expectFailure(r, { code: 2, stderr: message }, id);
+    }
+    rmSync(bareDir, { recursive: true, force: true });
+    rmSync(dirname(codexCapture), { recursive: true, force: true });
+  });
+
+  test("--wait and --timeout outside --extract --wait, or a bad timeout, are usage errors: exit 2", () => {
+    const outputFile = pendingCapture();
+    const badTimeout = "--timeout requires a whole number of seconds, at least 1";
+    for (const [id, args, message] of [
+      ["wait-on-launch", ["codex", promptFile, "--wait"], "--wait applies only to --extract"],
+      [
+        "timeout-on-launch",
+        ["codex", promptFile, "--timeout", "5"],
+        "--timeout applies only to --extract",
+      ],
+      [
+        "timeout-without-wait",
+        ["codex", "--extract", "--timeout", "5", outputFile],
+        "--timeout applies only to --extract --wait",
+      ],
+      ["timeout-zero", ["codex", "--extract", "--wait", "--timeout", "0", outputFile], badTimeout],
+      [
+        "timeout-word",
+        ["codex", "--extract", "--wait", "--timeout", "soon", outputFile],
+        badTimeout,
+      ],
+      ["timeout-no-value", ["codex", "--extract", "--wait", outputFile, "--timeout"], badTimeout],
+      ["no-file", ["codex", "--extract", "--wait"], "--extract takes exactly one <output-file>"],
+      [
+        "two-files",
+        ["codex", "--extract", "--wait", outputFile, outputFile],
+        "--extract takes exactly one <output-file>",
+      ],
+      ["unknown-flag", ["codex", "--extract", "--bogus", outputFile], "unknown flag: --bogus"],
+    ] as const) {
+      expectFailure(run([...args]), { code: 2, stderr: message }, id);
+    }
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  test("--extract fails a background run whose reviewer exited non-zero", () => {
+    const r = run(["codex", promptFile, "--background"], { STUB_EXIT: "3" });
+    expect(r.code).toBe(0);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("3");
+    const extracted = run(["codex", "--extract", outputFile]);
+    expect(extracted.code).toBe(1);
+    expect(extracted.stderr).toContain("recorded reviewer status: 3");
+    // Positive control for the kept-output suffix: the stream is still there.
+    expect(extracted.stderr).toContain(`output kept at ${outputFile}`);
+  });
+
+  test("--extract on a completed run whose stream was deleted fails without naming a kept file", () => {
+    const r = run(["codex", promptFile, "--background"]);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("0");
+    rmSync(outputFile);
+    const extracted = run(["codex", "--extract", outputFile]);
+    expectFailure(extracted, { code: 1, stderr: "cannot read output file" });
+    expect(extracted.stderr).not.toContain("output kept at");
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  test("a background run with a missing binary records not-found; --extract exits 2", () => {
+    const r = run(["codex", promptFile, "--background"], {}, emptyBinDir);
+    expect(r.code).toBe(0);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("not-found");
+    const extracted = run(["codex", "--extract", outputFile]);
+    expect(extracted.code).toBe(2);
+    expect(extracted.stderr).toContain("reviewer binary not found");
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  test("--extract with no exit status recorded fails safe, stream complete or not yet created", () => {
+    const cases = [
+      { id: "full stream, no record", stream: true },
+      { id: "nothing created yet", stream: false },
+    ];
+    for (const { id, stream } of cases) {
+      const earlyDir = mkdtempSync(join(tmpdir(), "run-review-early-"));
+      const outputFile = join(earlyDir, "review.jsonl");
+      if (stream) {
+        writeFileSync(
+          outputFile,
+          '{"type":"item.completed","item":{"type":"agent_message","text":"looks complete"}}\n{"type":"turn.completed"}\n',
+        );
+      }
+      const extracted = run(["codex", "--extract", outputFile]);
+      expectFailure(extracted, { code: 1, stderr: "no exit status recorded" }, id);
+      rmSync(earlyDir, { recursive: true, force: true });
+    }
+  });
+
+  test("--extract with a different reviewer than the launch is refused: exit 2", () => {
+    const r = run(["codex", promptFile, "--background"]);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("0");
+    const extracted = run(["claude", "--extract", outputFile]);
+    expect(extracted.code).toBe(2);
+    expect(extracted.stderr).toContain("launched with reviewer 'codex'");
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  test("--extract pointed at a different file in the capture dir is refused: exit 2", () => {
+    const r = run(["codex", promptFile, "--background"]);
+    const outputFile = backgroundOutputFile(r.stdout);
+    expect(waitForStatus(outputFile)).toBe("0");
+    // prompt.txt sits beside review.status; it must not pass as the stream.
+    const extracted = run(["codex", "--extract", join(dirname(outputFile), "prompt.txt")]);
+    expect(extracted.code).toBe(2);
+    expect(extracted.stderr).toContain("output file is 'review.jsonl'");
+    rmSync(dirname(outputFile), { recursive: true, force: true });
+  });
+
+  test("--extract on a launch-time record without a status yet exits 1", () => {
+    const pendingDir = mkdtempSync(join(tmpdir(), "run-review-launched-"));
+    const outputFile = join(pendingDir, "review.jsonl");
+    writeFileSync(
+      outputFile,
+      '{"type":"item.completed","item":{"type":"agent_message","text":"looks complete"}}\n{"type":"turn.completed"}\n',
+    );
+    writeFileSync(join(pendingDir, "review.status"), '{"tool":"codex","output":"review.jsonl"}');
+    const extracted = run(["codex", "--extract", outputFile]);
+    expect(extracted.code).toBe(1);
+    expect(extracted.stderr).toContain("no exit status recorded");
+    rmSync(pendingDir, { recursive: true, force: true });
+  });
+
+  test("--extract on a corrupt or non-string-status record is a usage error: exit 2", () => {
+    const corruptDir = mkdtempSync(join(tmpdir(), "run-review-corrupt-"));
+    const outputFile = join(corruptDir, "review.jsonl");
+    writeFileSync(
+      outputFile,
+      '{"type":"item.completed","item":{"type":"agent_message","text":"looks complete"}}\n{"type":"turn.completed"}\n',
+    );
+    const statusFile = join(corruptDir, "review.status");
+    writeFileSync(statusFile, "not json");
+    const corrupt = run(["codex", "--extract", outputFile]);
+    expectFailure(corrupt, { code: 2, stderr: "not a run-review capture" });
+    writeFileSync(statusFile, '{"tool":"codex","output":"review.jsonl","status":0}');
+    const extracted = run(["codex", "--extract", outputFile]);
+    expectFailure(extracted, { code: 2, stderr: "non-string status" });
+    rmSync(corruptDir, { recursive: true, force: true });
+  });
+});
+
+describe("writeAllSync", () => {
+  test("a short-writing fd still receives every byte, exactly once, in order", () => {
+    // writeSync may legally write fewer bytes than asked; dropping the
+    // remainder tears the captured stream, and a torn error line then parses
+    // as a clean review. The stub write caps each call at 3 bytes to force
+    // the loop through many short writes.
+    const chunk = Buffer.from('{"type":"error","message":"stream disconnected"}\n');
+    const landed: Buffer[] = [];
+    writeAllSync(7, chunk, (_fd, buf, offset, length) => {
+      const n = Math.min(3, length);
+      landed.push(Buffer.from(buf.subarray(offset, offset + n)));
+      return n;
+    });
+    expect(Buffer.concat(landed).toString()).toBe(chunk.toString());
+  });
+
+  test("with the real writeSync, a file receives the chunk byte-identically", () => {
+    const dir = mkdtempSync(join(tmpdir(), "write-all-"));
+    try {
+      const file = join(dir, "out");
+      const fd = openSync(file, "w");
+      const chunk = Buffer.from("review body\n");
+      try {
+        writeAllSync(fd, chunk);
+      } finally {
+        closeSync(fd);
+      }
+      expect(readFileSync(file)).toEqual(chunk);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

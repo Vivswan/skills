@@ -11,7 +11,7 @@
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
  *
- * Exit codes (tests/doc-drift.test.ts pins them to SKILL.md; change both together):
+ * Exit codes (tests/repo/doc-drift.test.ts pins them to SKILL.md; change both together):
  *   0  verdict printed, or a --background launch started (its verdict comes via --extract)
  *   1  review FAILED - relaunch: no usable verdict, whatever the cause; never a clean pass
  *   2  usage error, or the reviewer binary is not installed

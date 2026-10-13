@@ -4,7 +4,7 @@
 //   check-docs.mts [<root>]    the root defaults to this repository; a test points it at a fixture tree
 
 import { join } from "node:path";
-import { ROOT } from "./lib";
+import { ROOT } from "./lib.mts";
 
 const PROBE = join(ROOT, "skills", "working-text", "scripts", "docs-probe.mts");
 

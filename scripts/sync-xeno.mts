@@ -35,7 +35,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { Document, isMap, parse, parseDocument } from "yaml";
-import { ROOT, XENO_DIR } from "./lib";
+import { ROOT, XENO_DIR } from "./lib.mts";
 
 export const SOURCES_FILE = join(XENO_DIR, "sources.yaml");
 const SHA = /^[0-9a-f]{40}$/;

@@ -92,7 +92,7 @@ bun "<skill-dir>/scripts/check-name.mts" --list-registries        # the live col
 bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,docker,hf,github-user,dns-com,dns-ai <name>   # the brief's claims except github-repo; the four gate columns run regardless
 ```
 
-One row per name, one column per registry; the registries live in one table in `scripts/registries/table.mts`, and `--list-registries` prints it. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`, except the `say` column's `note(<reading>)`:
+One row per name, one column per registry; the registries live in one table in `scripts/columns/registries/table.mts`, and `--list-registries` prints it. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`, except the `say` column's `note(<reading>)`:
 
 ```text
 name    pypi  npm                 crates  homebrew                        docker                  maven  hf    github-user           github-repo  bluesky                arxiv  dns-com                     dns-ai  wiktionary                    urban                typosquat                                                         say

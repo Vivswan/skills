@@ -9,3 +9,4 @@ These pages are for people changing the repository:
 | [Authoring Guide](authoring.md) | adding or changing a skill: the folder layout, the checklist, the checks that enforce it |
 | [The validate-skills action](validate-skills.md) | the composite action any repository hosting skills can call, and how this one runs it on itself |
 | [Vale styles](vale.md) | the lint rules three skills ship for Vale, one owner per word, and how a consumer wires them |
+| [Memories](../memories/README.md) | the standing rules shipped beside the skills: the file contract, and why a rule is a memory rather than a skill |

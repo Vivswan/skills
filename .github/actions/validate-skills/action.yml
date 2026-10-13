@@ -48,4 +48,4 @@ runs:
         SKILLS_DIR: ${{ inputs.skills-dir }}
         PLUGIN_MANIFEST: ${{ inputs.plugin-manifest }}
         MODE: ${{ inputs.mode }}
-      run: '"${{ steps.bun.outputs.path }}" "${{ github.action_path }}/validate_skills.ts"'
+      run: '"${{ steps.bun.outputs.path }}" "${{ github.action_path }}/validate-skills.ts"'

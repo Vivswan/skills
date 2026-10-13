@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 /**
  * Pre-commit hook logic, invoked by the dispatcher that
- * scripts/install-hooks.ts installs into the shared hooks directory. The
+ * scripts/install-hooks.mts installs into the shared hooks directory. The
  * dispatcher runs with the repository root as the working directory
  * (githooks(5): pre-commit runs at the top of the working tree).
  *
  * The previous hook additionally guarded .git/config against mutation by
  * leaky tests; that guard is gone because the hermetic test environment
- * (scripts/hermetic-git-env.ts) blocks accidental (cwd- or env-based)
+ * (scripts/hermetic-git-env.mts) blocks accidental (cwd- or env-based)
  * discovery of the real repository from tests - not deliberate targeting.
  */
 

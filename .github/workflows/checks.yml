@@ -32,7 +32,7 @@ jobs:
 
   # End-to-end: the real `npx skills` CLI must discover and group the skills
   # exactly as consumers see them. Needs network; no install step because
-  # scripts/lib.ts is dependency-free.
+  # scripts/lib.mts is dependency-free.
   cli-discovery:
     runs-on: ubuntu-latest
     steps:
@@ -40,7 +40,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
-      - run: bun scripts/cli-discovery-test.ts
+      - run: bun scripts/cli-discovery.mts
 
   # The validate-skills composite action lives here and repo-platform's own
   # ci.yml calls it on its skills directory, so it also runs on this checkout:

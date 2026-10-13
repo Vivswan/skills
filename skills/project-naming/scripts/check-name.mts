@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-// One row per candidate name, one column per entry in registries/table.mts: is it free there, does
-// any language already own the word, does slang, is it one typo from a popular package, and can it
-// be said as spelled? A registry cell is `free`, `taken(<why>)`, or `unknown(<why>)`, and a lookup
+// One row per candidate name, one column per entry in columns/registries/table.mts: is it free there,
+// does any language already own the word, does slang, is it one typo from a popular package, and can
+// it be said as spelled? A registry cell is `free`, `taken(<why>)`, or `unknown(<why>)`, and a lookup
 // that failed never reads as free; the say column is a `note(<reading>)`. Two controls run with
 // every batch: per registry column, a name known to be taken there, and one random string that
 // must be free everywhere. A column that answers either control wrongly is reported as a failed
@@ -18,7 +18,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { domainToASCII } from "node:url";
 import { parseArgs } from "node:util";
-import { type Cell, type Claimed, type Io, renderCell, unknown } from "./cells.mts";
 import {
   ARXIV_GAP_MS,
   type Column,
@@ -27,7 +26,8 @@ import {
   GITHUB_SEARCH_GAP_MS,
   REGISTRIES,
   type RegistryEntry,
-} from "./registries/table.mts";
+} from "./columns/registries/table.mts";
+import { type Cell, type Claimed, type Io, renderCell, unknown } from "./core/cells.mts";
 
 const USAGE =
   "usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--no-arxiv] [--json] <name>...\n" +

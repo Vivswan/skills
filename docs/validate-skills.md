@@ -54,7 +54,7 @@ Structure mode, in the order it reports:
 - Symlinks are rejected anywhere on a validated path, ancestors included. A link can point outside the checkout, so what ships would not be what was validated.
 - The one exception: a marketplace plugin's `source` may pass through in-repo links while its physical path stays inside the repository.
 
-Discovery mode downloads the CLI from the npm registry at the exact version `validate_skills.ts` records in `SKILLS_CLI_VERSION` (a CLI release cannot red a green catalog; the pin moves by hand), makes up to three attempts, and matches each published skill name on word boundaries in the listing. Give it its own job; a caller decides whether discovery gates its merges (repo-platform gates it).
+Discovery mode downloads the CLI from the npm registry at the exact version `validate-skills.ts` records in `SKILLS_CLI_VERSION` (a CLI release cannot red a green catalog; the pin moves by hand), makes up to three attempts, and matches each published skill name on word boundaries in the listing. Give it its own job; a caller decides whether discovery gates its merges (repo-platform gates it).
 
 Exit codes:
 
@@ -64,7 +64,7 @@ Exit codes:
 | `1` | one `error:` line per finding, then a count |
 | `2` | unknown mode |
 
-The full rule set is the source, [validate_skills.ts](../.github/actions/validate-skills/validate_skills.ts). Its tests are [tests/validate-skills-action.test.ts](../tests/validate-skills-action.test.ts).
+The full rule set is the source, [validate-skills.ts](../.github/actions/validate-skills/validate-skills.ts). Its tests are [tests/repo/validate-skills.test.ts](../tests/repo/validate-skills.test.ts).
 
 ## How repo-platform calls it
 
@@ -85,10 +85,10 @@ The action sets up bun through the fleet's shared `bun-setup` action, which walk
 - Locally and in the pre-commit hook, `bun run validate` runs the same script with the defaults (`bun run check` includes it):
 
 ```sh
-SKILLS_DIR=skills PLUGIN_MANIFEST=.claude-plugin/plugin.json MODE=structure bun .github/actions/validate-skills/validate_skills.ts
+SKILLS_DIR=skills PLUGIN_MANIFEST=.claude-plugin/plugin.json MODE=structure bun .github/actions/validate-skills/validate-skills.ts
 ```
 
 - Discovery, the same command with `MODE=discovery` (needs network).
 - `bun run test` covers the action's unit tests along with the rest of the suite.
 
-The action is the baseline any repository hosting skills can call. Everything specific to this catalog (per-skill README and codex manifest, `template/`, `xeno/`, the marketplace shape, cross-file drift) is `bun run smoke`, [scripts/smoke-test.ts](../scripts/smoke-test.ts).
+The action is the baseline any repository hosting skills can call. Everything specific to this catalog (per-skill README and codex manifest, `template/`, `xeno/`, the marketplace shape, cross-file drift) is `bun run smoke`, [scripts/smoke.mts](../scripts/smoke.mts).

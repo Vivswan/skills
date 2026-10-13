@@ -1,0 +1,111 @@
+#!/usr/bin/env bun
+
+/**
+ * Test launcher behind `bun run test`: runs `bun test` inside the hermetic
+ * git environment (see scripts/hermetic-git-env.mts for why the environment
+ * must exist before the test process is born). Extra arguments replace the
+ * default `tests` target, so `bun run test tests/foo.test.ts` runs one file.
+ *
+ * The test process starts in a scratch directory OUTSIDE the repository:
+ * GIT_CEILING_DIRECTORIES never protects the starting directory itself, so
+ * with cwd at the repo root a git spawned with neither `env` nor `cwd` would
+ * still discover and mutate the real repository. From the scratch cwd such a
+ * spawn dies in a ceilinged non-repo directory instead. bunfig.toml is not
+ * discovered from the scratch cwd, so the preload - which verifies this
+ * birth environment - is passed explicitly.
+ *
+ * The scratch directory is also the test process's TMPDIR: every fixture a
+ * test (or a child inheriting its environment) creates through os.tmpdir()
+ * lives inside it and is deleted with the run, however the suite exits.
+ */
+
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { hermeticGitEnv } from "./hermetic-git-env.mts";
+import { ROOT } from "./lib.mts";
+
+// Path-like arguments are resolved against the repository root (the scratch
+// cwd contains no tests); flags and name filters pass through untouched.
+// Known limits of the scratch cwd: flags that WRITE repo-relative outputs
+// (--coverage-dir, reporter files) or discover the repo from the cwd
+// (--changed) would need absolute paths; nothing in this repo uses them.
+// The zero-test guard below is the fail-closed backstop for every flag that
+// can shrink the run to nothing (--pass-with-no-tests, --only with no .only
+// tests, an option value that happens to name a real path and suppresses
+// the default target).
+
+// Only an argument naming a real path counts as a target: bun test ORs
+// positional filters together, and a bare word can be an option's value
+// (--test-name-pattern baz) just as well as a name filter, so anything that
+// is not a real path gets the default target appended - over-running is
+// safe, a scratch-cwd invocation left with no target is not.
+let hasPathTarget = false;
+const args = process.argv.slice(2).map((arg) => {
+  const resolved = resolve(ROOT, arg);
+  if (existsSync(resolved)) {
+    hasPathTarget = true;
+    return resolved;
+  }
+  return arg;
+});
+if (!hasPathTarget) args.push(join(ROOT, "tests"));
+
+// cwd sits one level below the scratch ceiling: a default-cwd git checks
+// cwd, finds no repository, and cannot climb further.
+const scratch = mkdtempSync(join(tmpdir(), "hermetic-tests-"));
+const cwd = join(scratch, "cwd");
+mkdirSync(cwd);
+let status: number;
+let summary = "";
+try {
+  const child = Bun.spawn(
+    ["bun", "test", "--preload", join(ROOT, "tests", "preload.ts"), ...args],
+    {
+      cwd,
+      env: hermeticGitEnv({ ...process.env, TMPDIR: scratch }),
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "pipe",
+    },
+  );
+  // Tee stderr (where bun test reports results) while keeping only a
+  // bounded TAIL copy: the zero-test check below needs just the final
+  // "Ran N tests" summary line, and an unbounded copy would scale the
+  // launcher's memory with the run's failure output. Backpressure is
+  // honored - ignoring a false from write() would queue every chunk in
+  // process memory a second time.
+  const decoder = new TextDecoder();
+  const SUMMARY_TAIL_CHARS = 65536;
+  for await (const chunk of child.stderr) {
+    if (!process.stderr.write(chunk)) {
+      await new Promise((resolve) => process.stderr.once("drain", resolve));
+    }
+    summary = (summary + decoder.decode(chunk, { stream: true })).slice(-SUMMARY_TAIL_CHARS);
+  }
+  summary += decoder.decode();
+  status = await child.exited;
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
+}
+// bun exits 0 with "Ran 0 tests" under --pass-with-no-tests and --only, so a zero-test run must fail here.
+// The summary match is anchored at a line start: bun echoes CLI values mid-line ("Ran 1 test across 1 file. [x]" inside an error line).
+//
+// FORCE_COLOR wraps the timing bracket in SGR codes  -> stripped first, or a green run would fail
+// several anchored summaries                         -> the LAST is the run's
+// no summary on exit 0                               -> fails, so a bun wording change breaks loudly
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the ESC escape is exactly what is being stripped
+const plain = summary.replace(/\u001b\[[0-9;]*m/g, "");
+const ran = [...plain.matchAll(/(?:^|\n)Ran (\d+) tests? across \d+ files?\. \[/g)].at(-1);
+if (status === 0 && (ran === undefined || Number(ran[1]) === 0)) {
+  console.error(
+    ran === undefined
+      ? "run-tests: bun test exited 0 without a 'Ran N tests' summary; refusing to report success."
+      : "run-tests: zero tests ran; a run that tests nothing must not pass.",
+  );
+  status = 1;
+}
+// exitCode, not process.exit(): an explicit exit can truncate stdio still
+// draining to pipes (large failure output), and nothing here holds the event
+// loop open once the child has exited.
+process.exitCode = status;

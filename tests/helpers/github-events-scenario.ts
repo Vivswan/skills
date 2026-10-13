@@ -12,7 +12,7 @@
 
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../../scripts/lib";
+import { ROOT } from "../../scripts/lib.mts";
 import {
   closingLine,
   digest,
