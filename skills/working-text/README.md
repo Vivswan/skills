@@ -12,7 +12,7 @@ Every fact is shown by the device that shows it fastest, and every path, symbol,
 | a break between versions | old form, new form, and what the old form does now |
 | plain facts | bullets with bold lead-ins, paragraphs under 70 words |
 
-`scripts/docs-probe.mts` measures the cap and checks that named paths exist. `references/architecture-page.md` and its three scripts keep an architecture page's diagrams naming real code.
+`scripts/docs-probe.mts` measures the cap and checks that named paths exist. `references/architecture-page.md` and the `scripts/architecture/` set keep an architecture page's diagrams naming real code.
 
 ## Install
 
@@ -41,11 +41,12 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/working-text -
 - [`SKILL.md`](./SKILL.md): the specimen, the shape rules, the probe, restructuring, page kinds, the review criteria
 - [`references/architecture-page.md`](./references/architecture-page.md): the architecture page recipe
 - [`scripts/docs-probe.mts`](./scripts/docs-probe.mts): the paragraph cap and the path check. `--shape-only` skips paths, `--max-words` moves the cap, `--base <dir>` adds a tree paths also resolve against
-- [`scripts/arch-lint.mts`](./scripts/arch-lint.mts): the layering lint (`--mermaid` prints the map). Exports `readArchitecture`, `lintArchitecture`, `renderArchitectureMermaid`, `importSpecifiers`
-- [`scripts/render-architecture-map.mts`](./scripts/render-architecture-map.mts): writes the map into the page's generated region. `--check` exits 1 on drift
-- [`scripts/check-architecture-page.mts`](./scripts/check-architecture-page.mts): the page test. `--expect-diagrams <n>` pins the count, `--repo-url` resolves absolute links
+- [`scripts/architecture/lint.mts`](./scripts/architecture/lint.mts): the layering lint (`--mermaid` prints the map). Exports `lintArchitecture`
+- [`scripts/architecture/render-map.mts`](./scripts/architecture/render-map.mts): writes the map into the page's generated region. `--check` exits 1 on drift
+- [`scripts/architecture/check-page.mts`](./scripts/architecture/check-page.mts): the page test. `--expect-diagrams <n>` pins the count, `--repo-url` resolves absolute links
+- [`scripts/architecture/`](./scripts/architecture/) also holds the readers those three share: `declaration.mts` (`readArchitecture`, `renderArchitectureMermaid`), `sources.mts` (`parseModule`, `importSpecifiers`), `page.mts` (`readPage`), `paths.mts` (`pathLabel`)
 
-All four scripts bundle their dependencies (the mdast readers, `@babel/parser`) into the skill's `.build` folder on first run, so they need bun and, that once, the network; [`references/architecture-page.md`](./references/architecture-page.md) has the copy step for a repository that runs them without the skill installed.
+The scripts bundle their dependencies (the mdast readers, `@babel/parser`) into the skill's `.build` folder on first run, so they need bun and, that once, the network; [`references/architecture-page.md`](./references/architecture-page.md) has the copy step for a repository that runs them without the skill installed.
 
 ## Exit Codes
 

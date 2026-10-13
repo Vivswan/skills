@@ -68,10 +68,11 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
-const { DEFAULT_CONFIG, pathLabel, readArchitecture, renderArchitectureMermaid } = await import(
-  "./arch-lint.mts"
+const { DEFAULT_CONFIG, readArchitecture, renderArchitectureMermaid } = await import(
+  "./declaration.mts"
 );
-const { readPage } = await import("./check-architecture-page.mts");
+const { readPage } = await import("./page.mts");
+const { pathLabel } = await import("./paths.mts");
 
 export const DEFAULT_REGION = "architecture-map";
 
@@ -108,7 +109,7 @@ export function spliceMap(text: string, name: string, map: string): string {
 }
 
 const USAGE = [
-  "usage: render-architecture-map.mts --page <path> [--config <architecture.yml>] [--root <dir>] [--region <name>] [--check]",
+  "usage: render-map.mts --page <path> [--config <architecture.yml>] [--root <dir>] [--region <name>] [--check]",
   "  --page     the markdown page carrying the generated region",
   "  --config   the layering declaration (default: <root>/architecture.yml)",
   "  --root     the repository root (default: cwd)",

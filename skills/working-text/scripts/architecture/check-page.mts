@@ -14,8 +14,8 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { Nodes, Paragraph, Root } from "mdast";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import type { Fence, Marker, Page } from "./page.mts";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -78,18 +78,12 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
-const { fromMarkdown } = await import("mdast-util-from-markdown");
-const { gfmFromMarkdown } = await import("mdast-util-gfm");
-const { toString: plainText } = await import("mdast-util-to-string");
-const { gfm } = await import("micromark-extension-gfm");
-const { visit } = await import("unist-util-visit");
-const { parseModule, pathLabel, resolveImport, SOURCE_EXTENSIONS } = await import(
-  "./arch-lint.mts"
-);
+const { DEMONSTRATED, readPage } = await import("./page.mts");
+const { pathLabel, withinRoot } = await import("./paths.mts");
+const { parseModule, resolveImport, SOURCE_EXTENSIONS } = await import("./sources.mts");
 
 // An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
 const SYMBOL_TOKEN = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*(?:\(\))?$/u;
-const DEMONSTRATED = "Demonstrated by:";
 
 const exportOriginsByFile = new Map<string, ReadonlyMap<string, string>>();
 
@@ -145,125 +139,6 @@ export function exportOrigins(
 
 export function exportedNames(file: string): ReadonlySet<string> {
   return new Set(exportOrigins(file).keys());
-}
-
-export interface Fence {
-  /** One-based line of the opening fence. */
-  line: number;
-  /** One-based line of the closing fence (or the last line when the fence never closes). */
-  end: number;
-  /** The info string names mermaid; other fences are text the page quotes. */
-  mermaid: boolean;
-  body: string;
-  /** Between a BEGIN and an END GENERATED marker: the declaration's diagram, not the author's. */
-  generated: boolean;
-}
-
-export interface Marker {
-  kind: "BEGIN" | "END";
-  name: string;
-  /** One-based line of the marker. */
-  line: number;
-  /** Offsets of the marker in the page text, from its line's first character (indent included) to its last. */
-  start: number;
-  end: number;
-}
-
-export interface Page {
-  /** Every fence, whatever its language, at any depth. */
-  fences: readonly Fence[];
-  /** The region markers, in page order: a top-level HTML block that is one marker line. */
-  markers: readonly Marker[];
-  /** One-based lines of the top-level headings, ATX and Setext alike. */
-  headings: readonly number[];
-  /** Top-level paragraphs opening with "Demonstrated by:", each with the destinations it links. */
-  demonstrations: readonly { line: number; links: string[] }[];
-}
-
-// A marker line as the renderer reads it: up to three spaces in, the name, an optional hint on BEGIN.
-const MARKER = /^ {0,3}<!-- (BEGIN|END) GENERATED: (\S+?)(?: \([^)\r\n]*\))? -->[ \t]*$/;
-
-/** A node's extent, with the offsets a splice needs. */
-interface Span {
-  start: { line: number; offset: number };
-  end: { line: number; offset: number };
-}
-
-/** fromMarkdown positions every node, offsets included; the types leave both optional for trees built by hand. */
-function positionOf(node: Nodes): Span {
-  const { position } = node;
-  if (position?.start.offset === undefined || position.end.offset === undefined) {
-    throw new Error(`${node.type} node without a position`);
-  }
-  return {
-    start: { line: position.start.line, offset: position.start.offset },
-    end: { line: position.end.line, offset: position.end.offset },
-  };
-}
-
-/** The destinations a paragraph links, a reference link through its definition. */
-function linkTargets(paragraph: Paragraph, definitions: ReadonlyMap<string, string>): string[] {
-  const links: string[] = [];
-  visit(paragraph, (node) => {
-    if (node.type === "link") links.push(node.url);
-    else if (node.type === "linkReference") {
-      const url = definitions.get(node.identifier);
-      if (url !== undefined) links.push(url);
-    }
-  });
-  return links;
-}
-
-/**
- * The page as Markdown reads it: a marker quoted in a fence is code, one under `> ` is quoted
- * text, and a heading or fence inside a longer fence is that fence's text, so none of them steers
- * the walk. Only a top-level marker opens or closes a region, as the renderer splices it.
- */
-export function readPage(markdown: string): Page {
-  const root: Root = fromMarkdown(markdown, {
-    extensions: [gfm()],
-    mdastExtensions: [gfmFromMarkdown()],
-  });
-  const definitions = new Map<string, string>();
-  visit(root, "definition", (node) => {
-    if (!definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
-  });
-  const fences: Fence[] = [];
-  const markers: Marker[] = [];
-  const headings: number[] = [];
-  const demonstrations: { line: number; links: string[] }[] = [];
-  let generated = false;
-  for (const block of root.children) {
-    const { start, end } = positionOf(block);
-    const marker = block.type === "html" ? MARKER.exec(block.value) : null;
-    if (marker) {
-      const kind = marker[1] === "BEGIN" ? "BEGIN" : "END";
-      markers.push({
-        kind,
-        name: marker[2] ?? "",
-        line: start.line,
-        start: start.offset,
-        end: end.offset,
-      });
-      generated = kind === "BEGIN";
-      continue;
-    }
-    if (block.type === "heading") headings.push(start.line);
-    if (block.type === "paragraph" && plainText(block).startsWith(DEMONSTRATED)) {
-      demonstrations.push({ line: start.line, links: linkTargets(block, definitions) });
-    }
-    visit(block, "code", (node) => {
-      const at = positionOf(node);
-      fences.push({
-        line: at.start.line,
-        end: at.end.line,
-        mermaid: node.lang === "mermaid",
-        body: node.value,
-        generated,
-      });
-    });
-  }
-  return { fences, markers, headings, demonstrations };
 }
 
 // A node definition wherever it sits: an id, an opening shape run (`[`, `((`, `{{`, `[/`, `[\`, `>` ...), and what follows it.
@@ -444,12 +319,6 @@ function regionProblems(markers: readonly Marker[]): string[] {
   return problems;
 }
 
-/** True when `file` is `root` or sits under it, judged by the relative path so the host's separator does not matter. */
-function withinRoot(root: string, file: string): boolean {
-  const rel = relative(resolve(root), file);
-  return !rel.startsWith("..") && !isAbsolute(rel);
-}
-
 /** The file a link addresses: no fragment, no query, percent-escapes decoded when they are valid. */
 function linkFile(link: string): string {
   const bare = link.split("#")[0]?.split("?")[0] ?? "";
@@ -550,7 +419,7 @@ export function conceptCounts(markdown: string): { diagrams: number; demonstrati
 }
 
 const USAGE = [
-  "usage: check-architecture-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expect-diagrams <n>]",
+  "usage: check-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expect-diagrams <n>]",
   "  --page             the architecture page to check",
   "  --root             the repository root the label paths are relative to (default: cwd)",
   "  --repo-url         the URL prefix an absolute demonstration link maps onto the root with",

@@ -15,11 +15,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
+import { renderArchitectureMermaid } from "../skills/working-text/scripts/architecture/declaration.mts";
 import {
   importSpecifiers,
   parseModule,
-  renderArchitectureMermaid,
-} from "../skills/working-text/scripts/arch-lint.mts";
+} from "../skills/working-text/scripts/architecture/sources.mts";
 
 // Contract tests for the architecture-page scripts of /working-text against a small fixture
 // tree. Every CLI case asserts the whole outcome (exit code, full stdout, full
@@ -27,10 +27,10 @@ import {
 // declaration or the page can be wrong is seen failing, and the matching tree
 // and page are seen passing.
 
-const SCRIPTS = join(ROOT, "skills", "working-text", "scripts");
-const ARCH_LINT = join(SCRIPTS, "arch-lint.mts");
-const RENDER = join(SCRIPTS, "render-architecture-map.mts");
-const CHECK_PAGE = join(SCRIPTS, "check-architecture-page.mts");
+const SCRIPTS = join(ROOT, "skills", "working-text", "scripts", "architecture");
+const ARCH_LINT = join(SCRIPTS, "lint.mts");
+const RENDER = join(SCRIPTS, "render-map.mts");
+const CHECK_PAGE = join(SCRIPTS, "check-page.mts");
 
 const CONFIG = `layers:
   main: [src/main.ts]
@@ -124,14 +124,14 @@ function run(
 
 const USAGE = {
   lint: [
-    "usage: arch-lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]",
+    "usage: lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]",
     "  --config   the layering declaration (default: <root>/architecture.yml)",
     "  --root     the repository root the paths are relative to (default: cwd)",
     "  --mermaid  print the module map instead of linting",
     "exit 0: the tree matches the declaration; 1: forbidden or stale edges; 2: usage or an unreadable graph",
   ].join("\n"),
   render: [
-    "usage: render-architecture-map.mts --page <path> [--config <architecture.yml>] [--root <dir>] [--region <name>] [--check]",
+    "usage: render-map.mts --page <path> [--config <architecture.yml>] [--root <dir>] [--region <name>] [--check]",
     "  --page     the markdown page carrying the generated region",
     "  --config   the layering declaration (default: <root>/architecture.yml)",
     "  --root     the repository root (default: cwd)",
@@ -140,7 +140,7 @@ const USAGE = {
     "exit 0: written or already current; 1: drift under --check; 2: usage, no region, or an unreadable declaration",
   ].join("\n"),
   page: [
-    "usage: check-architecture-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expect-diagrams <n>]",
+    "usage: check-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expect-diagrams <n>]",
     "  --page             the architecture page to check",
     "  --root             the repository root the label paths are relative to (default: cwd)",
     "  --repo-url         the URL prefix an absolute demonstration link maps onto the root with",
@@ -161,7 +161,7 @@ afterAll(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-describe("arch-lint.mts", () => {
+describe("architecture/lint.mts", () => {
   const green = {
     status: 0,
     stdout: "arch-lint: imports under src match architecture.yml\n",
@@ -403,11 +403,11 @@ describe("self-building scripts", () => {
     stderr: "",
   };
   const lint = (root: string, env?: Record<string, string>): Outcome =>
-    run(join(root, "scripts", "arch-lint.mts"), [], root, env);
+    run(join(root, "scripts", "architecture", "lint.mts"), [], root, env);
 
   test("the first run builds the bundle and runs it, the second runs it as is, a newer source rebuilds it", () => {
     const root = copiedSkill("self-build");
-    const bundle = join(root, ".build", "arch-lint.js");
+    const bundle = join(root, ".build", "architecture", "lint.js");
     expect(existsSync(bundle)).toBe(false);
     expect(lint(root)).toEqual(green);
     // Only the bundle is left behind: the install the build needed is gone, and no lockfile was written.
@@ -418,7 +418,10 @@ describe("self-building scripts", () => {
       "scripts",
       "src",
     ]);
-    expect(readdirSync(join(root, ".build"))).toEqual(["arch-lint.js"]);
+    expect(readdirSync(join(root, ".build"), { recursive: true }).sort()).toEqual([
+      "architecture",
+      join("architecture", "lint.js"),
+    ]);
     const first = statSync(bundle).mtimeMs;
 
     expect(lint(root)).toEqual(green);
@@ -439,7 +442,7 @@ describe("self-building scripts", () => {
 
   test("an entry below scripts/ finds the skill root and bundles to the same path under .build", () => {
     const root = copiedSkill("nested-entry");
-    const head = readFileSync(join(root, "scripts", "arch-lint.mts"), "utf8");
+    const head = readFileSync(join(root, "scripts", "architecture", "sources.mts"), "utf8");
     const guard = "if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();\n";
     const prefix = head.slice(0, head.indexOf(guard) + guard.length);
     const entry = join(root, "scripts", "nested", "entry.mts");
@@ -473,7 +476,7 @@ describe("self-building scripts", () => {
     expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual([
       "install",
       "build",
-      join(root, ".build", "arch-lint.js"),
+      join(root, ".build", "architecture", "lint.js"),
     ]);
     expect(!existsSync(cache) || readdirSync(cache).length === 0).toBe(true);
 
@@ -524,18 +527,18 @@ Demonstrated by: [the run test](../test/engine/run.test.ts).
 
 `;
 
-const REGION = `<!-- BEGIN GENERATED: architecture-map (bun render-architecture-map.mts; derived from architecture.yml) -->
+const REGION = `<!-- BEGIN GENERATED: architecture-map (bun render-map.mts; derived from architecture.yml) -->
 <!-- END GENERATED: architecture-map -->
 `;
 
-const RENDERED_REGION = `<!-- BEGIN GENERATED: architecture-map (bun render-architecture-map.mts; derived from architecture.yml) -->
+const RENDERED_REGION = `<!-- BEGIN GENERATED: architecture-map (bun render-map.mts; derived from architecture.yml) -->
 \`\`\`mermaid
 ${MAP}
 \`\`\`
 <!-- END GENERATED: architecture-map -->
 `;
 
-describe("render-architecture-map.mts", () => {
+describe("architecture/render-map.mts", () => {
   test("writes the map into the region, then reports it current, then flags drift under --check", () => {
     const root = variant("render", { "docs/architecture.md": PAGE_HEAD + REGION });
     const page = join(root, "docs", "architecture.md");
@@ -642,7 +645,7 @@ describe("render-architecture-map.mts", () => {
   });
 });
 
-describe("check-architecture-page.mts", () => {
+describe("architecture/check-page.mts", () => {
   const REPO_URL = "https://github.com/octo/example/blob/main/";
   const demo = "Demonstrated by: [the run test](../test/engine/run.test.ts).";
   const page = (label: string, tail = demo): string =>
