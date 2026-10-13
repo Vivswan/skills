@@ -150,7 +150,9 @@ function parseTip(ref: unknown): { tip: Tip; suites: Suites | null } {
 
 // gh exits 1 when the reply carries an `errors` entry, which a deleted PR in the batch does
 // ("Could not resolve to a PullRequest"), with the other PRs' data still on stdout. That data is
-// read; a reply with no data at all is the failure it looks like.
+// read; a reply with no data at all is the failure it looks like, and so is an error at an alias
+// that is not a NOT_FOUND: an INTERNAL or RATE_LIMITED answer nulls the alias too, and read as a
+// deleted target it would end the watch with the wrong word.
 function requestChunk(chunk: Chunk): { data: unknown; failure: GhError | null } {
   let raw: string;
   let failure: GhError | null = null;
@@ -161,14 +163,22 @@ function requestChunk(chunk: Chunk): { data: unknown; failure: GhError | null } 
     failure = error;
     raw = error.stdout;
   }
-  let data: unknown;
+  let body: unknown;
   try {
-    data = get(parseJson(raw, "gh api graphql"), "data");
+    body = parseJson(raw, "gh api graphql");
   } catch (error) {
     throw failure ?? error;
   }
+  const data = get(body, "data");
   if (data === undefined || data === null) {
     throw failure ?? new GhError("GraphQL response carries no data");
+  }
+  const errors = get(body, "errors");
+  for (const entry of Array.isArray(errors) ? errors : []) {
+    const type = get(entry, "type");
+    if (type !== undefined && type !== "NOT_FOUND") {
+      throw failure ?? new GhError(`GraphQL response carries a ${String(type)} error`);
+    }
   }
   return { data, failure };
 }

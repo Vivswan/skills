@@ -888,6 +888,26 @@ describe("readRepository", () => {
     expect(s.violations()).toBe("");
   });
 
+  test("an error other than NOT_FOUND at a PR's alias is the failed read it is, never a deleted target", () => {
+    // GitHub nulls the alias for an INTERNAL or RATE_LIMITED error as it does for a deleted PR;
+    // read as deleted, a transient error would end the watch with the wrong word.
+    const s = scenario({
+      "rows-1.json": JSON.stringify({
+        data: { viewer: { login: "me" }, r: { p1: prNode(), p7: null } },
+        errors: [{ type: "INTERNAL", path: ["r", "p7"], message: "Something went wrong" }],
+      }),
+      "rows-1.exit1": "gh: Something went wrong\n",
+    });
+    expect(() =>
+      readRepository("octocat/repo", {
+        prs: [1, 7],
+        branches: [],
+        suitesFor: { prs: new Set(), branches: new Set() },
+      }),
+    ).toThrow(new GhError("gh api graphql exited 1: gh: Something went wrong"));
+    expect(s.violations()).toBe("");
+  });
+
   test("a failed request with no data is the gh failure it looks like, not a map of absent PRs", () => {
     // A rate-limited reply carries errors and no data; reading it as "every PR null" would name
     // the PRs instead of the limit.

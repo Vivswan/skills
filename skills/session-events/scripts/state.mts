@@ -114,8 +114,19 @@ export function noTargets<Target>(): Record<string, Target> {
   return Object.create(null) as Record<string, Target>;
 }
 
-/** The saved state, or an empty one on a fresh start. A file that is not a state object is refused by path. */
+/**
+ * The saved state, or an empty one on a fresh start. The log is appended before the state is
+ * saved, so a daemon killed between the two left a line past the saved counter: the counter picks
+ * up from the log's last id, and no id is ever used twice. A file that is not a state object is
+ * refused by path.
+ */
 export function loadState<Target>(files: Files): State<Target> {
+  const state = readSavedState<Target>(files);
+  const logged = readEventsSince(files, 0).at(-1)?.id ?? 0;
+  return { ...state, lastEventId: Math.max(state.lastEventId, logged) };
+}
+
+function readSavedState<Target>(files: Files): State<Target> {
   let text: string;
   try {
     text = readFileSync(files.state, "utf-8");

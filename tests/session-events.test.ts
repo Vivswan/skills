@@ -522,6 +522,26 @@ describe("session-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a daemon killed between appending the log and saving the state restarts past the logged id: the counter follows the log, so no id is used twice", async () => {
+    // The state is written after the log; a crash between the two leaves the log one line ahead.
+    const s = new Fake("counter");
+    const box = await s.inbox("a");
+    s.polls({ events: [note("t1", "one")] }, { events: [note("t1", "two")] });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
+    s.stop({ inbox: box.path });
+    // The crash, by hand: the log carries #2, the saved counter still says 1.
+    appendFileSync(
+      s.files().events,
+      `${JSON.stringify({ id: 2, at: "2026-01-01T00:00:00Z", target: "t1", kind: "note", text: "crashed", url: "" })}\n`,
+    );
+    await s.start({ inbox: box.path });
+    expect(headlines(await box.frames(2))).toEqual(["one", "two"]);
+    expect(s.events().map((e) => e.id)).toEqual([1, 2, 3]);
+    expect(s.state().lastEventId).toBe(3);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("wait --since returns only newer lines and the cursor, blocks until a poll appends, exits 4 at timeout, and exits 3 once the daemon is gone", async () => {
     const s = new Fake("wait");
     const id = ["--id", "probe"];
