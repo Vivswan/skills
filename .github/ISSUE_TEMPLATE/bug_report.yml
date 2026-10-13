@@ -12,23 +12,23 @@ body:
         - code-standards
         - codex-browser-fix
         - craft-skills-and-memories
-        - working-text
-        - no-invalid-states
+        - design-taste-frontend
+        - frontend-design
         - natural-writing
-        - orchestrator-mode
         - never-twice
+        - no-invalid-states
+        - orchestrator-mode
         - pr-and-issue-discipline
         - pr-landing-discipline
         - project-naming
         - reply-and-review-discipline
         - rubber-duck-review
         - session-events
+        - unslop
         - verify-with-controls
         - watch-github
+        - working-text
         - worktree-hygiene
-        - unslop
-        - frontend-design
-        - design-taste-frontend
         - Not skill-specific (catalog, install, or tooling)
     validations:
       required: true

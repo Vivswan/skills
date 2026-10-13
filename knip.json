@@ -2,14 +2,14 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreExportsUsedInFile": true,
   "entry": [
-    "scripts/*.ts",
+    "scripts/*.mts",
     ".githooks/**/*.{ts,mts}",
     ".github/actions/**/*.ts",
     "skills/*/scripts/**/*.{ts,mts}",
     "tests/**/*.{ts,mts}"
   ],
   "project": [
-    "scripts/**/*.ts",
+    "scripts/**/*.mts",
     ".githooks/**/*.{ts,mts}",
     ".github/actions/**/*.ts",
     "skills/*/scripts/**/*.{ts,mts}",

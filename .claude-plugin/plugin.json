@@ -15,11 +15,10 @@
     "./skills/code-standards",
     "./skills/codex-browser-fix",
     "./skills/craft-skills-and-memories",
-    "./skills/working-text",
-    "./skills/no-invalid-states",
     "./skills/natural-writing",
-    "./skills/orchestrator-mode",
     "./skills/never-twice",
+    "./skills/no-invalid-states",
+    "./skills/orchestrator-mode",
     "./skills/pr-and-issue-discipline",
     "./skills/pr-landing-discipline",
     "./skills/project-naming",
@@ -28,6 +27,7 @@
     "./skills/session-events",
     "./skills/verify-with-controls",
     "./skills/watch-github",
+    "./skills/working-text",
     "./skills/worktree-hygiene"
   ]
 }

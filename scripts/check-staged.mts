@@ -9,7 +9,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { basename, dirname, extname, join, normalize, relative } from "node:path";
-import { ROOT } from "./lib";
+import { ROOT } from "./lib.mts";
 
 export const STATIC_CHECKS = ["typecheck", "lint", "check:docs", "validate", "smoke"] as const;
 
@@ -20,7 +20,7 @@ export function stem(path: string): string {
 }
 
 /** The launcher every test runs under; a change anywhere in its import closure reaches every test. */
-export const LAUNCHER_ROOTS = ["scripts/run-tests.ts", "tests/preload.ts"] as const;
+export const LAUNCHER_ROOTS = ["scripts/run-tests.mts", "tests/preload.ts"] as const;
 
 const RELATIVE_IMPORT = /(?:from\s+|import\s+|import\()\s*["'](\.{1,2}\/[^"']+)["']/g;
 

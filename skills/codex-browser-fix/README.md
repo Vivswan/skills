@@ -35,7 +35,8 @@ bun scripts/browser-plugin-preflight.mts --check  # read-only verify
 - [`SKILL.md`](./SKILL.md): symptom table, preflight, family selection, recovery
 - [`references/recovery.md`](./references/recovery.md): the auth incident specimen, what the preflight synchronizes, extension-versus-tab failures
 - [`scripts/browser-plugin-preflight.mts`](./scripts/browser-plugin-preflight.mts): the sole setup implementation
-- [`scripts/browser-auth-launcher.mts`](./scripts/browser-auth-launcher.mts): launcher generator and the `config.toml` edit, unit-tested upstream (https://github.com/Vivswan/skills, tests/browser-auth-launcher.test.ts)
+- [`scripts/browser-auth-launcher.mts`](./scripts/browser-auth-launcher.mts): launcher generator, unit-tested upstream (https://github.com/Vivswan/skills, tests/skills/codex-browser-fix/browser-auth-launcher.test.ts)
+- [`scripts/codex-config-toml.mts`](./scripts/codex-config-toml.mts): the `config.toml` edit, unit-tested upstream (https://github.com/Vivswan/skills, tests/skills/codex-browser-fix/codex-config-toml.test.ts)
 
 ## Plugin-Ready Layout
 

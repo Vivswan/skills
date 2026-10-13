@@ -110,4 +110,5 @@ Live browser work resumes only in a desktop Codex session with the Chrome plugin
 
 - `references/recovery.md`: the auth incident specimen, what the preflight synchronizes, and the extension-versus-tab failure split
 - `scripts/browser-plugin-preflight.mts`: the sole setup implementation (sync and `--check`)
-- `scripts/browser-auth-launcher.mts`: the launcher generator and the `config.toml` edit, unit-tested upstream (https://github.com/Vivswan/skills, tests/browser-auth-launcher.test.ts)
+- `scripts/browser-auth-launcher.mts`: the launcher generator, unit-tested upstream (https://github.com/Vivswan/skills, tests/skills/codex-browser-fix/browser-auth-launcher.test.ts)
+- `scripts/codex-config-toml.mts`: the `config.toml` edit, unit-tested upstream (https://github.com/Vivswan/skills, tests/skills/codex-browser-fix/codex-config-toml.test.ts)

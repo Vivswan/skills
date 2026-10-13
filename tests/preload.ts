@@ -1,12 +1,12 @@
 /**
  * Interlock for the hermetic git test environment, loaded by
- * scripts/run-tests.ts via --preload and by any direct `bun test` at the
+ * scripts/run-tests.mts via --preload and by any direct `bun test` at the
  * repo root via bunfig.toml [test].preload.
  *
  * Layer 1 - verify the CHILD-VISIBLE birth environment, measured rather
  * than trusted: children spawned without an explicit `env` get the environ
  * snapshot from the test process's birth, which nothing set here can reach
- * (see scripts/hermetic-git-env.ts), and a trusted marker variable could be
+ * (see scripts/hermetic-git-env.mts), and a trusted marker variable could be
  * forged around an unsafe environ. So the probes below spawn real children
  * and refuse the run - before any test executes - unless containment
  * demonstrably holds for exactly the spawn shape a hygiene-free test uses.
@@ -16,7 +16,7 @@
  * change is TMPDIR, resolve()-normalized as the launcher already did.
  */
 
-import { hermeticGitEnv } from "../scripts/hermetic-git-env";
+import { hermeticGitEnv } from "../scripts/hermetic-git-env.mts";
 
 function refuse(reason: string): never {
   throw new Error(
@@ -25,8 +25,8 @@ function refuse(reason: string): never {
       "Run tests via 'bun run test' (or 'bun run check'): the hermetic git environment must",
       "exist before the test process starts, and it must start outside the repository -",
       "otherwise a leaky fixture git flow reaches the real repository (this exact leak once",
-      "rewrote the shared .git/config; see scripts/hermetic-git-env.ts and",
-      "tests/git-isolation.test.ts).",
+      "rewrote the shared .git/config; see scripts/hermetic-git-env.mts and",
+      "tests/repo/git-isolation.test.ts).",
     ].join("\n"),
   );
 }

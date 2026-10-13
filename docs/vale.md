@@ -10,7 +10,7 @@ Three skills ship their rules as [Vale](https://vale.sh) styles, each inside its
 
 One owner per token: no word or phrase is listed by two rules, so a word-level hit is reported once. A phrase rule can still overlap a word rule (`pivotal role` in `Significance`, `pivotal` in `Unslop`), and then both report, which is right: two different tells.
 
-`tests/vale-styles.test.ts` pins three things: the exact-token ownership, every token's presence in the skill text it comes from, and that no other `.yml` sits under `skills/` or `xeno/`, since Vale would read it as a rule.
+`tests/repo/vale-styles.test.ts` pins three things: the exact-token ownership, every token's presence in the skill text it comes from, and that no other `.yml` sits under `skills/` or `xeno/`, since Vale would read it as a rule.
 
 ## Wiring a consumer
 

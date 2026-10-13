@@ -2,7 +2,7 @@
 // The schema checks behind `bun run lint:json`. uvx fetches check-jsonschema, so it needs no
 // install step here.
 
-import { ROOT } from "./lib";
+import { ROOT } from "./lib.mts";
 
 const CHECKS: readonly (readonly string[])[] = [
   ["--schemafile", "https://json.schemastore.org/package.json", "package.json"],

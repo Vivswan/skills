@@ -1,5 +1,5 @@
 import { expect } from "bun:test";
-import { CheckFailure, errorMessage } from "../../scripts/lib";
+import { CheckFailure, errorMessage } from "../../scripts/lib.mts";
 
 // Both halves of a rejection in one invocation: runChecks() reports a
 // CheckFailure as FAIL and any other throw as a crash, so the class matters

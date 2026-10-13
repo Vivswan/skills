@@ -18,7 +18,8 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { browserAuthLauncher, withTomlValues } from "./browser-auth-launcher.mts";
+import { browserAuthLauncher } from "./browser-auth-launcher.mts";
+import { withTomlValues } from "./codex-config-toml.mts";
 
 type PluginManifest = {
   name: string;
