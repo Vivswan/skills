@@ -10,17 +10,96 @@
 // `import X = require("./x")`. Only relative specifiers are edges; a path
 // alias is invisible here, so the declaration names the tree, not the alias.
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Node, parseSync as ParseSync, TemplateElement } from "oxc-parser";
 
-// The adopting repository adds the parser (bun add -d oxc-parser); a copied
-// script without it says so once instead of failing on a missing module path.
+// The parser installs once per manifest-and-lock pair into a shared per-user cache, never into the skill
+// folder or the user's project; hashing both files makes a bumped pin, or a lock left stale behind one,
+// a fresh directory where `--frozen-lockfile` decides. Install output stays off stdout, which the
+// scripts' callers parse.
+const SKILL_DIR = join(import.meta.dir, "..");
+const SKILL = basename(SKILL_DIR);
+if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
+  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
+  process.exit(2);
+}
+const DEPS_HASH = createHash("sha256")
+  .update(readFileSync(join(SKILL_DIR, "package.json")))
+  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
+  .digest("hex")
+  .slice(0, 12);
+const DEPS_DIR = join(
+  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
+  "skills-deps",
+  `${SKILL}-${DEPS_HASH}`,
+);
+// One shell word, so the printed recovery command runs as printed whatever the path holds.
+const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
+const INSTALL_TIMEOUT_MS = 10 * 60_000;
+// Parallel lanes start these scripts at once on a cold cache, so each installs into its own staging
+// directory and renames the finished node_modules into place: a reader sees a complete tree or none,
+// and the rename that finds one already there lost the race and discards its own. DEPS_DIR holds the
+// manifests too, so the printed recovery command runs in it.
+if (!existsSync(join(DEPS_DIR, "node_modules"))) {
+  const staging = `${DEPS_DIR}.tmp-${process.pid}`;
+  let install: SpawnSyncReturns<string>;
+  try {
+    rmSync(staging, { recursive: true, force: true });
+    for (const dir of [DEPS_DIR, staging]) {
+      mkdirSync(dir, { recursive: true });
+      for (const file of ["package.json", "bun.lock"]) {
+        copyFileSync(join(SKILL_DIR, file), join(dir, file));
+      }
+    }
+    install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", staging], {
+      encoding: "utf8",
+      timeout: INSTALL_TIMEOUT_MS,
+    });
+    if (install.status === 0 && existsSync(join(staging, "node_modules"))) {
+      try {
+        renameSync(join(staging, "node_modules"), join(DEPS_DIR, "node_modules"));
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+      }
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  if (install.status !== 0) {
+    process.stderr.write(install.stderr ?? "");
+    const timedOut = (install.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+    console.error(
+      `${SKILL} dependencies did not install${timedOut ? ` within ${INSTALL_TIMEOUT_MS / 60_000} minutes` : ""}; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+    );
+    process.exit(2);
+  }
+}
 export const parseSync: typeof ParseSync = await (async () => {
   try {
-    return (await import("oxc-parser")).parseSync;
+    // Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, which would load
+    // whatever version the global cache has; the directory check keeps a broken install a failure.
+    if (!existsSync(join(DEPS_DIR, "node_modules", "oxc-parser"))) throw new Error("not installed");
+    const oxc: typeof import("oxc-parser") = await import(Bun.resolveSync("oxc-parser", DEPS_DIR));
+    return oxc.parseSync;
   } catch {
-    console.error("working-text scripts need oxc-parser: bun add -d oxc-parser");
+    console.error(
+      `${SKILL} scripts need oxc-parser: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
+    );
     process.exit(2);
   }
 })();

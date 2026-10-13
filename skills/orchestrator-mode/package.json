@@ -1,0 +1,7 @@
+{
+  "name": "orchestrator-mode-skill-dependencies",
+  "private": true,
+  "dependencies": {
+    "diff": "9.0.0"
+  }
+}

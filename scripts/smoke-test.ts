@@ -6,8 +6,8 @@
  * catalog or drift ACROSS files that still passes structural validation.
  */
 
-import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, extname, join } from "node:path";
 import { validateSkillDir } from "../.github/actions/validate-skills/validate_skills";
 import type { Frontmatter, Marketplace, RootManifest } from "./lib";
 import {
@@ -41,14 +41,14 @@ import {
   checkReadmeMermaidGraph,
   checkReadmeSkillList,
   checkReadmeUsageExplicitRoster,
+  checkSkillDependencies,
+  checkSkillScriptImports,
+  SEMVER,
 } from "./smoke-checks";
 import { parseSources } from "./sync-xeno.mts";
 
 // Strings that should only ever appear in template/, never in a published skill.
 const PLACEHOLDER_MARKERS = ["Replace with", "Replace this", "template-skill", "Template Skill"];
-
-const SEMVER =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
 
 // Component-declaring plugin.json fields. A marketplace entry with
 // strict:false conflicts with any of these and the plugin fails to load.
@@ -87,6 +87,72 @@ function checkNoInstallDroppedFiles(skillDir: string): void {
         `${rel(path)}: 'metadata.json' is a reserved filename that npx skills silently drops at install -- rename it`,
       );
     }
+  }
+}
+
+const SCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
+
+/** bun.lock is JSONC (trailing commas), so JSON.parse would refuse the file bun itself writes. */
+function loadLockfile(path: string): Record<string, unknown> {
+  let lock: unknown;
+  try {
+    lock = Bun.JSONC.parse(readTextFile(path));
+  } catch (error) {
+    fail(`${rel(path)}: invalid JSONC (${errorMessage(error)})`);
+  }
+  if (!isRecord(lock)) fail(`${rel(path)}: root must be an object`);
+  return lock;
+}
+
+interface SkillTree {
+  readonly manifestPaths: string[];
+  readonly nodeModulesPaths: string[];
+  readonly scriptPaths: string[];
+}
+
+// statSync follows links, so a linked package.json or script is judged as the file it points at and a dangling
+// link fails instead of vanishing from the walk; node_modules is recorded for the gate, never entered.
+function walkSkillTree(dir: string, tree: SkillTree): SkillTree {
+  const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+    a.name < b.name ? -1 : 1,
+  );
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.name === "node_modules") {
+      tree.nodeModulesPaths.push(full);
+      continue;
+    }
+    let stat: ReturnType<typeof statSync>;
+    try {
+      stat = statSync(full);
+    } catch (error) {
+      fail(`${rel(full)}: cannot stat (${errorMessage(error)})`);
+    }
+    if (stat.isDirectory()) walkSkillTree(full, tree);
+    else if (entry.name === "package.json") tree.manifestPaths.push(full);
+    else if (SCRIPT_EXTENSIONS.has(extname(entry.name))) tree.scriptPaths.push(full);
+  }
+  return tree;
+}
+
+function checkDependencies(skillDir: string, rootDevDependencies: Record<string, unknown>): void {
+  const tree = walkSkillTree(skillDir, {
+    manifestPaths: [],
+    nodeModulesPaths: [],
+    scriptPaths: [],
+  });
+  const manifestPath = join(skillDir, "package.json");
+  const lockPath = join(skillDir, "bun.lock");
+  const declared = checkSkillDependencies({
+    skillPath: rel(skillDir),
+    manifestPaths: tree.manifestPaths.map(rel),
+    nodeModulesPaths: tree.nodeModulesPaths.map(rel),
+    manifest: existsSync(manifestPath) ? loadJsonObject(manifestPath) : undefined,
+    lock: existsSync(lockPath) ? loadLockfile(lockPath) : undefined,
+    rootDevDependencies,
+  });
+  for (const path of tree.scriptPaths) {
+    checkSkillScriptImports(rel(path), readTextFile(path), { skillPath: rel(skillDir), declared });
   }
 }
 
@@ -904,12 +970,17 @@ function main(): void {
   checkCatalogCoverage(manifest, dirs);
   checkMarketplaceAgainstManifest(marketplace, manifest);
 
+  const rootPackage = loadJsonObject(join(ROOT, "package.json"));
+  const rootDevDependencies = isRecord(rootPackage.devDependencies)
+    ? rootPackage.devDependencies
+    : {};
   const codexManifests: CodexManifest[] = [];
   const skillFrontmatters: SkillFrontmatter[] = [];
   for (const skillDir of dirs) {
     requireFile(join(skillDir, "README.md"));
     checkNoPlaceholders(skillDir);
     checkNoInstallDroppedFiles(skillDir);
+    checkDependencies(skillDir, rootDevDependencies);
     const codex = loadCodexManifest(skillDir);
     const skillMd = loadSkillFrontmatter(skillDir);
     checkSingleSourceVersion(codex, skillMd);

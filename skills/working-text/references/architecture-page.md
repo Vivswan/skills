@@ -51,16 +51,16 @@ The page header says what the checks prove: existence only. A caption-only box (
 
 ## The recipe
 
-The three scripts ship with the `/working-text` skill. Copy them into `<scripts-dir>/`, wherever the repository keeps its scripts, so its check command runs without the skill installed. They import only each other, bun, and the `oxc-parser` package.
+The three scripts ship with the `/working-text` skill. Copy `scripts/`, `package.json`, and `bun.lock` into a folder of the repository's own, so its check command runs without the skill installed; `<scripts-dir>` below is that folder's `scripts/`. On first run the scripts install `oxc-parser` from the lock into `${XDG_CACHE_HOME:-~/.cache}/skills-deps/`, never into the repository.
 
 ```bash
-cp "<skill-dir>/scripts/"{arch-lint,render-architecture-map,check-architecture-page}.mts <scripts-dir>/
-bun add -d oxc-parser
+mkdir -p <tools-dir>/working-text
+cp -r "<skill-dir>"/{scripts,package.json,bun.lock} <tools-dir>/working-text/
 ```
 
 The commands below use `<docs>/architecture.md` for the page. Put it wherever the repository keeps its pages.
 
-Without the parser every script exits 2 with `working-text scripts need oxc-parser: bun add -d oxc-parser`.
+Without the two files beside `scripts/` every script exits 2 with `working-text scripts need the skill's package.json and bun.lock beside scripts/`. A repository whose `tsc` includes the copied scripts also adds the same exact version as a devDependency (`bun add -d --exact oxc-parser@0.147.0`): the types resolve from its `node_modules`, the run from the cache.
 
 ### 1. Declare the layers, then make the lint pass
 

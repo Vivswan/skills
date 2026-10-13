@@ -1,0 +1,7 @@
+{
+  "name": "working-text-skill-dependencies",
+  "private": true,
+  "dependencies": {
+    "oxc-parser": "0.147.0"
+  }
+}

@@ -45,7 +45,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/working-text -
 - [`scripts/render-architecture-map.mts`](./scripts/render-architecture-map.mts): writes the map into the page's generated region. `--check` exits 1 on drift
 - [`scripts/check-architecture-page.mts`](./scripts/check-architecture-page.mts): the page test. `--expect-diagrams <n>` pins the count, `--repo-url` resolves absolute links
 
-The probe runs with bun alone. The three architecture scripts also need `oxc-parser` (`bun add -d oxc-parser`). Copy them into the repository so its check command runs without the skill installed.
+The probe runs with bun alone. The three architecture scripts install their one dependency, `oxc-parser`, from the skill's `bun.lock` into a shared per-user cache on first run; [`references/architecture-page.md`](./references/architecture-page.md) has the copy step for a repository that runs them without the skill installed.
 
 ## Exit Codes
 

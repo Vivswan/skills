@@ -7,6 +7,9 @@ import {
   checkReadmeMermaidGraph,
   checkReadmeSkillList,
   checkReadmeUsageExplicitRoster,
+  checkSkillDependencies,
+  checkSkillScriptImports,
+  type SkillDependencyLayout,
 } from "../scripts/smoke-checks";
 import { expectCheckFailure } from "./helpers/check-failure";
 
@@ -352,5 +355,258 @@ describe("checkReadmeUsageExplicitRoster", () => {
         skills,
       ),
     ).toThrow(/duplicate/);
+  });
+});
+
+describe("checkSkillDependencies", () => {
+  // What drifts: bun's auto-install ignores a package.json pin and resolves `pkg@1.2.3` only until a
+  // second version was ever fetched, so the lock-per-skill layout and a root devDependency at the same
+  // version are what keep a consumer's run and this repository's typecheck on one version; nothing
+  // else in the repository enforces either.
+  const FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+  function lockFor(entries: Record<string, Record<string, string>>): Record<string, unknown> {
+    return { lockfileVersion: 1, workspaces: { "": { name: "x-dependencies", ...entries } } };
+  }
+  function layout(overrides: Partial<SkillDependencyLayout> = {}): SkillDependencyLayout {
+    return {
+      skillPath: "skills/x",
+      manifestPaths: ["skills/x/package.json"],
+      nodeModulesPaths: [],
+      manifest: { name: "x-dependencies", private: true, dependencies: { left: "1.2.3" } },
+      lock: lockFor({ dependencies: { left: "1.2.3" } }),
+      rootDevDependencies: { left: "1.2.3" },
+      ...overrides,
+    };
+  }
+
+  test.each(FIELDS)("accepts exact pins under %s and returns the declared names", (field) => {
+    const pins = { left: "1.0.0-beta.2", "@scope/right": "2.0.0+build.7" };
+    expect(
+      checkSkillDependencies(
+        layout({
+          manifest: { [field]: pins },
+          lock: lockFor({ [field]: pins }),
+          rootDevDependencies: pins,
+        }),
+      ),
+    ).toEqual(new Set(["left", "@scope/right"]));
+  });
+
+  test("accepts a package named in dependencies and optionalDependencies, which bun locks once", () => {
+    // bun 1.4.2 writes the optional entry alone into workspaces[""], so a per-field comparison could
+    // never be satisfied by any regenerated lock.
+    const manifest = {
+      dependencies: { left: "1.2.3" },
+      optionalDependencies: { left: "1.2.3" },
+    };
+    expect(
+      checkSkillDependencies(
+        layout({ manifest, lock: lockFor({ optionalDependencies: { left: "1.2.3" } }) }),
+      ),
+    ).toEqual(new Set(["left"]));
+  });
+
+  test.each(FIELDS)("rejects a range under %s with a message naming the rule", (field) => {
+    expectCheckFailure(
+      () => checkSkillDependencies(layout({ manifest: { [field]: { left: "^1.2.3" } } })),
+      new RegExp(
+        `^skills/x/package\\.json: ${field} entry 'left' is "\\^1\\.2\\.3" .* exact version`,
+      ),
+    );
+  });
+
+  test.each<[kind: string, version: unknown]>([
+    ["a tilde range", "~1.2.0"],
+    ["an x-range", "1.x"],
+    ["a partial version", "1.2"],
+    ["a compound range", ">=1.0.0 <2.0.0"],
+    ["a dist-tag", "latest"],
+    ["a star", "*"],
+    ["an empty string", ""],
+    ["a leading v", "v1.2.3"],
+    ["a git specifier", "github:oven-sh/bun#v1.2.3"],
+    ["a git URL", "git+https://example.com/left.git#1.2.3"],
+    ["a file specifier", "file:../left"],
+    ["an npm alias", "npm:other@1.2.3"],
+    ["a workspace specifier", "workspace:*"],
+    ["a JSON number", 1],
+  ])("rejects %s as a version", (_kind, version) => {
+    expectCheckFailure(
+      () => checkSkillDependencies(layout({ manifest: { dependencies: { left: version } } })),
+      /dependencies entry 'left' is .* exact version/,
+    );
+  });
+
+  test.each<[state: string, rootDevDependencies: Record<string, unknown>, detail: RegExp]>([
+    ["pins another version", { left: "1.2.4" }, /devDependencies pin "1\.2\.4"/],
+    ["lacks the package", {}, /devDependencies do not list it/],
+  ])("rejects a pin the root package.json %s", (_state, rootDevDependencies, detail) => {
+    expectCheckFailure(
+      () => checkSkillDependencies(layout({ rootDevDependencies })),
+      /^skills\/x\/package\.json: dependencies entry 'left' is 1\.2\.3 but the root package\.json/,
+    );
+    expectCheckFailure(() => checkSkillDependencies(layout({ rootDevDependencies })), detail);
+  });
+
+  test.each<[reason: string, overrides: Partial<SkillDependencyLayout>, message: RegExp]>([
+    [
+      "a package.json with dependencies and no bun.lock",
+      { lock: undefined },
+      /^skills\/x\/bun\.lock: missing beside a package\.json with dependencies; run bun install --lockfile-only --cwd skills\/x/,
+    ],
+    [
+      "a bun.lock that records other pins than package.json declares",
+      { lock: lockFor({ dependencies: { left: "1.2.2" } }) },
+      /^skills\/x\/bun\.lock: records {"left":"1\.2\.2"} but package\.json declares {"left":"1\.2\.3"}; run bun install --lockfile-only --cwd skills\/x/,
+    ],
+    [
+      "a bun.lock with no package.json",
+      { manifestPaths: [], manifest: undefined },
+      /^skills\/x\/bun\.lock: a lockfile with no package\.json beside it/,
+    ],
+    [
+      "a package.json that declares no dependency",
+      { manifest: { name: "x-dependencies", private: true } },
+      /^skills\/x\/package\.json: declares no dependency; a skill without dependencies ships neither/,
+    ],
+    [
+      "a package.json below the skill root",
+      { manifestPaths: ["skills/x/package.json", "skills/x/scripts/package.json"] },
+      /^skills\/x\/scripts\/package\.json: a skill's package\.json sits at skills\/x\/package\.json, nowhere deeper/,
+    ],
+    [
+      "a node_modules directory under the skill",
+      { nodeModulesPaths: ["skills/x/node_modules"] },
+      /^skills\/x\/node_modules: node_modules under a skill folder; dependencies install into the shared cache/,
+    ],
+    [
+      "a dependency field that is not a name-to-version object",
+      { manifest: { dependencies: ["left@1.2.3"] } },
+      /^skills\/x\/package\.json: dependencies must be an object of package name to exact version/,
+    ],
+  ])("rejects %s", (_reason, overrides, message) => {
+    expectCheckFailure(() => checkSkillDependencies(layout(overrides)), message);
+  });
+});
+
+describe("checkSkillScriptImports", () => {
+  // What drifts: a bare import in an installed skill resolves from the user's project (or nothing), so
+  // the only load of a dependency is the bootstrap's computed dynamic import. The judge reads what bun's
+  // own transpiler leaves after erasing types, so these cases pin bun's erasure and folding rules
+  // (type-only forms vanish, wrappers and concatenations fold to one path), facts nothing else in the
+  // repository states.
+  const path = "skills/x/scripts/x.mts";
+  const none = { skillPath: "skills/x", declared: undefined };
+  const declared = { skillPath: "skills/x", declared: new Set(["oxc-parser", "@scope/pkg"]) };
+
+  test.each([
+    'import { a } from "./a.mts";',
+    'import b from "../b.json" with { type: "json" };',
+    'export * from "./c.mts";',
+    'import { readFileSync } from "node:fs";',
+    'import { readFileSync } from "fs";',
+    'import "file:///tmp/example/helper.mts";',
+    'const n = await import("data:text/javascript,export default 42");',
+    'import { Database } from "bun:sqlite";',
+    'import { $ } from "bun";',
+    'const m = await import("./d.mts");',
+    'const o = await import(Bun.resolveSync("oxc-parser", depsDir));',
+    'const t: typeof import("oxc-parser") = o;',
+    'import type { Node } from "oxc-parser";',
+  ])("accepts %s in a skill with no package.json", (source) => {
+    expect(() => checkSkillScriptImports(path, source, none)).not.toThrow();
+  });
+
+  test.each([
+    'import { parseSync } from "oxc-parser";',
+    'export { parseSync } from "oxc-parser";',
+    'const o = await import("oxc-parser");',
+    'import Parser = require("oxc-parser");',
+    'const r = require("oxc-parser");',
+  ])("rejects %s in a skill with no package.json, naming the policy", (source) => {
+    expectCheckFailure(
+      () => checkSkillScriptImports(path, source, none),
+      /^skills\/x\/scripts\/x\.mts: imports '[^']+' but skills\/x has no package\.json -- a dependency ships skills\/x\/package\.json \+ bun\.lock/,
+    );
+  });
+
+  test.each([
+    'import type { Node } from "oxc-parser";',
+    'import /* erased at runtime */ type { Node } from "oxc-parser";',
+    'export type * from "oxc-parser";',
+    'export type { Node } from "oxc-parser";',
+    'import type { Sub } from "@scope/pkg/sub";',
+    'import { type Node, type Span } from "oxc-parser";',
+    'export { type Node } from "oxc-parser";',
+    'import type Parser = require("oxc-parser");',
+    'declare module "virtual-parser" { export { parseSync } from "oxc-parser"; }',
+    'const o: typeof import("oxc-parser") = await import(Bun.resolveSync("oxc-parser", depsDir));',
+  ])("accepts %s in a skill that declares the package", (source) => {
+    expect(() => checkSkillScriptImports(path, source, declared)).not.toThrow();
+  });
+
+  test.each<[source: string, message: RegExp]>([
+    [
+      'import { parseSync } from "oxc-parser";',
+      /static import of 'oxc-parser' runs before the bootstrap installs it -- load it with the typed dynamic import/,
+    ],
+    [
+      'import { type Node, parseSync } from "oxc-parser";',
+      /static import of 'oxc-parser' runs before the bootstrap/,
+    ],
+    [
+      'import Parser = require("oxc-parser");',
+      /static import of 'oxc-parser' runs before the bootstrap/,
+    ],
+    [
+      'export * from "@scope/pkg/sub";',
+      /static import of '@scope\/pkg\/sub' runs before the bootstrap/,
+    ],
+    [
+      'const o = await import("oxc-parser");',
+      /import\("oxc-parser"\) resolves from the user's project, not the skill's dependencies -- import\(Bun\.resolveSync\("oxc-parser", DEPS_DIR\)\)/,
+    ],
+    [
+      'const o = await import(("oxc-parser"));',
+      /import\("oxc-parser"\) resolves from the user's project/,
+    ],
+    [
+      'const o = await import("oxc-parser" as const);',
+      /import\("oxc-parser"\) resolves from the user's project/,
+    ],
+    [
+      'const o = await import("oxc-parser"!);',
+      /import\("oxc-parser"\) resolves from the user's project/,
+    ],
+    [
+      'const o = await import("oxc-" + "parser");',
+      /import\("oxc-parser"\) resolves from the user's project/,
+    ],
+    ['const r = require("oxc-parser");', /static import of 'oxc-parser' runs before the bootstrap/],
+    [
+      "const o = await import(`oxc-parser`);",
+      /import\("oxc-parser"\) resolves from the user's project/,
+    ],
+    [
+      'import { pad } from "left-pad";',
+      /imports 'left-pad', which skills\/x\/package\.json does not declare/,
+    ],
+  ])("rejects %s in a skill that declares the package", (source, message) => {
+    expectCheckFailure(() => checkSkillScriptImports(path, source, declared), message);
+  });
+
+  test("JSX in a .tsx script is judged by the import bun synthesizes for it", () => {
+    // bun 1.4.2 compiles `<div />` to an import of react/jsx-dev-runtime; the source text names no package.
+    expectCheckFailure(
+      () => checkSkillScriptImports("skills/x/scripts/view.tsx", "console.log(<div />);", none),
+      /^skills\/x\/scripts\/view\.tsx: imports 'react\/jsx-dev-runtime' but skills\/x has no package\.json/,
+    );
+  });
+
+  test("a script that does not parse fails instead of passing with no imports seen", () => {
+    expectCheckFailure(
+      () => checkSkillScriptImports(path, "import { from ;", none),
+      /^skills\/x\/scripts\/x\.mts: does not parse: /,
+    );
   });
 });

@@ -12,17 +12,15 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ROOT } from "../scripts/lib";
-import {
-  relativeStaysWithin,
-  scrubbedGitEnv,
-} from "../skills/orchestrator-mode/scripts/baseline.mts";
+import { relativeStaysWithin } from "../skills/orchestrator-mode/scripts/baseline.mts";
 
-// Contract test for the baseline snapshot helper: pinned copies plus git
-// diff --no-index must turn every landing-verification failure mode into a
-// visible diff. The scenarios pin the exact regressions substring tokens
-// could not see - a reflow must read as drift (not "content missing"), a
-// resurrected deleted line must be caught, and a file vanishing from the
-// tree must be a loud finding, never a silent pass.
+// Contract test for the baseline snapshot helper: pinned copies compared
+// byte for byte and rendered as a unified diff must turn every
+// landing-verification failure mode into a visible diff. The scenarios pin
+// the exact regressions substring tokens could not see - a reflow must read
+// as drift (not "content missing"), a resurrected deleted line must be
+// caught, and a file vanishing from the tree must be a loud finding, never a
+// silent pass.
 
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "baseline.mts");
 
@@ -34,7 +32,7 @@ afterAll(() => {
 interface Fixture {
   readonly tree: string;
   readonly baseline: string;
-  write(path: string, content: string): void;
+  write(path: string, content: string | Uint8Array): void;
 }
 
 function makeFixture(files: Record<string, string>): Fixture {
@@ -43,7 +41,7 @@ function makeFixture(files: Record<string, string>): Fixture {
   const tree = join(root, "tree");
   const baseline = join(root, "baseline");
   mkdirSync(tree, { recursive: true });
-  const write = (path: string, content: string) => {
+  const write = (path: string, content: string | Uint8Array) => {
     const full = join(tree, path);
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, content);
@@ -59,9 +57,9 @@ interface Summary {
   files: { path: string; status?: string; pinned?: boolean; reason?: string; detail?: string }[];
 }
 
-function runBaseline(args: string[], env: Record<string, string> = {}) {
+function runBaseline(args: string[]) {
   const result = Bun.spawnSync(["bun", SCRIPT, ...args], {
-    env: { ...process.env, ...env },
+    env: process.env,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -81,28 +79,6 @@ function fileStatus(summary: Summary | null, path: string) {
 }
 
 describe("baseline.mts pure helpers", () => {
-  test("scrubbedGitEnv drops GIT_* case-insensitively, keeps everything else", () => {
-    process.env.GIT_EXTERNAL_DIFF = "/usr/bin/true";
-    process.env.git_config_count = "1";
-    process.env.Git_Dir = "/nowhere";
-    process.env.NOT_GIT_RELATED = "kept"; // prefix-only match: GIT_ mid-name stays
-    try {
-      const env = scrubbedGitEnv();
-      expect(env.GIT_EXTERNAL_DIFF).toBeUndefined();
-      expect(env.git_config_count).toBeUndefined();
-      expect(env.Git_Dir).toBeUndefined();
-      expect(env.NOT_GIT_RELATED).toBe("kept");
-      expect(env.PATH).toBe(process.env.PATH as string);
-      expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
-      expect(env.GIT_CONFIG_SYSTEM).toBe("/dev/null");
-    } finally {
-      delete process.env.GIT_EXTERNAL_DIFF;
-      delete process.env.git_config_count;
-      delete process.env.Git_Dir;
-      delete process.env.NOT_GIT_RELATED;
-    }
-  });
-
   test("relativeStaysWithin recognizes parent escapes with either separator", () => {
     expect(relativeStaysWithin("")).toBe(true);
     expect(relativeStaysWithin("sub/dir")).toBe(true);
@@ -363,21 +339,55 @@ describe("baseline.mts pin/check", () => {
     expect(entry.detail).toContain("+different words");
   });
 
-  test("an inherited GIT_EXTERNAL_DIFF cannot corrupt the verdict", () => {
-    const fx = makeFixture({ "docs/a.md": "alpha beta\n" });
-    expect(runBaseline(["pin", fx.baseline, fx.tree, "docs/a.md"]).code).toBe(0);
-    fx.write("docs/a.md", "alpha gamma\n");
+  test("a binary pair reports drift as 'binary files differ', never a text patch", () => {
+    // git's rule: a NUL in the first 8000 bytes makes a file binary.
+    const fx = makeFixture({});
+    fx.write("logo.bin", Buffer.from([0x00, 0x01]));
+    expect(runBaseline(["pin", fx.baseline, fx.tree, "logo.bin"]).code).toBe(0);
+    fx.write("logo.bin", Buffer.from([0x00, 0x02]));
 
-    // /usr/bin/true as an external diff driver would swallow the comparison
-    // and report the drifted file as identical; the scrubbed git env must
-    // ignore it and still produce the real diff.
-    const check = runBaseline(["check", fx.baseline, fx.tree], {
-      GIT_EXTERNAL_DIFF: "/usr/bin/true",
-    });
+    const check = runBaseline(["check", fx.baseline, fx.tree]);
     expect(check.code).toBe(1);
-    const entry = fileStatus(check.summary, "docs/a.md");
+    const entry = fileStatus(check.summary, "logo.bin");
     expect(entry.status).toBe("drifted");
-    expect(entry.detail).toContain("+alpha gamma");
+    expect(entry.detail).toContain("binary files differ");
+    expect(entry.detail).toContain("2 bytes pinned, 2 bytes in the tree");
+    expect(entry.detail).not.toContain("@@");
+  });
+
+  test("a Latin-1 text file (not valid UTF-8) still renders as a text patch", () => {
+    const fx = makeFixture({});
+    fx.write("notes.txt", Buffer.from("café\n", "latin1"));
+    expect(runBaseline(["pin", fx.baseline, fx.tree, "notes.txt"]).code).toBe(0);
+    fx.write("notes.txt", Buffer.from("café updated\n", "latin1"));
+
+    const check = runBaseline(["check", fx.baseline, fx.tree]);
+    expect(check.code).toBe(1);
+    const entry = fileStatus(check.summary, "notes.txt");
+    expect(entry.status).toBe("drifted");
+    expect(entry.detail).toContain("-café\n");
+    expect(entry.detail).toContain("+café updated\n");
+    expect(entry.detail).not.toContain("binary files differ");
+  });
+
+  test("a one-line edit in a multi-megabyte file renders as one focused hunk within the timeout", () => {
+    const lines = Array.from(
+      { length: 60_000 },
+      (_, i) => `line ${i} of a generated document with some words to pad it out`,
+    );
+    const fx = makeFixture({ "big.txt": `${lines.join("\n")}\n` });
+    expect(runBaseline(["pin", fx.baseline, fx.tree, "big.txt"]).code).toBe(0);
+    lines[30_000] = "line 30000 was edited";
+    fx.write("big.txt", `${lines.join("\n")}\n`);
+
+    const check = runBaseline(["check", fx.baseline, fx.tree]);
+    expect(check.code).toBe(1);
+    const entry = fileStatus(check.summary, "big.txt");
+    expect(entry.status).toBe("drifted");
+    expect(entry.detail).toContain("-line 30000 of a generated document");
+    expect(entry.detail).toContain("+line 30000 was edited");
+    expect(entry.detail).toContain(" line 29997 of");
+    expect(entry.detail?.split("\n").length).toBeLessThan(20);
   });
 
   test("bad usage exits 2 and the ok:false JSON summary names the reason", () => {
