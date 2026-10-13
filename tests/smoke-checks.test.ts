@@ -518,17 +518,22 @@ describe("checkSkillScripts", () => {
     expect(() => checkSkillScripts([script(source)], none)).not.toThrow();
   });
 
-  const LOADS = [
+  const HOISTED_LOADS = [
     'import { pad } from "left-pad";',
     'export { pad } from "left-pad";',
-    'const o = await import("left-pad");',
-    'import Pad = require("left-pad");',
-    'const r = require("left-pad");',
-    'const o = await import("left-" + "pad");',
-    "const o = await import(`left-pad`);",
     'import { type Node, pad } from "left-pad";',
     'export * from "@scope/pkg/sub";',
   ];
+  // `import X = require()` compiles to a require call, which runs where it stands like `await import()`.
+  const IN_PLACE_LOADS = [
+    'const o = await import("left-pad");',
+    'const o = await import("left-" + "pad");',
+    "const o = await import(`left-pad`);",
+    'const o = await import("@scope/pkg/sub");',
+    'import Pad = require("left-pad");',
+    'const r = require("left-pad");',
+  ];
+  const LOADS = [...HOISTED_LOADS, ...IN_PLACE_LOADS];
 
   test.each(LOADS)("rejects %s in a skill with no package.json, naming the policy", (source) => {
     expectCheckFailure(
@@ -537,11 +542,24 @@ describe("checkSkillScripts", () => {
     );
   });
 
-  test.each(LOADS)("accepts %s with the block in a skill that declares the package", (source) => {
-    expect(() => checkSkillScripts([script(`${BLOCK}${source}`)], declared)).not.toThrow();
-  });
+  test.each(IN_PLACE_LOADS)(
+    "accepts %s below the block in a skill that declares the package",
+    (source) => {
+      expect(() => checkSkillScripts([script(`${BLOCK}${source}`)], declared)).not.toThrow();
+    },
+  );
 
-  test.each(LOADS)("rejects %s without the block, naming the missing block", (source) => {
+  test.each(HOISTED_LOADS)(
+    "rejects %s even with the block: ESM hoists it above the guard",
+    (source) => {
+      expectCheckFailure(
+        () => checkSkillScripts([script(`${BLOCK}${source}`)], declared),
+        /^skills\/x\/scripts\/x\.mts: static import of '[^']+' is hoisted above the ensureBuilt guard, so the source path resolves it before the bundle exists; load it below the guard with await import\(\)/,
+      );
+    },
+  );
+
+  test.each(IN_PLACE_LOADS)("rejects %s without the block, naming the missing block", (source) => {
     expectCheckFailure(
       () => checkSkillScripts([script(source)], declared),
       /^skills\/x\/scripts\/x\.mts: loads a package, directly or through a relative import, so it carries the ensureBuilt block above its program/,
@@ -551,7 +569,11 @@ describe("checkSkillScripts", () => {
   test("a block that differs by a byte is drift, not a block", () => {
     const drifted = BLOCK.replace("return source", "return  source");
     expectCheckFailure(
-      () => checkSkillScripts([script(`${drifted}import { pad } from "left-pad";`)], declared),
+      () =>
+        checkSkillScripts(
+          [script(`${drifted}const { pad } = await import("left-pad");`)],
+          declared,
+        ),
       /^skills\/x\/scripts\/x\.mts: loads a package, .* but its ensureBuilt block differs from the template; paste it again/,
     );
   });
@@ -565,13 +587,18 @@ describe("checkSkillScripts", () => {
 
   test("a script reaching a package through a relative import needs the block too", () => {
     const lib = script(
-      `${BLOCK}import { pad } from "left-pad";\nexport const x = pad;`,
+      `${BLOCK}const { pad } = await import("left-pad");\nexport const x = pad;`,
       "skills/x/scripts/lib.mts",
     );
     const cli = (text: string) => script(text, "skills/x/scripts/cli.mts");
     expectCheckFailure(
-      () => checkSkillScripts([lib, cli('import { x } from "./lib.mts";')], declared),
+      () => checkSkillScripts([lib, cli('const { x } = await import("./lib.mts");')], declared),
       /^skills\/x\/scripts\/cli\.mts: loads a package, directly or through a relative import, so it carries the ensureBuilt block/,
+    );
+    // A static import of the sibling runs the sibling's package loads above this script's guard.
+    expectCheckFailure(
+      () => checkSkillScripts([lib, cli(`${BLOCK}import { x } from "./lib.mts";`)], declared),
+      /^skills\/x\/scripts\/cli\.mts: static import of '\.\/lib\.mts' is hoisted above the ensureBuilt guard/,
     );
     // bun's resolution: a .js specifier names the .mts sibling, an extension-less one gains it, a directory
     // its index file; a chain of two relative imports is followed.
@@ -580,17 +607,23 @@ describe("checkSkillScripts", () => {
         specifier === "./lib/" ? "skills/x/scripts/lib/index.mts" : "skills/x/scripts/lib.mts";
       expectCheckFailure(
         () =>
-          checkSkillScripts([{ ...lib, path: target }, cli(`import "${specifier}";`)], declared),
+          checkSkillScripts(
+            [{ ...lib, path: target }, cli(`await import("${specifier}");`)],
+            declared,
+          ),
         /^skills\/x\/scripts\/cli\.mts: loads a package/,
       );
     }
-    const mid = script(`${BLOCK}export * from "./lib";`, "skills/x/scripts/mid.mts");
+    const mid = script(
+      `${BLOCK}export const m = await import("./lib");`,
+      "skills/x/scripts/mid.mts",
+    );
     expectCheckFailure(
-      () => checkSkillScripts([lib, mid, cli('import "./mid";')], declared),
+      () => checkSkillScripts([lib, mid, cli('await import("./mid");')], declared),
       /^skills\/x\/scripts\/cli\.mts: loads a package/,
     );
     expect(() =>
-      checkSkillScripts([lib, mid, cli(`${BLOCK}import "./mid";`)], declared),
+      checkSkillScripts([lib, mid, cli(`${BLOCK}await import("./mid");`)], declared),
     ).not.toThrow();
   });
 

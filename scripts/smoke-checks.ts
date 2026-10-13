@@ -221,9 +221,15 @@ const TRANSPILERS = {
   tsx: new Bun.Transpiler({ loader: "tsx", autoImportJSX: true }),
 };
 
+interface RuntimeImport {
+  readonly path: string;
+  /** A static ESM import, hoisted above every statement; `await import()` and `require()` run where they stand. */
+  readonly hoisted: boolean;
+}
+
 interface RuntimeImports {
-  readonly packages: readonly string[];
-  readonly relatives: readonly string[];
+  readonly packages: readonly RuntimeImport[];
+  readonly relatives: readonly RuntimeImport[];
 }
 
 /** The package and relative specifiers a script loads at runtime. */
@@ -235,11 +241,12 @@ function runtimeImports(script: SkillScript): RuntimeImports {
   } catch (error) {
     fail(`${script.path}: does not parse: ${errorMessage(error)}`);
   }
-  const packages: string[] = [];
-  const relatives: string[] = [];
-  for (const { path } of transpiler.scanImports(runtime)) {
-    if (/^\.\.?\//.test(path)) relatives.push(path);
-    else if (!/^(?:\/|file:|data:)/.test(path) && !isRuntimeModule(path)) packages.push(path);
+  const packages: RuntimeImport[] = [];
+  const relatives: RuntimeImport[] = [];
+  for (const { kind, path } of transpiler.scanImports(runtime)) {
+    const entry = { path, hoisted: kind === "import-statement" };
+    if (/^\.\.?\//.test(path)) relatives.push(entry);
+    else if (!/^(?:\/|file:|data:)/.test(path) && !isRuntimeModule(path)) packages.push(entry);
   }
   return { packages, relatives };
 }
@@ -247,13 +254,14 @@ function runtimeImports(script: SkillScript): RuntimeImports {
 /**
  * Every package a skill's scripts load is declared in its package.json, and every script whose bundle would
  * hold a package, through its own imports or a relative import's, carries the ensureBuilt block byte for
- * byte. A script that needs no bundle carries no block: the block makes bun a requirement.
+ * byte and loads those packages and siblings below its guard with `await import()`. A script that needs no
+ * bundle carries no block: the block makes bun a requirement.
  */
 export function checkSkillScripts(scripts: readonly SkillScript[], scope: SkillScriptScope): void {
   const imports = new Map<string, RuntimeImports>();
   for (const script of scripts) {
     const found = runtimeImports(script);
-    for (const path of found.packages) {
+    for (const { path } of found.packages) {
       if (scope.declared === undefined) {
         fail(
           `${script.path}: imports '${path}' but ${scope.skillPath} has no package.json -- a dependency is` +
@@ -289,8 +297,8 @@ export function checkSkillScripts(scripts: readonly SkillScript[], scope: SkillS
     const inner = new Set([...visiting, path]);
     return (
       found.packages.length > 0 ||
-      found.relatives.some((specifier) => {
-        const target = resolveRelative(path, specifier);
+      found.relatives.some((entry) => {
+        const target = resolveRelative(path, entry.path);
         return target !== undefined && needsBundle(target, inner);
       })
     );
@@ -298,7 +306,24 @@ export function checkSkillScripts(scripts: readonly SkillScript[], scope: SkillS
   for (const script of scripts) {
     const carries = script.text.includes(scope.buildBlock);
     const hasSome = script.text.includes("function ensureBuilt(");
-    if (needsBundle(script.path, new Set())) {
+    const found = imports.get(script.path);
+    if (found !== undefined && needsBundle(script.path, new Set())) {
+      // ESM hoists a static import above the guard, where the source path would resolve the package through
+      // bun's unpinned auto-install; a static import of a sibling that loads packages is the same, one step away.
+      const hoisted = [
+        ...found.packages.filter((entry) => entry.hoisted),
+        ...found.relatives.filter((entry) => {
+          const target = entry.hoisted ? resolveRelative(script.path, entry.path) : undefined;
+          return target !== undefined && needsBundle(target, new Set());
+        }),
+      ];
+      for (const entry of hoisted) {
+        fail(
+          `${script.path}: static import of '${entry.path}' is hoisted above the ensureBuilt guard, so the` +
+            ` source path resolves it before the bundle exists; load it below the guard with await import()` +
+            ` (${DEPENDENCIES_DOC})`,
+        );
+      }
       if (!carries) {
         fail(
           `${script.path}: loads a package, directly or through a relative import, ${

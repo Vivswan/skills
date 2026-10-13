@@ -437,6 +437,34 @@ describe("self-building scripts", () => {
     expect(statSync(bundle).mtimeMs).toBeGreaterThan(second);
   });
 
+  test("the source path touches no package: a recording bun sees install, build, and the bundle run before anything resolves", () => {
+    const root = copiedSkill("source-path");
+    const binDir = join(scratch, "recording-bun");
+    const log = join(scratch, "recording-bun.log");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "bun"), `#!/bin/sh\necho "$1" >> "${log}"\n`);
+    chmodSync(join(binDir, "bun"), 0o755);
+    const cache = join(scratch, "empty-package-cache");
+    const env = { PATH: `${binDir}:${process.env.PATH ?? ""}`, BUN_INSTALL_CACHE_DIR: cache };
+
+    expect(lint(root, env)).toEqual({ status: 0, stdout: "", stderr: "" });
+    expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual([
+      "install",
+      "build",
+      join(root, ".build", "arch-lint.js"),
+    ]);
+    expect(!existsSync(cache) || readdirSync(cache).length === 0).toBe(true);
+
+    // The empty cache is evidence only with its control: a static import where the source runs does fill it.
+    writeFileSync(
+      join(root, "scripts", "control.mts"),
+      'import { toString } from "mdast-util-to-string";\nconsole.log(typeof toString);\n',
+    );
+    const control = run(join(root, "scripts", "control.mts"), [], root, env);
+    expect([control.status, control.stdout]).toEqual([0, "function\n"]);
+    expect(readdirSync(cache).length).toBeGreaterThan(0);
+  });
+
   test("a failing build exits 2 after bun's own error, leaving no bundle and no install behind", () => {
     const root = copiedSkill("failed-build");
     const binDir = join(scratch, "failing-bun");

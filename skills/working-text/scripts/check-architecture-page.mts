@@ -16,12 +16,6 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Nodes, Paragraph, Root } from "mdast";
-import { fromMarkdown } from "mdast-util-from-markdown";
-import { gfmFromMarkdown } from "mdast-util-gfm";
-import { toString as plainText } from "mdast-util-to-string";
-import { gfm } from "micromark-extension-gfm";
-import { visit } from "unist-util-visit";
-import { parseModule, pathLabel, resolveImport, SOURCE_EXTENSIONS } from "./arch-lint.mts";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -72,6 +66,16 @@ function ensureBuilt(source: string): boolean {
 
 // Only the command builds; a test or a sibling importing this file must not.
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { fromMarkdown } = await import("mdast-util-from-markdown");
+const { gfmFromMarkdown } = await import("mdast-util-gfm");
+const { toString: plainText } = await import("mdast-util-to-string");
+const { gfm } = await import("micromark-extension-gfm");
+const { visit } = await import("unist-util-visit");
+const { parseModule, pathLabel, resolveImport, SOURCE_EXTENSIONS } = await import(
+  "./arch-lint.mts"
+);
 
 // An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
 const SYMBOL_TOKEN = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*(?:\(\))?$/u;

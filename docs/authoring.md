@@ -65,7 +65,7 @@ The root `package.json` pins the same version as a devDependency, so `tsc` check
 ```text
 skills/my-skill/
   package.json           { "name": "my-skill-dependencies", "private": true, "dependencies": { "yaml": "2.9.1" } }
-  scripts/x.mts          ordinary bare imports, with the block below above the program
+  scripts/x.mts          the block, then await import() of its packages, then the program
   .build/x.js            the bundle, written on first run; .build/ is gitignored
 ```
 
@@ -74,6 +74,8 @@ The script bundles itself on first run. Run as source (`bun scripts/x.mts`), the
 `bun build` resolves installed packages only, which is why the install step exists. A failed install or build prints bun's error and exits 2. A user may install any one skill alone, so no script imports from another skill.
 
 The block needs `spawnSync` from `node:child_process`, `existsSync`, `readdirSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
+
+Below the guard, the program loads its packages and sibling scripts with `await import("yaml")`, never a static import: ESM hoists a static import above the guard, where the source path would resolve the package through bun's unpinned auto-install. Type-only imports stay static; they are erased. The smoke test refuses a hoisted one.
 
 ```ts
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.

@@ -13,7 +13,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { type ParserPlugin, parse } from "@babel/parser";
+import type { ParserPlugin } from "@babel/parser";
 import type { Node, Program } from "@babel/types";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
@@ -65,6 +65,9 @@ function ensureBuilt(source: string): boolean {
 
 // Only the command builds; a test or a sibling importing this file must not.
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { parse } = await import("@babel/parser");
 
 export const DEFAULT_CONFIG = "architecture.yml";
 

@@ -18,11 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { List, Nodes, RootContent } from "mdast";
-import { fromMarkdown } from "mdast-util-from-markdown";
-import { gfmFromMarkdown } from "mdast-util-gfm";
-import { gfm } from "micromark-extension-gfm";
 import type { Position } from "unist";
-import { visit } from "unist-util-visit";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -73,6 +69,12 @@ function ensureBuilt(source: string): boolean {
 
 // Only the command builds; a test or a sibling importing this file must not.
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { fromMarkdown } = await import("mdast-util-from-markdown");
+const { gfmFromMarkdown } = await import("mdast-util-gfm");
+const { gfm } = await import("micromark-extension-gfm");
+const { visit } = await import("unist-util-visit");
 
 export const DEFAULT_MAX_WORDS = 70;
 

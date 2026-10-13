@@ -6,13 +6,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import {
-  DEFAULT_CONFIG,
-  pathLabel,
-  readArchitecture,
-  renderArchitectureMermaid,
-} from "./arch-lint.mts";
-import { readPage } from "./check-architecture-page.mts";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -63,6 +56,12 @@ function ensureBuilt(source: string): boolean {
 
 // Only the command builds; a test or a sibling importing this file must not.
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { DEFAULT_CONFIG, pathLabel, readArchitecture, renderArchitectureMermaid } = await import(
+  "./arch-lint.mts"
+);
+const { readPage } = await import("./check-architecture-page.mts");
 
 export const DEFAULT_REGION = "architecture-map";
 

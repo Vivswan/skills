@@ -35,7 +35,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -86,6 +85,9 @@ function ensureBuilt(source: string): boolean {
 
 // Only the command builds; a test or a sibling importing this file must not.
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { createTwoFilesPatch, FILE_HEADERS_ONLY } = await import("diff");
 
 const MANIFEST_NAME = "manifest.json";
 const CONTENT_DIR = "content";
