@@ -3,8 +3,9 @@
 // page's `<!-- BEGIN GENERATED: <name> (hint) -->` and `<!-- END GENERATED: <name> -->`
 // markers. A repository's check command runs it with --check so a stale map fails CI.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
   pathLabel,
@@ -12,6 +13,42 @@ import {
   renderArchitectureMermaid,
 } from "./arch-lint.mts";
 import { readPage } from "./check-architecture-page.mts";
+
+/**
+ * Self-build: as source, bundle this script into <skill>/.build/ and run the bundle in its place; as the
+ * bundle, do nothing. docs/authoring.md > Dependencies holds this block; the smoke test keeps every copy
+ * byte-identical to it.
+ */
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const scripts = dirname(source);
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", `${basename(source, ".mts")}.js`);
+  // The bundle's inputs: every script under scripts/, since an entry imports its siblings, and the pin list.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name))
+    .concat(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  if (!existsSync(built) || statSync(built).mtimeMs < newest) {
+    // bun build resolves installed packages only, so the pins install into the skill folder for the build's duration.
+    const bun = (args: string[]): boolean => {
+      const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+      if (step.status !== 0) process.stderr.write(step.stderr);
+      return step.status === 0;
+    };
+    const ok =
+      bun(["install", "--production", "--no-save", "--cwd", skill]) &&
+      bun(["build", source, "--target", "bun", "--outfile", built]);
+    rmSync(join(skill, "node_modules"), { recursive: true, force: true });
+    if (!ok) process.exit(2);
+  }
+  process.exitCode =
+    spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" }).status ?? 1;
+  return true;
+}
+// A test or another script importing this file must not build it: only the command does.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 export const DEFAULT_REGION = "architecture-map";
 

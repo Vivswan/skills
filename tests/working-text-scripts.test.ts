@@ -1,20 +1,23 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { ROOT } from "../scripts/lib";
 import {
   importSpecifiers,
+  parseModule,
   renderArchitectureMermaid,
 } from "../skills/working-text/scripts/arch-lint.mts";
 
@@ -313,6 +316,9 @@ describe("importSpecifiers", () => {
     ["a type-only import-equals", 'import type A = require("./a.js");', ["./a.js"]],
     ["an import-equals", 'import A = require("./a.js");', ["./a.js"]],
     ["an import with attributes", 'import d from "./d.json" with { type: "json" };', ["./d.json"]],
+    ["an export ahead of its import", 'export { v };\nimport { v } from "./a.js";', ["./a.js"]],
+    ["an optional-call require", 'require?.("./a.js");', ["./a.js"]],
+    ["a CommonJS file returning at top level", 'if (x) return;\nrequire("./a.js");', ["./a.js"]],
     ["a package import, which is not an edge", 'import { z } from "zod";', []],
     ["import.meta, which loads nothing", "const dir = import.meta.dir;", []],
     ["a member named import or require", 'o.import("./a.js"); require.resolve("./a.js");', []],
@@ -348,39 +354,32 @@ describe("importSpecifiers", () => {
     );
   });
 
+  test("a .cjs file is a script: a strict-mode reserved word is a plain name there", () => {
+    expect(importSpecifiers('const package = require("./a.js");', "x.cjs")).toEqual(["./a.js"]);
+  });
+
+  test("an export ahead of its import still forwards the imported binding", () => {
+    expect(parseModule("x.ts", 'export { v as w };\nimport { v } from "./a.js";').exports).toEqual([
+      { name: "w", from: { request: "./a.js", imported: "v" } },
+    ]);
+  });
+
   test("a file that does not parse throws naming the line", () => {
     expect(() => importSpecifiers("const = ;", "x.ts")).toThrow(/^x\.ts:1 does not parse: /);
   });
 });
 
-describe("dependency bootstrap", () => {
-  // The scripts' one dependency installs from the skill's bun.lock into XDG_CACHE_HOME/skills-deps, so
-  // a consumer's project never gains a node_modules. The fake bun pins where the install is sent and
-  // that the skill folder stays untouched; the stale lock pins that --frozen-lockfile is what refuses
-  // a lock disagreeing with package.json; the manifest-less copy pins the one-line hint.
+describe("self-building scripts", () => {
+  // The scripts bundle themselves with their dependencies into <skill>/.build/ on first run, from the pins in
+  // the skill's package.json, so a consumer's project never gains a node_modules and the skill folder ends
+  // with only the bundle. A scratch copy of the skill runs the real bun; a bun ahead on PATH that fails the
+  // build step pins the failure path.
   const SKILL_DIR = join(ROOT, "skills", "working-text");
-  const SCRIPT_NAMES = [
-    "arch-lint.mts",
-    "render-architecture-map.mts",
-    "check-architecture-page.mts",
-    "docs-probe.mts",
-  ];
 
-  /** The copied arch-lint with its install limit rewritten, so the timeout path runs in a test instead of ten minutes. */
-  function copiedSkill(name: string, files: readonly string[], installTimeoutMs?: number): string {
+  function copiedSkill(name: string): string {
     const root = join(scratch, name);
-    for (const script of SCRIPT_NAMES) cpSync(join(SCRIPTS, script), join(root, "scripts", script));
-    for (const file of files) cpSync(join(SKILL_DIR, file), join(root, file));
-    if (installTimeoutMs !== undefined) {
-      const lint = join(root, "scripts", "arch-lint.mts");
-      const limit = "const INSTALL_TIMEOUT_MS = 10 * 60_000;\n";
-      const source = readFileSync(lint, "utf8");
-      if (!source.includes(limit)) throw new Error(`arch-lint.mts no longer declares ${limit}`);
-      writeFileSync(
-        lint,
-        source.replace(limit, `const INSTALL_TIMEOUT_MS = ${installTimeoutMs};\n`),
-      );
-    }
+    cpSync(join(SKILL_DIR, "scripts"), join(root, "scripts"), { recursive: true });
+    cpSync(join(SKILL_DIR, "package.json"), join(root, "package.json"));
     writeTree(root, {
       "architecture.yml": "layers:\n  a: [src/a.ts]\n",
       "src/a.ts": "export const a = 1;\n",
@@ -388,191 +387,63 @@ describe("dependency bootstrap", () => {
     return root;
   }
 
-  function depsDirFor(root: string, cacheHome: string): string {
-    const hash = createHash("sha256")
-      .update(readFileSync(join(root, "package.json")))
-      .update(readFileSync(join(root, "bun.lock")))
-      .digest("hex");
-    return join(cacheHome, "skills-deps", `${basename(root)}-${hash.slice(0, 12)}`);
-  }
+  const green = {
+    status: 0,
+    stdout: "arch-lint: imports under src match architecture.yml\n",
+    stderr: "",
+  };
+  const lint = (root: string, env?: Record<string, string>): Outcome =>
+    run(join(root, "scripts", "arch-lint.mts"), [], root, env);
 
-  /** A `bun` ahead of the real one on PATH, running `body` with the install's --cwd in $cwd. */
-  function fakeBun(name: string, body: string): string {
-    const binDir = join(scratch, name);
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(join(binDir, "bun"), `#!/bin/sh\ncwd=$4\n${body}\n`);
-    chmodSync(join(binDir, "bun"), 0o755);
-    return `${binDir}:${process.env.PATH ?? ""}`;
-  }
-
-  /** The bootstrap from `const SKILL_DIR` through the install block: the part every copy shares. */
-  function sharedBootstrap(path: string): string {
-    const source = readFileSync(path, "utf8");
-    const start = source.indexOf('const SKILL_DIR = join(import.meta.dir, "..");');
-    const installAt = source.indexOf('if (!existsSync(join(DEPS_DIR, "node_modules"))) {', start);
-    const tail = "    process.exit(2);\n  }\n}\n";
-    const end = source.indexOf(tail, installAt);
-    if (start < 0 || installAt < 0 || end < 0) throw new Error(`${path}: no bootstrap block`);
-    return source.slice(start, end + tail.length);
-  }
-
-  test("the template in docs/authoring.md and both shipped bootstraps are one text", () => {
-    // Three copies by design (the template is the author's to paste), so only this holds them together.
-    const template = sharedBootstrap(join(ROOT, "docs", "authoring.md"));
-    expect(sharedBootstrap(ARCH_LINT)).toBe(template);
-    expect(
-      sharedBootstrap(join(ROOT, "skills", "orchestrator-mode", "scripts", "baseline.mts")),
-    ).toBe(template);
-  });
-
-  test("two lanes on a cold cache both install, one tree is published, and no staging directory is left", async () => {
-    // The fake waits until both lanes are inside their install, so both reach the rename; the loser's
-    // tree is discarded. The real oxc-parser is linked in so the lanes then lint for real.
-    const root = copiedSkill("cold-race", ["package.json", "bun.lock"]);
-    const cacheHome = join(scratch, "race cache home");
-    const barrier = join(scratch, "race-barrier");
-    const log = join(scratch, "race-installs.txt");
-    mkdirSync(barrier, { recursive: true });
-    const PATH = fakeBun(
-      "race-bin",
-      [
-        'echo "$cwd" >> "$FAKE_BUN_LOG"',
-        'touch "$FAKE_BUN_BARRIER/$$"',
-        "i=0",
-        'while [ "$(ls "$FAKE_BUN_BARRIER" | wc -l)" -lt 2 ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done',
-        'mkdir -p "$cwd/node_modules"',
-        'ln -s "$REAL_OXC_PARSER" "$cwd/node_modules/oxc-parser"',
-      ].join("\n"),
-    );
-    const env = {
-      ...process.env,
-      NO_COLOR: "1",
-      XDG_CACHE_HOME: cacheHome,
-      PATH,
-      FAKE_BUN_LOG: log,
-      FAKE_BUN_BARRIER: barrier,
-      REAL_OXC_PARSER: join(ROOT, "node_modules", "oxc-parser"),
-    };
-    const lanes = [0, 1].map(() =>
-      Bun.spawn([process.execPath, join(root, "scripts", "arch-lint.mts")], {
-        cwd: root,
-        env,
-        stdout: "pipe",
-        stderr: "pipe",
-      }),
-    );
-    const outcomes = await Promise.all(
-      lanes.map(async (lane) => ({
-        status: await lane.exited,
-        stdout: await new Response(lane.stdout).text(),
-        stderr: await new Response(lane.stderr).text(),
-      })),
-    );
-
-    const depsDir = depsDirFor(root, cacheHome);
-    const green = {
-      status: 0,
-      stdout: "arch-lint: imports under src match architecture.yml\n",
-      stderr: "",
-    };
-    expect(outcomes).toEqual([green, green]);
-    const installs = readFileSync(log, "utf8").split("\n").filter(Boolean);
-    expect(installs).toHaveLength(2);
-    expect(new Set(installs).size).toBe(2);
-    for (const dir of installs) expect(dir.startsWith(`${depsDir}.tmp-`)).toBe(true);
-    expect(readdirSync(join(cacheHome, "skills-deps"))).toEqual([basename(depsDir)]);
-    expect(readdirSync(depsDir).sort()).toEqual(["bun.lock", "node_modules", "package.json"]);
-    expect(readdirSync(join(depsDir, "node_modules"))).toEqual(["oxc-parser"]);
-  });
-
-  test("an install past the limit is cut off: exit 2 naming the limit and the directory, nothing half-built", () => {
-    const root = copiedSkill("slow-install", ["package.json", "bun.lock"], 300);
-    const cacheHome = join(scratch, "slow cache home");
-    const out = run(join(root, "scripts", "arch-lint.mts"), [], root, {
-      XDG_CACHE_HOME: cacheHome,
-      PATH: fakeBun("slow-bin", "exec sleep 30"),
-    });
-    const depsDir = depsDirFor(root, cacheHome);
-    expect(out).toEqual({
-      status: 2,
-      stdout: "",
-      stderr: `slow-install dependencies did not install within 0.005 minutes; run: bun install --frozen-lockfile --cwd '${depsDir}'\n`,
-    });
-    expect(readdirSync(join(cacheHome, "skills-deps"))).toEqual([basename(depsDir)]);
-    expect(readdirSync(depsDir).sort()).toEqual(["bun.lock", "package.json"]);
-  });
-
-  test("scripts copied without the skill's package.json and bun.lock exit 2 with the one-line hint", () => {
-    const root = copiedSkill("no-manifest", []);
-    const hint = "no-manifest scripts need the skill's package.json and bun.lock beside scripts/\n";
-    expect(run(join(root, "scripts", "arch-lint.mts"), [], root)).toEqual({
-      status: 2,
-      stdout: "",
-      stderr: hint,
-    });
-    expect(
-      run(join(root, "scripts", "render-architecture-map.mts"), ["--page", "x.md"], root),
-    ).toEqual({ status: 2, stdout: "", stderr: hint });
-    expect(
-      run(join(root, "scripts", "check-architecture-page.mts"), ["--page", "x.md"], root),
-    ).toEqual({ status: 2, stdout: "", stderr: hint });
-    expect(run(join(root, "scripts", "docs-probe.mts"), ["x.md"], root)).toEqual({
-      status: 2,
-      stdout: "",
-      stderr: hint,
-    });
-  });
-
-  test("the install is sent to XDG_CACHE_HOME/skills-deps/<skill>-<lock hash>, never into the skill folder", () => {
-    const root = copiedSkill("shared-cache", ["package.json", "bun.lock"]);
-    // A cache root with a space: the printed recovery command must survive being pasted back into a shell.
-    const cacheHome = join(scratch, "shared cache home");
-    const argvFile = join(scratch, "fake-bun-argv.txt");
-    const depsDir = depsDirFor(root, cacheHome);
-
-    const out = run(join(root, "scripts", "arch-lint.mts"), [], root, {
-      XDG_CACHE_HOME: cacheHome,
-      PATH: fakeBun("fake-bin", 'printf "%s\\n" "$@" > "$FAKE_BUN_ARGV"'),
-      FAKE_BUN_ARGV: argvFile,
-    });
-
-    const argv = readFileSync(argvFile, "utf8").split("\n").filter(Boolean);
-    expect(argv.slice(0, 3)).toEqual(["install", "--frozen-lockfile", "--cwd"]);
-    expect(argv[3]?.startsWith(`${depsDir}.tmp-`)).toBe(true);
-    // The fake installed nothing, so the copied manifests are all the directory holds and the import fails;
-    // the staging directory is gone either way.
-    expect(readdirSync(join(cacheHome, "skills-deps"))).toEqual([basename(depsDir)]);
-    expect(readdirSync(depsDir).sort()).toEqual(["bun.lock", "package.json"]);
+  test("the first run builds the bundle and runs it, the second runs it as is, a newer source rebuilds it", () => {
+    const root = copiedSkill("self-build");
+    const bundle = join(root, ".build", "arch-lint.js");
+    expect(existsSync(bundle)).toBe(false);
+    expect(lint(root)).toEqual(green);
+    // Only the bundle is left behind: the install the build needed is gone, and no lockfile was written.
     expect(readdirSync(root).sort()).toEqual([
+      ".build",
       "architecture.yml",
-      "bun.lock",
       "package.json",
       "scripts",
       "src",
     ]);
-    expect(out).toEqual({
-      status: 2,
-      stdout: "",
-      stderr: `shared-cache scripts need oxc-parser: bun install --frozen-lockfile --cwd '${depsDir}'\n`,
-    });
+    expect(readdirSync(join(root, ".build"))).toEqual(["arch-lint.js"]);
+    const first = statSync(bundle).mtimeMs;
+
+    expect(lint(root)).toEqual(green);
+    expect(statSync(bundle).mtimeMs).toBe(first);
+
+    // Any script in scripts/ newer than the bundle rebuilds it, a sibling the entry imports included, and so
+    // does the pin list: a bumped pin alone must not keep running the old package.
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(join(root, "scripts", "docs-probe.mts"), future, future);
+    expect(lint(root)).toEqual(green);
+    const second = statSync(bundle).mtimeMs;
+    expect(second).toBeGreaterThan(first);
+    const later = new Date(Date.now() + 120_000);
+    utimesSync(join(root, "package.json"), later, later);
+    expect(lint(root)).toEqual(green);
+    expect(statSync(bundle).mtimeMs).toBeGreaterThan(second);
   });
 
-  test("a lock that disagrees with package.json is refused, exit 2 with the command to run", () => {
-    const root = copiedSkill("stale-lock", ["package.json", "bun.lock"]);
+  test("a failing build exits 2 after bun's own error, leaving no bundle and no install behind", () => {
+    const root = copiedSkill("failed-build");
+    const binDir = join(scratch, "failing-bun");
+    mkdirSync(binDir, { recursive: true });
     writeFileSync(
-      join(root, "package.json"),
-      JSON.stringify({ name: "stale-lock-dependencies", private: true, dependencies: {} }),
+      join(binDir, "bun"),
+      `#!/bin/sh\nif [ "$1" = build ]; then echo "fake: build failed" >&2; exit 1; fi\nexec "${process.execPath}" "$@"\n`,
     );
-    const cacheHome = join(scratch, "stale cache home");
-    const out = run(join(root, "scripts", "arch-lint.mts"), [], root, {
-      XDG_CACHE_HOME: cacheHome,
-    });
-    expect(out.status).toBe(2);
-    expect(out.stdout).toBe("");
-    expect(out.stderr).toMatch(/lockfile had changes, but lockfile is frozen/);
-    expect(out.stderr).toEndWith(
-      `stale-lock dependencies did not install; run: bun install --frozen-lockfile --cwd '${depsDirFor(root, cacheHome)}'\n`,
-    );
+    chmodSync(join(binDir, "bun"), 0o755);
+    const out = lint(root, { PATH: `${binDir}:${process.env.PATH ?? ""}` });
+    expect(out).toEqual({ status: 2, stdout: "", stderr: "fake: build failed\n" });
+    expect(readdirSync(root).sort()).toEqual([
+      "architecture.yml",
+      "package.json",
+      "scripts",
+      "src",
+    ]);
   });
 });
 
@@ -781,6 +652,13 @@ describe("check-architecture-page.mts", () => {
         '"src/engine/index.ts<br>default() mock": src/engine/index.ts exports no mock',
       ]),
     );
+  });
+
+  test("an exported import-equals is a symbol of the file", () => {
+    const root = variant("export-equals", {
+      "src/engine/equals.ts": 'export import R = require("./run.ts");\n',
+    });
+    expect(check(page("src/engine/equals.ts<br>R"), [], root)).toEqual(passing(1));
   });
 
   test("a star re-export cycle resolves both files' names and terminates", () => {

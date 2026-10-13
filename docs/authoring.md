@@ -19,8 +19,7 @@ skills/<skill-name>/
   .mcp.json              # optional
   references/            # optional
   scripts/               # optional
-  package.json           # optional, with bun.lock: the scripts' dependencies (Dependencies, below)
-  bun.lock
+  package.json           # optional: the scripts' dependencies, exact versions (Dependencies, below)
   vale/                  # optional: Vale rules the skill ships (docs/vale.md)
 ```
 
@@ -59,93 +58,62 @@ Criteria that only apply in a specific context use a differently named heading (
 
 ## Dependencies
 
-A skill whose scripts import a package ships `package.json` (exact versions) and `bun.lock` at the skill root; a skill with no dependencies ships neither. The root `package.json` pins the same version as a devDependency, so `tsc` checks the code that runs. Generate the lock with `bun install --lockfile-only --cwd skills/<name>`; never commit a `node_modules`.
+A skill whose scripts import a package ships `package.json` at the skill root: exact versions under `dependencies`, nothing else. No lockfile, no `node_modules`, nothing generated is committed. A skill with no dependencies ships no `package.json`.
+
+The root `package.json` pins the same version as a devDependency, so `tsc` checks the code that runs.
 
 ```text
 skills/my-skill/
   package.json           { "name": "my-skill-dependencies", "private": true, "dependencies": { "yaml": "2.9.1" } }
-  bun.lock
-  scripts/x.mts
+  scripts/x.mts          ordinary bare imports, with the block below above the program
+  .build/x.js            the bundle, written on first run; .build/ is gitignored
 ```
 
-Each entry script starts with the bootstrap below. It installs the lock once into `${XDG_CACHE_HOME:-~/.cache}/skills-deps/<skill>-<first 12 hex of sha256(package.json + bun.lock)>/`, so a user's project never gains a `node_modules`; a changed pin or lock means a new directory, and old ones can be deleted.
+The script bundles itself on first run. Run as source (`bun scripts/x.mts`), the block installs the pins into the skill folder, bundles the script and everything it imports into the `.build` folder with `bun build`, removes the install, and runs the bundle with the same arguments. Later runs go straight to the bundle until a file in `scripts/` or the `package.json` is newer.
 
-Two lanes starting on a cold cache each install into a sibling staging directory and rename the finished `node_modules` into place, so neither sees a half-built tree. An install past ten minutes is cut off, and `bun install --frozen-lockfile` refusing a lock that disagrees with `package.json` is the intended failure: both exit 2 with the command to run.
+`bun build` resolves installed packages only, which is why the install step exists. A failed install or build prints bun's error and exits 2. A user may install any one skill alone, so no script imports from another skill.
+
+The block needs `spawnSync` from `node:child_process`, `existsSync`, `readdirSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
 
 ```ts
-import { type SpawnSyncReturns, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, join } from "node:path";
-
-const SKILL_DIR = join(import.meta.dir, "..");
-const SKILL = basename(SKILL_DIR);
-if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
-  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
-  process.exit(2);
-}
-const DEPS_HASH = createHash("sha256")
-  .update(readFileSync(join(SKILL_DIR, "package.json")))
-  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
-  .digest("hex")
-  .slice(0, 12);
-const DEPS_DIR = join(
-  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
-  "skills-deps",
-  `${SKILL}-${DEPS_HASH}`,
-);
-// One shell word, so the printed recovery command runs as printed whatever the path holds.
-const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
-const INSTALL_TIMEOUT_MS = 10 * 60_000;
-// Parallel lanes start these scripts at once on a cold cache, so each installs into its own staging
-// directory and renames the finished node_modules into place: a reader sees a complete tree or none,
-// and the rename that finds one already there lost the race and discards its own. DEPS_DIR holds the
-// manifests too, so the printed recovery command runs in it.
-if (!existsSync(join(DEPS_DIR, "node_modules"))) {
-  const staging = `${DEPS_DIR}.tmp-${process.pid}`;
-  let install: SpawnSyncReturns<string>;
-  try {
-    rmSync(staging, { recursive: true, force: true });
-    for (const dir of [DEPS_DIR, staging]) {
-      mkdirSync(dir, { recursive: true });
-      for (const file of ["package.json", "bun.lock"]) {
-        copyFileSync(join(SKILL_DIR, file), join(dir, file));
-      }
-    }
-    install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", staging], {
-      encoding: "utf8",
-      timeout: INSTALL_TIMEOUT_MS,
-    });
-    if (install.status === 0 && existsSync(join(staging, "node_modules"))) {
-      try {
-        renameSync(join(staging, "node_modules"), join(DEPS_DIR, "node_modules"));
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
-      }
-    }
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
+/**
+ * Self-build: as source, bundle this script into <skill>/.build/ and run the bundle in its place; as the
+ * bundle, do nothing. docs/authoring.md > Dependencies holds this block; the smoke test keeps every copy
+ * byte-identical to it.
+ */
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const scripts = dirname(source);
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", `${basename(source, ".mts")}.js`);
+  // The bundle's inputs: every script under scripts/, since an entry imports its siblings, and the pin list.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name))
+    .concat(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  if (!existsSync(built) || statSync(built).mtimeMs < newest) {
+    // bun build resolves installed packages only, so the pins install into the skill folder for the build's duration.
+    const bun = (args: string[]): boolean => {
+      const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+      if (step.status !== 0) process.stderr.write(step.stderr);
+      return step.status === 0;
+    };
+    const ok =
+      bun(["install", "--production", "--no-save", "--cwd", skill]) &&
+      bun(["build", source, "--target", "bun", "--outfile", built]);
+    rmSync(join(skill, "node_modules"), { recursive: true, force: true });
+    if (!ok) process.exit(2);
   }
-  if (install.status !== 0) {
-    process.stderr.write(install.stderr ?? "");
-    const timedOut = (install.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
-    console.error(
-      `${SKILL} dependencies did not install${timedOut ? ` within ${INSTALL_TIMEOUT_MS / 60_000} minutes` : ""}; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
+  process.exitCode =
+    spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" }).status ?? 1;
+  return true;
 }
-// Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
-if (!existsSync(join(DEPS_DIR, "node_modules", "yaml"))) {
-  console.error(`${SKILL} scripts need yaml: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`);
-  process.exit(2);
-}
-const yaml: typeof import("yaml") = await import(Bun.resolveSync("yaml", DEPS_DIR));
+// A test or another script importing this file must not build it: only the command does.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 ```
 
-Why not a plain pin: bun's auto-install ignores a `package.json` version, and an inline `pkg@1.2.3` specifier fails once a second version of that package was ever fetched on the machine. The smoke test holds the layout and import rules above, a static import of a dependency included; the bootstrap itself is the author's to copy.
+Why a bundle: bun's auto-install ignores a `package.json` pin, an inline `pkg@1.2.3` specifier fails once a second version of the package was ever fetched on the machine, and a `node_modules` in a user's project is theirs, not the skill's.
 
 ## Compatibility Rules
 
@@ -186,7 +154,7 @@ skills/my-skill/
 - `.claude-plugin/plugin.json` lists the skill directory, and `.claude-plugin/marketplace.json` stays consistent with it
 - the catalog version lives only in `.claude-plugin/marketplace.json` (`metadata.version`); no `version` in any `SKILL.md`, `.codex-plugin/plugin.json`, or `.claude-plugin/plugin.json`
 - optional MCP files parse as JSON when present
-- a skill with dependencies pins exact versions in `package.json`, commits `bun.lock`, matches the root devDependency, and loads them through the bootstrap
+- a skill with dependencies pins exact versions in `package.json`, mirrored by the root devDependency, commits no lockfile or `node_modules`, and every script loading a package carries the ensureBuilt block
 
 ## Template Notes
 

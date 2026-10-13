@@ -63,13 +63,7 @@ try {
     ["bun", "test", "--preload", join(ROOT, "tests", "preload.ts"), ...args],
     {
       cwd,
-      // A skill script's dependency bootstrap installs under XDG_CACHE_HOME, so pointing it into the scratch keeps a
-      // test run (and its spawned scripts) out of the user's real cache.
-      env: hermeticGitEnv({
-        ...process.env,
-        TMPDIR: scratch,
-        XDG_CACHE_HOME: join(scratch, "cache"),
-      }),
+      env: hermeticGitEnv({ ...process.env, TMPDIR: scratch }),
       stdin: "inherit",
       stdout: "inherit",
       stderr: "pipe",

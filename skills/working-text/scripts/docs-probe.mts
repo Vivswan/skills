@@ -15,66 +15,50 @@
 // may name files the reader will create.
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { List, Nodes, RootContent } from "mdast";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import type { Position } from "unist";
+import { visit } from "unist-util-visit";
 
-const SKILL_DIR = join(import.meta.dir, "..");
-const SKILL = basename(SKILL_DIR);
-if (!existsSync(join(SKILL_DIR, "package.json")) || !existsSync(join(SKILL_DIR, "bun.lock"))) {
-  console.error(`${SKILL} scripts need the skill's package.json and bun.lock beside scripts/`);
-  process.exit(2);
-}
-const DEPS_HASH = createHash("sha256")
-  .update(readFileSync(join(SKILL_DIR, "package.json")))
-  .update(readFileSync(join(SKILL_DIR, "bun.lock")))
-  .digest("hex")
-  .slice(0, 12);
-const DEPS_DIR = join(
-  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
-  "skills-deps",
-  `${SKILL}-${DEPS_HASH}`,
-);
-// One shell word, so the printed recovery command runs as printed whatever the path holds.
-const DEPS_DIR_QUOTED = `'${DEPS_DIR.replace(/'/g, "'\\''")}'`;
-if (!existsSync(join(DEPS_DIR, "node_modules"))) {
-  mkdirSync(DEPS_DIR, { recursive: true });
-  for (const file of ["package.json", "bun.lock"]) {
-    copyFileSync(join(SKILL_DIR, file), join(DEPS_DIR, file));
+/**
+ * Self-build: as source, bundle this script into <skill>/.build/ and run the bundle in its place; as the
+ * bundle, do nothing. docs/authoring.md > Dependencies holds this block; the smoke test keeps every copy
+ * byte-identical to it.
+ */
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const scripts = dirname(source);
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", `${basename(source, ".mts")}.js`);
+  // The bundle's inputs: every script under scripts/, since an entry imports its siblings, and the pin list.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name))
+    .concat(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  if (!existsSync(built) || statSync(built).mtimeMs < newest) {
+    // bun build resolves installed packages only, so the pins install into the skill folder for the build's duration.
+    const bun = (args: string[]): boolean => {
+      const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+      if (step.status !== 0) process.stderr.write(step.stderr);
+      return step.status === 0;
+    };
+    const ok =
+      bun(["install", "--production", "--no-save", "--cwd", skill]) &&
+      bun(["build", source, "--target", "bun", "--outfile", built]);
+    rmSync(join(skill, "node_modules"), { recursive: true, force: true });
+    if (!ok) process.exit(2);
   }
-  const install = spawnSync("bun", ["install", "--frozen-lockfile", "--cwd", DEPS_DIR], {
-    encoding: "utf8",
-  });
-  if (install.status !== 0) {
-    process.stderr.write(install.stderr ?? "");
-    console.error(
-      `${SKILL} dependencies did not install; run: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
+  process.exitCode =
+    spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" }).status ?? 1;
+  return true;
 }
-// Bun.resolveSync falls through to auto-install when DEPS_DIR holds no node_modules, so check the directory first.
-for (const name of ["mdast-util-from-markdown", "mdast-util-gfm", "micromark-extension-gfm"]) {
-  if (!existsSync(join(DEPS_DIR, "node_modules", name))) {
-    console.error(
-      `${SKILL} scripts need ${name}: bun install --frozen-lockfile --cwd ${DEPS_DIR_QUOTED}`,
-    );
-    process.exit(2);
-  }
-}
-const { fromMarkdown }: typeof import("mdast-util-from-markdown") = await import(
-  Bun.resolveSync("mdast-util-from-markdown", DEPS_DIR)
-);
-const { gfmFromMarkdown }: typeof import("mdast-util-gfm") = await import(
-  Bun.resolveSync("mdast-util-gfm", DEPS_DIR)
-);
-const { gfm }: typeof import("micromark-extension-gfm") = await import(
-  Bun.resolveSync("micromark-extension-gfm", DEPS_DIR)
-);
+// A test or another script importing this file must not build it: only the command does.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 export const DEFAULT_MAX_WORDS = 70;
 
@@ -155,12 +139,6 @@ function startLine(node: Nodes): number {
   return position.start.line;
 }
 
-/** Every node under `node`, itself first, in page order. */
-function* descendants(node: Nodes): Generator<Nodes> {
-  yield node;
-  if ("children" in node) for (const child of node.children) yield* descendants(child);
-}
-
 /**
  * The text a reader sees: a comment is nothing (it joins what it sits between), any other inline
  * HTML is at most a break, a hard break is a line, an image is nothing.
@@ -179,11 +157,9 @@ export function scanPage(text: string): Scan {
   });
   // A definition resolves references anywhere on the page, a generated region included; one no reference uses renders no link.
   const definitions = new Map<string, string>();
-  for (const node of descendants(tree)) {
-    if (node.type === "definition" && !definitions.has(node.identifier)) {
-      definitions.set(node.identifier, node.url);
-    }
-  }
+  visit(tree, "definition", (node) => {
+    if (!definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
+  });
   const scan: Scan = { units: [], codespans: [], links: [] };
   const walk = (nodes: readonly RootContent[], itemText: boolean) => {
     for (const node of nodes) {
@@ -320,9 +296,11 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
   return findings.sort((a, b) => a.line - b.line);
 }
 
+// The bundle in .build/ is <name>.js built from <name>.mts; a vendored copy under another name prints that name,
+// an importer never its own.
+const SELF = basename(import.meta.path).replace(/\.js$/, ".mts");
 const USAGE = [
-  // The file names itself, so a vendored copy under another name prints a command that exists there.
-  `usage: ${basename(fileURLToPath(import.meta.url))} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
+  `usage: ${SELF} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
   "  --root        the repository root paths resolve against (default: cwd)",
   "  --base        a directory under the root that paths also resolve against (repeatable)",
   "  --max-words   the cap on a paragraph or list item (default: 70)",

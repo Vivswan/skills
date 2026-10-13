@@ -6,6 +6,9 @@ skills-lock.json
 # Claude Code session state and in-repo worktrees.
 .claude/
 
+# A skill script's bundle, written beside its scripts/ on first run (docs/authoring.md > Dependencies).
+.build/
+
 # BEGIN REPO-PLATFORM MANAGED
 # Generated from github/gitignore - do not edit between the BEGIN/END
 # markers; repository-local patterns live outside the managed region

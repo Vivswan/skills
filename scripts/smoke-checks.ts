@@ -7,7 +7,7 @@
  */
 
 import { isBuiltin } from "node:module";
-import { isDeepStrictEqual } from "node:util";
+import { posix } from "node:path";
 import type { Frontmatter } from "./lib";
 import { errorMessage, fail, isRecord, KEBAB_CASE } from "./lib";
 
@@ -96,42 +96,45 @@ export function checkMarketplacePluginVersionBan(
 export const SEMVER =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
 
-const DEPENDENCY_FIELDS = [
-  "dependencies",
-  "devDependencies",
-  "optionalDependencies",
-  "peerDependencies",
-] as const;
-
 const DEPENDENCIES_DOC = "docs/authoring.md > Dependencies";
+
+/** The extensions a skill script may carry, in bun's resolution order. */
+export const SCRIPT_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+
+/** The other package.json dependency fields: a skill's pins are one list, under dependencies. */
+const OTHER_DEPENDENCY_FIELDS = ["devDependencies", "optionalDependencies", "peerDependencies"];
 
 export interface SkillDependencyLayout {
   /** The skill's display path, e.g. skills/working-text. */
   readonly skillPath: string;
-  /** Display paths of every package.json under the skill, node_modules excluded. */
+  /** Display paths of every package.json under the skill, node_modules and .build excluded. */
   readonly manifestPaths: readonly string[];
   /** Display paths of every node_modules directory under the skill. */
   readonly nodeModulesPaths: readonly string[];
+  /** Display paths of every lockfile under the skill. */
+  readonly lockfilePaths: readonly string[];
   /** The parsed skills/<name>/package.json, when the skill root carries one. */
   readonly manifest: Record<string, unknown> | undefined;
-  /** The parsed skills/<name>/bun.lock, when present. */
-  readonly lock: Record<string, unknown> | undefined;
   /** The root package.json devDependencies: where tsc resolves every skill import. */
   readonly rootDevDependencies: Record<string, unknown>;
 }
 
-// Why a lockfile per skill and a root pin of the same version: bun's auto-install ignores a package.json pin, and an
-// inline `pkg@1.2.3` specifier breaks once a second version of the package was ever fetched on the machine, so a
-// skill's dependencies install from its own bun.lock into a shared cache (the bootstrap in docs/authoring.md) while
-// tsc resolves the same bare import against the root node_modules.
+// Why exact pins and a root pin of the same version: the skill's package.json is the list bun installs before a
+// script's bundle is built (the ensureBuilt block in docs/authoring.md), while tsc resolves the same bare import
+// against the root node_modules; one version in both places keeps the code that runs the code that was checked.
 export function checkSkillDependencies(
   layout: SkillDependencyLayout,
 ): ReadonlySet<string> | undefined {
   const { skillPath, manifest } = layout;
   for (const path of layout.nodeModulesPaths) {
     fail(
-      `${path}: node_modules under a skill folder; dependencies install into the shared cache, never` +
-        ` here (${DEPENDENCIES_DOC})`,
+      `${path}: node_modules under a skill folder; a script installs its pins for the build's duration only,` +
+        ` and the bundle it leaves lives in .build/ (${DEPENDENCIES_DOC})`,
+    );
+  }
+  for (const path of layout.lockfilePaths) {
+    fail(
+      `${path}: a lockfile under a skill folder; the exact pins in package.json are the lock (${DEPENDENCIES_DOC})`,
     );
   }
   const rootManifest = `${skillPath}/package.json`;
@@ -142,82 +145,60 @@ export function checkSkillDependencies(
       );
     }
   }
-  if (manifest === undefined) {
-    if (layout.lock !== undefined) {
+  if (manifest === undefined) return undefined;
+  for (const field of OTHER_DEPENDENCY_FIELDS) {
+    if (manifest[field] !== undefined) {
       fail(
-        `${skillPath}/bun.lock: a lockfile with no package.json beside it; commit both or neither`,
+        `${rootManifest}: ${field}: a skill declares its packages under dependencies only, the one list` +
+          ` the install reads, the root mirrors, and the bundle holds (${DEPENDENCIES_DOC})`,
       );
     }
-    return undefined;
+  }
+  const entries = manifest.dependencies;
+  if (entries !== undefined && !isRecord(entries)) {
+    fail(`${rootManifest}: dependencies must be an object of package name to exact version`);
   }
   const declared = new Set<string>();
-  for (const field of DEPENDENCY_FIELDS) {
-    const entries = manifest[field];
-    if (entries === undefined) continue;
-    if (!isRecord(entries)) {
-      fail(`${rootManifest}: ${field} must be an object of package name to exact version`);
+  for (const [name, version] of Object.entries(entries ?? {})) {
+    if (typeof version !== "string" || !SEMVER.test(version)) {
+      fail(
+        `${rootManifest}: dependencies entry '${name}' is ${JSON.stringify(version)} -- a skill pins an` +
+          ` exact version only (1.2.3; no range, tag, git or file specifier), see ${DEPENDENCIES_DOC}`,
+      );
     }
-    for (const [name, version] of Object.entries(entries)) {
-      if (typeof version !== "string" || !SEMVER.test(version)) {
-        fail(
-          `${rootManifest}: ${field} entry '${name}' is ${JSON.stringify(version)} -- a skill pins an` +
-            ` exact version only (1.2.3; no range, tag, git or file specifier), see ${DEPENDENCIES_DOC}`,
-        );
-      }
-      const rootVersion = layout.rootDevDependencies[name];
-      if (rootVersion !== version) {
-        const rootState =
-          rootVersion === undefined ? "do not list it" : `pin ${JSON.stringify(rootVersion)}`;
-        fail(
-          `${rootManifest}: ${field} entry '${name}' is ${version} but the root package.json` +
-            ` devDependencies ${rootState} -- tsc resolves skill imports from the root node_modules, so` +
-            ` both pins stay identical (${DEPENDENCIES_DOC})`,
-        );
-      }
-      declared.add(name);
+    const rootVersion = layout.rootDevDependencies[name];
+    if (rootVersion !== version) {
+      const rootState =
+        rootVersion === undefined ? "do not list it" : `pin ${JSON.stringify(rootVersion)}`;
+      fail(
+        `${rootManifest}: dependencies entry '${name}' is ${version} but the root package.json` +
+          ` devDependencies ${rootState} -- tsc resolves skill imports from the root node_modules, so` +
+          ` both pins stay identical (${DEPENDENCIES_DOC})`,
+      );
     }
+    declared.add(name);
   }
   if (declared.size === 0) {
     fail(
-      `${rootManifest}: declares no dependency; a skill without dependencies ships neither package.json` +
-        ` nor bun.lock (${DEPENDENCIES_DOC})`,
-    );
-  }
-  if (layout.lock === undefined) {
-    fail(
-      `${skillPath}/bun.lock: missing beside a package.json with dependencies; run` +
-        ` bun install --lockfile-only --cwd ${skillPath} and commit it (${DEPENDENCIES_DOC})`,
-    );
-  }
-  // A bumped pin with a stale lock lands in a fresh bootstrap directory where `--frozen-lockfile` refuses it at
-  // the consumer's first run; this is the author's earlier warning. Pins are compared as one name-to-version map
-  // across the fields, since bun records a package named in both dependencies and optionalDependencies once.
-  const workspaces = isRecord(layout.lock.workspaces) ? layout.lock.workspaces : undefined;
-  const locked = workspaces !== undefined && isRecord(workspaces[""]) ? workspaces[""] : {};
-  const declaredPins = mergedPins(manifest);
-  const lockedPins = mergedPins(locked);
-  if (!isDeepStrictEqual(declaredPins, lockedPins)) {
-    fail(
-      `${skillPath}/bun.lock: records ${JSON.stringify(lockedPins)} but package.json declares` +
-        ` ${JSON.stringify(declaredPins)}; run bun install --lockfile-only --cwd ${skillPath} and commit it`,
+      `${rootManifest}: declares no dependency; a skill without dependencies ships no package.json` +
+        ` (${DEPENDENCIES_DOC})`,
     );
   }
   return declared;
 }
 
-function mergedPins(fields: Record<string, unknown>): Record<string, unknown> {
-  const pins: Record<string, unknown> = {};
-  for (const field of DEPENDENCY_FIELDS) {
-    const entries = fields[field];
-    if (isRecord(entries)) Object.assign(pins, entries);
-  }
-  return pins;
+export interface SkillScript {
+  /** Display path, e.g. skills/x/scripts/x.mts. */
+  readonly path: string;
+  readonly text: string;
 }
 
-export interface SkillDependencyScope {
+export interface SkillScriptScope {
   readonly skillPath: string;
   /** Package names the skill's package.json declares; undefined when the skill has none. */
   readonly declared: ReadonlySet<string> | undefined;
+  /** The ensureBuilt block as docs/authoring.md prints it. */
+  readonly buildBlock: string;
 }
 
 /** `bun` and `bun:*` are the runtime's own modules; isBuiltin covers `node:*` and the bare builtin names. */
@@ -233,52 +214,120 @@ function packageName(specifier: string): string {
 
 // bun's own transpiler is what a consumer runs, so the requests left after it erases types are the runtime truth:
 // `import type`, all-type specifier lists, `typeof import()` and ambient `declare module` bodies vanish (tsc owns
-// them), while every form that loads a module, through parentheses, `as const`, `!`, a template or a folded
-// concatenation, comes back as one path. A computed `import(Bun.resolveSync(name, DEPS_DIR))`, the bootstrap's
-// own form, has no literal path and is left alone. autoImportJSX makes the import bun synthesizes for JSX
-// (react/jsx-dev-runtime) visible to the scanner, since a consumer's run loads it like any other package.
+// them), while every form that loads a module, static, dynamic or require, comes back as one path. autoImportJSX
+// makes the import bun synthesizes for JSX (react/jsx-dev-runtime) visible, since a bundle holds it like any package.
 const TRANSPILERS = {
   ts: new Bun.Transpiler({ loader: "ts" }),
   tsx: new Bun.Transpiler({ loader: "tsx", autoImportJSX: true }),
 };
 
-export function checkSkillScriptImports(
-  displayPath: string,
-  sourceText: string,
-  scope: SkillDependencyScope,
-): void {
-  const transpiler = /\.[jt]sx$/.test(displayPath) ? TRANSPILERS.tsx : TRANSPILERS.ts;
+interface RuntimeImports {
+  readonly packages: readonly string[];
+  readonly relatives: readonly string[];
+}
+
+/** The package and relative specifiers a script loads at runtime. */
+function runtimeImports(script: SkillScript): RuntimeImports {
+  const transpiler = /\.[jt]sx$/.test(script.path) ? TRANSPILERS.tsx : TRANSPILERS.ts;
   let runtime: string;
   try {
-    runtime = transpiler.transformSync(sourceText);
+    runtime = transpiler.transformSync(script.text);
   } catch (error) {
-    fail(`${displayPath}: does not parse: ${errorMessage(error)}`);
+    fail(`${script.path}: does not parse: ${errorMessage(error)}`);
   }
-  for (const { kind, path } of transpiler.scanImports(runtime)) {
-    if (/^(?:\.|\/|file:|data:)/.test(path) || isRuntimeModule(path)) continue;
-    if (scope.declared === undefined) {
-      fail(
-        `${displayPath}: imports '${path}' but ${scope.skillPath} has no package.json -- a dependency` +
-          ` ships ${scope.skillPath}/package.json + bun.lock and loads through the bootstrap (${DEPENDENCIES_DOC})`,
-      );
+  const packages: string[] = [];
+  const relatives: string[] = [];
+  for (const { path } of transpiler.scanImports(runtime)) {
+    if (/^\.\.?\//.test(path)) relatives.push(path);
+    else if (!/^(?:\/|file:|data:)/.test(path) && !isRuntimeModule(path)) packages.push(path);
+  }
+  return { packages, relatives };
+}
+
+/**
+ * Every package a skill's scripts load is declared in its package.json, and every script whose bundle would
+ * hold a package, through its own imports or a relative import's, carries the ensureBuilt block byte for
+ * byte. A script that needs no bundle carries no block: the block makes bun a requirement.
+ */
+export function checkSkillScripts(scripts: readonly SkillScript[], scope: SkillScriptScope): void {
+  const imports = new Map<string, RuntimeImports>();
+  for (const script of scripts) {
+    const found = runtimeImports(script);
+    for (const path of found.packages) {
+      if (scope.declared === undefined) {
+        fail(
+          `${script.path}: imports '${path}' but ${scope.skillPath} has no package.json -- a dependency is` +
+            ` declared in ${scope.skillPath}/package.json and bundled on first run (${DEPENDENCIES_DOC})`,
+        );
+      }
+      if (!scope.declared.has(packageName(path))) {
+        fail(
+          `${script.path}: imports '${path}', which ${scope.skillPath}/package.json does not declare` +
+            ` (${DEPENDENCIES_DOC})`,
+        );
+      }
     }
-    if (!scope.declared.has(packageName(path))) {
-      fail(
-        `${displayPath}: imports '${path}', which ${scope.skillPath}/package.json does not declare` +
-          ` (${DEPENDENCIES_DOC})`,
-      );
-    }
-    if (kind === "dynamic-import") {
-      fail(
-        `${displayPath}: import("${path}") resolves from the user's project, not the skill's` +
-          ` dependencies -- import(Bun.resolveSync("${path}", DEPS_DIR)) per the template (${DEPENDENCIES_DOC})`,
-      );
-    }
-    fail(
-      `${displayPath}: static import of '${path}' runs before the bootstrap installs it -- load it` +
-        ` with the typed dynamic import from the template (${DEPENDENCIES_DOC})`,
+    imports.set(script.path, found);
+  }
+  // Relative imports resolve among the skill's own scripts as bun resolves them: the path as written, a
+  // .js-family extension standing for the TypeScript file, an extension added, or a directory's index file.
+  // One resolving to no script (a JSON file) holds no package.
+  const resolveRelative = (from: string, specifier: string): string | undefined => {
+    const target = posix.normalize(posix.join(posix.dirname(from), specifier));
+    const stem = target.replace(/\.(?:[mc]?js|jsx)$/, "");
+    const candidates = [
+      target,
+      ...SCRIPT_EXTENSIONS.map((ext) => `${stem}${ext}`),
+      ...SCRIPT_EXTENSIONS.map((ext) => posix.join(target, `index${ext}`)),
+    ];
+    return candidates.find((candidate) => imports.has(candidate));
+  };
+  const needsBundle = (path: string, visiting: ReadonlySet<string>): boolean => {
+    if (visiting.has(path)) return false;
+    const found = imports.get(path);
+    if (found === undefined) return false;
+    const inner = new Set([...visiting, path]);
+    return (
+      found.packages.length > 0 ||
+      found.relatives.some((specifier) => {
+        const target = resolveRelative(path, specifier);
+        return target !== undefined && needsBundle(target, inner);
+      })
     );
+  };
+  for (const script of scripts) {
+    const carries = script.text.includes(scope.buildBlock);
+    const hasSome = script.text.includes("function ensureBuilt(");
+    if (needsBundle(script.path, new Set())) {
+      if (!carries) {
+        fail(
+          `${script.path}: loads a package, directly or through a relative import, ${
+            hasSome
+              ? "but its ensureBuilt block differs from the template; paste it again"
+              : "so it carries the ensureBuilt block above its program"
+          } (${DEPENDENCIES_DOC})`,
+        );
+      }
+    } else if (hasSome) {
+      fail(
+        `${script.path}: carries an ensureBuilt block but loads no package; the block makes bun a requirement,` +
+          ` so a dependency-free script has none (${DEPENDENCIES_DOC})`,
+      );
+    }
   }
+}
+
+/** The ensureBuilt block as docs/authoring.md prints it: the first ts fence of the Dependencies section. */
+export function ensureBuiltTemplate(docText: string, displayPath = "docs/authoring.md"): string {
+  const heading = "\n## Dependencies\n";
+  const start = docText.indexOf(heading);
+  if (start === -1) fail(`${displayPath}: missing the '## Dependencies' section`);
+  const section = docText.slice(start + heading.length).split("\n## ")[0] ?? "";
+  const fence = /```ts\n([\s\S]*?)```\n/.exec(section);
+  if (fence?.[1] === undefined || !fence[1].includes("function ensureBuilt(")) {
+    fail(`${displayPath}: the Dependencies section has no ts fence holding function ensureBuilt`);
+  }
+  return fence[1];
 }
 
 // Extract a '## <title>' section of the README, with fenced blocks (backtick
