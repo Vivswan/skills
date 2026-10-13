@@ -318,6 +318,8 @@ describe("importSpecifiers", () => {
     ["an import with attributes", 'import d from "./d.json" with { type: "json" };', ["./d.json"]],
     ["an export ahead of its import", 'export { v };\nimport { v } from "./a.js";', ["./a.js"]],
     ["an optional-call require", 'require?.("./a.js");', ["./a.js"]],
+    ["an optional member require", 'module?.require("./a.js");', ["./a.js"]],
+    ["a fully optional require chain", 'module?.require?.("./a.js");', ["./a.js"]],
     ["a CommonJS file returning at top level", 'if (x) return;\nrequire("./a.js");', ["./a.js"]],
     ["a package import, which is not an edge", 'import { z } from "zod";', []],
     ["import.meta, which loads nothing", "const dir = import.meta.dir;", []],
@@ -354,8 +356,16 @@ describe("importSpecifiers", () => {
     );
   });
 
-  test("a .cjs file is a script: a strict-mode reserved word is a plain name there", () => {
-    expect(importSpecifiers('const package = require("./a.js");', "x.cjs")).toEqual(["./a.js"]);
+  test.each(["x.cjs", "x.js"])(
+    "a CommonJS %s parses as a script: a strict-mode reserved word is a plain name there",
+    (file) => {
+      expect(importSpecifiers('const package = require("./a.js");', file)).toEqual(["./a.js"]);
+    },
+  );
+
+  test("a .js file has no TypeScript grammar: `require < 0 > (x)` is a comparison, not a call", () => {
+    expect(importSpecifiers('require < 0 > ("./a.js");', "x.js")).toEqual([]);
+    expect(importSpecifiers('require < 0 > ("./a.js");', "x.ts")).toEqual(["./a.js"]);
   });
 
   test("an export ahead of its import still forwards the imported binding", () => {

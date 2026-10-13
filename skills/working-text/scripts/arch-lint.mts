@@ -16,40 +16,54 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { type ParserPlugin, parse } from "@babel/parser";
 import type { Node, Program } from "@babel/types";
 
-/**
- * Self-build: as source, bundle this script into <skill>/.build/ and run the bundle in its place; as the
- * bundle, do nothing. docs/authoring.md > Dependencies holds this block; the smoke test keeps every copy
- * byte-identical to it.
- */
-function ensureBuilt(source: string): boolean {
-  if (!source.endsWith(".mts")) return false;
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
   const scripts = dirname(source);
   const skill = dirname(scripts);
   const built = join(skill, ".build", `${basename(source, ".mts")}.js`);
-  // The bundle's inputs: every script under scripts/, since an entry imports its siblings, and the pin list.
+  return { scripts, skill, built };
+}
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
   const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
     .filter((name) => name.endsWith(".mts"))
-    .map((name) => join(scripts, name))
-    .concat(join(skill, "package.json"));
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
   const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
-  if (!existsSync(built) || statSync(built).mtimeMs < newest) {
-    // bun build resolves installed packages only, so the pins install into the skill folder for the build's duration.
-    const bun = (args: string[]): boolean => {
-      const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
-      if (step.status !== 0) process.stderr.write(step.stderr);
-      return step.status === 0;
-    };
-    const ok =
-      bun(["install", "--production", "--no-save", "--cwd", skill]) &&
-      bun(["build", source, "--target", "bun", "--outfile", built]);
-    rmSync(join(skill, "node_modules"), { recursive: true, force: true });
-    if (!ok) process.exit(2);
-  }
-  process.exitCode =
-    spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" }).status ?? 1;
+  return statSync(built).mtimeMs < newest;
+}
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, skill: string, built: string): void {
+  // bun build resolves installed packages only: install the pins for the build's duration, then remove them.
+  const ok =
+    runBun(["install", "--production", "--no-save", "--cwd", skill]) &&
+    runBun(["build", source, "--target", "bun", "--outfile", built]);
+  rmSync(join(skill, "node_modules"), { recursive: true, force: true });
+  if (!ok) process.exit(2);
+}
+
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built)) build(source, skill, built);
+  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  // A bundle killed by a signal has no status: die of the same signal.
+  if (run.signal) process.kill(process.pid, run.signal);
+  process.exitCode = run.status ?? 1;
   return true;
 }
-// A test or another script importing this file must not build it: only the command does.
+
+// Only the command builds; a test or a sibling importing this file must not.
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 export const DEFAULT_CONFIG = "architecture.yml";
@@ -212,23 +226,42 @@ function* boundNames(node: Node | null | undefined): Generator<string> {
 }
 
 /**
+ * The grammar follows the extension, as oxc's did: a .js file has no TypeScript syntax, so `a < b > (c)`
+ * is a comparison there, not a call with type arguments. tsc owns binding checks, so an export ahead of
+ * its import parses, and a CommonJS file may return at top level; .cjs is a script, where `package` is a
+ * plain name, and .js is a module unless only script syntax parses it.
+ */
+function parseProgram(file: string, text: string): Program {
+  const plugins: ParserPlugin[] = ["decorators", "decoratorAutoAccessors"];
+  if (!/\.[mc]?jsx?$/.test(file)) plugins.push("typescript");
+  if (/\.[jt]sx$|\.[mc]?js$/.test(file)) plugins.push("jsx");
+  const options = {
+    plugins,
+    attachComment: false,
+    allowUndeclaredExports: true,
+    allowReturnOutsideFunction: true,
+  };
+  if (file.endsWith(".cjs")) return parse(text, { ...options, sourceType: "script" }).program;
+  try {
+    return parse(text, { ...options, sourceType: "module" }).program;
+  } catch (error) {
+    if (!/\.jsx?$/.test(file)) throw error;
+    try {
+      return parse(text, { ...options, sourceType: "script" }).program;
+    } catch {
+      throw error;
+    }
+  }
+}
+
+/**
  * The module record of `text`: its static imports and exports, read from the TypeScript AST. A file
  * that does not parse throws naming the line.
  */
 export function parseModule(file: string, text: string): ModuleRecord {
-  const plugins: ParserPlugin[] = ["typescript", "decorators", "decoratorAutoAccessors"];
-  if (/\.[jt]sx$/.test(file)) plugins.push("jsx");
   let program: Program;
   try {
-    // tsc owns binding checks, so an export ahead of its import parses; a CommonJS file may return at top
-    // level, and a .cjs file is a script, where `package` is a plain name and no import statement belongs.
-    program = parse(text, {
-      sourceType: file.endsWith(".cjs") ? "script" : "module",
-      plugins,
-      attachComment: false,
-      allowUndeclaredExports: true,
-      allowReturnOutsideFunction: true,
-    }).program;
+    program = parseProgram(file, text);
   } catch (error) {
     const line = (error as { loc?: { line?: number } }).loc?.line ?? 1;
     throw new Error(
@@ -342,10 +375,12 @@ export function importSpecifiers(text: string, file: string): string[] {
   return [...found].filter((specifier) => /^\.\.?\//.test(specifier));
 }
 
-/** `require(...)`, `require?.(...)` and CommonJS's `module.require(...)` all load; `require.resolve(...)` does not. */
+/** `require(...)` and CommonJS's `module.require(...)` load, through `?.` too; `require.resolve(...)` does not. */
 function isRequireCallee(callee: Node): boolean {
   if (callee.type === "Identifier") return callee.name === "require";
-  if (callee.type !== "MemberExpression" || callee.computed) return false;
+  if (callee.type !== "MemberExpression" && callee.type !== "OptionalMemberExpression")
+    return false;
+  if (callee.computed) return false;
   const { object, property } = callee;
   return (
     object.type === "Identifier" &&
