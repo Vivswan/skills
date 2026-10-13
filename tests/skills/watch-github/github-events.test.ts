@@ -239,6 +239,119 @@ describe("github-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a label added or removed after the first sighting is one line per poll naming the labels, sorted, and nothing else; the labels a PR already carries are its baseline", async () => {
+    const s = new Scenario("labels");
+    const box = await s.inbox("a");
+    const labelled = (minute: number, labels: string[]): RowSpec => ({
+      rollup: "SUCCESS",
+      updatedAt: `2026-01-01T00:${minute}:00Z`,
+      labels,
+    });
+    s.fixtures({
+      "rows-1": rows({ p7: prNode({ ...labelled(10, ["bug"]), suites: [] }) }),
+      // GitHub lists labels in its own order; two added in one poll are one line, sorted.
+      "rows-2": rows({ p7: prNode(labelled(11, ["merge-when-green", "bug", "approved"])) }),
+      "rows-3": rows({ p7: prNode(labelled(12, ["approved"])) }),
+      "rows-4": rows({ p7: prNode(labelled(13, ["needs-rebase"])) }),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
+    for (let poll = 0; poll < 3; poll += 1) {
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    }
+    expect((await box.frames(4)).map(text)).toEqual([
+      [`PR ${PR7}: CI green on ${SHORT_A}: 0 workflows`, `${PR7_URL}/checks`, CLOSING].join("\n"),
+      [`PR ${PR7}: labels added: approved, merge-when-green`, PR7_URL, CLOSING].join("\n"),
+      [`PR ${PR7}: labels removed: bug, merge-when-green`, PR7_URL, CLOSING].join("\n"),
+      [`PR ${PR7}: label added: needs-rebase; label removed: approved`, PR7_URL, CLOSING].join(
+        "\n",
+      ),
+    ]);
+    expect(s.events().map((e) => e.kind)).toEqual(["ci", "label", "label", "label"]);
+    expect(s.state().targets[PR7]).toMatchObject({ seen: { row: { labels: ["needs-rebase"] } } });
+    expect(s.violations()).toBe("");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a conflict is said when the merge test settles on it, once per settled stretch and again after a push, and resolved when it settles clean; UNKNOWN says nothing; a PR already conflicting is said at its first sighting", async () => {
+    const s = new Scenario("conflicts");
+    const box = await s.inbox("a");
+    const p7 = (mergeable: string, head = HEAD_A): RowSpec => ({
+      head,
+      mergeable,
+      rollup: "SUCCESS",
+    });
+    s.fixtures({
+      "rows-1": rows({ p7: prNode({ ...p7("MERGEABLE"), suites: [] }) }),
+      "rows-2": rows({ p7: prNode(p7("UNKNOWN")) }),
+      "rows-3": rows({ p7: prNode(p7("CONFLICTING")) }),
+      "rows-4": rows({ p7: prNode(p7("UNKNOWN")) }),
+      "rows-5": rows({ p7: prNode(p7("CONFLICTING")) }),
+      // A push: GitHub recomputes, and a conflict that survives the push is news again.
+      "rows-6": rows({ p7: prNode(p7("UNKNOWN", HEAD_B)) }),
+      "rows-7": rows({ p7: prNode({ ...p7("CONFLICTING", HEAD_B), suites: [] }) }),
+      "rows-8": rows({ p7: prNode(p7("MERGEABLE", HEAD_B)) }),
+      "rows-9": rows({
+        p7: prNode(p7("MERGEABLE", HEAD_B)),
+        p8: prNode({
+          number: 8,
+          base: "release/2",
+          mergeable: "CONFLICTING",
+          rollup: "SUCCESS",
+          suites: [],
+        }),
+      }),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
+    // UNKNOWN is never kept: the cursor still holds the settled MERGEABLE.
+    expect(s.state().targets[PR7]).toMatchObject({ seen: { mergeable: "MERGEABLE" } });
+    for (const count of [1, 0, 0, 1, 2, 1]) {
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain(`${count} event(s)`);
+    }
+    expect(s.run(["watch", `${REPO}#8`], { inbox: box.path }).code).toBe(0);
+    expect((await box.frames(6)).map(text)).toEqual([
+      [`PR ${PR7}: CI green on ${SHORT_A}: 0 workflows`, `${PR7_URL}/checks`, CLOSING].join("\n"),
+      [`PR ${PR7}: conflicts with main; rebase needed`, PR7_URL, CLOSING].join("\n"),
+      [
+        `PR ${PR7}: head moved to ${SHORT_B}; last commit by dev`,
+        `${PR7_URL}/commits/${HEAD_B}`,
+        CLOSING,
+      ].join("\n"),
+      [
+        `PR ${PR7}: conflicts with main; rebase needed`,
+        PR7_URL,
+        "",
+        `PR ${PR7}: CI green on ${SHORT_B}: 0 workflows`,
+        `${PR7_URL}/checks`,
+        CLOSING,
+      ].join("\n"),
+      [`PR ${PR7}: conflicts resolved`, PR7_URL, CLOSING].join("\n"),
+      [
+        `PR ${REPO}#8: conflicts with release/2; rebase needed`,
+        `https://github.com/${REPO}/pull/8`,
+        "",
+        `PR ${REPO}#8: CI green on ${SHORT_A}: 0 workflows`,
+        `https://github.com/${REPO}/pull/8/checks`,
+        CLOSING,
+      ].join("\n"),
+    ]);
+    expect(s.events().map((e) => [e.kind, e.pr])).toEqual([
+      ["ci", 7],
+      ["conflict", 7],
+      ["head", 7],
+      ["conflict", 7],
+      ["ci", 7],
+      ["conflict", 7],
+      ["conflict", 8],
+      ["ci", 8],
+    ]);
+    expect(s.state().targets[`${REPO}#8`]).toMatchObject({ seen: { mergeable: "CONFLICTING" } });
+    expect(s.violations()).toBe("");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a review and the comments beside it are counted, placed, and linked, and not one word of them is in the message or the log, whatever they say; the viewer's own are left out", async () => {
     const s = new Scenario("activity");
     const box = await s.inbox("a");

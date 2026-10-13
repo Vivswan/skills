@@ -224,6 +224,9 @@ type PrNodeSpec = Partial<{
   threads: number;
   review: { id: string; submittedAt: string | null; state: string; login: string | null } | null;
   rollup: string | null;
+  /** The label names as GitHub lists them, in any order. */
+  labels: string[];
+  mergeable: string;
   /** The head's check suites, present only when the read asked for them. */
   suites: SuiteSpec[];
   suitesNext: string;
@@ -242,8 +245,10 @@ function prNode(spec: PrNodeSpec = {}): unknown {
     baseRefName: spec.baseRefName ?? "main",
     headRefOid: spec.headRefOid ?? "head0001",
     updatedAt: spec.updatedAt ?? "2026-03-01T10:00:00Z",
+    mergeable: spec.mergeable ?? "MERGEABLE",
     comments: { totalCount: spec.comments ?? 0 },
     reviewThreads: { totalCount: spec.threads ?? 0 },
+    labels: { nodes: (spec.labels ?? []).map((name) => ({ name })) },
     reviews: {
       nodes:
         review === null
@@ -290,6 +295,8 @@ function row(spec: Partial<Row> = {}): Row {
     reviewThreads: 0,
     latestReview: null,
     rollupState: null,
+    labels: [],
+    mergeable: "MERGEABLE",
     ...spec,
   };
 }
@@ -840,6 +847,8 @@ describe("readRepository", () => {
       r[`p${n}`] =
         n === 17 ? null : prNode({ number: n, suites: n === 1 ? [{ id: 1 }] : undefined });
     }
+    // Labels arrive in GitHub's order and are kept sorted, so two rows compare as sets.
+    r.p2 = prNode({ number: 2, labels: ["needs-rebase", "bug"], mergeable: "CONFLICTING" });
     r.b0 = {
       target: {
         oid: "tip00001",
@@ -885,7 +894,12 @@ describe("readRepository", () => {
       suites: { runs: [run({ id: 1 })], complete: true, nextCursor: null },
     });
     expect(reply.rows.get(2)).toEqual({
-      row: row({ number: 2, url: "https://example.com/octocat/repo/pull/2" }),
+      row: row({
+        number: 2,
+        url: "https://example.com/octocat/repo/pull/2",
+        labels: ["bug", "needs-rebase"],
+        mergeable: "CONFLICTING",
+      }),
       suites: null,
     });
     // A deleted account nulls the author; a PENDING review has no submittedAt.
@@ -902,6 +916,7 @@ describe("readRepository", () => {
     expect(calls).toHaveLength(2);
     const first = calls[0] as string;
     expect(first).toContain("viewer { login }");
+    expect(first).toContain("labels(first: 20) { nodes { name } }");
     expect(first).toContain('r: repository(owner: "octocat", name: "repo")');
     expect(first).toContain("p17: pullRequest(number: 17)");
     expect(first).toContain('b0: ref(qualifiedName: "refs/heads/main")');

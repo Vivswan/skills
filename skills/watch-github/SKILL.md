@@ -8,7 +8,7 @@ metadata:
 
 # Watch GitHub
 
-One daemon per Claude Code session, started by the session as a background task, polls GitHub for the pull requests and branch tips that session watches. The session subscribes once and keeps working. Comments, reviews, CI verdicts, head moves, merges, and closes arrive as messages in the session, one message per poll, and as lines in a log any other agent can read.
+One daemon per Claude Code session, started by the session as a background task, polls GitHub for the pull requests and branch tips that session watches. The session subscribes once and keeps working. Comments, reviews, CI verdicts, head moves, label moves, conflicts with the base, merges, and closes arrive as messages in the session, one message per poll, and as lines in a log any other agent can read.
 
 The daemon is the `/session-events` skill's, installed beside this one; this skill is its GitHub source. That page owns the envelope, the runtime directory and files, the file sink, and the two-hour cap. This page owns what is polled and what the events say.
 
@@ -50,14 +50,14 @@ bun "<skill-dir>/scripts/github-events.mts" watch owner/repo:main --expect-workf
 
 | Target | Events | Ends |
 | --- | --- | --- |
-| `owner/repo#n`, a pull request | comment, review, ci, head, merged, closed, trouble | at the merge or close |
+| `owner/repo#n`, a pull request | comment, review, ci, head, label, conflict, merged, closed, trouble | at the merge or close |
 | `owner/repo:branch`, a branch tip | ci, head, trouble | never; every push to the branch is a new head |
 
 Issues and security alerts are future target forms of this source, never new commands or skills.
 
 `--expect-workflow <name>`, repeatable, names a gate: the `name:` of a workflow file under `.github/workflows/` that gates the target. The flags of one call are the complete gate set. A repeated `watch` of the same target replaces it, gates and cursor: its CI is judged again, and its activity baseline is taken afresh.
 
-Without a daemon, `watch` exits 3 and prints the exact start command. A PR's first sighting reports none of the comments or reviews already on it; only what lands afterwards is an event. Its CI verdict and its merged or closed state are judged at once.
+Without a daemon, `watch` exits 3 and prints the exact start command. A PR's first sighting reports none of the comments, reviews, or labels already on it; only what lands afterwards is an event. Its CI verdict, its merged or closed state, and a conflict it already carries are judged at once.
 
 ## Events
 
@@ -69,12 +69,16 @@ Each message holds one poll's events, each with a URL, and the closing line `aut
 | `review` | `PR owner/repo#12: review by octocat (CHANGES_REQUESTED), 3 comments`, the review's URL | the same, per the `/pr-landing-discipline` skill |
 | `ci` | `PR owner/repo#12: CI green on 1a2b3c4d5e6f: 3 workflows`, the checks page; or `PR owner/repo#12: CI red on 1a2b3c4d5e6f: checks / check / Run tests`, the failed run's URL | green: carry on; red: `gh run view <id> --log-failed` for the excerpt, fix, push, and the next verdict arrives on its own |
 | `head` | `PR owner/repo#12: head moved to 1a2b3c4d5e6f; last commit by octocat` (the commit's author, not who pushed), on every move, your own pushes included | a head you did not push: pull before touching the branch |
+| `label` | `PR owner/repo#12: label added: merge-when-green`; several in one poll: `PR owner/repo#12: labels added: approved, merge-when-green`; `PR owner/repo#12: label removed: needs-rebase`; an add and a remove in one poll share the line, `;` between; the PR's URL | a label that names you or a gate: act on it; any other is information |
+| `conflict` | `PR owner/repo#12: conflicts with main; rebase needed`, then `PR owner/repo#12: conflicts resolved` once the merge test settles clean again; the PR's URL | rebase onto the base and push; the line comes again when a push leaves the conflict standing |
 | `merged` | `PR owner/repo#12: merged into main` | stop babysitting; the mainline's CI is the branch target's business |
 | `closed` | `PR owner/repo#12: closed without merging` | stop babysitting |
 | `trouble` | `PR owner/repo#12 is not readable; unwatch it or check access`; `PR owner/repo#12: CI settled on 1a2b3c4d5e6f with no run of checks; check the workflow name` (or `no checks on 1a2b3c4d5e6f after 2 polls, so no run of checks`); `PR owner/repo#12: 3 reads failed; read the daemon log`; or the `/session-events` skill's line after three failed polls | tooling trouble, never a red or green pipeline; Gotchas below |
 | busy | not a kind: a poll with an event, a pending rollup, or a head still being judged keeps the 60 s interval; a quiet poll moves to 300 s | nothing |
 
 A branch target's lines open with `branch owner/repo:main:` instead. The comment line counts the viewer's own comments out. A review's inline comments are counted on its line and not again as comments.
+
+After a push on either side GitHub recomputes the merge test and answers UNKNOWN meanwhile. Nothing is said until it settles.
 
 ### The CI rules
 
