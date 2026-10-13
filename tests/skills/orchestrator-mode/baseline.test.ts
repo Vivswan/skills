@@ -1,18 +1,19 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
 import { relativeStaysWithin } from "../../../skills/orchestrator-mode/scripts/baseline.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // Contract test for the baseline snapshot helper: pinned copies compared
 // byte for byte and rendered as a unified diff must turn every
@@ -24,11 +25,6 @@ import { relativeStaysWithin } from "../../../skills/orchestrator-mode/scripts/b
 
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "baseline.mts");
 
-const fixtures: string[] = [];
-afterAll(() => {
-  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
-});
-
 interface Fixture {
   readonly tree: string;
   readonly baseline: string;
@@ -36,8 +32,7 @@ interface Fixture {
 }
 
 function makeFixture(files: Record<string, string>): Fixture {
-  const root = mkdtempSync(join(tmpdir(), "baseline-test-"));
-  fixtures.push(root);
+  const root = temp.dir("baseline-test-");
   const tree = join(root, "tree");
   const baseline = join(root, "baseline");
   mkdirSync(tree, { recursive: true });

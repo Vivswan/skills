@@ -1,16 +1,10 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // Contract tests for the orchestrator-mode session ledger. Each test drives
 // the real script as a child process against a throwaway ledger file, pinning
@@ -18,8 +12,7 @@ import { ROOT } from "../../../scripts/lib.mts";
 
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "ledger.mts");
 
-const dir = mkdtempSync(join(tmpdir(), "ledger-test-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const dir = temp.dir("ledger-test-");
 
 let fileCount = 0;
 function freshFile(): string {

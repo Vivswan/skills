@@ -104,7 +104,7 @@ scripts/sweep.mts: probe extended 120s -> 300s while the build lock is held; age
 - **Reviewer note (Copilot):** the 300s ceiling is a constant in `scripts/sweep.mts`, not a flag.
 - **Refused: `--probe-ceiling`.** No second caller exists.
 - **Proof detail:** one new test pins the extension while the lock is held, the other the plain 120s verdict without it.
-- **Files:** `scripts/sweep.mts` (the probe), `tests/sweep-script.test.ts` (the two cases).
+- **Files:** `scripts/sweep.mts` (the probe), `tests/skills/orchestrator-mode/sweep.test.ts` (the two cases).
 
 BEGIN_COMMIT_OVERRIDE
 fix(sweep)!: extend the probe while the build lock is held

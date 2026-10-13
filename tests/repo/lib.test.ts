@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import {
   CheckFailure,
@@ -18,9 +17,12 @@ import {
   skillDirs,
 } from "../../scripts/lib.mts";
 import { expectCheckFailure } from "../helpers/check-failure";
+import { tempDirs } from "../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 function tempFile(content: string, name = "SKILL.md"): string {
-  const dir = mkdtempSync(join(tmpdir(), "skills-lib-test-"));
+  const dir = temp.dir("skills-lib-test-");
   const path = join(dir, name);
   writeFileSync(path, content);
   return path;

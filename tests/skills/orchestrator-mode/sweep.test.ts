@@ -1,9 +1,8 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
   lutimesSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -11,9 +10,11 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // Fixture-repo test for the fleet sweep script: a temp git repo with a live
 // worktree (ahead of origin, dirty + untracked), a repo-wiping worktree, a
@@ -29,8 +30,7 @@ import { ROOT } from "../../../scripts/lib.mts";
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "sweep.mts");
 const SWEEP_TIMEOUT = 60_000;
 
-const fixtureRoot = mkdtempSync(join(tmpdir(), "sweep-test-"));
-afterAll(() => rmSync(fixtureRoot, { recursive: true, force: true }));
+const fixtureRoot = temp.dir("sweep-test-");
 
 // Hooks (the pre-commit check runs this suite) export GIT_DIR/GIT_INDEX_FILE
 // pointed at the outer repo; they would hijack every fixture git call.

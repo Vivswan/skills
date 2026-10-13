@@ -6,7 +6,6 @@ import {
   linkSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -21,6 +20,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
 import { writeAllSync } from "../../../skills/rubber-duck-review/scripts/run-review.mts";
+import { tempDirs } from "../../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // Contract tests for the run-review helper: stub reviewer binaries on PATH
 // drive every exit path, pinning the traps the script encapsulates - the
@@ -305,8 +307,8 @@ fi
 exec /bin/cp "$@"
 `;
 
-const binDir = mkdtempSync(join(tmpdir(), "run-review-test-"));
-const emptyBinDir = mkdtempSync(join(tmpdir(), "run-review-nobin-"));
+const binDir = temp.dir("run-review-test-");
+const emptyBinDir = temp.dir("run-review-nobin-");
 for (const [name, body] of [
   ["codex", FAKE_CODEX],
   ["claude", FAKE_CLAUDE],
@@ -317,8 +319,6 @@ for (const [name, body] of [
   chmodSync(join(binDir, name), 0o755);
 }
 const mintedDirs: string[] = [];
-/** Fixture repositories and bare directories the copy-mode cases run from. */
-const fixtureDirs: string[] = [];
 /** Prompt files reach a launch only through a `prepare`-minted path. */
 function mintPrompt(section: string, content: string = PROMPT): string {
   const result = Bun.spawnSync([process.execPath, SCRIPT, "prepare", section], {
@@ -335,10 +335,7 @@ function mintPrompt(section: string, content: string = PROMPT): string {
 const promptFile = mintPrompt("prompt");
 
 afterAll(() => {
-  rmSync(binDir, { recursive: true, force: true });
-  rmSync(emptyBinDir, { recursive: true, force: true });
   for (const dir of mintedDirs) rmSync(dir, { recursive: true, force: true });
-  for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true });
 });
 
 interface Report {
@@ -459,7 +456,7 @@ const LAUNCH_RECORD = '{"tool":"codex","output":"review.jsonl"}';
 /** A capture dir as a --background launch leaves it: stream and launch
  * record present, no status yet. */
 function pendingCapture(stream = true): string {
-  const dir = mkdtempSync(join(tmpdir(), "run-review-pending-"));
+  const dir = temp.dir("run-review-pending-");
   if (stream) writeFileSync(join(dir, "review.jsonl"), COMPLETE_CODEX_STREAM);
   writeFileSync(join(dir, "review.status"), LAUNCH_RECORD);
   return join(dir, "review.jsonl");
@@ -735,8 +732,7 @@ describe("run-review.mts", () => {
   /** A repository with one staged change and an untracked file, the shape a
    * pre-commit review targets; `git status` must read the same after the run. */
   function fixtureRepo(): string {
-    const repo = mkdtempSync(join(tmpdir(), "run-review-repo-"));
-    fixtureDirs.push(repo);
+    const repo = temp.dir("run-review-repo-");
     const git = (...args: string[]) => {
       const result = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
       expect(result.stderr.toString(), args.join(" ")).toBe("");
@@ -859,8 +855,7 @@ describe("run-review.mts", () => {
 
   test("copy mode runs codex under a scratch CODEX_HOME holding copies of the user's config and credentials, so codex's trust write never reaches the user's file", () => {
     const repo = fixtureRepo();
-    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
-    fixtureDirs.push(home);
+    const home = temp.dir("run-review-codex-home-");
     writeFileSync(join(home, "config.toml"), 'model = "example"\n');
     writeFileSync(join(home, "auth.json"), '{"token":"example"}\n');
     const homeReport = join(binDir, "home-report-copy");
@@ -882,8 +877,7 @@ describe("run-review.mts", () => {
 
   test("the review's transcript codex writes under the scratch home's sessions lands in the user's own sessions directory and survives the cleanup", () => {
     const repo = fixtureRepo();
-    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
-    fixtureDirs.push(home);
+    const home = temp.dir("run-review-codex-home-");
     writeFileSync(join(home, "config.toml"), 'model = "example"\n');
     // An earlier review's transcript already in the user's directory must not be touched.
     mkdirSync(join(home, "sessions", "2026", "10", "10"), { recursive: true });
@@ -935,8 +929,7 @@ describe("run-review.mts", () => {
 
   test("a codex home without a sessions directory yet gets one, so the first review's transcript has a place to land", () => {
     const repo = fixtureRepo();
-    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
-    fixtureDirs.push(home);
+    const home = temp.dir("run-review-codex-home-");
     const homeReport = join(binDir, "home-report-sessions-fresh");
     const r = run(
       ["codex", promptFile],
@@ -960,8 +953,7 @@ describe("run-review.mts", () => {
 
   test("a token refresh codex writes into the scratch auth.json goes back to the user's home; the config does not", () => {
     const repo = fixtureRepo();
-    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
-    fixtureDirs.push(home);
+    const home = temp.dir("run-review-codex-home-");
     writeFileSync(join(home, "config.toml"), 'model = "example"\n');
     writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
     const homeReport = join(binDir, "home-report-refresh");
@@ -984,8 +976,7 @@ describe("run-review.mts", () => {
 
   test("a parallel review's refresh of the user's auth.json is not rolled back by a review whose scratch copy never changed", () => {
     const repo = fixtureRepo();
-    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
-    fixtureDirs.push(home);
+    const home = temp.dir("run-review-codex-home-");
     writeFileSync(join(home, "config.toml"), 'model = "example"\n');
     writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
     const homeReport = join(binDir, "home-report-parallel");
@@ -1009,8 +1000,7 @@ describe("run-review.mts", () => {
 
   test("a scratch refresh is not returned over credentials another review changed meanwhile; the run warns instead", () => {
     const repo = fixtureRepo();
-    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
-    fixtureDirs.push(home);
+    const home = temp.dir("run-review-codex-home-");
     writeFileSync(join(home, "config.toml"), 'model = "example"\n');
     writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
     const homeReport = join(binDir, "home-report-conflict");
@@ -1036,15 +1026,13 @@ describe("run-review.mts", () => {
     "a credentials file the launcher cannot read fails the review cleanly, copy and scratch home removed",
     () => {
       const repo = fixtureRepo();
-      const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
-      fixtureDirs.push(home);
+      const home = temp.dir("run-review-codex-home-");
       writeFileSync(join(home, "config.toml"), 'model = "example"\n');
       writeFileSync(join(home, "auth.json"), "{}\n");
       chmodSync(join(home, "auth.json"), 0o000);
       // A foreground spawn failure removes its whole scratch dir, so the proof of cleanup is an
       // empty private TMPDIR afterwards (shared tmp would show other sessions' reviews).
-      const privateTmp = mkdtempSync(join(tmpdir(), "run-review-cleanup-"));
-      fixtureDirs.push(privateTmp);
+      const privateTmp = temp.dir("run-review-cleanup-");
       const scratchDirs = () =>
         new Set(readdirSync(privateTmp).filter((name) => name.startsWith("rubber-duck-")));
       const before = scratchDirs();
@@ -1065,8 +1053,7 @@ describe("run-review.mts", () => {
 
   test("read-only mode leaves CODEX_HOME alone", () => {
     const repo = fixtureRepo();
-    const home = mkdtempSync(join(tmpdir(), "run-review-codex-home-"));
-    fixtureDirs.push(home);
+    const home = temp.dir("run-review-codex-home-");
     const homeReport = join(binDir, "home-report-readonly");
     const r = run(
       ["codex", promptFile],
@@ -1088,8 +1075,7 @@ describe("run-review.mts", () => {
   });
 
   test("codex whose sandbox cannot start, outside a git repository, is a usage error: exit 2", () => {
-    const bare = mkdtempSync(join(tmpdir(), "run-review-norepo-"));
-    fixtureDirs.push(bare);
+    const bare = temp.dir("run-review-norepo-");
     const r = run(["codex", promptFile], { STUB_SANDBOX: "bwrap" }, undefined, bare);
     expectFailure(r, {
       code: 2,
@@ -1118,8 +1104,7 @@ describe("run-review.mts", () => {
   });
 
   test("a launch record naming an unknown sandbox is a usage error: exit 2", () => {
-    const dir = mkdtempSync(join(tmpdir(), "run-review-sandbox-"));
-    fixtureDirs.push(dir);
+    const dir = temp.dir("run-review-sandbox-");
     writeFileSync(join(dir, "review.jsonl"), COMPLETE_CODEX_STREAM);
     writeFileSync(
       join(dir, "review.status"),
@@ -1215,7 +1200,7 @@ describe("run-review.mts", () => {
     // Without this pin scratch dirs accumulate forever, or a purge that reaches
     // by name instead of age removes another session's in-flight review, or
     // follows a symlink out of tmp.
-    const privateTmp = mkdtempSync(join(tmpdir(), "run-review-purge-"));
+    const privateTmp = temp.dir("run-review-purge-");
     const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
     const makeDir = (name: string, stale: boolean): string => {
       const dir = join(privateTmp, name);
@@ -1224,57 +1209,51 @@ describe("run-review.mts", () => {
       if (stale) utimesSync(dir, dayAgo, dayAgo);
       return dir;
     };
-    try {
-      const staleCapture = makeDir("rubber-duck-stale", true);
-      const stalePrompt = makeDir("rubber-duck-prompt-stale", true);
-      const fresh = makeDir("rubber-duck-fresh", false);
-      const unrelated = makeDir("other-tool-stale", true);
-      const linkTarget = makeDir("not-rubber-duck-target", true);
-      const link = join(privateTmp, "rubber-duck-link");
-      symlinkSync(linkTarget, link);
-      const staleFile = join(privateTmp, "rubber-duck-file");
-      writeFileSync(staleFile, "");
-      utimesSync(staleFile, dayAgo, dayAgo);
+    const staleCapture = makeDir("rubber-duck-stale", true);
+    const stalePrompt = makeDir("rubber-duck-prompt-stale", true);
+    const fresh = makeDir("rubber-duck-fresh", false);
+    const unrelated = makeDir("other-tool-stale", true);
+    const linkTarget = makeDir("not-rubber-duck-target", true);
+    const link = join(privateTmp, "rubber-duck-link");
+    symlinkSync(linkTarget, link);
+    const staleFile = join(privateTmp, "rubber-duck-file");
+    writeFileSync(staleFile, "");
+    utimesSync(staleFile, dayAgo, dayAgo);
 
-      const prepared = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
-      expect(prepared.code).toBe(0);
-      expect(prepared.stderr).toBe("");
-      expect(dirname(prepared.stdout.trimEnd())).toStartWith(
-        join(privateTmp, "rubber-duck-prompt-"),
-      );
-      expect(existsSync(staleCapture)).toBe(false);
-      expect(existsSync(stalePrompt)).toBe(false);
-      for (const kept of [fresh, unrelated, linkTarget, link, staleFile]) {
-        expect(existsSync(kept), kept).toBe(true);
+    const prepared = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
+    expect(prepared.code).toBe(0);
+    expect(prepared.stderr).toBe("");
+    expect(dirname(prepared.stdout.trimEnd())).toStartWith(join(privateTmp, "rubber-duck-prompt-"));
+    expect(existsSync(staleCapture)).toBe(false);
+    expect(existsSync(stalePrompt)).toBe(false);
+    for (const kept of [fresh, unrelated, linkTarget, link, staleFile]) {
+      expect(existsSync(kept), kept).toBe(true);
+    }
+
+    // A launch purges too, and its own fresh capture dir survives its own purge.
+    const staleAgain = makeDir("rubber-duck-stale-again", true);
+    const launched = run(["codex", promptFile], { TMPDIR: privateTmp });
+    expect(launched.code).toBe(0);
+    expect(dirname(launched.report().capture)).toStartWith(join(privateTmp, "rubber-duck-"));
+    expect(existsSync(staleAgain)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(link)).toBe(true);
+
+    // A stale dir whose own modes refuse removal is made writable and removed, silently.
+    if (process.getuid?.() !== 0) {
+      const locked = makeDir("rubber-duck-locked", false);
+      writeFileSync(join(locked, "pinned"), "");
+      chmodSync(locked, 0o555);
+      utimesSync(locked, dayAgo, dayAgo);
+      try {
+        const r = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
+        expect(r.code).toBe(0);
+        expect(r.stdout).toStartWith(join(privateTmp, "rubber-duck-prompt-"));
+        expect(r.stderr).toBe("");
+        expect(existsSync(locked)).toBe(false);
+      } finally {
+        if (existsSync(locked)) chmodSync(locked, 0o755);
       }
-
-      // A launch purges too, and its own fresh capture dir survives its own purge.
-      const staleAgain = makeDir("rubber-duck-stale-again", true);
-      const launched = run(["codex", promptFile], { TMPDIR: privateTmp });
-      expect(launched.code).toBe(0);
-      expect(dirname(launched.report().capture)).toStartWith(join(privateTmp, "rubber-duck-"));
-      expect(existsSync(staleAgain)).toBe(false);
-      expect(existsSync(fresh)).toBe(true);
-      expect(existsSync(link)).toBe(true);
-
-      // A stale dir whose own modes refuse removal is made writable and removed, silently.
-      if (process.getuid?.() !== 0) {
-        const locked = makeDir("rubber-duck-locked", false);
-        writeFileSync(join(locked, "pinned"), "");
-        chmodSync(locked, 0o555);
-        utimesSync(locked, dayAgo, dayAgo);
-        try {
-          const r = run(["prepare", "purge-probe"], { TMPDIR: privateTmp });
-          expect(r.code).toBe(0);
-          expect(r.stdout).toStartWith(join(privateTmp, "rubber-duck-prompt-"));
-          expect(r.stderr).toBe("");
-          expect(existsSync(locked)).toBe(false);
-        } finally {
-          if (existsSync(locked)) chmodSync(locked, 0o755);
-        }
-      }
-    } finally {
-      rmSync(privateTmp, { recursive: true, force: true });
     }
   });
 
@@ -1287,8 +1266,7 @@ describe("run-review.mts", () => {
     mkdirSync(nested);
     writeFileSync(join(nested, "prompt.md"), PROMPT);
     // Right prefix, hand-made: no marker.
-    const handMade = mkdtempSync(join(tmpdir(), "rubber-duck-prompt-"));
-    mintedDirs.push(handMade);
+    const handMade = temp.dir("rubber-duck-prompt-");
     writeFileSync(join(handMade, "prompt.md"), PROMPT);
     // A symlink inside a minted dir that points at a shared file elsewhere.
     const linked = join(dirname(promptFile), "linked.md");
@@ -1319,8 +1297,7 @@ describe("run-review.mts", () => {
     // --capture must not be a side door around the minted-prompt guard.
     const predictable = join(binDir, "capture-prompt.txt");
     writeFileSync(predictable, PROMPT);
-    const scratch = mkdtempSync(join(tmpdir(), "rubber-duck-"));
-    mintedDirs.push(scratch);
+    const scratch = temp.dir("rubber-duck-");
     const snapshot = join(scratch, "prompt.txt");
     writeFileSync(snapshot, PROMPT);
     const refused = { code: 2, stderr: "--capture is internal to --background" } as const;
@@ -1385,7 +1362,6 @@ describe("run-review.mts", () => {
       } else {
         expect(stdout, status).toBe("");
       }
-      rmSync(dirname(outputFile), { recursive: true, force: true });
     }
   }, 30000);
 
@@ -1404,7 +1380,6 @@ describe("run-review.mts", () => {
           `^review FAILED - relaunch \\(--wait timed out: no exit status recorded beside ${file} after \\d+ s${kept}\\)\\n$`,
         ),
       );
-      rmSync(dirname(outputFile), { recursive: true, force: true });
     }
   }, 15000);
 
@@ -1412,7 +1387,7 @@ describe("run-review.mts", () => {
     // The launch writes the record before printing the output-file line, so
     // no record on the first read is a wrong path: it must not poll for an hour.
     const missingDir = join(tmpdir(), `run-review-missing-${process.pid}`, "review.jsonl");
-    const bareDir = mkdtempSync(join(tmpdir(), "run-review-bare-"));
+    const bareDir = temp.dir("run-review-bare-");
     writeFileSync(join(bareDir, "review.jsonl"), COMPLETE_CODEX_STREAM);
     const codexCapture = pendingCapture();
     const noRecord = "no launch record beside";
@@ -1432,8 +1407,6 @@ describe("run-review.mts", () => {
       expect(Date.now() - started, id).toBeLessThan(1900);
       expectFailure(r, { code: 2, stderr: message }, id);
     }
-    rmSync(bareDir, { recursive: true, force: true });
-    rmSync(dirname(codexCapture), { recursive: true, force: true });
   });
 
   test("--wait and --timeout outside --extract --wait, or a bad timeout, are usage errors: exit 2", () => {
@@ -1468,7 +1441,6 @@ describe("run-review.mts", () => {
     ] as const) {
       expectFailure(run([...args]), { code: 2, stderr: message }, id);
     }
-    rmSync(dirname(outputFile), { recursive: true, force: true });
   });
 
   test("--extract fails a background run whose reviewer exited non-zero", () => {
@@ -1511,7 +1483,7 @@ describe("run-review.mts", () => {
       { id: "nothing created yet", stream: false },
     ];
     for (const { id, stream } of cases) {
-      const earlyDir = mkdtempSync(join(tmpdir(), "run-review-early-"));
+      const earlyDir = temp.dir("run-review-early-");
       const outputFile = join(earlyDir, "review.jsonl");
       if (stream) {
         writeFileSync(
@@ -1521,7 +1493,6 @@ describe("run-review.mts", () => {
       }
       const extracted = run(["codex", "--extract", outputFile]);
       expectFailure(extracted, { code: 1, stderr: "no exit status recorded" }, id);
-      rmSync(earlyDir, { recursive: true, force: true });
     }
   });
 
@@ -1547,7 +1518,7 @@ describe("run-review.mts", () => {
   });
 
   test("--extract on a launch-time record without a status yet exits 1", () => {
-    const pendingDir = mkdtempSync(join(tmpdir(), "run-review-launched-"));
+    const pendingDir = temp.dir("run-review-launched-");
     const outputFile = join(pendingDir, "review.jsonl");
     writeFileSync(
       outputFile,
@@ -1557,11 +1528,10 @@ describe("run-review.mts", () => {
     const extracted = run(["codex", "--extract", outputFile]);
     expect(extracted.code).toBe(1);
     expect(extracted.stderr).toContain("no exit status recorded");
-    rmSync(pendingDir, { recursive: true, force: true });
   });
 
   test("--extract on a corrupt or non-string-status record is a usage error: exit 2", () => {
-    const corruptDir = mkdtempSync(join(tmpdir(), "run-review-corrupt-"));
+    const corruptDir = temp.dir("run-review-corrupt-");
     const outputFile = join(corruptDir, "review.jsonl");
     writeFileSync(
       outputFile,
@@ -1574,7 +1544,6 @@ describe("run-review.mts", () => {
     writeFileSync(statusFile, '{"tool":"codex","output":"review.jsonl","status":0}');
     const extracted = run(["codex", "--extract", outputFile]);
     expectFailure(extracted, { code: 2, stderr: "non-string status" });
-    rmSync(corruptDir, { recursive: true, force: true });
   });
 });
 
@@ -1595,19 +1564,15 @@ describe("writeAllSync", () => {
   });
 
   test("with the real writeSync, a file receives the chunk byte-identically", () => {
-    const dir = mkdtempSync(join(tmpdir(), "write-all-"));
+    const dir = temp.dir("write-all-");
+    const file = join(dir, "out");
+    const fd = openSync(file, "w");
+    const chunk = Buffer.from("review body\n");
     try {
-      const file = join(dir, "out");
-      const fd = openSync(file, "w");
-      const chunk = Buffer.from("review body\n");
-      try {
-        writeAllSync(fd, chunk);
-      } finally {
-        closeSync(fd);
-      }
-      expect(readFileSync(file)).toEqual(chunk);
+      writeAllSync(fd, chunk);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      closeSync(fd);
     }
+    expect(readFileSync(file)).toEqual(chunk);
   });
 });

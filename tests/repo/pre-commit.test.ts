@@ -1,16 +1,10 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import {
-  chmodSync,
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../../scripts/lib.mts";
+import { tempDirs } from "../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // Incident class: git exports GIT_DIR and GIT_INDEX_FILE to hooks, everything `bun run check:staged`
 // spawns inherits them, and an unscrubbed fixture git flow then lands on the REAL repository
@@ -53,11 +47,9 @@ esac
 exit 0
 `;
 
-const binDir = mkdtempSync(join(tmpdir(), "pre-commit-hook-test-"));
+const binDir = temp.dir("pre-commit-hook-test-");
 writeFileSync(join(binDir, "bun"), FAKE_BUN);
 chmodSync(join(binDir, "bun"), 0o755);
-
-afterAll(() => rmSync(binDir, { recursive: true, force: true }));
 
 function git(...args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { stdout: "pipe", stderr: "pipe" });
@@ -71,7 +63,7 @@ let scenario = 0;
 // hook logic from the checkout it runs in).
 function makeCheckout(): string {
   scenario += 1;
-  const dir = mkdtempSync(join(binDir, `repo-${scenario}-`));
+  const dir = temp.dir(`pre-commit-repo-${scenario}-`);
   git("init", "-q", "-b", "main", dir);
   git("-C", dir, "commit", "-q", "--allow-empty", "-m", "initial");
   mkdirSync(join(dir, ".githooks"));
@@ -103,7 +95,7 @@ function runHook(entry: string[], cwd: string, env: Record<string, string>) {
 
 describe("pre-commit dispatcher", () => {
   test("a checkout without hook logic fails the commit instead of skipping silently", () => {
-    const dir = mkdtempSync(join(binDir, "no-logic-"));
+    const dir = temp.dir("pre-commit-no-logic-");
     git("init", "-q", "-b", "main", dir);
     const r = runHook(["/bin/sh", DISPATCHER], dir, {});
     expect(r.code).toBe(1);
@@ -156,7 +148,7 @@ describe("pre-commit hook logic", () => {
   });
 
   test("running outside a repository root refuses instead of checking the wrong tree", () => {
-    const notARepo = mkdtempSync(join(binDir, "not-a-repo-"));
+    const notARepo = temp.dir("pre-commit-not-a-repo-");
     const r = runHook([process.execPath, HOOK], notARepo, {});
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("not a repository root");

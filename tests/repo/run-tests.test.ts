@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { lstatSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ROOT } from "../../scripts/lib.mts";
+import { tempDirs } from "../helpers/temp-dirs";
+
+const temp = tempDirs();
 
 // The launcher's zero-test guard: an invocation that runs zero tests must
 // fail HOWEVER it was reached. bun test itself exits 0 with "Ran 0 tests"
@@ -69,40 +72,36 @@ describe("run-tests zero-test guard", () => {
   test("fixture temp dirs live in the launcher's scratch and die with the run", () => {
     // A test that leaks a fixture without cleaning up, exactly like a leaky
     // suite would, and reports where it landed.
-    const dir = mkdtempSync(join(tmpdir(), "launcher-tmpdir-probe-"));
-    try {
-      const probe = join(dir, "probe.test.ts");
-      writeFileSync(
-        probe,
-        [
-          'import { test } from "bun:test";',
-          'import { mkdtempSync, realpathSync } from "node:fs";',
-          'import { tmpdir } from "node:os";',
-          'import { join } from "node:path";',
-          "// realpath throughout: process.cwd() is symlink-resolved (macOS /private/tmp).",
-          'test("leak", () => {',
-          '  console.error("TMPDIR=" + realpathSync(tmpdir()));',
-          '  console.error("CWD=" + process.cwd());',
-          '  console.error("FIXTURE=" + realpathSync(mkdtempSync(join(tmpdir(), "leaked-"))));',
-          "});",
-          "",
-        ].join("\n"),
-      );
-      const r = run(probe);
-      expect(r.code).toBe(0);
-      const seen = Object.fromEntries(
-        [...r.stderr.matchAll(/^(TMPDIR|CWD|FIXTURE)=(.+)$/gm)].map((m) => [m[1], m[2]]),
-      );
-      expect(Object.keys(seen).sort()).toEqual(["CWD", "FIXTURE", "TMPDIR"]);
-      // The run got its own temp dir, the cwd sits one level below it (the
-      // git ceiling), the fixture landed in it, and all of it is gone.
-      expect(seen.TMPDIR).not.toBe(realpathSync(tmpdir()));
-      expect(dirname(seen.CWD as string)).toBe(seen.TMPDIR);
-      expect(dirname(seen.FIXTURE as string)).toBe(seen.TMPDIR);
-      expect(() => lstatSync(seen.TMPDIR as string)).toThrow(/ENOENT/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const dir = temp.dir("launcher-tmpdir-probe-");
+    const probe = join(dir, "probe.test.ts");
+    writeFileSync(
+      probe,
+      [
+        'import { test } from "bun:test";',
+        'import { mkdtempSync, realpathSync } from "node:fs";',
+        'import { tmpdir } from "node:os";',
+        'import { join } from "node:path";',
+        "// realpath throughout: process.cwd() is symlink-resolved (macOS /private/tmp).",
+        'test("leak", () => {',
+        '  console.error("TMPDIR=" + realpathSync(tmpdir()));',
+        '  console.error("CWD=" + process.cwd());',
+        '  console.error("FIXTURE=" + realpathSync(mkdtempSync(join(tmpdir(), "leaked-"))));',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const r = run(probe);
+    expect(r.code).toBe(0);
+    const seen = Object.fromEntries(
+      [...r.stderr.matchAll(/^(TMPDIR|CWD|FIXTURE)=(.+)$/gm)].map((m) => [m[1], m[2]]),
+    );
+    expect(Object.keys(seen).sort()).toEqual(["CWD", "FIXTURE", "TMPDIR"]);
+    // The run got its own temp dir, the cwd sits one level below it (the
+    // git ceiling), the fixture landed in it, and all of it is gone.
+    expect(seen.TMPDIR).not.toBe(realpathSync(tmpdir()));
+    expect(dirname(seen.CWD as string)).toBe(seen.TMPDIR);
+    expect(dirname(seen.FIXTURE as string)).toBe(seen.TMPDIR);
+    expect(() => lstatSync(seen.TMPDIR as string)).toThrow(/ENOENT/);
   });
 
   test("a forced-color summary still counts: ANSI codes cannot hide a real run", () => {

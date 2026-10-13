@@ -110,7 +110,7 @@ For every form:
 
 - **One fact per line, one sentence per line.** A line that needs a second sentence is two facts.
 - **Guard and refusal lists use one pattern:** `**Refused: \`--flag\`.** one-clause reason`.
-- **Files take one line,** grouped with braces: `scripts/{sweep.mts,probe.mts}`, `tests/sweep-script.test.ts`.
+- **Files take one line,** grouped with braces: `scripts/{sweep.mts,probe.mts}`, `tests/skills/orchestrator-mode/sweep.test.ts`.
 - **No round numbers, no process narrative.** "Copilot round four" and "codex round two" name the session, not the change. The fact stays; the round it came from goes.
 - **Nothing part one already says.** A details section that restates `## How` doubled the body for no reader.
 

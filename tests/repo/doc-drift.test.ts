@@ -522,6 +522,14 @@ const SURFACES: Record<string, Surface> = {
         doc: { text: "(add --execute)", occurrences: 2 },
         script: { text: "(add --execute)", occurrences: 2 },
       },
+      { doc: "| 2 | usage error", script: "const EXIT_USAGE = 2;" },
+      { doc: "| 2 | usage error", script: "exitWith(EXIT_USAGE," },
+    ],
+  },
+  "worktree-hygiene/SKILL.md <-> retire/judge.mts": {
+    docPath: join(WORKTREE_HYGIENE, "SKILL.md"),
+    scriptPath: join(WORKTREE_HYGIENE, "scripts", "retire", "judge.mts"),
+    tokens: [
       {
         doc: { text: "[landed] by three-way merge", occurrences: 2 },
         // biome-ignore lint/suspicious/noTemplateCurlyInString: pins the template-shaped source fragment
@@ -534,8 +542,12 @@ const SURFACES: Record<string, Surface> = {
       },
       { doc: "| 1 | a gate REFUSED on the evidence", script: "const EXIT_REFUSED = 1;" },
       { doc: "| 1 | a gate REFUSED on the evidence", script: "exitWith(EXIT_REFUSED," },
-      { doc: "| 2 | usage error", script: "const EXIT_USAGE = 2;" },
-      { doc: "| 2 | usage error", script: "exitWith(EXIT_USAGE," },
+    ],
+  },
+  "worktree-hygiene/SKILL.md <-> retire/read.mts": {
+    docPath: join(WORKTREE_HYGIENE, "SKILL.md"),
+    scriptPath: join(WORKTREE_HYGIENE, "scripts", "retire", "read.mts"),
+    tokens: [
       { doc: "| 3 | BROKEN measurement", script: "const EXIT_BROKEN = 3;" },
       { doc: "| 3 | BROKEN measurement", script: "exitWith(EXIT_BROKEN," },
     ],
