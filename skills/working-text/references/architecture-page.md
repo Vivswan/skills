@@ -1,6 +1,6 @@
 # The Architecture Page
 
-The page kind with the most to rot: one layering declaration, two readers, one page whose every box names real code. The declaration cannot rot because a lint fails in both directions. The page cannot rot because a test checks every path, symbol, and demonstration link it names.
+The page kind with the most to rot: one layering declaration, the lint and the renderer that read it, one page whose every box names real code. The declaration cannot rot because a lint fails in both directions. The page cannot rot because a test checks every path, symbol, and demonstration link it names.
 
 ## The specimen
 
@@ -51,12 +51,17 @@ The page header says what the checks prove: existence only. A caption-only box (
 
 ## The recipe
 
-The three scripts ship with the `/working-text` skill. Copy `scripts/` and `package.json` into a folder of the repository's own, so its check command runs without the skill installed; `<scripts-dir>` below is that folder's `scripts/`. On first run each script bundles itself with its dependencies into a `.build` folder beside `scripts/`; add `.build/` to the repository's `.gitignore`.
+The three commands ship with the `/working-text` skill under `scripts/architecture/`, beside the readers they share. Copy that folder and `package.json` into a folder of the repository's own, so its check command runs without the skill installed; `<scripts-dir>` below is the copied `scripts/architecture/`.
+
+The output prefixes keep the old command names: `arch-lint:`, `render-architecture-map:`, `check-architecture-page:`.
 
 ```bash
-mkdir -p <tools-dir>/working-text
-cp -r "<skill-dir>"/{scripts,package.json} <tools-dir>/working-text/
+mkdir -p <tools-dir>/working-text/scripts
+cp -r "<skill-dir>/scripts/architecture" <tools-dir>/working-text/scripts/
+cp "<skill-dir>/package.json" <tools-dir>/working-text/
 ```
+
+The copy keeps `scripts/` between the folder and `architecture/`: on first run each command bundles itself with its dependencies into a `.build` folder beside the `scripts/` that has `package.json` next to it. Add `.build/` to the repository's `.gitignore`.
 
 The commands below use `<docs>/architecture.md` for the page. Put it wherever the repository keeps its pages.
 
@@ -71,7 +76,7 @@ A repository whose `tsc` includes the copied scripts also adds the pins of the c
 - Run the lint and fix until it prints the match line:
 
 ```bash
-bun <scripts-dir>/arch-lint.mts --root .            # exit 0: arch-lint: imports under src match architecture.yml
+bun <scripts-dir>/lint.mts --root .            # exit 0: arch-lint: imports under src match architecture.yml
 ```
 
 | Message | What to do |
@@ -90,13 +95,13 @@ Put this under the page's last heading. The markers stay, the body is the script
 
 Each node is one layer, labelled with the paths it owns; an arrow means the layer imports the other. Rendered from `architecture.yml`; the lint keeps that declaration equal to the import graph.
 
-<!-- BEGIN GENERATED: architecture-map (bun render-architecture-map.mts; derived from architecture.yml) -->
+<!-- BEGIN GENERATED: architecture-map (bun render-map.mts; derived from architecture.yml) -->
 <!-- END GENERATED: architecture-map -->
 ```
 
 ```bash
-bun <scripts-dir>/render-architecture-map.mts --page <docs>/architecture.md          # writes the fence
-bun <scripts-dir>/render-architecture-map.mts --page <docs>/architecture.md --check  # exit 1 on drift, for CI
+bun <scripts-dir>/render-map.mts --page <docs>/architecture.md          # writes the fence
+bun <scripts-dir>/render-map.mts --page <docs>/architecture.md --check  # exit 1 on drift, for CI
 ```
 
 ### 3. Author the concept diagrams, box by box, against real symbols
@@ -117,7 +122,7 @@ One hand-authored mermaid flowchart per concept, above the module map. Rules per
 Run the check with the diagram count pinned, where `<n>` is the number of concept diagrams on the page. The count changes only when a diagram is added or removed on purpose:
 
 ```bash
-bun <scripts-dir>/check-architecture-page.mts --page <docs>/architecture.md \
+bun <scripts-dir>/check-page.mts --page <docs>/architecture.md \
   --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams <n>
 # exit 0: check-architecture-page: <docs>/architecture.md names real code (concept diagrams: <n>)
 ```
@@ -134,15 +139,15 @@ Repositories that already have a bun test suite can import the same functions in
 
 ### 5. Wire the gates
 
-Both readers and the page check run inside the repository's check command and, where the repository publishes a docs site, the page is part of it. The entries, shown for a `package.json`:
+The lint, the renderer, and the page check run inside the repository's check command and, where the repository publishes a docs site, the page is part of it. The entries, shown for a `package.json`:
 
 ```json
 {
   "scripts": {
-    "lint:arch": "bun <scripts-dir>/arch-lint.mts --root .",
-    "build:docs": "bun <scripts-dir>/render-architecture-map.mts --page <docs>/architecture.md",
-    "build:check": "bun <scripts-dir>/render-architecture-map.mts --page <docs>/architecture.md --check",
-    "test:docs": "bun <scripts-dir>/check-architecture-page.mts --page <docs>/architecture.md --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams <n>"
+    "lint:arch": "bun <scripts-dir>/lint.mts --root .",
+    "build:docs": "bun <scripts-dir>/render-map.mts --page <docs>/architecture.md",
+    "build:check": "bun <scripts-dir>/render-map.mts --page <docs>/architecture.md --check",
+    "test:docs": "bun <scripts-dir>/check-page.mts --page <docs>/architecture.md --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams <n>"
   }
 }
 ```
@@ -158,8 +163,8 @@ Add `lint:arch`, `test:docs`, and `build:check` to the repository's existing che
 
 ## What a review checks
 
-- A box names a symbol its file does not export, or a path that does not exist (run `check-architecture-page.mts` rather than trusting the diff).
-- The module map shows an edge the code does not draw, or was edited by hand inside the GENERATED region (run `arch-lint.mts` and `render-architecture-map.mts --check`).
+- A box names a symbol its file does not export, or a path that does not exist (run `check-page.mts` rather than trusting the diff).
+- The module map shows an edge the code does not draw, or was edited by hand inside the GENERATED region (run `lint.mts` and `render-map.mts --check`).
 - A concept diagram has no `Demonstrated by:` line, or its link does not resolve to a test or scenario.
 - Bullets under a diagram restate the arrows instead of stating what the diagram cannot show.
 - The change moved code across layers without touching `architecture.yml`, or added an allowance no import draws.

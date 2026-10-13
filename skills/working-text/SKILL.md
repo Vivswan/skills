@@ -183,7 +183,7 @@ The page kind with the most to rot has its own recipe in `references/architectur
 - A page whose top layer (headings, figures, diagrams, captured blocks, the shape of tables, first sentences, emphasized text) does not carry the story on its own.
 - An assumption, a supplied claim, a risk, a recommendation, or an unverified reading presented as a confirmed fact.
 - A shortened page that dropped a definition, a reason, a limitation, or a next step the reader needed.
-- A path, link, symbol, or check the page names that does not exist (the probe for paths and links, `check-architecture-page.mts` for diagram boxes).
+- A path, link, symbol, or check the page names that does not exist (the probe for paths and links, `scripts/architecture/check-page.mts` for diagram boxes).
 - A reshaped page that lost a fact, added one, or dropped a heading anchor another page links to.
 - An architecture page whose module map shows an edge the code does not draw.
 - A box naming a symbol its file does not export, or a concept diagram with no `Demonstrated by:` line.
