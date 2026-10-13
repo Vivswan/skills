@@ -13,15 +13,19 @@ const FILES = new Map<string, string>([
   ],
   ["scripts/sync-xeno.mts", 'import { ROOT } from "./lib.mts";'],
   ["scripts/probe.ts", "export const probe = 1;"],
-  ["tests/repo/sync-xeno.test.ts", 'import { update } from "../../scripts/sync-xeno.mts";'],
+  // A quoted glob inside a fixture is not a declaration, nor is a reaches line below the first: only the first line selects by pattern.
+  [
+    "tests/repo/sync-xeno.test.ts",
+    'import { update } from "../../scripts/sync-xeno.mts";\nconst text = `path: "*/*"\n// reaches: **/*.md\n`;',
+  ],
   ["tests/repo/probe.test.ts", 'import { probe } from "../../scripts/probe";'],
   [
     "tests/skills/watch-github/github-events.test.ts",
     'const SCRIPT = join(ROOT, "skills", "watch-github", "scripts", "github-events.mts");',
   ],
   [
-    "tests/repo/doc-drift.test.ts",
-    'const SKILL = join(ROOT, "skills", "rubber-duck-review", "SKILL.md");',
+    "tests/repo/usage-blocks.test.ts",
+    "// reaches: **/*.md skills/*/scripts/**/*.mts\nconst pages = [];",
   ],
 ]);
 const ALL = [...FILES.keys()].filter((p) => p.endsWith(".test.ts")).sort();
@@ -37,26 +41,36 @@ describe("selectTests", () => {
     ["a launcher module no test imports selects every test", ["scripts/hermetic-git-env.mts"], ALL],
     ["the preload selects every test even when it is not in the map", ["tests/preload.ts"], ALL],
     [
-      "a skill script run by path selects the test that names it",
+      "a skill script run by path selects the test that names it, and the test whose reaches line covers scripts",
       ["skills/watch-github/scripts/github-events.mts"],
-      ["tests/skills/watch-github/github-events.test.ts"],
+      ["tests/repo/usage-blocks.test.ts", "tests/skills/watch-github/github-events.test.ts"],
     ],
     [
       "a staged test runs itself",
-      ["tests/repo/doc-drift.test.ts"],
-      ["tests/repo/doc-drift.test.ts"],
+      ["tests/repo/usage-blocks.test.ts"],
+      ["tests/repo/usage-blocks.test.ts"],
     ],
     [
       "a deleted script, absent from the map, still selects the test that names it",
       ["scripts/gone.mts", "skills/watch-github/scripts/github-events.mts"],
-      ["tests/skills/watch-github/github-events.test.ts"],
+      ["tests/repo/usage-blocks.test.ts", "tests/skills/watch-github/github-events.test.ts"],
     ],
     [
-      "a SKILL.md selects the doc pin only",
+      "a SKILL.md selects the test whose reaches line covers pages, only",
       ["skills/unslop/SKILL.md"],
-      ["tests/repo/doc-drift.test.ts"],
+      ["tests/repo/usage-blocks.test.ts"],
     ],
-    ["a stem under three characters selects nothing", ["ab.md", "x.ts"], []],
+    [
+      "a reference page selects the test whose reaches line covers pages",
+      ["skills/orchestrator-mode/references/fleet-monitor.md"],
+      ["tests/repo/usage-blocks.test.ts"],
+    ],
+    [
+      "a page selects by the reaches line, never by a glob quoted inside another test",
+      ["docs/authoring.md"],
+      ["tests/repo/usage-blocks.test.ts"],
+    ],
+    ["a stem under three characters selects nothing", ["ab.yml", "x.ts"], []],
     ["nothing staged selects nothing", [], []],
   ])("%s", (_name, staged, expected) => {
     expect(selectTests(staged, FILES)).toEqual(expected);

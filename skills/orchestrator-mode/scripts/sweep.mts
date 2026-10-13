@@ -4,20 +4,7 @@
  * and a broken sweep is a loud control line, never a quiet fleet. Processes are attributed by lsof
  * cwd, never by argv, which a shell pipeline or a wrapper can misreport.
  *
- * Usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]
- *   --base <ref>   aheadBehind against this committish (e.g. origin/develop) instead of origin's default branch
- *
- * Output lines, in order, each only when its condition holds:
- *   {"control":"FAILED","reason":...}          the sweep itself is broken
- *   {"lsof":{"ok":false,"error":...}}          process attribution is down (rows carry processes:[])
- *   {"lsof":{"ok":true,"degraded":true,...}}   lsof exited nonzero but produced records (lists may omit processes)
- *   {"defaultRef":{"ok":false,"error":...}}    origin's default branch is unresolvable (rows carry aheadBehind:null)
- *   {"baseRef":{"ok":false,"error":...}}       the --base ref is unresolvable or ambiguous (same, never a fallback)
- *   {"worktree":...,"ok":true,...}             one per worktree
- *   {"worktree":...,"ok":false,"error":...}    vanished dir, git failure, or readings that moved mid-row
- *   {"transcripts":{...}}                      only with --transcripts
- *
- * Exit: 0 sweep ran (ok:false rows included), 1 control failure, 2 usage error.
+ * The command line, the output lines, and the exit codes are USAGE below; `--help` prints it.
  */
 
 import { execFile } from "node:child_process";
@@ -692,8 +679,26 @@ function controlFailureReason(control: Record<string, unknown>): string | null {
 
 // --- main -------------------------------------------------------------------
 
+const USAGE = [
+  "usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]",
+  "  --base <ref>         aheadBehind against this committish (e.g. origin/develop) instead of origin's default branch",
+  "  --transcripts <dir>  add one liveness line over the agent-*.jsonl transcripts in the directory",
+  "prints: one JSON line each, in this order, each only when its condition holds",
+  '  {"control":"FAILED","reason":...}          the sweep itself is broken',
+  '  {"lsof":{"ok":false,"error":...}}          process attribution is down (rows carry processes:[])',
+  '  {"lsof":{"ok":true,"degraded":true,...}}   lsof exited nonzero but produced records (lists may omit processes)',
+  '  {"defaultRef":{"ok":false,"error":...}}    origin\'s default branch is unresolvable (rows carry aheadBehind:null)',
+  '  {"baseRef":{"ok":false,"error":...}}       the --base ref is unresolvable or ambiguous (same, never a fallback)',
+  '  {"worktree":...,"ok":true,...}             one per worktree: branch, headSha, aheadBehind {ahead, behind}, treeFileCount,',
+  "                                             dirtyCount, untrackedCount, newestDirtyMtime, statusHash, processes [{pid, command, state}]",
+  '  {"worktree":...,"ok":false,"error":...}    vanished dir, git failure, or readings that moved mid-row',
+  '  {"transcripts":{...}}                      only with --transcripts: mtime, sizeBytes, lastEventAgeSeconds,',
+  "                                             lastEventType per agent",
+  "exits: 0 the sweep ran (ok:false rows included); 1 control failure; 2 usage error",
+].join("\n");
+
 function usage(): number {
-  console.error("usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]");
+  console.error(USAGE);
   return 2;
 }
 
@@ -705,6 +710,10 @@ function usage(): number {
  */
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
+  if (args[0] === "--help" || args[0] === "-h") {
+    console.log(USAGE);
+    return 0;
+  }
   let repoRoot: string | null = null;
   let transcriptsDir: string | null = null;
   let baseRefArg: string | null = null;

@@ -143,6 +143,30 @@ if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 Why a bundle: bun's auto-install ignores a `package.json` pin, an inline `pkg@1.2.3` specifier fails once a second version of the package was ever fetched on the machine, and a `node_modules` in a user's project is theirs, not the skill's.
 
+## Commands and Their Usage Blocks
+
+A command is a skill script that starts with `#!/usr/bin/env bun`. Its usage block is the contract: the command line, the flags, what it prints, the exit codes. The script prints it on `--help` or `-h` as the first argument, to stdout, exit 0, and one page quotes it in a fence whose info string names the script:
+
+````markdown
+```text usage=skills/working-text/scripts/architecture/lint.mts
+usage: lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]
+  --config   the layering declaration (default: <root>/architecture.yml)
+  --root     the repository root the paths are relative to (default: cwd)
+  --mermaid  print the module map instead of linting
+exits: 0 the tree matches the declaration; 1 forbidden or stale edges; 2 usage or an unreadable graph
+```
+````
+
+`tests/repo/usage-blocks.test.ts` runs `bun <script> --help` for every command and holds the fence equal to it, trailing whitespace aside. A command with no fence, or with two, fails the same test. Other pages link to the one that carries the fence.
+
+The test's first line, `// reaches: **/*.md skills/*/scripts/**/*.mts`, declares what it reads, so the pre-commit hook runs it when a staged file matches. Any test that discovers its inputs by pattern declares them the same way.
+
+A fence that drifted is never edited by hand. Regenerate it from the repository root and paste the output:
+
+```bash
+bun skills/working-text/scripts/architecture/lint.mts --help
+```
+
 ## Compatibility Rules
 
 - `npx skills add Vivswan/skills` is the primary install path.

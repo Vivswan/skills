@@ -26,8 +26,16 @@ type PluginManifest = {
   version: string;
 };
 
+const USAGE = [
+  "usage: browser-plugin-preflight.mts [--check] [--plugin-dir <dir>]",
+  "  --check             verify only, nothing written; exit 1 on drift",
+  "  --plugin-dir <dir>  the bundled Chrome plugin directory of a non-standard install",
+  "the codex home is $CODEX_HOME or ~/.codex",
+  "exits: 0 synchronized, or verified current; 1 a missing file or a stale setting; 2 usage",
+].join("\n");
+
 function usage(): never {
-  console.error("usage: browser-plugin-preflight.mts [--check] [--plugin-dir <dir>]");
+  console.error(USAGE);
   process.exit(2);
 }
 
@@ -35,6 +43,10 @@ function usage(): never {
 let checkOnly = false;
 let pluginDirOverride: string | undefined;
 const args = process.argv.slice(2);
+if (args[0] === "--help" || args[0] === "-h") {
+  console.log(USAGE);
+  process.exit(0);
+}
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
   if (arg === "--check") checkOnly = true;

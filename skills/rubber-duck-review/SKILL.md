@@ -86,6 +86,22 @@ This skill ships `scripts/run-review.mts` (the path is relative to the installed
 - extracts the verdict and refuses one with no tool call before it. codex fills its narration into the schema too, so a turn that ends at "I will review now" is a valid-looking empty verdict. The missing reads are what expose it
 - prints one JSON report: the verdict, the tool-call count, the path of the kept capture, and a compact trajectory (one row per reviewer step) so you can see what the reviewer did without opening the stream
 
+`bun "<skill-dir>/scripts/run-review.mts" --help`:
+
+```text usage=skills/rubber-duck-review/scripts/run-review.mts
+usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt]
+       run-review.mts <codex|claude|copilot> --extract <output-file>
+       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)
+       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir>  (internal)
+       run-review.mts prepare <section>
+scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones
+codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir
+prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>
+exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);
+       1 review FAILED - relaunch: no usable verdict, whatever the cause, or --wait timed out; never a clean pass;
+       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository
+```
+
 Write the step-3 prompt to a tmp file and pass the reviewer name plus that file. Several agents (or several sections of one fan-out) review at once on one machine. A predictable name such as `/tmp/rubber-duck-prompt-<section>.md` lets one writer overwrite another's prompt before the script reads it, so the script mints the path:
 
 - `prepare <section>` creates a private directory with `mkdtemp` (atomic, so two callers can never receive the same one), leaves its marker there, and prints the section's prompt file inside it.
@@ -128,11 +144,8 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - Killing that PID cancels the review (the signal is forwarded to the reviewer).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line; the codex copy mode adds its notice first). Silence in between is normal. A real review can take a while.
 - Runtime: `bun`. `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
-- Exit codes:
-  - 0: verdict extracted and printed to stdout as the JSON report, or a `--background` launch started (that run's verdict comes later, via `--extract`).
-  - 1: `review FAILED - relaunch`.
-  - 2: usage error, reviewer binary not found, or codex's sandbox unavailable outside a git repository.
-- The shipped script and these citations (the reviewer invocations, the flags, the exit codes, the failure verdict) are kept in sync upstream. Where they disagree, trust the script and report the drift.
+- Exit codes: the `exits:` lines of the usage block above. Step 5 says what to do on each.
+- The shipped script and these citations (the reviewer invocations, the flags, the failure verdict) are kept in sync upstream, and the usage block is held equal to the script by a test there. Where they disagree, trust the script and report the drift.
 
 ### 5. Act on the printed verdict
 

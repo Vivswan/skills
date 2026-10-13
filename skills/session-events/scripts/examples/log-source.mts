@@ -14,6 +14,7 @@ type File = { path: string; size: number | null };
 runEvents<File>({
   name: "log-events",
   interval: 5,
+  usage: ["targets: the absolute path of a file; an event when its size changes or it disappears"],
   parseTarget([path, ...rest]) {
     if (path === undefined || !path.startsWith("/"))
       throw new UsageError("watch needs an absolute path");

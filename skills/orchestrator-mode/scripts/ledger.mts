@@ -5,11 +5,8 @@
  * agent context loss. A duplicate standing flag is refused by construction,
  * dormancy is a lookup, and retraction is a recorded transition.
  *
- * Run with bun. Zero npm dependencies; node builtins only.
- *
- * Usage: ledger.mts <file> <command> [args...]
- * Every command prints a JSON result to stdout.
- * Exit codes: 0 ok, 1 refused / not found / corrupt ledger, 2 usage.
+ * Run with bun. Zero npm dependencies; node builtins only. The commands and the exit codes are
+ * USAGE below; `--help` prints it.
  *
  * Concurrency contract: mutating commands (state, flag, retract, grant) hold
  * an exclusive lockfile (<file>.lock, atomic create-if-absent) across their
@@ -65,7 +62,7 @@ interface Ledger {
   flags: FlagEntry[];
 }
 
-const USAGE = `usage: ledger <file> <command> [args...]
+const USAGE = `usage: ledger.mts <file> <command> [args...]
 commands:
   init                                create an empty ledger (never clobbers an existing one)
   state <worker> <state>              set standing state; states: ${WORKER_STATES.join(", ")}
@@ -73,6 +70,8 @@ commands:
   retract <flag-hash-prefix>          mark a flag retracted (unique prefix match)
   grant <worker> <wording> <glob...>  record a territory grant with its exact wording
   show [worker]                       print the whole ledger, or one worker
+prints: one JSON result per command; mutations (state, flag, retract, grant) hold the <file>.lock lockfile
+exits: 0 ok; 1 refused, not found, or a corrupt ledger; 2 usage
 `;
 
 function emit(exitCode: number, result: unknown): never {
@@ -471,6 +470,10 @@ function workerEntry(ledger: Ledger, worker: string): WorkerEntry {
 }
 
 const [, , file, command, ...rest] = process.argv;
+if (file === "--help" || file === "-h") {
+  process.stdout.write(USAGE);
+  process.exit(0);
+}
 if (!file || !command) {
   usageError("missing <file> or <command>");
 }

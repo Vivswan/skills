@@ -8,12 +8,7 @@
  * copies compared byte for byte and rendered as a unified diff, so every
  * change is a visible diff instead of a bare count.
  *
- * Usage:
- *   baseline pin <baseline-dir> <tree-root> <file...>
- *   baseline check <baseline-dir> <tree-root>
- *
- * stdout: one JSON summary object. stderr: human-readable findings + diffs.
- * Exit 0 = clean, 1 = drift found or ok:false, 2 = usage error.
+ * The commands, the output streams, and the exit codes are USAGE below; `--help` prints it.
  *
  * Baseline layout: <baseline-dir>/manifest.json plus exact copies under
  * <baseline-dir>/content/<relative-path>, so a pinned file named
@@ -35,6 +30,24 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+
+const USAGE = [
+  "usage: baseline.mts pin <baseline-dir> <tree-root> <file...>",
+  "       baseline.mts check <baseline-dir> <tree-root>",
+  "  pin    copy the exact current content of each file (paths relative to tree-root) into baseline-dir, keeping",
+  "         the relative paths, and write a manifest.json listing the pinned set; if anything fails, the previous",
+  "         baseline is left untouched and every file is reported as pinned or not",
+  "  check  compare every manifest entry against the tree byte for byte; per file: identical | drifted (with the",
+  "         unified diff) | missing-in-tree | missing-baseline",
+  "prints: one JSON summary object on stdout; findings and unified diffs on stderr",
+  "exits: 0 clean; 1 drift found or ok:false; 2 usage error",
+].join("\n");
+
+// Above the self-build: a cold install with no network still answers --help.
+if (import.meta.main && (process.argv[2] === "--help" || process.argv[2] === "-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -106,20 +119,6 @@ const CONTENT_DIR = "content";
 // bound a regenerated large file stalls the check for minutes. Past it the finding stays drifted and
 // says the diff was abandoned.
 const DIFF_TIMEOUT_MS = 10_000;
-
-const USAGE = [
-  "usage:",
-  "  baseline pin <baseline-dir> <tree-root> <file...>",
-  "      Copy the exact current content of each file (paths relative to",
-  "      tree-root) into baseline-dir, preserving relative paths, and write",
-  "      a manifest.json listing the pinned set. If anything fails, the",
-  "      previous baseline is left untouched and every file is reported as",
-  "      pinned or not.",
-  "  baseline check <baseline-dir> <tree-root>",
-  "      Compare every manifest entry against the tree byte for byte.",
-  "      Reports per file: identical | drifted (with the unified diff)",
-  "      | missing-in-tree | missing-baseline. Exits 1 unless all identical.",
-].join("\n");
 
 /** CLI misuse (bad subcommand, arity, or file argument). Rendered as exit 2. */
 class UsageError extends Error {}

@@ -95,13 +95,26 @@ bun "<skill-dir>/scripts/retire-branch.mts" --branch feature/thing --execute
 | 2 | usage error | fix the invocation |
 | 3 | BROKEN measurement: a ref that does not resolve, a git failure, a probe that could not run, a shallow clone | the question was never answered; never retry with the gate removed |
 
-Flags:
+`bun "<skill-dir>/scripts/retire-branch.mts" --help`:
 
-```bash
---mainline develop --remote upstream --repo-root /path/to/repo
---original-tip 7c31f0e   # a branch rebased before landing: prove the OLD tip landed too
---no-writer-check        # a host where lsof cannot answer; the run says so out loud
+```text usage=skills/worktree-hygiene/scripts/retire-branch.mts
+usage: retire-branch.mts --branch <name> [options]
+
+  --branch <name>       the branch to retire (required)
+  --repo-root <path>    repository to operate in (default: cwd)
+  --remote <name>       remote to fetch the mainline from (default: origin)
+  --mainline <name>     branch the work must have landed on (default: main)
+  --original-tip <sha>  pre-rebase tip to also prove landed
+  --no-writer-check     skip the lsof live-writer probe (hosts without a usable lsof)
+  --execute             actually remove the worktree and delete the branch
+
+prints: one [gate] line per step; without --execute the destructive steps read 'would ... (add --execute)' and
+        the run ends 'REHEARSED: every gate passed for <branch>; nothing was destroyed'
+exits: 0 every requested step passed; 1 a gate refused on the evidence;
+       2 usage error; 3 broken measurement (the question was never answered)
 ```
+
+`--original-tip` is for a branch rebased before it landed: the OLD tip must prove landed too. `--no-writer-check` is for a host where lsof cannot answer, and the run says so out loud.
 
 A squash or rebase merge leaves the branch's shas off the mainline, so ancestry refuses. The script merges the branch into the tip (`git merge-tree --write-tree`, git 2.38+): the tip's tree back means the branch carries nothing the mainline lacks, a later mainline edit of the same file included. It prints which gate cleared it: `[landed] by ancestry` or `[landed] by three-way merge`. Why each gate exists: `references/retire-branch.md`.
 

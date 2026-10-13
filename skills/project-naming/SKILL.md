@@ -87,9 +87,20 @@ The rejection round (step 7) sits between runs: rewrite the brief, rerun only th
 ### 4. Machine check
 
 ```bash
-bun "<skill-dir>/scripts/check-name.mts" <name> <name> ...        # domains default to com, ai, dev; --domain <tld> replaces that list
-bun "<skill-dir>/scripts/check-name.mts" --list-registries        # the live column table: id, label, taken control, gate
-bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,docker,hf,github-user,dns-com,dns-ai <name>   # the brief's claims except github-repo; the four gate columns run regardless
+bun "<skill-dir>/scripts/check-name.mts" <name> <name> ...
+bun "<skill-dir>/scripts/check-name.mts" --registries pypi,npm,docker,hf,github-user,dns-com,dns-ai <name>   # the brief's claims except github-repo
+```
+
+```text usage=skills/project-naming/scripts/check-name.mts
+usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--no-arxiv] [--json] <name>...
+       check-name.mts --list-registries
+  --domain <tld>          a DNS column per zone (default: com, ai, dev; the list replaces the default)
+  --registries <id,...>   the availability columns to run; the gate columns run on every name regardless
+  --no-arxiv              skip the arXiv column (one request every three seconds)
+  --json                  one JSON object, rows and failures, instead of the table
+  --list-registries       the live column table: id, label, taken control, gate
+exits: 0 every row printed and every control answered as expected;
+       1 a control answered wrongly: the named columns are not evidence; 2 usage error
 ```
 
 One row per name, one column per registry; the registries live in one table in `scripts/columns/registries/table.mts`, and `--list-registries` prints it. Every cell reads `free`, `taken(<why>)`, or `unknown(<why>)`, except the `say` column's `note(<reading>)`:

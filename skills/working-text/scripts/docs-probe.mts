@@ -20,6 +20,24 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import type { List, Nodes, RootContent } from "mdast";
 import type { Position } from "unist";
 
+// The bundle in .build/ is <name>.js built from <name>.mts; a vendored copy under another name prints that name,
+// an importer never its own.
+const SELF = basename(import.meta.path).replace(/\.js$/, ".mts");
+const USAGE = [
+  `usage: ${SELF} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
+  "  --root        the repository root paths resolve against (default: cwd)",
+  "  --base        a directory under the root that paths also resolve against (repeatable)",
+  "  --max-words   the cap on a paragraph or list item (default: 70)",
+  "  --shape-only  word counts only; skip the check that named paths exist",
+  "exits: 0 every page is clean; 1 findings, one per line as page:line: message; 2 usage or an unreadable page",
+].join("\n");
+
+// Above the self-build: a cold install with no network still answers --help.
+if (import.meta.main && (process.argv[2] === "--help" || process.argv[2] === "-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
 
@@ -321,18 +339,6 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
   }
   return findings.sort((a, b) => a.line - b.line);
 }
-
-// The bundle in .build/ is <name>.js built from <name>.mts; a vendored copy under another name prints that name,
-// an importer never its own.
-const SELF = basename(import.meta.path).replace(/\.js$/, ".mts");
-const USAGE = [
-  `usage: ${SELF} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
-  "  --root        the repository root paths resolve against (default: cwd)",
-  "  --base        a directory under the root that paths also resolve against (repeatable)",
-  "  --max-words   the cap on a paragraph or list item (default: 70)",
-  "  --shape-only  word counts only; skip the check that named paths exist",
-  "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
-].join("\n");
 
 interface CliOptions {
   readonly root: string;

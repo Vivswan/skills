@@ -5,12 +5,7 @@
 // that failed never reads as free; the say column is a `note(<reading>)`. Two controls run with
 // every batch: per registry column, a name known to be taken there, and one random string that
 // must be free everywhere. A column that answers either control wrongly is reported as a failed
-// instrument and is not evidence.
-//
-// Exit codes:
-//   0  every row printed and every control answered as expected
-//   1  a control answered wrongly: the named columns are not evidence
-//   2  usage error
+// instrument and is not evidence. The flags and the exit codes are USAGE below; `--help` prints it.
 
 import { spawnSync } from "node:child_process";
 import { promises as dns } from "node:dns";
@@ -29,9 +24,17 @@ import {
 } from "./columns/registries/table.mts";
 import { type Cell, type Claimed, type Io, renderCell, unknown } from "./core/cells.mts";
 
-const USAGE =
-  "usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--no-arxiv] [--json] <name>...\n" +
-  "       check-name.mts --list-registries";
+const USAGE = [
+  "usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--no-arxiv] [--json] <name>...",
+  "       check-name.mts --list-registries",
+  "  --domain <tld>          a DNS column per zone (default: com, ai, dev; the list replaces the default)",
+  "  --registries <id,...>   the availability columns to run; the gate columns run on every name regardless",
+  "  --no-arxiv              skip the arXiv column (one request every three seconds)",
+  "  --json                  one JSON object, rows and failures, instead of the table",
+  "  --list-registries       the live column table: id, label, taken control, gate",
+  "exits: 0 every row printed and every control answered as expected;",
+  "       1 a control answered wrongly: the named columns are not evidence; 2 usage error",
+].join("\n");
 
 export type Row = { name: string; cells: Record<string, Cell> };
 
@@ -185,6 +188,11 @@ function githubTokenFromEnvironment(): string | null {
 }
 
 async function main(): Promise<number> {
+  const first = process.argv[2];
+  if (first === "--help" || first === "-h") {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
   let parsed: ReturnType<typeof parseArgs>;
   try {
     parsed = parseArgs({

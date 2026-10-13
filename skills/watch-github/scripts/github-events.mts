@@ -126,4 +126,15 @@ async function poll(targets: Record<string, Target>, io: Io) {
   return { events, busy };
 }
 
-runEvents<Target>({ name: "github-events", interval: 60, idleInterval: 300, parseTarget, poll });
+runEvents<Target>({
+  name: "github-events",
+  interval: 60,
+  idleInterval: 300,
+  usage: [
+    "targets: <owner/repo>#<n> for a pull request, <owner/repo>:<branch> for a branch tip",
+    "--expect-workflow <name> names a workflow whose run must appear on the head before CI reads green; repeatable",
+    `the session-events skill must be installed beside this one; without it every command exits 2 naming the install: ${INSTALL}`,
+  ],
+  parseTarget,
+  poll,
+});

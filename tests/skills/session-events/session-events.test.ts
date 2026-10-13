@@ -196,8 +196,10 @@ describe("session-events.mts", () => {
       const r = s.run(args, options);
       expect([args.join(" "), r.code]).toEqual([args.join(" "), 2]);
       expect(r.stderr).toContain(reason);
-      expect(r.stderr.trim().split("\n").at(-1)).toBe("--interval is 1 s by default, 1 to 86400");
-      expect(r.stderr).toContain(`usage: ${FAKE_SOURCE} <command> [options]`);
+      expect(r.stderr.trim().split("\n").at(-1)).toBe(
+        "       3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line",
+      );
+      expect(r.stderr).toContain("usage: fake-source.mts <command> [options]");
     }
     expect(existsSync(s.socketPath())).toBe(false);
     expect(await box.frames(0)).toEqual([]);
