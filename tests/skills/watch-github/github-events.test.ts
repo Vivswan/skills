@@ -273,7 +273,7 @@ describe("github-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a conflict is said when the merge test settles on it, once per settled stretch and again after a push, and resolved when it settles clean; UNKNOWN says nothing; a PR already conflicting is said at its first sighting", async () => {
+  test("a conflict is said when the merge test settles on it, once per settled stretch and again after a push it survived, and resolved when it settles clean, a push in between or not; UNKNOWN says nothing; a PR already conflicting is said at its first sighting", async () => {
     const s = new Scenario("conflicts");
     const box = await s.inbox("a");
     const p7 = (mergeable: string, head = HEAD_A): RowSpec => ({
@@ -291,8 +291,12 @@ describe("github-events.mts", () => {
       "rows-6": rows({ p7: prNode(p7("UNKNOWN", HEAD_B)) }),
       "rows-7": rows({ p7: prNode({ ...p7("CONFLICTING", HEAD_B), suites: [] }) }),
       "rows-8": rows({ p7: prNode(p7("MERGEABLE", HEAD_B)) }),
-      "rows-9": rows({
-        p7: prNode(p7("MERGEABLE", HEAD_B)),
+      "rows-9": rows({ p7: prNode(p7("CONFLICTING", HEAD_B)) }),
+      // The rebase that fixes it: the resolved line follows the push once the test settles.
+      "rows-10": rows({ p7: prNode(p7("UNKNOWN", HEAD_A)) }),
+      "rows-11": rows({ p7: prNode({ ...p7("MERGEABLE", HEAD_A), suites: [] }) }),
+      "rows-12": rows({
+        p7: prNode(p7("MERGEABLE", HEAD_A)),
         p8: prNode({
           number: 8,
           base: "release/2",
@@ -304,21 +308,29 @@ describe("github-events.mts", () => {
     });
     await s.start({ inbox: box.path });
     expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
-    // UNKNOWN is never kept: the cursor still holds the settled MERGEABLE.
-    expect(s.state().targets[PR7]).toMatchObject({ seen: { mergeable: "MERGEABLE" } });
-    for (const count of [1, 0, 0, 1, 2, 1]) {
+    for (const count of [0, 1, 0]) {
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain(`${count} event(s)`);
+    }
+    // UNKNOWN moves nothing: the conflict line still stands after it.
+    expect(s.state().targets[PR7]).toMatchObject({ seen: { conflict: "told" } });
+    for (const count of [0, 1, 2, 1, 1, 1, 2]) {
       expect(s.run(["poll"], { inbox: box.path }).stdout).toContain(`${count} event(s)`);
     }
     expect(s.run(["watch", `${REPO}#8`], { inbox: box.path }).code).toBe(0);
-    expect((await box.frames(6)).map(text)).toEqual([
-      [`PR ${PR7}: CI green on ${SHORT_A}: 0 workflows`, `${PR7_URL}/checks`, CLOSING].join("\n"),
-      [`PR ${PR7}: conflicts with main; rebase needed`, PR7_URL, CLOSING].join("\n"),
+    const conflicts = [`PR ${PR7}: conflicts with main; rebase needed`, PR7_URL, CLOSING].join(
+      "\n",
+    );
+    const resolved = [`PR ${PR7}: conflicts resolved`, PR7_URL, CLOSING].join("\n");
+    const headMoved = (sha: string) =>
       [
-        `PR ${PR7}: head moved to ${SHORT_B}; last commit by dev`,
-        `${PR7_URL}/commits/${HEAD_B}`,
+        `PR ${PR7}: head moved to ${sha.slice(0, 12)}; last commit by dev`,
+        `${PR7_URL}/commits/${sha}`,
         CLOSING,
-      ].join("\n"),
+      ].join("\n");
+    expect((await box.frames(9)).map(text)).toEqual([
+      [`PR ${PR7}: CI green on ${SHORT_A}: 0 workflows`, `${PR7_URL}/checks`, CLOSING].join("\n"),
+      conflicts,
+      headMoved(HEAD_B),
       [
         `PR ${PR7}: conflicts with main; rebase needed`,
         PR7_URL,
@@ -327,7 +339,17 @@ describe("github-events.mts", () => {
         `${PR7_URL}/checks`,
         CLOSING,
       ].join("\n"),
-      [`PR ${PR7}: conflicts resolved`, PR7_URL, CLOSING].join("\n"),
+      resolved,
+      conflicts,
+      headMoved(HEAD_A),
+      [
+        `PR ${PR7}: conflicts resolved`,
+        PR7_URL,
+        "",
+        `PR ${PR7}: CI green on ${SHORT_A}: 0 workflows`,
+        `${PR7_URL}/checks`,
+        CLOSING,
+      ].join("\n"),
       [
         `PR ${REPO}#8: conflicts with release/2; rebase needed`,
         `https://github.com/${REPO}/pull/8`,
@@ -344,10 +366,15 @@ describe("github-events.mts", () => {
       ["conflict", 7],
       ["ci", 7],
       ["conflict", 7],
+      ["conflict", 7],
+      ["head", 7],
+      ["conflict", 7],
+      ["ci", 7],
       ["conflict", 8],
       ["ci", 8],
     ]);
-    expect(s.state().targets[`${REPO}#8`]).toMatchObject({ seen: { mergeable: "CONFLICTING" } });
+    expect(s.state().targets[PR7]).toMatchObject({ seen: { conflict: null } });
+    expect(s.state().targets[`${REPO}#8`]).toMatchObject({ seen: { conflict: "told" } });
     expect(s.violations()).toBe("");
     s.stop({ inbox: box.path });
   }, 30000);

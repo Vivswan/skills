@@ -5,7 +5,7 @@
 import type { EventInput, Io } from "../../../session-events/scripts/session-events.mts";
 import { discoverRuns, type Suites } from "../github/check-suites.mts";
 import { type Activity, newActivity, readPrDetail } from "../github/pr-activity.mts";
-import { type Mergeable, type Row, rowChanged } from "../github/repository.mts";
+import { type Row, rowChanged } from "../github/repository.mts";
 import type { Outcome } from "./branch.mts";
 import {
   type CiState,
@@ -21,14 +21,12 @@ const PR_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
 // GraphQL's Int: a number past it makes the whole repository query invalid, every target with it.
 const MAX_PR_NUMBER = 2_147_483_647;
 
-type Settled = Exclude<Mergeable, "UNKNOWN">;
-
 export interface PrTarget {
   form: "pr";
   repo: string;
   number: number;
   gates: string[];
-  /** The cursor: the row at the last poll, where its CI judgment stands, the verdict last delivered on its head, the merge test last settled, and the activity ids the last two detail reads fetched. */
+  /** The cursor: the row at the last poll, where its CI judgment stands, the verdict last delivered on its head, where the conflict line stands, and the activity ids the last two detail reads fetched. */
   seen: {
     row: Row;
     ci: CiState;
@@ -36,8 +34,8 @@ export interface PrTarget {
     verdict: string | null;
     /** Polls on this head with no checks at all (no rollup), for a named gate that never registers. */
     noRuns: number;
-    /** The merge test's last settled answer, never UNKNOWN; null until one, and again after a head or base move. */
-    mergeable: Settled | null;
+    /** A conflict line stands unresolved; after a head or base move the test has not settled since, a conflict that survived is said again. */
+    conflict: "told" | "told-before-move" | null;
     activity: string[][];
   } | null;
   /** Set once the row answered null and the trouble event went out; cleared when it reads again. */
@@ -199,28 +197,27 @@ export function processPr(
       events.push({ ...fields, kind: "label", text: `${label}: ${moved}`, url: row.url });
   }
   // GitHub answers UNKNOWN while it recomputes the merge test after either side moved, so only a
-  // settled answer is judged, against the last settled one. A head or base move clears that, so a
-  // conflict the push did not resolve is said again; a PR that already conflicts is said at once.
-  let mergeable: Settled | null =
-    previous !== null && !changes.head && previous.row.baseRefName === row.baseRefName
-      ? previous.mergeable
-      : null;
-  if (row.mergeable === "CONFLICTING" && mergeable !== "CONFLICTING") {
+  // settled answer is judged, and a move keeps the standing conflict line until one arrives.
+  const moved = changes.head || (previous !== null && previous.row.baseRefName !== row.baseRefName);
+  let conflict = previous?.conflict ?? null;
+  if (conflict === "told" && moved) conflict = "told-before-move";
+  if (row.mergeable === "CONFLICTING" && conflict !== "told") {
     events.push({
       ...fields,
       kind: "conflict",
       text: `${label}: conflicts with ${row.baseRefName}; rebase needed`,
       url: row.url,
     });
-  } else if (row.mergeable === "MERGEABLE" && mergeable === "CONFLICTING") {
+    conflict = "told";
+  } else if (row.mergeable === "MERGEABLE" && conflict !== null) {
     events.push({
       ...fields,
       kind: "conflict",
       text: `${label}: conflicts resolved`,
       url: row.url,
     });
+    conflict = null;
   }
-  if (row.mergeable !== "UNKNOWN") mergeable = row.mergeable;
   let ci: CiState = previous?.ci ?? "pending";
   // The verdict last delivered on this head; a new head has none, so its first verdict is news. A
   // rollup that moves after a verdict is judged again, and the same verdict stays silent.
@@ -242,7 +239,7 @@ export function processPr(
     }
   }
   delete target.unreadable;
-  target.seen = { row, ci, verdict, noRuns, mergeable, activity };
+  target.seen = { row, ci, verdict, noRuns, conflict, activity };
   // Pending CI holds the busy interval; a head with no CI does not. The ci term covers the poll a
   // rollup change is first seen on, and a named gate's run still registering or queued.
   return {

@@ -26,7 +26,7 @@ export type Row = {
   reviewThreads: number;
   latestReview: { id: string; submittedAt: string; state: string; author: string } | null;
   rollupState: string | null;
-  /** The label names, sorted, so two rows compare as sets; the first 20 of a PR with more. */
+  /** The label names, sorted, so two rows compare as sets; one page of 100, GitHub's maximum, so a page shift never reads as a change. */
   labels: string[];
   /** GitHub's merge test against the base: UNKNOWN while it recomputes after either side moves. */
   mergeable: Mergeable;
@@ -58,7 +58,7 @@ const COMMIT_FIELDS = "oid author { user { login } } statusCheckRollup { state }
 
 function rowFields(withSuites: boolean): string {
   return `number url isDraft state mergedAt baseRefName headRefOid updatedAt mergeable
-      comments { totalCount } reviewThreads { totalCount } labels(first: 20) { nodes { name } }
+      comments { totalCount } reviewThreads { totalCount } labels(first: 100) { nodes { name } }
       reviews(last: 1) { nodes { fullDatabaseId submittedAt state author { login } } }
       commits(last: 1) { nodes { commit { ${COMMIT_FIELDS}${withSuites ? ` ${SUITES_CONNECTION}` : ""} } } }`;
 }

@@ -916,7 +916,7 @@ describe("readRepository", () => {
     expect(calls).toHaveLength(2);
     const first = calls[0] as string;
     expect(first).toContain("viewer { login }");
-    expect(first).toContain("labels(first: 20) { nodes { name } }");
+    expect(first).toContain("labels(first: 100) { nodes { name } }");
     expect(first).toContain('r: repository(owner: "octocat", name: "repo")');
     expect(first).toContain("p17: pullRequest(number: 17)");
     expect(first).toContain('b0: ref(qualifiedName: "refs/heads/main")');
