@@ -379,7 +379,7 @@ describe("github-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a review and the comments beside it are counted, placed, and linked, and not one word of them is in the message or the log, whatever they say; the session's own login counts like any other; an id once fetched stays seen after it leaves the read window", async () => {
+  test("reviews and comments, inline or loose, are counted, placed, and linked; no body text reaches the message, log, or state; the session's own login counts like any other; a fetched id stays seen after leaving the window", async () => {
     const s = new Scenario("activity");
     const box = await s.inbox("a");
     const at = "2026-01-01T00:30:00Z";
