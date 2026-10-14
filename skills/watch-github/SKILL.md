@@ -74,7 +74,7 @@ Each message holds one poll's events, each with a URL, and the closing line `aut
 | `merged` | `PR owner/repo#12: merged into main` | stop babysitting; the mainline's CI is the branch target's business |
 | `closed` | `PR owner/repo#12: closed without merging` | stop babysitting |
 | `trouble` | `PR owner/repo#12 is not readable; unwatch it or check access`; `PR owner/repo#12: CI settled on 1a2b3c4d5e6f with no run of checks; check the workflow name` (or `no checks on 1a2b3c4d5e6f after 2 polls, so no run of checks`); `PR owner/repo#12: 3 reads failed; read the daemon log`; or the `/session-events` skill's line after three failed polls | tooling trouble, never a red or green pipeline; Gotchas below |
-| busy | not a kind: a poll with an event, a pending rollup, or a head still being judged keeps the 60 s interval; a quiet poll moves to 300 s | nothing |
+| busy | not a kind: a poll with an event, a pending rollup, or a head still being judged keeps the 60 s interval; each quiet poll doubles the wait, 120 s, 240 s, then 300 s | nothing |
 
 A branch target's lines open with `branch owner/repo:main:` instead. The comment line counts the viewer's own comments out. A review's inline comments are counted on its line and not again as comments.
 
@@ -91,7 +91,7 @@ After a push on either side GitHub recomputes the merge test and answers UNKNOWN
 
 ## Polling Budget
 
-GitHub throttles GraphQL in its own bucket and the Actions REST endpoints (`gh run list`, `gh run watch`, `gh run view`) in a secondary one that parallel watchers lock for longer than a run lasts. The daemon reads GraphQL only, once a minute while something moves and every five minutes while nothing does.
+GitHub throttles GraphQL in its own bucket and the Actions REST endpoints (`gh run list`, `gh run watch`, `gh run view`) in a secondary one that parallel watchers lock for longer than a run lasts. The daemon reads GraphQL only, once a minute while something moves and, after the `/session-events` skill's ramp, every five minutes while nothing does.
 
 One poll costs one request per repository: every watched PR's row, every watched branch's tip, the check suites of each head still being judged or carrying named gates, and the viewer's login, aliased in one query (one more request per 30 PRs of a repository). On top of that:
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 // The GitHub source: PRs and branch tips, read through gh's GraphQL once a minute while something
-// moves and every five while nothing does. The daemon is the session-events skill's, installed
-// beside this one; `npx skills add --skill` copies one folder, so a single-skill install is told
-// what else to add.
+// moves, backing off to every five while nothing does. The daemon is the session-events skill's,
+// installed beside this one; `npx skills add --skill` copies one folder, so a single-skill install
+// is told what else to add.
 //
 //   bun "<skill-dir>/scripts/github-events.mts" daemon          # once per session, as a BACKGROUND task
 //   bun "<skill-dir>/scripts/github-events.mts" watch owner/repo#12 --expect-workflow checks

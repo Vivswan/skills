@@ -658,34 +658,42 @@ describe("session-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 40000);
 
-  test("a busy poll is followed after the busy interval, an idle one after the idle interval; --interval moves the busy one", async () => {
+  test("a busy poll is followed after the busy interval; each quiet poll doubles the wait, up to the idle interval; --interval moves the busy one", async () => {
     const s = new Fake("intervals");
     const box = await s.inbox("a");
-    s.polls({ busy: true }, { busy: false }, { busy: true });
+    s.polls({ busy: true }, { busy: false }, { busy: false }, { busy: false }, { busy: true });
     await s.start({ inbox: box.path });
     expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
-    const deadline = Date.now() + 12000;
-    while (s.pollLog().length < 4 && Date.now() < deadline) await Bun.sleep(50);
-    const [one, two, three, four] = s.pollLog().map(([, at]) => at) as [
-      number,
-      number,
-      number,
-      number,
-    ];
-    expect(two - one).toBeGreaterThanOrEqual(900);
-    expect(two - one).toBeLessThan(2500);
-    expect(three - two).toBeGreaterThanOrEqual(2900);
-    expect(four - three).toBeGreaterThanOrEqual(900);
-    expect(four - three).toBeLessThan(2500);
+    const deadline = Date.now() + 20000;
+    while (s.pollLog().length < 6 && Date.now() < deadline) await Bun.sleep(50);
+    const gaps = s.pollLog().map(([, at]) => at);
+    const [one, two, three, four, five] = gaps.slice(1).map((at, i) => at - (gaps[i] as number));
+    // 1 s, 2 s, then 4 s twice (the cap, not 8 s), then 1 s again. The old step to idle would make
+    // the second gap 4 s; each window leaves the daemon at least 1.5 s of lateness.
+    expect(one).toBeGreaterThanOrEqual(900);
+    expect(one).toBeLessThan(2500);
+    expect(two).toBeGreaterThanOrEqual(1900);
+    expect(two).toBeLessThan(3900);
+    expect(three).toBeGreaterThanOrEqual(3900);
+    expect(three).toBeLessThan(7900);
+    expect(four).toBeGreaterThanOrEqual(3900);
+    expect(four).toBeLessThan(7900);
+    expect(five).toBeGreaterThanOrEqual(900);
+    expect(five).toBeLessThan(2500);
+    expect(s.log()).toContain("poll: 0 event(s), quiet; next in 2 s");
     s.stop({ inbox: box.path });
 
     const slow = new Fake("intervals-flag");
     const slowBox = await slow.inbox("a");
-    slow.polls({ busy: true });
+    slow.polls({ busy: true }, { busy: true });
     await slow.start({ inbox: slowBox.path, args: ["--interval", "2"] });
-    expect(slow.log()).toContain("poll every 2 s busy, 3 s idle");
+    expect(slow.run(["watch", "t1"], { inbox: slowBox.path }).code).toBe(0);
+    const slowDeadline = Date.now() + 8000;
+    while (slow.pollLog().length < 2 && Date.now() < slowDeadline) await Bun.sleep(50);
+    const [first, second] = slow.pollLog().map(([, at]) => at) as [number, number];
+    expect(second - first).toBeGreaterThanOrEqual(1900);
     slow.stop({ inbox: slowBox.path });
-  }, 30000);
+  }, 40000);
 
   test("status prints the daemon, its files, the targets by key, and the last event; unwatch drops one target by its key, or all of them, and refuses one not watched", async () => {
     const s = new Fake("status-unwatch");

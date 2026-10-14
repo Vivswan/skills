@@ -27,7 +27,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/watch-github -
 - **Two target forms**: a pull request, `owner/repo#n`, until it merges or closes; a branch tip, `owner/repo:branch`, through every push. Each carries the gate workflows named on it.
 - **Nine event kinds** as messages: comment, review, CI verdict, head moved, label, conflict, merged, closed, and tooling trouble. Every text is structure, label names, and URLs; nothing a comment or a build log said is quoted.
 - **A file sink** for Codex, the Copilot CLI, or a shell: a daemon named with `--id <name>` and a blocking `wait --id <name> --since <id>`.
-- **One request per repository per poll, GraphQL only, 60 s busy and 300 s idle**: the rate buckets behind those rules are in the skill's Polling Budget.
+- **One request per repository per poll, GraphQL only, 60 s busy, doubling to 300 s idle**: the rate buckets behind those rules are in the skill's Polling Budget.
 
 ## Layout
 

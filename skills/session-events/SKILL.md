@@ -83,7 +83,7 @@ A source script imports `runEvents` from `scripts/session-events.mts` and calls 
 | --- | --- | --- |
 | `name` | `"log-events"` (`[a-z0-9-]{1,40}`) | the file stems, the envelope's `from-name`, the `msg_id` prefix, the closing line |
 | `interval` | `5` | seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400 |
-| `idleInterval` (optional) | not set, so `5` | seconds between polls while nothing moves |
+| `idleInterval` (optional) | not set, so `5` | the longest wait between polls; a quiet poll doubles the wait from `interval` up to it |
 | `usage` (optional) | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags |
 | `parseTarget(args)` | the path, refused unless absolute | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2 |
 | `poll(targets, io)` | stat each file, compare with its saved size | every poll: the events, and whether anything is still moving |
@@ -96,7 +96,7 @@ Rules a poll keeps:
 
 - **It returns, it does not stream.** The events come back in one array; the daemon numbers and stamps them, appends them to the log, saves the state, then delivers.
 - **It writes cursors on the way to returning.** A poll that throws is a failed poll: the daemon logs the reason and saves nothing, so a source that moved a cursor before throwing would skip what the cursor passed.
-- **`busy` says which interval comes next.** True while something is pending or an event just happened; false picks `idleInterval`.
+- **`busy` says which interval comes next.** True while something is pending or an event just happened, and the next poll comes after `interval`; false doubles the wait, up to `idleInterval`.
 - **Text is the source's own words.** Identifiers, counts, states, URLs: never a line quoted from the polled system (below).
 
 ## Commands
@@ -152,8 +152,9 @@ start     the session runs `daemon` as a background task; the owner is the sessi
 one only  binding `<runtime-dir>/<pid>.<source>.sock` is the rule: a second start finds the first
           answering and exits 0; a socket file nobody answers on was left by a crash and is removed
           once; two sources of one session are two daemons
-poll      every `interval` seconds while busy, every `idleInterval` while not, and at once on `watch`;
-          a restart with saved targets polls at once
+poll      every `interval` seconds while busy; each quiet poll doubles the wait, up to `idleInterval`;
+          at once on `watch`, and on a restart with saved targets; each poll is a log line with its
+          event count and the next wait
 trouble   a failed poll is a log line; three in a row are one event, `<name>: the last 3 polls
           failed; read the daemon log for the reason`, with the log's path as its URL, and nothing
           more until a poll succeeds and three fail again
