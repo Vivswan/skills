@@ -43,13 +43,13 @@ Specimen: `useLiteralKeys` rewrites `record["name"]` to `record.name`, which `ts
 
 ## Module order, read
 
-Biome has no rule for function order (`noInvalidUseBeforeDeclaration` lets a hoisted function through). Where ESLint runs, one rule carries define-before-use, in its typescript-eslint form so enums, types, and interfaces count too:
+Biome has no rule for function order (`noInvalidUseBeforeDeclaration` lets a hoisted function through). Where ESLint runs, one rule carries define-before-use for values, in its typescript-eslint form so enums count too. A type-only reference stays exempt (the rule's `ignoreTypeReferences` default): a type is resolved at compile time, and the layout above already puts types before the functions.
 
 ```json
 {
   "rules": {
     "no-use-before-define": "off",
-    "@typescript-eslint/no-use-before-define": ["error", { "functions": true, "classes": true, "variables": true, "enums": true, "typedefs": true }]
+    "@typescript-eslint/no-use-before-define": ["error", { "functions": true, "classes": true, "variables": true, "enums": true }]
   }
 }
 ```
