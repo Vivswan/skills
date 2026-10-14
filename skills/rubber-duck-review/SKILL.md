@@ -206,6 +206,9 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   That convergence IS the gate: nothing commits or lands until the review has converged on the exact final content of the change being landed. At commit time that is the staged diff, since Git commits the index, not the tree. At merge time it is the branch or PR diff.
 
   This is the single definition of review convergence. Skills that gate on it (e.g. `/pr-landing-discipline`'s Converged) point here rather than restating it.
+- **A converged report names the rubric it ran against:** the prompt file's path, or a one-line digest of its criteria and its `Already decided` list. Instructions move mid-run, and a lead reading "converged" needs to see which version it converged on.
+
+  Specimen: three builders reported "converged" against a rubric the owner had superseded while their rounds ran; nothing in their reports showed it. One line per report would have.
 
 ### 8. If these instructions don't work, fix the skill
 
