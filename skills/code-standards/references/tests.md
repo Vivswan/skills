@@ -152,7 +152,7 @@ Before claiming a test covers a bug, show it failing on that bug through the sam
 The fixture is the reproduction of the observed failure: the same input shape and the same wrong output. It is hand-written but shaped like the incident, never an approximation that fails for a different reason. A failure with no reproduction gets no fixture, and whether it earns any guard is the `/never-twice` skill's floor.
 
 1. Reintroduce the bug in the source (or make the equivalent one-line change).
-2. Run the test and confirm it fails.
+2. Run that test file alone, not the suite, and confirm it fails.
 3. Confirm it fails *for that reason*, not on an unrelated error.
 4. Confirm the mutation reached the assertion you added or changed. A mutation that throws upstream of every `expect` fails the old test just as well and proves nothing about the new one (observed: breaking a default path threw before the new assertion ran, and the red run looked right and was not).
 5. Restore the source and confirm green again.

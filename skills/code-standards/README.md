@@ -10,6 +10,7 @@
 - a library over hand-rolling, the reviewer naming the library
 - comments that carry only what the code cannot show: tell first, then show
 - heal what the tool owns at the boundary when one repair exists, refuse there otherwise
+- code that reads beautifully, top to bottom: constants first, define before use, one concept per function, with the lint floor per language
 - no barrel files or pass-through functions
 - no planning references in code
 - lean AGENTS.md files

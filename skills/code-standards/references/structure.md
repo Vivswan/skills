@@ -34,13 +34,36 @@ The PR body carries an export census (the exported names before and after, equal
 
 A whole-repo reorganisation is proposed as a target layout first, one tree with one line per folder saying what lives there, and files move only after the owner agrees to it.
 
+## A predictable layout
+
+A reader predicts where a thing lives before looking, and the import line names the file. The rules below are defaults the case may override; the specimen is one package of [AnalogVNN](https://github.com/Vivswan/AnalogVNN), by this skill's author:
+
+```text
+analogvnn/
+  backward/     BackwardModule.py  BackwardFunction.py  BackwardIdentity.py  BackwardUsingForward.py
+  fn/           train.py  test.py  reduce_precision.py  dirac_delta.py  to_matrix.py
+  nn/
+    activation/   Activation.py  ReLU.py  SiLU.py  Sigmoid.py  Tanh.py  Gaussian.py  ...
+    noise/        Noise.py  GaussianNoise.py  LaplacianNoise.py  PoissonNoise.py  UniformNoise.py
+    precision/    Precision.py  ReducePrecision.py  StochasticReducePrecision.py
+  utils/        is_cpu_cuda.py  to_tensor_parameter.py  render_autograd_graph.py
+```
+
+- **The file is named after the one public thing in it,** in that thing's own case: `GaussianNoise.py` holds the class `GaussianNoise`, `reduce_precision.py` the function `reduce_precision`. The import line `from analogvnn.nn.noise.GaussianNoise import GaussianNoise` is predictable from either end.
+- **A folder is a concept,** and inside it the base sits beside one file per variant (`Noise.py` beside the four noises). Adding a variant adds one file; nothing else moves.
+- **Every sibling has the same internal template,** and every module follows the one module template (`shape.md`, Module layout), so the reader knows where the constants, the class, and the entry point sit before opening the file. The specimen's reading: "it is easy to even just predict where the thing will be".
+- **Sibling stages mirror their names.** In a pipeline the stage is the folder and the concept is the file name, repeated across stages: `equations/dpuc_input.py` and `simulation/results_parser/dpuc_input.py` are one concept at two stages.
+- **Entry points sit at the root,** one runnable script per run (`finetune.py`, `run_pca.py`). A `utils/` folder is the one place a file may hold several small functions, grouped by what they serve.
+- **Package metadata and constants have one home each:** the root `__init__.py` carries only the package's name, author, and version; a package-wide constant (one that two or more modules read) lives in one constants module, never beside its first use. A module's own constants sit in its constants block (`shape.md`, Module layout).
+- **Not sure where a thing goes: ask the user, with options.** Two or three candidate placements, each with the import line it would give and what sits beside it. A guessed placement is the one the reader cannot predict.
+
+Readability and beauty come first: this rule yields where following it would read worse, and the deviation is said in a line.
+
+The specimens pre-date modern typing. The layout is what to copy; the syntax is modernised.
+
 ## The same rule in other languages
 
-- **Python**: `__init__.py` runs at package import, so keep it EMPTY unless absolutely necessary. Re-exporting symbols from it builds a barrel: the real dependency graph hides behind the package name and import cycles become easy to mint. Importers name the defining module (`from pkg.user import User`, not `from pkg import User`).
-- **Rust**: an intra-crate `mod.rs` whose `pub use` fan only re-exports names is the same barrel. The exception is the crate root. A `lib.rs` `pub use` that defines the crate's public API is idiomatic, since it is the crate's only way to present a public surface distinct from its internal module tree.
-- **Go**: a package that only wraps another package's identifiers adds a hop. Callers import the defining package.
-
-The test is identical in every language: does this file or function only forward names?
+The test is identical in every language: does this file or function only forward names? How each language spells the barrel (`__init__.py`, `mod.rs`, `index.ts`, a wrapping package) is on its page under `languages/`.
 
 ## How to apply
 

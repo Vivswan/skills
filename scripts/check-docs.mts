@@ -25,7 +25,7 @@ export const PAGE_SETS: readonly { flags: readonly string[]; patterns: readonly 
   },
   {
     flags: ["--shape-only"],
-    patterns: ["skills/*/SKILL.md", "skills/*/references/*.md", "template/SKILL.md"],
+    patterns: ["skills/*/SKILL.md", "skills/*/references/**/*.md", "template/SKILL.md"],
   },
 ];
 

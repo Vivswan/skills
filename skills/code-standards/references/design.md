@@ -1,6 +1,6 @@
 # Design Standards: Full Detail
 
-The deep version of four standards: fix the class, general-purpose over special-case, maintainability over effort, prefer a library over hand-rolling. They share one root: a design should absorb change instead of being rewritten by it.
+The deep version of five standards: fix the class, general-purpose over special-case, maintainability over effort, prefer a library over hand-rolling, heal at the boundary or refuse there. They share one root: a design should absorb change instead of being rewritten by it.
 
 ## Fix the Class, Not the Instance
 
@@ -87,3 +87,24 @@ How to apply:
 - The one exception: a library that needs a runtime or API the repository has dropped is not a fit, however good. Specimen: a dependency graph tool that requires the TypeScript compiler API is not a fit for a repository pinned to a TypeScript that no longer ships one. The hand-rolled parser walk stays, and the reason is recorded where the walk lives.
 - At review, a reviewer treats hand-rolled code whose whole job a good library does as a finding that names the library. A finding that names no library is a style opinion.
 
+
+## Heal at the Boundary, or Refuse There
+
+Malformed input or state with one unambiguous repair is repaired at the boundary, reported where a user would want to know, and the program continues. Input with no repair, or with several candidate repairs, is refused at that same boundary. Nothing malformed passes through to fail later.
+
+Ownership follows the direction of data:
+
+| The data | Ownership | At the boundary |
+| --- | --- | --- |
+| what the tool only reads: a user's settings file, CLI arguments, a caller's payload | never the tool's own | refused, naming the key and the fix |
+| what the tool outputs, directly or through something it drives: applied state, rendered config, caches, generated files | may be the tool's own | healed toward what the user declared |
+| direction unclear | | ask the repository owner |
+
+A tool's own section inside a user-authored file splits the same way. A malformation the user typed there is reported, never healed, and the bad slot reads as absent where that is safe. A schema migration may rewrite that section once, since the tool moves its own data between its own shapes. Nothing outside the section is touched.
+
+Specimen: a quoted `"true"` in a config file the tool manages is healed, since the tool could have written it right. The same `"true"` in the user's settings is the user's error and is refused.
+
+How to apply:
+
+- A comment on a healing step states the rule in one line and does not argue for it.
+- Where the boundary sits is the `/no-invalid-states` skill's question: parse once at the edge, and nothing past it carries the malformed shape.
