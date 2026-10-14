@@ -1,8 +1,8 @@
 // The per-poll read of one repository: one aliased GraphQL request answers every watched pull
-// request's row, every watched branch's tip, the check suites of each head whose CI is pending,
-// and the viewer's login. Aliases carry the identity, so a reply is read back by alias, never by
-// position, and a PR GitHub answers null for (deleted, or no access) is null in the result while
-// the rest of the batch stands.
+// request's row, every watched branch's tip, and the check suites of each head whose CI is
+// pending. Aliases carry the identity, so a reply is read back by alias, never by position, and a
+// PR GitHub answers null for (deleted, or no access) is null in the result while the rest of the
+// batch stands.
 
 import { parseSuites, SUITES_CONNECTION, type Suites } from "./check-suites.mts";
 import { GhError, get, gh, parseJson, requireNumber, requireString, stringOrNull } from "./gh.mts";
@@ -51,7 +51,6 @@ export interface RepoReply {
   /** Null: GitHub answered null for the alias (a deleted PR, or no access). */
   rows: Map<number, { row: Row; suites: Suites | null } | null>;
   tips: Map<string, { tip: Tip; suites: Suites | null } | null>;
-  viewer: string | null;
 }
 
 const COMMIT_FIELDS = "oid author { user { login } } statusCheckRollup { state }";
@@ -67,15 +66,9 @@ type Chunk = { query: string; prs: number[]; branches: string[] };
 
 /**
  * `r: repository(...) { p12: pullRequest(number: 12) { ... } b0: ref(qualifiedName: "refs/heads/main") { ... } }`.
- * Branch names are not alias-safe, so branches are aliased by position; `viewer` rides along once.
+ * Branch names are not alias-safe, so branches are aliased by position.
  */
-function buildChunk(
-  repo: string,
-  prs: number[],
-  branches: string[],
-  read: RepoRead,
-  first: boolean,
-): Chunk {
+function buildChunk(repo: string, prs: number[], branches: string[], read: RepoRead): Chunk {
   const [owner, name] = repo.split("/") as [string, string];
   const parts = prs.map(
     (number) =>
@@ -87,8 +80,7 @@ function buildChunk(
       `b${i}: ref(qualifiedName: ${JSON.stringify(`refs/heads/${branch}`)}) { target { ... on Commit { ${COMMIT_FIELDS}${suites} } } }`,
     );
   });
-  const viewer = first ? "  viewer { login }\n" : "";
-  const query = `query {\n${viewer}  r: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {\n    ${parts.join("\n    ")}\n  }\n}`;
+  const query = `query {\n  r: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {\n    ${parts.join("\n    ")}\n  }\n}`;
   return { query, prs, branches };
 }
 
@@ -201,9 +193,9 @@ function requestChunk(chunk: Chunk): { data: unknown; failure: GhError | null } 
   return { data, failure };
 }
 
-/** One repository's rows and tips, in one request per 30 PRs; the branches and the viewer ride with the first. */
+/** One repository's rows and tips, in one request per 30 PRs; the branches ride with the first. */
 export function readRepository(repo: string, read: RepoRead): RepoReply {
-  const reply: RepoReply = { rows: new Map(), tips: new Map(), viewer: null };
+  const reply: RepoReply = { rows: new Map(), tips: new Map() };
   const chunks: Chunk[] = [];
   for (let start = 0; start < Math.max(read.prs.length, 1); start += CHUNK_SIZE) {
     chunks.push(
@@ -212,13 +204,11 @@ export function readRepository(repo: string, read: RepoRead): RepoReply {
         read.prs.slice(start, start + CHUNK_SIZE),
         start === 0 ? read.branches : [],
         read,
-        start === 0,
       ),
     );
   }
   for (const chunk of chunks) {
     const { data, failure } = requestChunk(chunk);
-    reply.viewer ??= stringOrNull(get(get(data, "viewer"), "login"));
     const repository = get(data, "r");
     // A null repository is the whole read failed (gone, no access, or an error at its path), not
     // every target unreadable at once; the poll fails and is retried.

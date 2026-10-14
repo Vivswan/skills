@@ -43,7 +43,7 @@ const { temp, emptyBinDir } = githubEventsHarness();
 const MAIN_URL = `https://github.com/${REPO}/commit/${HEAD_A}`;
 
 describe("github-events.mts", () => {
-  test("the two target forms subscribe, a third is refused; one poll is one request per repository carrying its rows, its tips, the suites of gated or pending heads, and the viewer", async () => {
+  test("the two target forms subscribe, a third is refused; one poll is one request per repository carrying its rows, its tips, and the suites of gated or pending heads", async () => {
     const s = new Scenario("forms");
     const box = await s.inbox("a");
     s.fixtures({
@@ -80,7 +80,6 @@ describe("github-events.mts", () => {
       .filter((call) => call.includes("r: repository("))
       .slice(-2) as [string, string];
     expect(example).toContain('r: repository(owner: "octo", name: "example")');
-    expect(example).toContain("viewer { login }");
     expect(example).toContain("p7: pullRequest(number: 7)");
     expect(example).toContain("p8: pullRequest(number: 8)");
     expect(example).toContain('b0: ref(qualifiedName: "refs/heads/main")');
@@ -380,7 +379,7 @@ describe("github-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a review and the comments beside it are counted, placed, and linked, and not one word of them is in the message or the log, whatever they say; the viewer's own are left out", async () => {
+  test("a review and the comments beside it are counted, placed, and linked, and not one word of them is in the message or the log, whatever they say; the session's own login counts like any other; an id once fetched stays seen after it leaves the read window", async () => {
     const s = new Scenario("activity");
     const box = await s.inbox("a");
     const at = "2026-01-01T00:30:00Z";
@@ -425,8 +424,8 @@ describe("github-events.mts", () => {
         `PR ${PR7}: review by octocat (CHANGES_REQUESTED), 2 comments`,
         `${PR7_URL}#pullrequestreview-55`,
         "",
-        `PR ${PR7}: 1 new comment by hubot`,
-        `${PR7_URL}#issuecomment-901`,
+        `PR ${PR7}: 2 new comments by hubot, me`,
+        `${PR7_URL}#issuecomment-902`,
         CLOSING,
       ].join("\n"),
     );
@@ -475,6 +474,56 @@ describe("github-events.mts", () => {
         `${PR7_URL}#discussion_r905`,
         CLOSING,
       ].join("\n"),
+    );
+    // The thread grows past its three-comment window: 903 leaves it on the fourth read and is
+    // still a seen id after the fifth, so a deletion that pulls it back cannot make it news.
+    const thread = (ids: number[], total: number) => ({
+      path: "src/x.ts",
+      line: 41,
+      total,
+      comments: ids.map((id) => ({ login: "hubot", at: "2026-01-01T00:33:00Z", body: "more", id })),
+    });
+    for (const [n, ids] of [
+      [4, [905, 906, 907]],
+      [5, [906, 907, 908]],
+    ] as const) {
+      s.fixtures({
+        [`rows-${n}`]: rows({
+          p7: prNode({
+            rollup: "SUCCESS",
+            updatedAt: `2026-01-01T00:3${n}:00Z`,
+            comments: 2,
+            threads: 2,
+          }),
+        }),
+        [`detail-${n}`]: detail({
+          comments: [
+            { login: "hubot", at, body: INJECTION, id: 901 },
+            { login: "me", at, body: "my own reply", id: 902 },
+          ],
+          reviews: [
+            { id: "55", login: "octocat", at, state: "CHANGES_REQUESTED", body: INJECTION },
+          ],
+          threads: [
+            thread([...ids], n + 1),
+            {
+              path: "src/y.ts",
+              line: 7,
+              total: 1,
+              comments: [{ login: "octocat", at, body: INJECTION, review: "55", id: 904 }],
+            },
+          ],
+        }),
+      });
+      expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    }
+    expect(headlines(await box.frames(5)).slice(3)).toEqual([
+      `PR ${PR7}: 2 new comments by hubot at src/x.ts:41`,
+      `PR ${PR7}: 1 new comment by hubot at src/x.ts:41`,
+    ]);
+    const remembered = (s.state().targets[PR7] as { seen: { activity: string[] } }).seen.activity;
+    expect(remembered).toEqual(
+      expect.arrayContaining(["comment:901", "review-comment:903", "review-comment:908"]),
     );
     expect(s.violations()).toBe("");
     s.stop({ inbox: box.path });
