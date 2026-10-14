@@ -529,7 +529,7 @@ describe("github-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a red names the failed workflow, job, and step from one read, said once; a gate re-run to green is judged without a head move; a bystander's failure is not the gate's", async () => {
+  test("a red names the failed workflow, job, and step from one read, said once; a gate re-run to green is judged without a head move; a bystander's failure is named on the green line, not judged", async () => {
     const s = new Scenario("red");
     const box = await s.inbox("a");
     s.fixtures({
@@ -574,9 +574,11 @@ describe("github-events.mts", () => {
         `https://github.com/${REPO}/actions/runs/500`,
         CLOSING,
       ].join("\n"),
-      [`branch ${MAIN}: CI green on ${SHORT_A}: 2 workflows`, `${MAIN_URL}/checks`, CLOSING].join(
-        "\n",
-      ),
+      [
+        `branch ${MAIN}: CI green on ${SHORT_A}: 2 workflows; other checks red: lint`,
+        `${MAIN_URL}/checks`,
+        CLOSING,
+      ].join("\n"),
     ]);
     // The failed-jobs read happened for the red once, not on the quiet poll after it.
     expect(s.ghCalls().filter((call) => call.includes("nodes(ids:"))).toHaveLength(1);
@@ -675,7 +677,11 @@ describe("github-events.mts", () => {
       paged.run(["watch", PR7, "--expect-workflow", "ci"], { inbox: pagedBox.path }).code,
     ).toBe(0);
     expect((await pagedBox.frames(1)).map(text)).toEqual([
-      [`PR ${PR7}: CI green on ${SHORT_A}: 2 workflows`, `${PR7_URL}/checks`, CLOSING].join("\n"),
+      [
+        `PR ${PR7}: CI green on ${SHORT_A}: 2 workflows; other checks red: lint`,
+        `${PR7_URL}/checks`,
+        CLOSING,
+      ].join("\n"),
     ]);
     const suiteCalls = paged
       .ghCalls()

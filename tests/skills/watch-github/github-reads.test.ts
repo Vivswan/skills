@@ -507,6 +507,7 @@ describe("discoverRuns", () => {
     expect(judgeHead("SUCCESS", runs, [])).toEqual({
       kind: "green",
       latest: [run({ id: 2 }), run({ id: 1 })],
+      bystanders: [],
     });
     expect(s.calls()).toHaveLength(1);
     expect(s.calls()[0]).toContain("-f owner=octocat -f name=repo -f oid=deadbeef");
@@ -616,7 +617,7 @@ describe("judgeHead", () => {
       rollup: "SUCCESS",
       runs: [run({ id: 1 }), run({ id: 2 })],
       gates: [],
-      verdict: { kind: "green", latest: [run({ id: 2 }), run({ id: 1 })] },
+      verdict: { kind: "green", bystanders: [], latest: [run({ id: 2 }), run({ id: 1 })] },
     },
     {
       id: "no gate: rollup FAILURE is red naming the failed latest runs",
@@ -700,12 +701,13 @@ describe("judgeHead", () => {
       verdict: { kind: "pending" },
     },
     {
-      id: "every gate passed is green; a bystander's failure is not judged",
+      id: "every gate passed is green; a bystander's failure is named, not judged",
       rollup: "FAILURE",
       runs: [run({ id: 1, name: "Gate" }), run({ id: 2, conclusion: "failure", name: "Other" })],
       gates: ["Gate"],
       verdict: {
         kind: "green",
+        bystanders: [run({ id: 2, conclusion: "failure", name: "Other" })],
         latest: [
           run({ id: 2, conclusion: "failure", name: "Other" }),
           run({ id: 1, name: "Gate" }),
@@ -734,7 +736,7 @@ describe("judgeHead", () => {
         run({ id: 100, ...sameWorkflow }),
       ],
       gates: ["CI"],
-      verdict: { kind: "green", latest: [run({ id: 100, ...sameWorkflow })] },
+      verdict: { kind: "green", bystanders: [], latest: [run({ id: 100, ...sameWorkflow })] },
     },
     {
       id: "a cancelled latest run with no newer run is red: no verdict was ever delivered",
@@ -753,7 +755,11 @@ describe("judgeHead", () => {
       rollup: "SUCCESS",
       runs: [run({ id: 1, conclusion: "skipped", name: "CI" })],
       gates: ["CI"],
-      verdict: { kind: "green", latest: [run({ id: 1, conclusion: "skipped", name: "CI" })] },
+      verdict: {
+        kind: "green",
+        bystanders: [],
+        latest: [run({ id: 1, conclusion: "skipped", name: "CI" })],
+      },
     },
     {
       id: "gate names match exactly, never by prefix",
@@ -761,6 +767,25 @@ describe("judgeHead", () => {
       runs: [run({ id: 1, name: "CI-1" })],
       gates: ["CI"],
       verdict: { kind: "missing", gates: ["CI"], settled: true },
+    },
+    {
+      id: "a gated green names the failed runs outside the gates as bystanders, the gates' own runs and passing bystanders left out",
+      rollup: "FAILURE",
+      runs: [
+        run({ id: 1, name: "Gate" }),
+        run({ id: 2, conclusion: "failure", name: "claude-review" }),
+        run({ id: 3, name: "Lint" }),
+      ],
+      gates: ["Gate"],
+      verdict: {
+        kind: "green",
+        latest: [
+          run({ id: 3, name: "Lint" }),
+          run({ id: 2, conclusion: "failure", name: "claude-review" }),
+          run({ id: 1, name: "Gate" }),
+        ],
+        bystanders: [run({ id: 2, conclusion: "failure", name: "claude-review" })],
+      },
     },
     {
       id: "a gate completed with no conclusion is pending, never green or red",
@@ -783,10 +808,40 @@ describe("judgeHead", () => {
     expect(verdictKey(judgeHead("SUCCESS", [], ["Lint"]))).toBe("missing Lint");
     expect(verdictKey(judgeHead("PENDING", [], ["Lint"]))).toBeNull();
     expect(verdictKey(judgeHead("SUCCESS", [run({ id: 2 })], []))).toBe("green");
+    // A bystander turning red after the green is a new verdict, so the operator hears of it.
+    const gate = run({ id: 3, name: "Gate" });
+    const bystander = run({ id: 4, conclusion: "failure", name: "claude-review" });
+    expect(verdictKey(judgeHead("FAILURE", [gate, bystander], ["Gate"]))).toBe(
+      "green; red: claude-review",
+    );
   });
 });
 
 describe("describeVerdict", () => {
+  test("a gated green names the red runs outside the gates after the count, so the line and the every-check landing rule agree", () => {
+    const said = describeVerdict(
+      "PR octocat/repo#7",
+      "deadbeef".repeat(5),
+      judgeHead(
+        "FAILURE",
+        [
+          run({ id: 1, name: "build" }),
+          run({ id: 2, conclusion: "failure", name: "claude-review" }),
+          run({ id: 3, conclusion: "failure", name: "claude-review", wf: 102 }),
+        ],
+        ["build"],
+      ),
+      "https://github.com/octocat/repo/pull/7/checks",
+      () => {},
+    );
+    expect(said).toEqual({
+      kind: "ci",
+      state: "green",
+      text: "PR octocat/repo#7: CI green on deadbeefdead: 3 workflows; other checks red: claude-review",
+      url: "https://github.com/octocat/repo/pull/7/checks",
+    });
+  });
+
   test("a red names every failed run: a workflow the jobs read returns no row for is named after another's job rows, never dropped, even when the two share a name", () => {
     const s = scenario({
       "jobs-1.json": JSON.stringify({

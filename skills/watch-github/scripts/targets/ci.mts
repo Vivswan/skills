@@ -43,7 +43,8 @@ export function isFailed(run: Run): boolean {
 }
 
 export type Verdict =
-  | { kind: "green"; latest: Run[] }
+  /** `bystanders`: with gates named, the latest runs outside them that failed, named on the green line so the gates' green does not hide a red the landing rules count. */
+  | { kind: "green"; latest: Run[]; bystanders: Run[] }
   /** `missing`: gates with no run although the rollup settled, named on the red line so the red does not hide them. */
   | { kind: "red"; latest: Run[]; failed: Run[]; missing: string[] }
   | { kind: "pending" }
@@ -70,7 +71,7 @@ export function judgeHead(
   const latest = selectLatest(runs);
   const settled = TERMINAL_ROLLUPS.has(rollup ?? "");
   if (gates.length === 0) {
-    if (rollup === "SUCCESS") return { kind: "green", latest };
+    if (rollup === "SUCCESS") return { kind: "green", latest, bystanders: [] };
     if (settled) return { kind: "red", latest, failed: latest.filter(isFailed), missing: [] };
     if (rollup === null) return { kind: "none" };
     return { kind: "pending" };
@@ -87,7 +88,11 @@ export function judgeHead(
   if (gateRuns.some((run) => run.status !== "completed" || run.conclusion === null)) {
     return { kind: "pending" };
   }
-  return { kind: "green", latest };
+  return {
+    kind: "green",
+    latest,
+    bystanders: latest.filter((run) => !gates.includes(run.name) && isFailed(run)),
+  };
 }
 
 // --- the verdict as an event -----------------------------------------------------
@@ -95,6 +100,8 @@ export function judgeHead(
 export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
+
+const names = (runs: Run[]): string => [...new Set(runs.map((run) => run.name))].sort().join(", ");
 
 export type CiState = Verdict["kind"];
 
@@ -120,7 +127,7 @@ export function verdictKey(verdict: Verdict): string | null {
     case "none":
       return null;
     case "green":
-      return "green";
+      return verdict.bystanders.length > 0 ? `green; red: ${names(verdict.bystanders)}` : "green";
     case "red":
       return verdict.missing.length > 0 ? `red; no run of ${verdict.missing.join(", ")}` : "red";
     case "missing":
@@ -145,13 +152,16 @@ export function describeVerdict(
     case "pending":
     case "none":
       return null;
-    case "green":
+    case "green": {
+      const red =
+        verdict.bystanders.length > 0 ? `; other checks red: ${names(verdict.bystanders)}` : "";
       return {
         kind: "ci",
         state: "green",
-        text: `${label}: CI green on ${short}: ${plural(verdict.latest.length, "workflow")}`,
+        text: `${label}: CI green on ${short}: ${plural(verdict.latest.length, "workflow")}${red}`,
         url: checksUrl,
       };
+    }
     case "missing":
       return {
         kind: "trouble",
