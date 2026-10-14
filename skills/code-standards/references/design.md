@@ -1,6 +1,6 @@
 # Design Standards: Full Detail
 
-The deep version of four standards: fix the class, general-purpose over special-case, maintainability over effort, prefer a library over hand-rolling. They share one root: a design should absorb change instead of being rewritten by it.
+The deep version of five standards: fix the class, general-purpose over special-case, build only what the change needs, maintainability over effort, prefer a library over hand-rolling. They share one root: a design should absorb change instead of being rewritten by it.
 
 ## Fix the Class, Not the Instance
 
@@ -47,6 +47,20 @@ Canonical case: one page grew THREE independent problem-band renderers across th
 - Below that level, sharing any given function is a per-function judgment with no mechanical rule. Share when sharing is easy and uncomplicating (or when consistency is itself the point), and duplicate when a shared helper would accrete flags as its callers diverge. Not-DRY sometimes makes growth simpler than DRY.
 - Only unify where divergence is user-visible or correctness-relevant. Incidental duplication that is clearer duplicated stays duplicated, and deliberate test oracles exist precisely to disagree.
 - The unified pipeline itself follows `/no-invalid-states`: a discriminated union over the variants, not a flag soup a caller can set wrong. A "one pipeline" whose inputs can express nonsense states has traded N drift sites for one corruption site.
+
+## Build Only What the Change Needs
+
+Build what this change needs now, nothing for a need no caller has yet (YAGNI). The two design standards meet at the axis: parameterize what varies today, never what might vary.
+
+How to apply:
+
+- **An option, flag, parameter, hook, or abstraction earns its place** with a second real caller or a variation this change already needs. One caller with nothing varying means a plain call; a caller whose input already varies is the general-purpose standard's case.
+- **Speculative hardening** (a hostile caller that cannot reach the code, a race in a single-user tool, a bound an outer timeout already sets) is recorded where the change is described and built only when asked. The `/rubber-duck-review` skill's recorded-not-built list is its home.
+- **A change does what its title says.** A neighbouring improvement spotted on the way is its own change, with its own review.
+- **Generalize when the second consumer or the varying input arrives,** with both in view: the axis is known rather than guessed, and the parameter fits.
+- **The test:** if nothing in the repository uses the generality today, it is a guess, and a guess is debt that the next reader pays to understand.
+
+Canonical case: a CI watcher gained a flag for the one axis that varied across repositories (the gate workflow's name) and no retry policy for an outage nobody had seen.
 
 ## Maintainability Over Effort
 
