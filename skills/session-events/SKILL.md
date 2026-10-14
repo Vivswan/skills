@@ -153,8 +153,8 @@ one only  binding `<runtime-dir>/<pid>.<source>.sock` is the rule: a second star
           answering and exits 0; a socket file nobody answers on was left by a crash and is removed
           once; two sources of one session are two daemons
 poll      every `interval` seconds while busy; each quiet poll doubles the wait, up to `idleInterval`;
-          at once on `watch`, and on a restart with saved targets; each poll is a log line with its
-          event count and the next wait
+          at once on `watch`, and on a restart with saved targets; each poll that returns is a log
+          line with its event count and the next wait
 trouble   a failed poll is a log line; three in a row are one event, `<name>: the last 3 polls
           failed; read the daemon log for the reason`, with the log's path as its URL, and nothing
           more until a poll succeeds and three fail again
