@@ -47,7 +47,7 @@ runEvents<Target>({
   // A test gives the daemon a name it must refuse.
   name: process.env.FAKE_SOURCE_NAME ?? "fake-events",
   interval: 1,
-  idleInterval: 3,
+  idleInterval: 4,
   parseTarget([name, ...flags]) {
     if (name === undefined || !/^[A-Za-z0-9_-]+$/.test(name)) {
       throw new UsageError(`watch needs a target name of letters, digits, _ or -, got: ${name}`);

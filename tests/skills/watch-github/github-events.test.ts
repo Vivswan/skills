@@ -726,11 +726,12 @@ describe("a head nothing runs on, and a target whose own reads keep failing", ()
       "rows-1": rows({ b0: refNode({ rollup: null, suites: [["ci", "QUEUED", null]] }) }),
       "rows-3": rows({ b0: refNode({ rollup: "PENDING", suites: [] }) }),
     });
-    // Busy polls are 1 s apart, idle ones the source's 300 s: a read of its own inside 3 s is busy.
+    // Busy polls are 1 s apart; a quiet poll doubles the wait. The watch's read and the poll's
+    // are both quiet, so the daemon's log says so, and the second read is two doublings in.
     await s.start({ inbox: box.path, args: ["--interval", "1"] });
     expect(s.run(["watch", MAIN], { inbox: box.path }).code).toBe(0);
     expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("0 event(s)");
-    await Bun.sleep(3000);
+    expect(s.log()).toContain("poll: 0 event(s), quiet; next in 4 s");
     expect(s.rowsCalls()).toEqual(["example", "example"]);
     expect(s.ghCalls().filter((call) => call.includes("checkSuites("))).toHaveLength(1);
     expect(s.state().targets[MAIN]).toMatchObject({ seen: { ci: "none", verdict: null } });

@@ -57,7 +57,7 @@ export interface Io {
 
 export interface PollResult {
   events: EventInput[];
-  /** Something is still moving (CI pending, an event this poll): the next poll comes after `interval`, else `idleInterval`. */
+  /** Something is still moving (CI pending, an event this poll): the next poll comes after `interval`. A quiet poll doubles the wait, up to `idleInterval`. */
   busy: boolean;
 }
 
@@ -66,7 +66,7 @@ export interface Source<Target extends object> {
   name: string;
   /** Seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400. */
   interval: number;
-  /** Seconds between polls while nothing moves; defaults to `interval`. */
+  /** The longest wait between polls: a quiet poll doubles the wait, up to this; defaults to `interval`. */
   idleInterval?: number;
   /** Lines the usage text ends with: the target's forms and the source's own flags after `watch`. */
   usage?: string[];
@@ -548,7 +548,7 @@ async function runDaemon<Target extends object>(
     rmSync(files.socket, { force: true });
     throw new ToolingError(errorText(error));
   }
-  const banner = `${source.name} daemon ${process.pid} for ${describeOwner(owner)}; socket ${files.socket}; log ${files.log}; poll every ${busyInterval} s busy, ${idleInterval} s idle; mode ${mode}`;
+  const banner = `${source.name} daemon ${process.pid} for ${describeOwner(owner)}; socket ${files.socket}; log ${files.log}; poll every ${busyInterval} s busy, doubling to ${idleInterval} s idle; mode ${mode}`;
   console.log(banner);
   log(banner);
 
@@ -640,8 +640,13 @@ async function runDaemon<Target extends object>(
       if (Object.hasOwn(working, key)) state.targets[key] = working[key] as Target;
       else delete state.targets[key];
     }
-    nextInterval = result.busy ? busyInterval : idleInterval;
+    // A ramp, not a jump to idle: a merge or a review lands minutes after the last activity, with
+    // nothing pending.
+    nextInterval = result.busy ? busyInterval : Math.min(idleInterval, nextInterval * 2);
     const events = number(result.events);
+    log(
+      `poll: ${events.length} event(s), ${result.busy ? "busy" : "quiet"}; next in ${nextInterval} s`,
+    );
     commit(events);
     await deliverDigest(events);
     return events.length;
