@@ -96,7 +96,7 @@ async function poll(targets: Record<string, Target>, io: Io) {
     try {
       const outcome =
         target.form === "pr"
-          ? processPr(target, reply.rows.get(target.number) ?? null, reply.viewer, io)
+          ? processPr(target, reply.rows.get(target.number) ?? null, io)
           : processBranch(target, reply.tips.get(target.branch) ?? null, io);
       events.push(...outcome.events);
       busy ||= outcome.busy;

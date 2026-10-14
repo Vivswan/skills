@@ -189,7 +189,7 @@ export function rows(
   errors: Array<{ type: string; message: string; path: string[] }> = [],
 ): string {
   return JSON.stringify({
-    data: { viewer: { login: "me" }, r: aliases },
+    data: { r: aliases },
     ...(errors.length === 0 ? {} : { errors }),
   });
 }

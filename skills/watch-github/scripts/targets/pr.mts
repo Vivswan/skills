@@ -26,7 +26,7 @@ export interface PrTarget {
   repo: string;
   number: number;
   gates: string[];
-  /** The cursor: the row at the last poll, where its CI judgment stands, the verdict last delivered on its head, where the conflict line stands, and the activity ids the last two detail reads fetched. */
+  /** The cursor: the row at the last poll, where its CI judgment stands, the verdict last delivered on its head, where the conflict line stands, and every activity id a detail read has fetched. */
   seen: {
     row: Row;
     ci: CiState;
@@ -36,7 +36,8 @@ export interface PrTarget {
     noRuns: number;
     /** A conflict line stands unresolved; after a head or base move the test has not settled since, a conflict that survived is said again. */
     conflict: "told" | "told-before-move" | null;
-    activity: string[][];
+    /** Every id fetched so far, so a comment that leaves the read window and comes back is never news again. */
+    activity: string[];
   } | null;
   /** Set once the row answered null and the trouble event went out; cleared when it reads again. */
   unreadable?: boolean;
@@ -84,7 +85,7 @@ export function describeActivities(label: string, activities: Activity[]): Event
   const loose = comments.filter((comment) => !headlined.has(comment.id));
   if (loose.length > 0) {
     const authors = [...new Set(loose.map((comment) => comment.author))].join(", ");
-    const places = loose.map(place).filter((at): at is string => at !== null);
+    const places = [...new Set(loose.map(place).filter((at): at is string => at !== null))];
     const at = places.length > 0 ? ` at ${places.join(", ")}` : "";
     events.push({
       kind: "comment",
@@ -114,7 +115,6 @@ export function describeLabels(previous: string[], current: string[]): string | 
 export function processPr(
   target: PrTarget,
   reply: { row: Row; suites: Suites | null } | null,
-  viewer: string | null,
   io: Io,
 ): Outcome {
   const label = prLabel(target);
@@ -162,14 +162,17 @@ export function processPr(
     });
     return { events, busy: true, done: true };
   }
-  let activity = previous?.activity ?? [];
+  // A cursor an older daemon saved as two lists of ids is not migrated: it carried draft ids as
+  // seen and had forgotten older ones, so the activity is a baseline again, read now.
+  const legacy = previous !== null && !previous.activity.every((id) => typeof id === "string");
+  let activity = legacy ? [] : (previous?.activity ?? []);
   // A first sighting reads the detail too: what is on the PR now is the baseline, by id.
-  if (previous === null || changes.activity) {
-    const seen = previous === null ? null : new Set(previous.activity.flat());
+  if (previous === null || legacy || changes.activity) {
+    const seen = previous === null || legacy ? null : new Set(activity);
     const detail = readPrDetail(ref, seen);
-    activity = [...activity.slice(-1), detail.fetchedIds];
+    activity = [...new Set([...activity, ...detail.fetchedIds])];
     if (seen !== null) {
-      for (const event of describeActivities(label, newActivity(detail, seen, viewer))) {
+      for (const event of describeActivities(label, newActivity(detail, seen))) {
         events.push({ ...fields, ...event });
       }
       for (const gap of detail.gaps) {

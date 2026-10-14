@@ -22,6 +22,7 @@ import {
   judgeHead,
   verdictKey,
 } from "../../../skills/watch-github/scripts/targets/ci.mts";
+import { type PrTarget, processPr } from "../../../skills/watch-github/scripts/targets/pr.mts";
 import { tempDirs } from "../../helpers/temp-dirs";
 
 // Contract tests for the GitHub read modules: a fake `gh` on PATH validates the exact invocation
@@ -303,7 +304,8 @@ function row(spec: Partial<Row> = {}): Row {
 
 /**
  * `at` is the publication instant; `created` (default: the same) is the draft's creation;
- * `review` is the fullDatabaseId of the review that published an inline comment.
+ * `review` is the fullDatabaseId of the review that published an inline comment, `reviewState`
+ * that review's state (default: none given; "PENDING" marks a draft the author alone sees).
  */
 type CommentSpec = {
   id: number;
@@ -313,6 +315,7 @@ type CommentSpec = {
   body: string;
   url: string;
   review?: string;
+  reviewState?: string;
 };
 
 function commentNode(spec: CommentSpec): unknown {
@@ -323,7 +326,14 @@ function commentNode(spec: CommentSpec): unknown {
     author: spec.login === null ? null : { login: spec.login },
     body: spec.body,
     url: spec.url,
-    ...(spec.review === undefined ? {} : { pullRequestReview: { fullDatabaseId: spec.review } }),
+    ...(spec.review === undefined
+      ? {}
+      : {
+          pullRequestReview: {
+            fullDatabaseId: spec.review,
+            ...(spec.reviewState === undefined ? {} : { state: spec.reviewState }),
+          },
+        }),
   };
 }
 
@@ -838,7 +848,7 @@ describe("describeVerdict", () => {
 describe("readRepository", () => {
   const PENDING_SUITE: SuiteSpec = { id: 5, status: "in_progress" };
 
-  test("one request carries the rows, the branch tips, the suites of the heads still being judged, and the viewer; 31 PRs go as two chunks; a null PR is null while its batch survives gh's exit 1", () => {
+  test("one request carries the rows, the branch tips, and the suites of the heads still being judged; 31 PRs go as two chunks; a null PR is null while its batch survives gh's exit 1", () => {
     // PR 17 is deleted: GitHub answers null for it with an `errors` entry, on which gh exits 1
     // with the body still on stdout. A batch that failed on that exit would blind 30 PRs for one
     // deletion. Only PR 1 and the main tip are pending, so only they carry their suites.
@@ -860,7 +870,7 @@ describe("readRepository", () => {
     r.b1 = null;
     const s = scenario({
       "rows-1.json": JSON.stringify({
-        data: { viewer: { login: "me" }, r },
+        data: { r },
         errors: [
           {
             type: "NOT_FOUND",
@@ -886,7 +896,6 @@ describe("readRepository", () => {
       branches: ["main", "gone"],
       suitesFor: { prs: new Set([1]), branches: new Set(["main"]) },
     });
-    expect(reply.viewer).toBe("me");
     expect(reply.rows.size).toBe(31);
     expect(reply.rows.get(17)).toBeNull();
     expect(reply.rows.get(1)).toEqual({
@@ -915,7 +924,6 @@ describe("readRepository", () => {
     const calls = s.calls();
     expect(calls).toHaveLength(2);
     const first = calls[0] as string;
-    expect(first).toContain("viewer { login }");
     expect(first).toContain("labels(first: 100) { nodes { name } }");
     expect(first).toContain('r: repository(owner: "octocat", name: "repo")');
     expect(first).toContain("p17: pullRequest(number: 17)");
@@ -923,7 +931,6 @@ describe("readRepository", () => {
     expect(first).toContain('b1: ref(qualifiedName: "refs/heads/gone")');
     expect(first.split("checkSuites(first: 100)")).toHaveLength(3);
     expect(calls[1]).toContain("p31: pullRequest(number: 31)");
-    expect(calls[1]).not.toContain("viewer");
     expect(calls[1]).not.toContain("ref(");
     expect(s.violations()).toBe("");
   });
@@ -944,17 +951,16 @@ describe("readRepository", () => {
       complete: false,
       nextCursor: "page2",
     });
-    expect(reply.viewer).toBeNull();
     expect(s.violations()).toBe("");
   });
 
   test("a repository that answers null is the failed read it is, carrying gh's own error, never a batch of unreadable targets", () => {
-    // An error at the repository's path (gone, no access, or GitHub's own) nulls the alias with
-    // the viewer still answered; read as every target unreadable, a transient error would end
-    // every watch on the repository with a trouble event each.
+    // An error at the repository's path (gone, no access, or GitHub's own) nulls the alias; read
+    // as every target unreadable, a transient error would end every watch on the repository with
+    // a trouble event each.
     const s = scenario({
       "rows-1.json": JSON.stringify({
-        data: { viewer: { login: "me" }, r: null },
+        data: { r: null },
         errors: [{ type: "INTERNAL", path: ["r"], message: "Something went wrong" }],
       }),
       "rows-1.exit1": "gh: Something went wrong\n",
@@ -974,7 +980,7 @@ describe("readRepository", () => {
     // read as deleted, a transient error would end the watch with the wrong word.
     const s = scenario({
       "rows-1.json": JSON.stringify({
-        data: { viewer: { login: "me" }, r: { p1: prNode(), p7: null } },
+        data: { r: { p1: prNode(), p7: null } },
         errors: [{ type: "INTERNAL", path: ["r", "p7"], message: "Something went wrong" }],
       }),
       "rows-1.exit1": "gh: Something went wrong\n",
@@ -1102,8 +1108,10 @@ describe("readPrDetail", () => {
     // at 09:50 and published when review 2 was submitted, so their activity instant is the
     // publication and they name that review. Thread C on page 2 is two long and fully fetched: a
     // review-comment then a reply. The empty-bodied COMMENTED review 2 is activity, for the
-    // renderer to headline its inline comments under; the unsubmitted PENDING review is not. The
-    // issue comments and reviews come from the first page only.
+    // renderer to headline its inline comments under. The unsubmitted PENDING review and the
+    // inline comment drafted under it are neither activity nor fetched ids: their submission,
+    // under the same ids, is news then. The issue comments and reviews come from the first page
+    // only.
     const s = scenario({
       "detail-1.json": detailPage({
         comments: [
@@ -1149,6 +1157,23 @@ describe("readPrDetail", () => {
           },
         ],
         threads: [
+          {
+            isResolved: false,
+            path: "src/d.ts",
+            line: 2,
+            total: 1,
+            comments: [
+              {
+                id: 41,
+                at: "2026-03-01T10:09:00Z",
+                login: "octocat",
+                body: "draft note",
+                url: "https://example.com/t41",
+                review: "3",
+                reviewState: "PENDING",
+              },
+            ],
+          },
           {
             isResolved: true,
             path: "src/a.ts",
@@ -1339,7 +1364,7 @@ describe("readPrDetail", () => {
       },
     ];
     expect(detail).toEqual({
-      unresolvedThreads: 2,
+      unresolvedThreads: 3,
       activities: expected,
       fetchedIds: [
         "review-comment:11",
@@ -1352,7 +1377,6 @@ describe("readPrDetail", () => {
         "comment:2",
         "review:1",
         "review:2",
-        "review:3",
       ],
       gaps: [],
     });
@@ -1361,6 +1385,65 @@ describe("readPrDetail", () => {
     expect(
       calls.map((call) => call.endsWith("-f owner=octocat -f name=repo -F number=7 -f cursor=c1")),
     ).toEqual([false, true]);
+    expect(s.violations()).toBe("");
+  });
+
+  test("a draft submitted behind a seen review is news: on the first page every unseen node counts, whatever its position", () => {
+    // A review drafted before review 2 keeps its place before it when submitted later. The
+    // boundary rule (older than the last seen node is forgotten history) holds on a back page,
+    // where the page is wider than the window; on the first page every node older than the seen
+    // one was fetched beside it, so an unseen one there is a draft that just became real.
+    const s = scenario({
+      "detail-1.json": detailPage({
+        comments: [],
+        reviews: [review("1", 1), review("2", 2)],
+        threads: [],
+      }),
+    });
+    const detail = readPrDetail(PR7, new Set(["review:2"]));
+    expect(detail.activities.map((activity) => activity.id)).toEqual(["review:1", "review:2"]);
+    expect(detail.fetchedIds).toEqual(["review:1", "review:2"]);
+    expect(s.calls()).toHaveLength(1);
+    expect(s.violations()).toBe("");
+  });
+
+  test("a cursor an older daemon saved as two id lists is a baseline again: nothing is reported and the ids are saved flat; a flat cursor reports what it has not seen", () => {
+    // The two-list cursor carried the login's drafts as seen and had forgotten ids older than
+    // two reads, so what it says is not trusted: the window is read as on a first sighting.
+    const s = scenario({
+      "detail-1.json": detailPage({
+        comments: [comment(1, 1), comment(2, 2)],
+        reviews: [],
+        threads: [],
+      }),
+    });
+    const target = (activity: unknown): PrTarget => ({
+      form: "pr",
+      repo: PR7.repo,
+      number: PR7.number,
+      gates: [],
+      seen: {
+        row: row({ number: 7 }),
+        ci: "green",
+        verdict: "green",
+        noRuns: 0,
+        conflict: null,
+        activity: activity as string[],
+      },
+    });
+    const reply = { row: row({ number: 7 }), suites: null };
+    const io = { log: () => {} };
+    const legacy = target([["comment:1"]]);
+    expect(processPr(legacy, reply, io).events).toEqual([]);
+    expect(legacy.seen?.activity).toEqual(["comment:1", "comment:2"]);
+    const flat = target(["comment:1"]);
+    expect(
+      processPr(
+        flat,
+        { row: row({ number: 7, updatedAt: "2026-03-01T10:09:00Z" }), suites: null },
+        io,
+      ).events.map((event) => event.text),
+    ).toEqual(["PR octocat/repo#7: 1 new comment by work-bot"]);
     expect(s.violations()).toBe("");
   });
 
@@ -1492,7 +1575,7 @@ describe("newActivity", () => {
     url: "https://example.com/c",
   });
 
-  test("news is an unseen id, never a later instant: a same-second comment is new, a seen later one is not; the viewer's own are dropped; oldest first", () => {
+  test("news is an unseen id, never a later instant: a same-second comment is new, a seen later one is not; oldest first, whoever wrote them", () => {
     // GitHub's timestamps have one-second grain. Judged by instant against a 10:00:00 watermark,
     // comment 5 (published in that same second) would never be reported, and comment 1 (read
     // ahead of its row last time) would be reported again.
@@ -1510,13 +1593,16 @@ describe("newActivity", () => {
       ],
     };
     const seen = new Set(["comment:1", "comment:2", "comment:3", "comment:4"]);
-    expect(newActivity(detail, seen, "octocat")).toEqual([
+    expect(newActivity(detail, seen)).toEqual([
       activity("comment:5", "2026-03-01T10:00:00Z", "example-user"),
+      activity("comment:6", "2026-03-01T10:00:01Z", "octocat"),
     ]);
-    expect(newActivity(detail, new Set(), "octocat")).toEqual([
+    expect(newActivity(detail, new Set())).toEqual([
       activity("comment:4", "2026-03-01T09:59:59Z", "work-bot"),
+      activity("comment:2", "2026-03-01T10:00:00Z", "octocat"),
       activity("comment:3", "2026-03-01T10:00:00Z", "work-bot"),
       activity("comment:5", "2026-03-01T10:00:00Z", "example-user"),
+      activity("comment:6", "2026-03-01T10:00:01Z", "octocat"),
       activity("comment:1", "2026-03-01T10:00:02Z", "work-bot"),
     ]);
   });

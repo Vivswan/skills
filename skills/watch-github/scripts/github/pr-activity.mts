@@ -39,7 +39,7 @@ export type PrDetail = {
 };
 
 const COMMENT_FIELDS = "databaseId publishedAt createdAt author { login } body url";
-const REVIEW_COMMENT_FIELDS = `${COMMENT_FIELDS} pullRequestReview { fullDatabaseId }`;
+const REVIEW_COMMENT_FIELDS = `${COMMENT_FIELDS} pullRequestReview { fullDatabaseId state }`;
 const REVIEW_FIELDS = "fullDatabaseId submittedAt state author { login } body url";
 const BACK_PAGE_INFO = "pageInfo { hasPreviousPage startCursor }";
 
@@ -123,8 +123,7 @@ function reviewId(node: unknown, what: string): string {
   return `review:${requireString(get(node, "fullDatabaseId"), `${what} fullDatabaseId`)}`;
 }
 
-// GitHub renders a deleted account's comments under "ghost"; the same name here keeps the viewer
-// filter in newActivity from ever matching one.
+// GitHub renders a deleted account's comments under "ghost", so the event line names them the same.
 function loginOf(node: unknown): string {
   const login = get(get(node, "author"), "login");
   return typeof login === "string" ? login : "ghost";
@@ -166,16 +165,26 @@ function commentActivity(
   return activity;
 }
 
-// A PENDING review (no submittedAt) is the viewer's own unsubmitted draft.
+// A PENDING review (no submittedAt) and the inline comments drafted under it are the login's own
+// unsubmitted draft: not news, and not fetched ids either, or their submission under the same ids
+// would count as already seen.
+const isDraftReview = (node: unknown): boolean => typeof get(node, "submittedAt") !== "string";
+const isDraftInline = (node: unknown): boolean =>
+  get(get(node, "pullRequestReview"), "state") === "PENDING";
+
+function without(connection: Connection, draft: (node: unknown) => boolean): Connection {
+  return { ...connection, nodes: connection.nodes.filter((node) => !draft(node)) };
+}
+
+const reviewIdOf = (node: unknown): string => reviewId(node, "review");
+
 function reviewActivities(nodes: unknown[]): Activity[] {
   const activities: Activity[] = [];
   for (const node of nodes) {
-    const submittedAt = get(node, "submittedAt");
-    if (typeof submittedAt !== "string") continue;
     activities.push({
       id: reviewId(node, "review"),
       kind: "review",
-      at: submittedAt,
+      at: requireString(get(node, "submittedAt"), "review submittedAt"),
       author: loginOf(node),
       hasBody: hasBody(node),
       url: requireString(get(node, "url"), "review url"),
@@ -228,10 +237,11 @@ class DetailReader {
     return variables;
   }
 
-  // The seen set holds two reads' fetched ids, so a node older than the newest seen one on the
-  // stopping page is history the set has forgotten, not news: a back page is wider than a
-  // thread's window, and would otherwise resurface comments from before the baseline. Every
-  // fetched id still counts as seen, so a cut page does not narrow the next read's set.
+  // A back page is wider than a thread's window and reaches past the baseline to comments never
+  // fetched, so on it a node older than the newest seen one is history, not news, and is cut.
+  // The first page is the window itself, whose unseen nodes are news whatever their position: a
+  // draft review submitted after a later review was seen keeps its older place. The cut page's
+  // ids still count as fetched, so it does not narrow the next read's seen set.
   private readBack(
     first: Connection,
     what: string,
@@ -245,7 +255,7 @@ class DetailReader {
       this.fetchedIds.push(...page.nodes.map(idOf));
       if (seen === null) return page.nodes;
       const boundary = page.nodes.findLastIndex((node) => seen.has(idOf(node)));
-      if (boundary >= 0) return [...page.nodes.slice(boundary), ...newer];
+      if (boundary >= 0) return [...page.nodes.slice(pages === 1 ? 0 : boundary), ...newer];
       if (!page.hasPreviousPage) return [...page.nodes, ...newer];
       if (pages === MAX_BACK_PAGES) {
         this.gaps.push(
@@ -293,11 +303,12 @@ class DetailReader {
       const comments = get(thread, "comments");
       const total = requireNumber(get(comments, "totalCount"), `${where}.comments.totalCount`);
       const threadId = requireString(get(thread, "id"), `${where}.id`);
+      const idOf = (node: unknown) => commentId(node, "review-comment", `${where}.comments`);
       const nodes = this.readBack(
-        connectionOf(comments, `${where}.comments`),
+        without(connectionOf(comments, `${where}.comments`), isDraftInline),
         `thread on ${place.path}`,
-        (node) => commentId(node, "review-comment", `${where}.comments`),
-        (cursor) => this.olderThreadComments(threadId, cursor),
+        idOf,
+        (cursor) => without(this.olderThreadComments(threadId, cursor), isDraftInline),
       );
       activities.push(...threadActivities(place, total, nodes, where));
     });
@@ -338,10 +349,10 @@ class DetailReader {
     );
     for (const node of comments) activities.push(commentActivity(node, "comment", "comment"));
     const reviews = this.readBack(
-      connectionOf(get(first, "reviews"), "reviews"),
+      without(connectionOf(get(first, "reviews"), "reviews"), isDraftReview),
       "reviews",
-      (node) => reviewId(node, "review"),
-      (c) => this.olderReviews(c),
+      reviewIdOf,
+      (c) => without(this.olderReviews(c), isDraftReview),
     );
     activities.push(...reviewActivities(reviews));
     return { unresolvedThreads, activities, fetchedIds: this.fetchedIds, gaps: this.gaps };
@@ -353,16 +364,13 @@ export function readPrDetail(ref: PrRef, seen: Seen): PrDetail {
 }
 
 /**
- * Activities whose id is not in `seen`, the viewer's own excluded, oldest first. Ids, never
- * instants: GitHub's timestamps have one-second grain, so a comment published in the same second
- * as the last read would be older-or-equal to any watermark and never reported.
+ * Activities whose id is not in `seen`, oldest first, whoever wrote them: the owner and the agent
+ * often share one login, so a comment by the session's own login may be the owner's decision.
+ * Ids, never instants: GitHub's timestamps have one-second grain, so a comment published in the
+ * same second as the last read would be older-or-equal to any watermark and never reported.
  */
-export function newActivity(
-  detail: PrDetail,
-  seen: ReadonlySet<string>,
-  viewer: string | null,
-): Activity[] {
+export function newActivity(detail: PrDetail, seen: ReadonlySet<string>): Activity[] {
   return detail.activities
-    .filter((activity) => activity.author !== viewer && !seen.has(activity.id))
+    .filter((activity) => !seen.has(activity.id))
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
