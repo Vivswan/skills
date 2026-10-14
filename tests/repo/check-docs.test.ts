@@ -31,6 +31,7 @@ const TREE: Record<string, string> = {
   "template/references/ref.md": CLEAN,
   "skills/one/SKILL.md": "# S\n\nRead `docs/gone.md` in your repository.\n",
   "skills/one/references/ref.md": CLEAN,
+  "skills/one/references/languages/nested.md": CLEAN,
   "template/SKILL.md": CLEAN,
 };
 
@@ -56,7 +57,7 @@ describe("check-docs", () => {
       {},
       [
         0,
-        "docs-probe: 9 page(s) clean (cap 70 words)\ndocs-probe: 3 page(s) clean (cap 70 words)\n",
+        "docs-probe: 9 page(s) clean (cap 70 words)\ndocs-probe: 4 page(s) clean (cap 70 words)\n",
         "",
       ],
     ],
@@ -66,12 +67,12 @@ describe("check-docs", () => {
       [1, "", `docs-probe: 1 finding(s)\n  README.md:3: ${LONG_FINDING}\n`],
     ],
     [
-      "a long paragraph in a skill page exits 1 after the first set passed: shape-only still counts words",
-      { "skills/one/references/ref.md": LONG },
+      "a long paragraph in a nested skill reference page exits 1 after the first set passed: shape-only still counts words",
+      { "skills/one/references/languages/nested.md": LONG },
       [
         1,
         "docs-probe: 9 page(s) clean (cap 70 words)\n",
-        `docs-probe: 1 finding(s)\n  skills/one/references/ref.md:3: ${LONG_FINDING}\n`,
+        `docs-probe: 1 finding(s)\n  skills/one/references/languages/nested.md:3: ${LONG_FINDING}\n`,
       ],
     ],
     [

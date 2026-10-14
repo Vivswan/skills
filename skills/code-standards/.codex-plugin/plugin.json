@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Code Standards",
     "shortDescription": "Standards for writing and reviewing code.",
-    "longDescription": "Standards with concrete specimens: fix the class not the instance, guard tests for recurring problems, general-purpose over special-case, maintainability over effort, comments only for what code cannot show, no barrel files or pass-through functions, no planning references in code, lean AGENTS.md files, content-only commit messages, and scannable structure instead of text blobs. Contributes its Review Criteria to rubber-duck-review passes when both are installed.",
+    "longDescription": "Standards with concrete specimens: fix the class not the instance, guard tests for recurring problems, general-purpose over special-case, maintainability over effort, comments only for what code cannot show, code that reads top to bottom (constants first, define before use, one concept per function, a lint floor per language), no barrel files or pass-through functions, no planning references in code, lean AGENTS.md files, content-only commit messages, and scannable structure instead of text blobs. Contributes its Review Criteria to rubber-duck-review passes when both are installed.",
     "developerName": "Vivswan",
     "category": "Developer Tools",
     "capabilities": ["Read", "Review"],

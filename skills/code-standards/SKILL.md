@@ -10,202 +10,130 @@ metadata:
 
 Standards for code and the artifacts around it. Apply them while writing. Check them while reviewing.
 
-Where a standard has a canonical case (the specimen that set the rule), it is stated inline or in the standard's `references/` file. The concrete case recalls better than the rule. The `references/` file named under each standard carries the full detail: the why, the how-to-apply list, and the boundaries and exceptions.
+Readability and beauty come first. Every standard here serves them and yields where following it would read worse; the deviation is said in a line, never forced through.
+
+This is a silver standard, not gold. Languages and tools move faster than this page: a newer version's more beautiful, more readable way of writing a thing wins even where the page has not caught up, and the page is brought up to it afterwards.
+
+Each standard below is the rule in a few lines, with the specimen that set it where one exists. The `references/` page named under it carries the why, the how-to-apply list, and the boundaries. Load that page before acting on a standard's edge.
 
 ## The Standards
 
 ### Fix the class, not the instance
 
-A systemic problem gets a root fix that makes recurrence impossible, never only a fix of the case at hand. The `/never-twice` skill owns this rule and its response ladder. Specimen and full detail in `references/design.md`.
+A systemic problem gets a root fix that makes recurrence impossible, never only a fix of the case at hand. The `/never-twice` skill owns the judgment and its response ladder. Full detail: `references/design.md`.
 
 ### Guard what passes the floor
 
-A problem that passes the `/never-twice` floor's judgment ships with the highest reachable rung of that ladder: a type or structure that makes the state impossible, else a test, tripwire, or pipeline fix (or a proposal to the user when the pipeline is out of reach), else a written rule recorded as debt.
-
-That floor owns the judgment and its worked examples. Full detail, including the guard-outside-your-reach case, in `references/design.md`.
+A problem that passes the `/never-twice` floor's judgment ships with the highest reachable rung: a type or structure that makes the state impossible, else a test, tripwire, or pipeline fix (or a proposal to the user when the pipeline is out of reach), else a written rule recorded as debt. Full detail: `references/design.md`.
 
 ### General-purpose over special-case
 
-Parameterize the axis that keeps changing instead of hardcoding today's instance.
-
-Specimen: a safety classifier whose rulebook kept changing was built as a classifier FACTORY with the rubric as an input. Any rubric change produces a new classifier for free, and the same machinery serves uses beyond safety.
-
-Full detail, including the one-pipeline-per-concept rule (the page that grew three visibly diverging error-band renderers) and where DRY stops: `references/design.md`.
+Parameterize the axis that keeps changing instead of hardcoding today's instance, and give one concept one pipeline. Specimen: a safety classifier whose rulebook kept changing was built as a classifier factory with the rubric as an input. Full detail, including where DRY stops: `references/design.md`.
 
 ### Maintainability over effort
 
-Code quality outweighs diff size and effort spent. A big refactor is always better than a fix done the wrong way: wrong-shaped fixes compound into tech debt.
-
-- Take the larger refactor when it is cleaner, and reduce complexity.
-- Enforce invariants in types rather than repeated checks (see the `/no-invalid-states` skill).
-- Use assertions to pin invariants the type system cannot carry: one assertion at a boundary removes whole families of downstream edge-case handling.
-
-Specimen: a documented workaround hybrid was reworked outright rather than kept. Never preserve a workaround to keep a diff small.
-
-Full detail: `references/design.md`.
+Code quality outweighs diff size and effort spent. A big refactor beats a fix done the wrong way, invariants live in types (the `/no-invalid-states` skill), and an assertion at a boundary pins what types cannot. Specimen: a documented workaround hybrid was reworked outright rather than kept. Full detail: `references/design.md`.
 
 ### Prefer a library over hand-rolling
 
-Never hand-roll what a good library already does: the hand-rolled version is maintained for as long as the code lives, the library by its authors. A large library, or a fit that is unclear, is a question to the user or repository owner before the work. Otherwise the library wins.
-
-The search happens before the first line and is written down: the brief, then the PR body or the landing report, names the library used, or the search and why nothing fits. A tool already in the repository counts as the library. The rule covers code a change adds, moves, touches, reuses, or depends on, not only code it adds.
-
-Specimen: an audit of one repository's CI scripts found five whose whole job existing tooling already did. A published package covered four (two schema fetchers, an events enum, generated action docs). A build followed by `git diff --exit-code` covered the drift check.
-
-Full detail, including what makes a library good and the one exception (a library that needs a runtime or API the repository has dropped): `references/design.md`.
+Never hand-roll what a good library already does; a tool already in the repository counts. The search happens before the first line and is recorded in the brief, then the PR body or landing report. A large library or an unclear fit is a question to the owner first. Specimen: five CI scripts whose whole job a published package or `git diff --exit-code` already did. Full detail: `references/design.md`.
 
 ### Minimum standard for tests
 
-A floor every test clears, not a recipe for which tests to write. Fuzzing, property-based, integration, and other richer tests are welcome, and each of them still meets this bar. A test asserts a whole outcome, not one field of it.
+A floor every test clears. A test asserts a whole outcome and answers "what would drift silently without this?" in its name or first line: an external fact, a cross-file consistency, or a named incident. A constant or a shipped file is the source and is never pinned to itself.
 
-Agents drift toward many small weak tests. The fix is tests that each pin a whole outcome, which leaves fewer of them as a side effect, not a goal.
+A guard test is seen failing on its bug. A deletion with no behavior of its own proves itself with a census, not a manufactured test. Fixtures are hand-authored, never recorded from real data.
 
-- **The drift question.** Every test answers "what would drift silently without this?" in its name or first line. Three answers count: an external fact that nothing in the repository or its CI enforces, a cross-file consistency the source cannot express, or a regression with a named incident. "The source says so" means no test.
-- **A constant is the source.** A test of a single constant restates the source and grows with it. So does a test of a variable that is itself the source of its value (a default, a key name, an argv literal, a path).
-- **A shipped file is the source.** A test that parses a file the repository ships (a lint table, a workflow fragment, a settings layer) and asserts its contents back is the same restatement. A data file is not external because it is not code.
-- **A check earns its place.** What fails loudly on its own gets no check, nor does what the toolchain fixes itself (a toolchain that fetches a missing tool itself, as bun does, is working, not failing): a missing package, a stale lockfile, a wrong toolchain all show in the next build and are fixed then. What would fail silently gets a test, never skipped as "it would fail anyway".
-- **Pin the value where it leaves the program** (the bytes written to a file, the line printed, the request sent), and only when that boundary is an external contract.
-- **Shape-only tests go.** Delete tests that only assert a shape, a type, or that something exists. If that fact matters, assert it inside a test that also checks the value.
-- **Parametrize one axis.** When hand-written cases differ only along one input axis, replace them with one parametrized case list.
-- **Prove each guard test:** show it failing on the bug it guards, and for that reason. Reintroducing the bug is the standard form, and a pre-fix red run is the same control. Run that test file alone, not the suite.
-- **Red-then-green is for behavior changes,** a fix made by deleting code included. A deletion with no behavior of its own (an unused setting, a dead path) proves itself with a census (grep counts before and after), never with a test manufactured so that something goes red. The census goes in the PR body, or in the landing report with no PR.
-- **Fixtures are hand-authored,** never recorded from real data: a file measured or copied from the author's real environment identifies the author with no name in it. A tool that measures real data requires an explicit output path outside the repository and refuses one inside it.
-
-Specimen: an extractor had fifteen tests each asserting one key of the returned dict. Folded into one parametrized test pinning the whole dict per scenario, the file went from 81 test functions to 44.
-
-Every one of the seven bugs the suite existed to catch still failed when reintroduced. A test that ignores a column cannot catch a regression in it.
-
-Specimen: builders on a workflows repository shipped eleven PRs in one day of shape tests that restated the yaml they had just read. Two examples: a census that no workflow sets `cancel-in-progress: false`, and a pin that a job's `needs` equals the list in the file. Such a test changes in the same commit as the source, so nothing can drift under it: delete it.
-
-Specimen: a test audit found `expect(DEFAULT_HOME).toBe("~/.local/share/app")`. Deleted. Its replacement runs the installer with no home override and reads back the file it wrote under that path, because the path is where the value reaches the user's disk.
-
-Specimen: a toolchain repository's Rust lint floor shipped with a test that parsed the shipped `Cargo.toml` starter and asserted its lint list, then parsed the three shipped workflow blocks and asserted their cargo commands. Deleted: the shipped file is the source of truth, and a test listing its contents back is a second copy that changes in the same commit.
-
-Specimen: a statistical profile measured from its author's real sessions sat committed as a test fixture with a comment saying so. Replaced by a hand-written fixture. Every figure of the old file was grepped out of the replacing PR, and the history was rewritten to drop the original.
-
-Full detail: `references/tests.md`.
+Specimen: fifteen tests each asserting one key of a dict became one parametrized test pinning the whole dict, 81 test functions to 44, every guarded bug still caught. Full detail and the other specimens: `references/tests.md`.
 
 ### Comments carry only what the code cannot show
 
-A comment is read by humans and agents, the human first. The code is the single source of truth.
+The reason a choice was made, an invariant another file relies on, an external system's quirk, a consequence invisible here, the input that motivated a guard. Never what the code does, its types, its control flow, its history, the alternatives.
 
-- **Content**, the kinds a comment may carry:
-  - the reason a choice was made when the obvious choice was rejected
-  - an invariant another file relies on, naming the file
-  - an external system's quirk and what breaks without the workaround
-  - a consequence of changing the line that is not visible here
-  - the one input that motivated a guard
-- **Never a comment:** what the code does, its types, its control flow, its history, the alternatives. History and alternatives go in the commit message.
-- **Tell first, then show.** One or two sentences say what the code cannot show. A block follows only when it shows the fact faster: an arrow flow for a sequence, aligned rows for facts that share a shape.
-- **Uniform shape is the wall:** a paragraph, or every fact as its own line with nothing shown. Past the two sentences, a fact is shown or cut.
-- **No limits here.** Length and width caps, where a repository has them, belong to its own lint or file-size check, not to this rule. Never pack prose to fit a cap: cut honestly.
-- **Test, before writing or keeping one:** "What does this say that the code does not?" and "Could a tired human read it in one pass?" Fail either: rewrite or delete.
-
-Specimen, a stack of eight one-fact sentences rewritten as tell, then rows:
-
-```ts
-/**
- * The ONE "entry uses this credential field" judgment; it judges the ENTRY alone, so it errs toward "uses it".
- * Wire narrowing still drops what cannot ride, so consumers gate refusals, never the send.
- *
- * Authorization-named header resolved  -> skips the OAuth exchange
- * X-API-Key-named header resolved      -> owns that carrier
- * declared header, value unknown       -> lowers no other field's judgment
- */
-```
-
-Full detail, the before/after specimens, and the TODO ban: `references/comments.md`.
+Tell first, in one or two sentences, then show (aligned rows, an arrow flow) only when a block is faster. Never pack prose to fit a cap: cut honestly. Before writing or keeping one: what does this say that the code does not, and could a tired human read it in one pass? Specimens, the TODO ban: `references/comments.md`.
 
 ### Heal at the boundary, or refuse there
 
-Malformed input or state with one unambiguous repair is repaired at the boundary, reported where a user would want to know, and the program continues. Input with no repair, or with several candidate repairs, is refused at that same boundary. Nothing malformed passes through to fail later.
+Malformed state with one unambiguous repair is repaired at the boundary and reported; with no repair or several, it is refused there. What the tool only reads is refused, what it outputs is healed toward what the user declared, and nothing malformed passes through to fail later. Full detail: `references/design.md`.
 
-Ownership follows the direction of data. What the tool only reads (a user's settings file, CLI arguments, a caller's payload) is never its own: a malformation there is refused, naming the key and the fix. What it outputs, directly or through something it drives (applied state, rendered config, caches, generated files), may be its own and is healed toward what the user declared. Unclear direction: ask the repository owner.
+### Code reads beautifully, top to bottom
 
-A tool's own section inside a user-authored file splits the same way. A malformation the user typed there is reported, never healed, and the bad slot reads as absent where that is safe. A schema migration may rewrite that section once, since the tool moves its own data between its own shapes. Nothing outside the section is touched.
+Code always looks beautiful and reads once. A module reads top to bottom with nothing to scroll back for, and a function reads as the list of its steps. Everything below this heading is a default, not a law: the case decides, a deviation that reads better stands, and a reviewer who flags one says what would read better.
 
-A quoted `"true"` in a config file the tool manages is healed, since the tool could have written it right. The same `"true"` in the user's settings is the user's error and is refused. A comment on a healing step states the rule in one line and does not argue for it. Where the boundary sits is the `/no-invalid-states` skill's question.
+- **Module:** imports, every constant in one block (caches included), types, then functions. A function sits above its callers, so the entry point is the last definition. Where that order cannot be had or reads worse, readability wins and the deviation is stated. A section separator marks a small bounded group only: a module that wants sections is two modules.
+- **Function:** one concept each, nameable in a few words, long when the concept is long. Guards first, each its own paragraph and never counted as a second concept; an early return with the body unwrapped after it; a loop that `continue`s instead of nesting. Two nameable things split into named steps; a complexity lint is the backstop, raised with a reason or split, never silenced inline.
+- **Line:** no ugly one-liners (nested conditionals, conditional splices, first-match lookups, assignment in a condition, `and`/`or` as control flow). One computation per line under a plain-noun name; named arguments once three values share a type; cleanup bound to its acquisition (`with`, `defer`, `Drop`, `using`).
+- **Body:** blank lines after the setup, between decisions and branches, before the return; none inside an `if` and its single consequence.
+- **Surface:** every signature typed; a doc comment on every public item saying what it returns and what the arguments mean, never a narrative of its behaviour; no underscore-prefixed module-level names (functions, constants, caches) beyond the language's own visibility.
+
+Specimen, the body that set the paragraph rule:
+
+```python
+key = (video_key(video), audio_sig(video), model)
+
+if key not in SEGMENTS:
+    cache = cache_file(video, model)
+    segments = read_cache(cache)
+
+    if segments is None and window is not None:
+        return with_min_words(transcribe_window(video, model, window), min_words)
+
+    if segments is None:
+        segments = run_asr(full_audio_wav(video), model, offset=audio_start(video))
+        write_cache(cache, segments)
+
+    SEGMENTS[key] = segments
+
+segments = SEGMENTS[key]
+if window is not None:
+    segments = within_window(segments, window)
+
+return with_min_words(segments, min_words)
+```
+
+The rules and their specimens: `references/shape.md`. The lint floor and the idioms per language, and the Python order checker: `references/languages/`.
 
 ### No barrel files or pass-through functions
 
-Delete these and repoint the importers or callers at the defining module or real function:
+Delete an import-only index, a "keep old importers compiling" re-export, and a function whose whole body forwards to another. Repoint the importers or callers at the defining module. A wrapper earns its existence only by adding something real: a default, a conversion, error mapping, an injected dependency, a narrowed type.
 
-- an import-only index file
-- a "keep old importers compiling" re-export left after a move
-- a function whose whole body forwards to another function without adding anything
+A confusing layout is the same defect one level up. A predictable one names each file after the one public thing in it, gives every sibling in a folder the same internal template, and repeats file names across sibling stages, so a reader knows where a thing sits before opening it. Not sure where a thing goes: ask the user, with options.
 
-A wrapper earns its existence only by adding something real (a default, a conversion, error mapping, an injected dependency, a narrowed type). In Python, `__init__.py` stays EMPTY unless absolutely necessary: re-exports there are the same barrel.
-
-A confusing layout is the same defect one level up: any file or folder may move, a pure move is its own PR with an export census and an equal test count, every path the move changes follows it (references from elsewhere, relative paths inside the moved file), and a whole-repo reorganisation is proposed as a target layout first.
-
-Full detail, including the migration-staging exception, what is not a barrel, and the move rules: `references/structure.md`.
+Any file may move, a pure move is its own PR with an export census and an equal test count, and a whole-repo reorganisation is proposed as a target layout first. Full detail: `references/structure.md`; the barrel in each language: `references/languages/`.
 
 ### No planning references in code
 
-Code and comments never reference planning artifacts: work-package names, spike or phase labels, plan codenames, audit finding numbers. The next reader has the code, not the plan.
-
-Specimen: a comment like "WP-B spike, part 2:" has no meaning outside the planning. Comments describe purpose and constraints, not where the code came from.
-
-Full detail: `references/comments.md`.
+Code and comments never reference planning artifacts: work-package names, spike or phase labels, plan codenames, audit finding numbers. Specimen: a comment opening "WP-B spike, part 2:" means nothing outside the plan. Full detail: `references/comments.md`.
 
 ### Lean AGENTS.md
 
-AGENTS.md (and CLAUDE.md) holds the project's guiding principles and nothing an agent can deduce elsewhere. Code is the source of truth, and implementation detail lives there. README, CONTRIBUTING, and the rest of the repository's documentation are the `/working-text` skill's pages.
-
-- **Keep:** what the project is, the conventions the owner wants kept, safety constraints, the toolchain entry points, and pointers.
-- **Cut:** anything a specific file answers, even when essential. That means layout trees, the commands block (the manifest and hooks are the source), naming conventions a linter carries, checklists a test enforces, and per-module behavior. A one-line pointer replaces each.
-- **Shape:** short bullets a human skims. No long paragraphs, no walls of text.
-- **No tests pin it.** A test asserting AGENTS.md text turns guidance into a fixture. Delete it.
-- **Already lean:** leave it alone and say so.
-
-Specimen: a tail of 66 lines (a layout tree, a 17-item authoring checklist the smoke test enforced, release notes) became 15: one line on what the repo is, five principles, two working rules. The checklist moved to the authoring doc it was duplicating.
-
-Full detail: `references/artifacts.md`.
+AGENTS.md (and CLAUDE.md) holds the project's guiding principles and nothing an agent can deduce elsewhere: what the project is, the conventions the owner wants kept, safety constraints, toolchain entry points, pointers. Anything a specific file answers is cut to a one-line pointer, and no test pins the text. Specimen: a 66-line tail became 15. Full detail: `references/artifacts.md`.
 
 ### Commit messages carry content only
 
-Commit and PR messages state what changed and why, following the repo's subject conventions.
-
-No AI or tool attribution lines. No hard wrapping of the body at 72 columns: a wrapped body renders as ragged mid-sentence breaks in GitHub's soft-wrapping UI. No PII, nothing that tells a reader who the author is, how they work, or how their machine is set up (the `/pr-and-issue-discipline` skill's rule).
-
-Specimen of the one sanctioned attribution, human community credit in repos that take contributions: `fix: ... (#NN, thanks @user)` in the subject, `Co-authored-by:` trailers for humans whose code landed. Credit for people, never for tools.
-
-Full detail, including the email-patch exception: `references/artifacts.md`.
+What changed and why, in the repo's subject conventions. No AI or tool attribution, no hard wrapping of the body, no PII (the `/pr-and-issue-discipline` skill's rule). The one sanctioned attribution is human community credit. Full detail: `references/artifacts.md`.
 
 ### Hooks check, never commit
 
-A pre-commit hook checks what the developer staged and reports. It never changes what the commit contains.
-
-- **Allowed:** check, fail.
-- **Allowed:** check, fail, write the fix into the working tree, still fail.
-- **Forbidden:** changing what the commit contains: no stage, no commit, no formatter-and-restage step (lint-staged and its kind are out).
-- **Forbidden:** anything else: no fix-then-pass, no git command that writes (`stash push`, `checkout`, `reset`, `push`, a `config` set), no network. A read-only query (`git diff --cached --name-only`, `git config --get`) stays.
-
-A hook itself installs nothing and goes no further than the tooling already offers. A toolchain that fetches what it needs on its own (bun does) is the toolchain's feature, not the hook installing. A pre-check in front of a failure the tooling shows on its own is the check that never earns its place (see the tests floor above).
-
-The developer's move after a failure: run the generator or formatter, stage the result, rerun the commit.
-
-Specimen: a repository's hook that staged needed a `git add`, which needed a `git status` guard, which needed scratch-repo tests. One of those tests ran under the hook's leaked `GIT_DIR` and rewrote the real checkout's config. A check-only hook removes that whole class of tooling, and with it the "which git variable leaks into which child" failures.
+A pre-commit hook checks what the developer staged and reports: check and fail, or check, write the fix into the working tree, and still fail. It never stages, commits, formats-and-restages, runs a writing git command, reaches the network, or installs anything. Full detail and the specimen: `references/artifacts.md`.
 
 ### No blobs of text
 
-Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences, and when the content is enumerable, enumerate it. The shape rules and the paragraph probe live in the `/working-text` skill. PR bodies follow the `/pr-and-issue-discipline` skill's Readability rules.
-
-Prose a human reads inside a code artifact (an action description, a manifest description, CLI help) follows the `/working-text` skill's page rules.
+Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences, and when the content is enumerable, enumerate it. The shape rules and the paragraph probe live in the `/working-text` skill; PR bodies follow the `/pr-and-issue-discipline` skill. Prose inside a code artifact (an action description, CLI help) follows the `/working-text` page rules.
 
 ## Workflow
 
-1. **Writing code:** apply the standards as you go. They are cheaper at write time than at review time.
-2. **Writing a test:** before creating a test file or adding a case, write its drift answer (an external fact, a cross-file consistency, a named incident) as the name or first line. No answer, no test: a constant or a shipped file is the source, and the source is never pinned to itself.
+1. **Writing code:** apply the standards as you go. They are cheaper at write time than at review time. Readability and beauty come first: where a standard would read worse here, break it and say so in a line.
+2. **Writing a test:** before creating a test file or adding a case, write its drift answer (an external fact, a cross-file consistency, a named incident) as the name or first line. No answer, no test.
 3. **Reviewing:** check the Review Criteria, cite the specific standard in each finding, and prefer suggesting the class fix over the instance patch.
-4. **Boundaries:** when a standard needs its boundaries (what counts, what is exempt, how far to take it), load the matching `references/` file before acting on it.
-5. **Type-level fixes:** when a finding calls for enforcing invariants in the type system (lifecycle flags, must-call-X-before-Y ordering, fields that must appear together), apply the `/no-invalid-states` skill for the refactor itself.
+4. **Boundaries:** when a standard needs its boundaries (what counts, what is exempt, how far to take it), load the matching `references/` page before acting on it.
+5. **Type-level fixes:** when a finding calls for enforcing invariants in the type system, apply the `/no-invalid-states` skill for the refactor itself.
 6. **Conflicts:** when a standard conflicts with an explicit user or project decision, follow the decision and record which standard was consciously set aside.
 
 ## Review Criteria
 
 - Instance-only fixes, once the problem passes the `/never-twice` floor's judgment: does the change prevent recurrence (test, type, tooling), or just patch the case at hand?
-- A problem past the `/never-twice` floor's judgment fixed again without the highest reachable rung: a type or structure that makes the state impossible, a test, tripwire, or pipeline fix, a proposal to the user when the pipeline is out of reach, or, when none is possible, a written rule recorded as debt.
+- A problem past the `/never-twice` floor's judgment fixed again without the highest reachable rung: a type or structure, a test, tripwire, or pipeline fix, a proposal to the user when the pipeline is out of reach, or, when none is possible, a written rule recorded as debt.
 - Tests that assert only a shape, a type, or that something exists.
 - Hand-written test functions that differ only along one input axis and should be one parametrized case list.
 - A guard test never seen failing on the bug it guards.
@@ -220,19 +148,33 @@ Prose a human reads inside a code artifact (an action description, a manifest de
 - Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), several ideas in one sentence, prose packed to fit a cap.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - A boundary that refuses state the tool outputs and could repair unambiguously, repairs input the tool only reads, or lets malformed input through to fail later; a healing step whose comment argues instead of stating the rule.
+- A module constant below the first function, a function above one it calls, a section separator where a split was due, a function holding two nameable concepts, or a complexity finding silenced inline instead of split or raised at config level with its reason.
+- A nested conditional expression, a conditional splice, a first-match lookup where a keyed table reads once, an assignment inside a condition, `and`/`or` as control flow, a guard's body wrapped in an `else`, a loop nesting what a `continue` would skip, or a hand-written cleanup block where the language binds cleanup to the acquisition.
+- A body with no blank line between its decisions, an untyped signature, a public item without a doc comment in the language's form, a docstring over three short paragraphs or narrating behaviour instead of stating what the function returns, or an underscore-prefixed module-level name.
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
+- A file holding two public things or named unlike the one it holds, a sibling whose internal template differs from the folder's, or a concept spelled differently across sibling stages.
 - A move that leaves a path it changed unrepaired (an importer, a workflow or manifest path, a comment, a relative path inside the moved file), that edits the moved code beyond its paths in the same PR, or that lacks the export census and test count; a confusing layout kept because moving files is "churn".
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
 - A pre-commit hook that does anything beyond check-and-fail or check-write-the-fix-and-fail: staging, committing, a writing git command, fix-then-pass, network, an install or tool fetch.
 
-Triage findings against the standards above. Each criterion maps to one.
+Triage findings against the standards above. Each criterion maps to one. The shape and layout criteria are defaults: a finding there names what would read better, and a deviation the author can defend in a line stands.
 
 ## References
 
-- `references/design.md`: fix the class, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort
-- `references/tests.md`: the minimum standard for tests, what counts as weak, the drift question every test answers, proving a guard test with a negative control, the census rule for deletions, hand-authored fixtures and the output-path rule for tools that measure real data
+Cross-language standards, one page each:
+
+- `references/design.md`: fix the class, guard the floor, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort, prefer a library, heal at the boundary
+- `references/tests.md`: the minimum standard for tests, the drift question, proving a guard test, the census rule for deletions, hand-authored fixtures
 - `references/comments.md`: what a good comment carries, tell then show, the two-question test, the specimens, the TODO ban, planning references
-- `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging, the pure-move PR and the target layout for a reorganisation
-- `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions
+- `references/shape.md`: module layout, define before use, one concept per function, guards and early exits, the ugly-to-clear table, the paragraph specimen, types and docs
+- `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging, the predictable layout and its specimen tree, the pure-move PR and the target layout for a reorganisation
+- `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions, hooks that check and never commit
+
+How the shape and barrel rules land in each language, with its lint floor and idioms:
+
+- `references/languages/python.md`: the ruff block, the order checker, `__all__`, `with`, Google docstrings
+- `references/languages/typescript.md`: the biome block, `no-use-before-define`, options objects, `using`
+- `references/languages/rust.md`: the clippy thresholds, `let ... else`, `Drop` guards, `mod.rs`
+- `references/languages/go.md`: the golangci-lint block, `defer`, options structs, the package as the unit

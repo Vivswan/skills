@@ -1,6 +1,6 @@
 # Artifact Standards: Full Detail
 
-Standards for the artifacts around the code: agent instruction files and commit/PR messages.
+Standards for the artifacts around the code: agent instruction files, commit and PR messages, and pre-commit hooks.
 
 ## Lean AGENTS.md
 
@@ -33,3 +33,21 @@ Sanctioned exceptions:
 - **Email-patch projects.** Contributing to an email-patch project (e.g. the Linux kernel) follows that project's wrapping rules.
 
 How to apply: write subject and body with content only and unwrapped paragraphs. Stop before any attribution footer. Pass both rules explicitly to any subagent that writes commits.
+
+## Hooks check, never commit
+
+A pre-commit hook checks what the developer staged and reports. It never changes what the commit contains.
+
+| The hook | Verdict |
+| --- | --- |
+| check, fail | allowed |
+| check, fail, write the fix into the working tree, still fail | allowed |
+| stage, commit, format-and-restage (lint-staged and its kind) | forbidden: it changes what the commit contains |
+| fix-then-pass, a git command that writes (`stash push`, `checkout`, `reset`, `push`, a `config` set), network, an install or tool fetch | forbidden |
+| a read-only query (`git diff --cached --name-only`, `git config --get`) | stays |
+
+A hook itself installs nothing and goes no further than the tooling already offers. A toolchain that fetches what it needs on its own (bun does) is the toolchain's feature, not the hook installing. A pre-check in front of a failure the tooling shows on its own is the check that never earns its place (`tests.md`, A check earns its place).
+
+The developer's move after a failure: run the generator or formatter, stage the result, rerun the commit.
+
+Specimen: a repository's hook that staged needed a `git add`, which needed a `git status` guard, which needed scratch-repo tests. One of those tests ran under the hook's leaked `GIT_DIR` and rewrote the real checkout's config. A check-only hook removes that whole class of tooling, and with it the "which git variable leaks into which child" failures.
