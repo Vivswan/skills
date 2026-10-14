@@ -18,6 +18,11 @@ function tree(files: Record<string, string | Buffer>): string {
   return root;
 }
 
+function runCheck(cwd: string, ...args: string[]) {
+  const proc = spawnSync("bun", [CHECK, ...args], { cwd, encoding: "utf8" });
+  return { status: proc.status, stdout: proc.stdout, stderr: proc.stderr };
+}
+
 const messages = (root: string, ...files: string[]) =>
   checkFiles(files.map((f) => join(root, f))).findings.map((f) => `${f.line}: ${f.message}`);
 
@@ -242,7 +247,7 @@ describe("the two orderings Python reads for the reviewer", () => {
       "latin.py",
       Buffer.concat([
         Buffer.from("# coding: latin-1\n", "ascii"),
-        Buffer.from('LABEL = "caf\xe9"\n', "latin1"),
+        Buffer.from('LABEL = "Z\xfcrich"\n', "latin1"),
         Buffer.from(
           "def main() -> None:\n    later()\n\ndef later() -> None:\n    return None\n",
           "ascii",
@@ -271,7 +276,7 @@ describe("the command", () => {
       "pkg/sub/b.py",
     ]);
 
-    const run = spawnSync("bun", [CHECK, "pkg"], { cwd: root, encoding: "utf8" });
+    const run = runCheck(root, "pkg");
     expect(run.status).toBe(1);
     expect(run.stdout).toBe(`pkg/a.py:1: f uses g, ${FORWARD}\n`);
     expect(run.stderr).toBe(
@@ -282,28 +287,25 @@ describe("the command", () => {
   test("a clean tree exits 0 with no output; a file Python cannot parse exits 2 and names the line", () => {
     const root = tree({ "ok.py": IN_ORDER, "bad/broken.py": "def (:\n" });
 
-    const clean = spawnSync("bun", [CHECK, "ok.py"], { cwd: root, encoding: "utf8" });
+    const clean = runCheck(root, "ok.py");
     expect([clean.status, clean.stdout, clean.stderr]).toEqual([0, "", ""]);
 
-    const broken = spawnSync("bun", [CHECK, "."], { cwd: root, encoding: "utf8" });
+    const broken = runCheck(root, ".");
     expect(broken.status).toBe(2);
     expect(broken.stderr).toBe("unreadable: bad/broken.py:1: invalid syntax\n");
   });
 
   test("usage errors and a missing interpreter exit 2 with the usage block", () => {
     const root = tree({ "ok.py": IN_ORDER });
-    const noPath = spawnSync("bun", [CHECK], { cwd: root, encoding: "utf8" });
+    const noPath = runCheck(root);
     expect(noPath.status).toBe(2);
     expect(noPath.stderr).toContain("no path given\n\nusage:");
 
-    const badFlag = spawnSync("bun", [CHECK, "--bogus", "ok.py"], { cwd: root, encoding: "utf8" });
+    const badFlag = runCheck(root, "--bogus", "ok.py");
     expect(badFlag.status).toBe(2);
     expect(badFlag.stderr).toContain("--bogus");
 
-    const noPython = spawnSync("bun", [CHECK, "--python", "no-such-python-xyz", "ok.py"], {
-      cwd: root,
-      encoding: "utf8",
-    });
+    const noPython = runCheck(root, "--python", "no-such-python-xyz", "ok.py");
     expect(noPython.status).toBe(2);
     expect(noPython.stderr).toContain("no-such-python-xyz failed:");
   });

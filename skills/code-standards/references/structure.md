@@ -54,7 +54,7 @@ analogvnn/
 - **Every sibling has the same internal template,** and every module follows the one module template (`shape.md`, Module layout), so the reader knows where the constants, the class, and the entry point sit before opening the file. The specimen's reading: "it is easy to even just predict where the thing will be".
 - **Sibling stages mirror their names.** In a pipeline the stage is the folder and the concept is the file name, repeated across stages: `equations/dpuc_input.py` and `simulation/results_parser/dpuc_input.py` are one concept at two stages.
 - **Entry points sit at the root,** one runnable script per run (`finetune.py`, `run_pca.py`). A `utils/` folder is the one place a file may hold several small functions, grouped by what they serve.
-- **Package metadata and constants have one home each:** the root `__init__.py` carries only the package's name, author, and version; a package-wide constant lives in one constants module, never beside its first use.
+- **Package metadata and constants have one home each:** the root `__init__.py` carries only the package's name, author, and version; a package-wide constant (one that two or more modules read) lives in one constants module, never beside its first use. A module's own constants sit in its constants block (`shape.md`, Module layout).
 - **Not sure where a thing goes: ask the user, with options.** Two or three candidate placements, each with the import line it would give and what sits beside it. A guessed placement is the one the reader cannot predict.
 
 Readability and beauty come first: this rule yields where following it would read worse, and the deviation is said in a line.
