@@ -275,6 +275,8 @@ describe("the command", () => {
       "pkg/a.py",
       "pkg/sub/b.py",
     ]);
+    // Overlapping inputs name a file once, so a finding prints once.
+    expect(pythonFiles([join(root, "pkg"), join(root, "pkg", "a.py")])).toHaveLength(2);
 
     const run = runCheck(root, "pkg");
     expect(run.status).toBe(1);
@@ -295,11 +297,15 @@ describe("the command", () => {
     expect(broken.stderr).toBe("unreadable: bad/broken.py:1: invalid syntax\n");
   });
 
-  test("usage errors and a missing interpreter exit 2 with the usage block", () => {
-    const root = tree({ "ok.py": IN_ORDER });
+  test("usage errors, a named non-Python file, and a missing interpreter exit 2 with the usage block", () => {
+    const root = tree({ "ok.py": IN_ORDER, "notes.txt": "def f(): g()\n" });
     const noPath = runCheck(root);
     expect(noPath.status).toBe(2);
     expect(noPath.stderr).toContain("no path given\n\nusage:");
+
+    const notPython = runCheck(root, "notes.txt");
+    expect(notPython.status).toBe(2);
+    expect(notPython.stderr).toContain("notes.txt is not a .py file");
 
     const badFlag = runCheck(root, "--bogus", "ok.py");
     expect(badFlag.status).toBe(2);

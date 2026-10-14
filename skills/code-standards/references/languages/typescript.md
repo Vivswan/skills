@@ -43,10 +43,15 @@ Specimen: `useLiteralKeys` rewrites `record["name"]` to `record.name`, which `ts
 
 ## Module order, read
 
-Biome has no rule for function order (`noInvalidUseBeforeDeclaration` lets a hoisted function through). Where ESLint runs, one rule carries define-before-use:
+Biome has no rule for function order (`noInvalidUseBeforeDeclaration` lets a hoisted function through). Where ESLint runs, one rule carries define-before-use, in its typescript-eslint form so enums, types, and interfaces count too:
 
 ```json
-{ "rules": { "no-use-before-define": ["error", { "functions": true, "classes": true, "variables": true }] } }
+{
+  "rules": {
+    "no-use-before-define": "off",
+    "@typescript-eslint/no-use-before-define": ["error", { "functions": true, "classes": true, "variables": true, "enums": true, "typedefs": true }]
+  }
+}
 ```
 
 Without ESLint the reviewer reads it. A finding is a place to look, not a verdict: the author who answers one with what reads better keeps the code and says so in a line.

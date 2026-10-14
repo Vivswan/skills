@@ -11,7 +11,7 @@ In `Cargo.toml` and `clippy.toml`:
 ```toml
 # Cargo.toml
 [lints.rust]
-missing_docs = "warn"
+missing_docs = "deny"
 
 [lints.clippy]
 too_many_arguments = "deny"

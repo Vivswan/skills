@@ -13,7 +13,7 @@ In `pyproject.toml`:
 extend-select = ["C90", "PLR", "PLW", "RET", "PIE", "C4", "PERF", "ERA", "N", "ARG", "PTH", "RUF", "ANN", "D"]
 ignore = [
   "PLR2004",  # a literal beside its comparison reads better than a one-use constant
-  "D1",       # a helper whose name says what it does carries no docstring
+  "D1",       # presence is the reviewer's call (a helper whose name says what it does carries none); ruff holds the shape
   "D202",     # the body starts after a blank line, so the docstring reads as its own paragraph
 ]
 

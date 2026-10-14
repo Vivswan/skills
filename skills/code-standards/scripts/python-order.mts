@@ -160,20 +160,21 @@ export interface Finding {
   readonly message: string;
 }
 
-/** Every .py file under the paths, files named directly included, in path order. */
+/** Every .py file under the paths, files named directly included, each once, in path order. */
 export function pythonFiles(paths: readonly string[]): string[] {
-  const out: string[] = [];
+  const out = new Set<string>();
   for (const path of paths) {
     if (!statSync(path).isDirectory()) {
-      out.push(path);
+      if (!path.endsWith(".py")) throw new Error(`${path} is not a .py file`);
+      out.add(path);
       continue;
     }
     // Bun.Glob skips dot-directories by default, which covers .git and .venv.
     for (const found of new Bun.Glob("**/*.py").scanSync({ cwd: path, onlyFiles: true })) {
-      if (!found.split(sep).some((part) => SKIPPED_DIRS.has(part))) out.push(join(path, found));
+      if (!found.split(sep).some((part) => SKIPPED_DIRS.has(part))) out.add(join(path, found));
     }
   }
-  return out.sort();
+  return [...out].sort();
 }
 
 export interface Report {
