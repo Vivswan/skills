@@ -28,7 +28,7 @@ frontend-design:
 design-taste-frontend:
   url: https://github.com/Leonxlnx/taste-skill.git
   path: skills/taste-skill
-  commit: d237dd399d57524945c0c81327da5da19f7a468d
+  commit: f624f37a8c650b9cc550253104925efe4c8de246
   license: MIT
   license_file: LICENSE
   frontmatter:
