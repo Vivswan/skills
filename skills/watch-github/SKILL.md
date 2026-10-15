@@ -67,7 +67,7 @@ Each message holds one poll's events, each with a URL, and the closing line `aut
 | --- | --- | --- |
 | `comment` | `PR owner/repo#12: 2 new comments by octocat at src/x.ts:41, src/y.ts:7`, the newest comment's URL | open the URL and triage it as a review round |
 | `review` | `PR owner/repo#12: review by octocat (CHANGES_REQUESTED), 3 comments`, the review's URL | the same, per the `/pr-landing-discipline` skill |
-| `ci` | `PR owner/repo#12: CI green on 1a2b3c4d5e6f: 3 workflows`, the checks page; or `PR owner/repo#12: CI red on 1a2b3c4d5e6f: checks / check / Run tests`, the failed run's URL | green: carry on; red: `gh run view <id> --log-failed` for the excerpt, fix, push, and the next verdict arrives on its own |
+| `ci` | `PR owner/repo#12: CI green on 1a2b3c4d5e6f: 3 workflows`, the checks page, with `; other checks red: claude-review` when a workflow outside the named gates failed; or `PR owner/repo#12: CI red on 1a2b3c4d5e6f: checks / check / Run tests`, the failed run's URL | green: carry on; red: `gh run view <id> --log-failed` for the excerpt, fix, push, and the next verdict arrives on its own |
 | `head` | `PR owner/repo#12: head moved to 1a2b3c4d5e6f; last commit by octocat` (the commit's author, not who pushed), on every move, your own pushes included | a head you did not push: pull before touching the branch |
 | `label` | `PR owner/repo#12: label added: merge-when-green`; several in one poll: `PR owner/repo#12: labels added: approved, merge-when-green`; `PR owner/repo#12: label removed: needs-rebase`; an add and a remove in one poll share the line, `;` between; the PR's URL | a label that names you or a gate: act on it; any other is information |
 | `conflict` | `PR owner/repo#12: conflicts with main; rebase needed`, then `PR owner/repo#12: conflicts resolved` once the merge test settles clean again, after your rebase or on its own; the PR's URL | rebase onto the base and push; the line comes again when a push leaves the conflict standing |
@@ -84,7 +84,7 @@ After a push on either side GitHub recomputes the merge test and answers UNKNOWN
 
 ### The CI rules
 
-- **Green** is every named gate's latest run passed (skipped counts), or, with no gate named, the PR's aggregate rollup `SUCCESS`.
+- **Green** is every named gate's latest run passed (skipped counts), or, with no gate named, the PR's aggregate rollup `SUCCESS`. With gates named, a failed run outside them is listed after `; other checks red:`, and a bystander turning red later is a new `ci` event, since the `/pr-landing-discipline` skill's green counts every check.
 - **Red** is any named gate's latest run failed or cancelled with no newer run, or, with no gate, the rollup `FAILURE` or `ERROR`. The red line names up to 50 failed jobs per suite, each as workflow, job, and first failed step, and any gate with no run after `; no run of`.
 - **A gate with no run** is pending while the rollup is pending, and one `trouble` event once the rollup settled without it, or after two polls on a head with no checks at all: a typo in the name, or a workflow that does not trigger on this ref.
 - **No checks and no gate** is no CI, not pending: nothing is said, and the head idles until a rollup appears. Name the gate with `--expect-workflow` when a run must register.
