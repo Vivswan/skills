@@ -8,7 +8,7 @@ A collection of skills for AI coding agents. Skills are packaged instructions an
 
 This repo keeps the collection-style catalog and install flow from `vercel-labs/agent-skills`, while also keeping each skill folder plugin-ready so MCP servers, hooks, or app integrations can be added later without changing the layout.
 
-The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes the catalog as the `vivswan-skills` plugin for Claude Code marketplace installs, with [`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) as the plugin manifest, plus a `xeno` plugin that groups the skills vendored from other repositories under their own heading, but the main experience stays centered on `npx skills add ...`.
+The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes the catalog as the `vivswan-skills` plugin for Claude Code marketplace installs, with [`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) as the plugin manifest, plus one entry per upstream skill, fetched from its own repository by a `git-subdir` source, but the main experience stays centered on `npx skills add ...`.
 
 ## Available Skills
 
@@ -40,13 +40,24 @@ Load only when you invoke them (`/skill-name` in Claude Code, `$skill-name` in C
 - [/natural-writing](./skills/natural-writing/SKILL.md) - Prose without AI writing tells
 - [/orchestrator-mode](./skills/orchestrator-mode/SKILL.md) - Parallel worktree subagents with gated landings, direct or PR-based
 
-### Xeno
+### Upstream skills
 
-Xeno, from the Greek for foreign: skills written in other repositories, vendored here from their upstream at a pinned commit and refreshed nightly ([how](./xeno/README.md)):
+Skills written in other repositories. Nothing of them is copied here: the marketplace fetches each from its upstream's default branch, so an install is always upstream's latest, with upstream's own frontmatter.
 
-- [/unslop](./xeno/unslop/SKILL.md) - Cut AI tells from any writing (from [cursor/plugins](https://github.com/cursor/plugins))
-- [/frontend-design](./xeno/frontend-design/SKILL.md) - Distinctive visual design for new or reshaped UI, invoked by you in Claude Code (from [anthropics/skills](https://github.com/anthropics/skills))
-- [/design-taste-frontend](./xeno/design-taste-frontend/SKILL.md) - Anti-slop frontend for landing pages, portfolios, and redesigns, invoked by you in Claude Code (from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill))
+- [/unslop](https://github.com/cursor/plugins/tree/HEAD/pstack/skills/unslop) - Cut AI tells from any writing (from [cursor/plugins](https://github.com/cursor/plugins))
+- [/frontend-design](https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design) - Distinctive visual design for new or reshaped UI (from [anthropics/skills](https://github.com/anthropics/skills))
+- [/design-taste-frontend](https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill) - Anti-slop frontend for landing pages, portfolios, and redesigns (from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill))
+
+| Where you run | How you install them |
+| --- | --- |
+| Claude Code | `/plugin marketplace add Vivswan/skills`, then `/plugin install unslop@vivswan-skills` (same for `frontend-design` and `design-taste-frontend`) |
+| `npx skills` and Codex | each upstream directly, one line each below |
+
+```bash
+npx skills add cursor/plugins/pstack/skills/unslop -g
+npx skills add anthropics/skills --skill frontend-design -g
+npx skills add Leonxlnx/taste-skill --skill design-taste-frontend -g
+```
 
 How the skills reference each other (an arrow means "mentions and hands off to, where installed"):
 
@@ -132,11 +143,11 @@ graph LR
   click wgh "./skills/watch-github/SKILL.md"
   click se "./skills/session-events/SKILL.md"
   click wh "./skills/worktree-hygiene/SKILL.md"
-  click us "./xeno/unslop/SKILL.md"
+  click us "https://github.com/cursor/plugins/tree/HEAD/pstack/skills/unslop"
   click cbf "./skills/codex-browser-fix/SKILL.md"
   click crp "./skills/claude-remote-peers/SKILL.md"
-  click fd "./xeno/frontend-design/SKILL.md"
-  click dtf "./xeno/design-taste-frontend/SKILL.md"
+  click fd "https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design"
+  click dtf "https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill"
 ```
 
 ## Installation
@@ -170,14 +181,15 @@ Or install everything as a Claude Code plugin:
 ```text
 /plugin marketplace add Vivswan/skills
 /plugin install vivswan-skills@vivswan-skills
-/plugin install xeno@vivswan-skills
 ```
+
+The three upstream skills install by name from the same marketplace (`/plugin install unslop@vivswan-skills`); see [Upstream skills](#upstream-skills).
 
 ## Usage
 
 Once installed, a skill fires on its own when its trigger matches the task.
 
-Skills marked explicit-invocation-only ([`/claude-remote-peers`](./skills/claude-remote-peers/SKILL.md), [`/natural-writing`](./skills/natural-writing/SKILL.md), [`/orchestrator-mode`](./skills/orchestrator-mode/SKILL.md), [`/frontend-design`](./xeno/frontend-design/SKILL.md), [`/design-taste-frontend`](./xeno/design-taste-frontend/SKILL.md)) load only when you invoke them. For the two xeno copies that holds in Claude Code; Codex reads the upstream policy, which lets the model invoke them.
+Skills marked explicit-invocation-only ([`/claude-remote-peers`](./skills/claude-remote-peers/SKILL.md), [`/natural-writing`](./skills/natural-writing/SKILL.md), [`/orchestrator-mode`](./skills/orchestrator-mode/SKILL.md)) load only when you invoke them. The upstream skills follow their own frontmatter.
 
 **Examples:**
 

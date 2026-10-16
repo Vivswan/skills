@@ -12,8 +12,6 @@ body:
         - code-standards
         - codex-browser-fix
         - craft-skills-and-memories
-        - design-taste-frontend
-        - frontend-design
         - natural-writing
         - never-twice
         - no-invalid-states
@@ -24,7 +22,6 @@ body:
         - reply-and-review-discipline
         - rubber-duck-review
         - session-events
-        - unslop
         - verify-with-controls
         - watch-github
         - working-text

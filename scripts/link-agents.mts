@@ -1,7 +1,7 @@
 /**
- * Replace the installed copies of this repo's skills (skills/ and the vendored xeno/) in
- * ~/.agents/skills with symlinks into the working tree, so an edit or a xeno sync here is live in
- * every agent without re-running `npx skills add .`.
+ * Replace the installed copies of this repo's skills (skills/) in ~/.agents/skills with symlinks
+ * into the working tree, so an edit here is live in every agent without re-running
+ * `npx skills add .`.
  *
  * `npx skills add` copies the source into ~/.agents/skills/<name>, and the per-agent directories
  * (~/.claude/skills, ...) symlink to that copy, never to the source. Linking the source directly
@@ -38,8 +38,6 @@ import {
   runChecks,
   SKILLS_DIR,
   skillDirs,
-  XENO_DIR,
-  xenoSkillDirs,
 } from "./lib.mts";
 
 export interface LinkAction {
@@ -61,7 +59,7 @@ export interface PruneAction {
 export type LockVerdict = "ours" | "foreign" | "unknown";
 
 export interface PruneOptions {
-  /** This repo's skill directories (skills/, xeno/); symlink targets under any of them are ours. */
+  /** This repo's skill directories (skills/); symlink targets under any of them are ours. */
   readonly repoSkillsDirs: readonly string[];
   /** Basenames of the skills the repo currently ships. */
   readonly currentSkills: ReadonlySet<string>;
@@ -78,7 +76,7 @@ export interface PruneOptions {
 
 /**
  * The skill directories this repository ships, by installed name. One name
- * can have only one source: a skill in both skills/ and xeno/ would link to
+ * can have only one source: a skill shipped from two directories would link to
  * whichever came last and report the other, so that state fails here.
  */
 export function repoSkillSources(dirs: readonly string[]): Map<string, string> {
@@ -390,7 +388,7 @@ if (import.meta.main) {
     if (withAdd && dryRun) fail("--add and --dry-run cannot be combined");
     // Settled before the installer runs: a refused source set must not leave
     // installs it already rewired unlinked.
-    const sourceByName = repoSkillSources([...skillDirs(), ...xenoSkillDirs()]);
+    const sourceByName = repoSkillSources(skillDirs());
 
     if (withAdd) {
       const result = spawnSync("npx", ["skills", "add", ".", "--global"], {
@@ -430,7 +428,7 @@ if (import.meta.main) {
     }
     const lockfilePath = join(dirname(agentsSkillsDir), ".skill-lock.json");
     const pruneActions = pruneStaleSkills({
-      repoSkillsDirs: [SKILLS_DIR, XENO_DIR],
+      repoSkillsDirs: [SKILLS_DIR],
       currentSkills: new Set(sourceByName.keys()),
       agentsSkillsDir,
       agentSkillDirs: discoverAgentSkillDirs(homedir(), agentsSkillsDir),

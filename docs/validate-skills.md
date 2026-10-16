@@ -48,7 +48,7 @@ Structure mode, in the order it reports:
 - Its frontmatter does not set `metadata.internal` to `true`: the skills CLI silently drops such a skill at install time, so the value on a published skill hides it from consumers while every gate stays green. Any other value publishes.
 - A `.mcp.json` in a skill folder, when present, parses as JSON.
 - `marketplace.json`, when present next to the manifest, has a kebab-case `name` and a non-empty `plugins` list.
-- Each marketplace plugin's `source` stays inside the repository.
+- Each marketplace plugin's `source` path stays inside the repository; a source object naming another repository (`git-subdir`, `github`, `url`) is left to `claude plugin validate`, since nothing of it is in the checkout.
 - A marketplace plugin's `skills` (one path or a list) resolve under its `source` and must stay inside it, each a kebab-case folder with a `SKILL.md`; the root plugin (`source: "./"`) keeps the repository's skills directory rule.
 - A plugin publishing the repository root carries the same `name` as `plugin.json`.
 - Symlinks are rejected anywhere on a validated path, ancestors included. A link can point outside the checkout, so what ships would not be what was validated.
@@ -91,4 +91,4 @@ SKILLS_DIR=skills PLUGIN_MANIFEST=.claude-plugin/plugin.json MODE=structure bun 
 - Discovery, the same command with `MODE=discovery` (needs network).
 - `bun run test` covers the action's unit tests along with the rest of the suite.
 
-The action is the baseline any repository hosting skills can call. Everything specific to this catalog (per-skill README and codex manifest, `template/`, `xeno/`, the marketplace shape, cross-file drift) is `bun run smoke`, [scripts/smoke.mts](../scripts/smoke.mts).
+The action is the baseline any repository hosting skills can call. Everything specific to this catalog (per-skill README and codex manifest, `template/`, the marketplace shape with its upstream entries, cross-file drift) is `bun run smoke`, [scripts/smoke.mts](../scripts/smoke.mts).

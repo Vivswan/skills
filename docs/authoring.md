@@ -44,9 +44,26 @@ This keeps the repo compatible with:
 11. Explicit-invocation-only skills set `disable-model-invocation: true` in the frontmatter AND `policy.allow_implicit_invocation: false` in `agents/openai.yaml`; the README entry then goes under "Invoked by you", otherwise under "Automatic".
 12. Commit; the pre-commit hook's `bun run check:staged` runs the validator and smoke test, which enforce every item above plus frontmatter limits (`name` <= 64 characters, `description` <= 1024), the codex manifest's `homepage` and `keywords`, and `interface.short_description` at 25 to 64 characters. It also runs the docs probe: paragraphs and list items in first-party `SKILL.md` and `references/*.md` files and the template are capped at 70 words.
 
-## Xeno Skills
+## Upstream Skills
 
-A skill written elsewhere ships from this catalog as a vendored copy under `xeno/<name>/`, pinned to an upstream commit in `xeno/sources.yaml` and rewritten only by `bun run sync-xeno`. The layout above does not apply to a copy; [`xeno/README.md`](../xeno/README.md) has the steps to add one and the nightly refresh.
+A skill written elsewhere is published by its own entry in [`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json), whose `git-subdir` source names the upstream repository (`owner/repo`) and the skill folder inside it. Nothing of the upstream is copied here, and the entry carries no `sha` and no `ref`: the Claude Code marketplace fetches the folder from the upstream's default branch, so an install is upstream's latest, frontmatter included.
+
+```json
+{
+  "name": "unslop",
+  "description": "Cuts AI tells from any writing",
+  "source": { "source": "git-subdir", "url": "cursor/plugins", "path": "pstack/skills/unslop" },
+  "skills": ["./"]
+}
+```
+
+To add one:
+
+1. The entry above, in `.claude-plugin/marketplace.json`.
+2. A bullet under the root README's "Upstream skills", linking to the upstream folder at `tree/HEAD`, and one install line there for `npx skills` and Codex users.
+3. A node in the mermaid graph, clicking to the same page.
+
+The smoke test holds the entry to that shape and the README to the entries. The layout above does not apply: upstream's folder is the skill as it is.
 
 ## Contributing Criteria to Reviews
 

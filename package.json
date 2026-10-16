@@ -17,8 +17,7 @@
     "check:fix": "biome check --write .",
     "check:docs": "bun scripts/check-docs.mts",
     "check": "bun run typecheck && bun run lint && bun run lint:json && bun run check:docs && bun run test && bun run validate && bun run smoke",
-    "check:staged": "bun scripts/check-staged.mts",
-    "sync-xeno": "bun scripts/sync-xeno.mts"
+    "check:staged": "bun scripts/check-staged.mts"
   },
   "devDependencies": {
     "@babel/parser": "8.0.7",

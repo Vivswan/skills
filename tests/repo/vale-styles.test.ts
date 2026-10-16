@@ -1,11 +1,20 @@
-// reaches: skills/**/*.yml xeno/**/*.yml skills/natural-writing/references/words-to-avoid.md
+// reaches: skills/**/*.yml skills/natural-writing/references/words-to-avoid.md
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { ROOT, walkFiles } from "../../scripts/lib.mts";
 
-/** Vale reads every *.yml under the two folders a consumer names as styles, so every one of them must be a rule. */
-const STYLE_ROOTS = ["skills", "xeno"];
+/** Vale reads every *.yml under the folder a consumer names as its style, so every one of them must be a rule. */
+const STYLE_ROOT = "skills";
+
+/**
+ * The two rules derived from the upstream /unslop skill's text, which this repository does not hold (the skill
+ * installs from its own repository), so the token-in-source test below cannot read it for them.
+ */
+const UPSTREAM_DERIVED = new Set([
+  "skills.natural-writing.vale.AIVocabulary",
+  "skills.natural-writing.vale.PlainWords",
+]);
 
 type Rule = {
   extends: string;
@@ -16,18 +25,17 @@ type Rule = {
 };
 
 function ruleFiles(): string[] {
-  return STYLE_ROOTS.flatMap((top) =>
-    readdirSync(join(ROOT, top), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .flatMap((entry) => {
-        const dir = join(ROOT, top, entry.name, "vale");
-        return statSync(dir, { throwIfNoEntry: false })?.isDirectory()
-          ? readdirSync(dir)
-              .filter((file) => file.endsWith(".yml"))
-              .map((file) => join(dir, file))
-          : [];
-      }),
-  ).sort();
+  return readdirSync(join(ROOT, STYLE_ROOT), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const dir = join(ROOT, STYLE_ROOT, entry.name, "vale");
+      return statSync(dir, { throwIfNoEntry: false })?.isDirectory()
+        ? readdirSync(dir)
+            .filter((file) => file.endsWith(".yml"))
+            .map((file) => join(dir, file))
+        : [];
+    })
+    .sort();
 }
 
 /** The id Vale gives a rule: the path from the styles root with slashes as dots and no extension. */
@@ -48,11 +56,11 @@ const lower = (text: string) => text.toLowerCase();
 
 describe("vale styles", () => {
   // Vale parses every .yml under a style folder as a rule; a stray one (a registry, a config) breaks every consumer.
-  test("the only .yml files under skills/ and xeno/ are Vale rules in a vale/ folder", () => {
-    const stray = STYLE_ROOTS.flatMap((top) => walkFiles(join(ROOT, top)))
+  test("the only .yml files under skills/ are Vale rules in a vale/ folder", () => {
+    const stray = walkFiles(join(ROOT, STYLE_ROOT))
       .filter((file) => file.endsWith(".yml"))
       .map((file) => relative(ROOT, file))
-      .filter((file) => !/^(skills|xeno)\/[^/]+\/vale\/[^/]+\.yml$/.test(file));
+      .filter((file) => !/^skills\/[^/]+\/vale\/[^/]+\.yml$/.test(file));
     expect(stray).toEqual([]);
   });
 
@@ -71,7 +79,7 @@ describe("vale styles", () => {
   });
 
   // The rules are derived from skill text; a word the skill drops must leave the rule too.
-  test("every natural-writing and unslop token appears in the skill text it comes from", () => {
+  test("every natural-writing token appears in the skill text it comes from", () => {
     const sources: Record<string, string> = {
       "natural-writing": lower(
         readFileSync(
@@ -79,12 +87,11 @@ describe("vale styles", () => {
           "utf8",
         ),
       ),
-      unslop: lower(readFileSync(join(ROOT, "xeno", "unslop", "SKILL.md"), "utf8")),
     };
     const missing: string[] = [];
     for (const { id, skill, rule } of rules()) {
       const source = sources[skill];
-      if (source === undefined) continue;
+      if (source === undefined || UPSTREAM_DERIVED.has(id)) continue;
       const entries = id.endsWith(".TrailingParticiple")
         ? participles(rule.tokens ?? [])
         : (rule.tokens ?? Object.keys(rule.swap ?? {}));

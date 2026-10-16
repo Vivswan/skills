@@ -430,25 +430,42 @@ function readmeSection(readmeText: string, title: string): string {
   return area;
 }
 
+/** A skill of another repository, published by a marketplace entry whose source is a git-subdir object. */
+export interface UpstreamSkill {
+  /** The entry's name, which is the skill's install name. */
+  readonly name: string;
+  /** The upstream repository as GitHub owner/repo. */
+  readonly repo: string;
+  /** The skill folder inside it, repository-relative. */
+  readonly path: string;
+}
+
+/** The GitHub page of an upstream skill's folder at its default branch head, where the README links to it. */
+export function upstreamPage(skill: UpstreamSkill): string {
+  return `https://github.com/${skill.repo}/tree/HEAD/${skill.path}`;
+}
+
+const UPSTREAM_HEADING = "### Upstream skills";
+
 // Bijection between README's Available Skills list and skill folders: every
 // published skill appears as a linked bullet '- [/name](./skills/name/)', an
 // entry whose folder is gone is stale documentation, each link must point at
 // the skill's own folder, and a duplicate entry is drift. Only kebab-case
 // names count as skill entries, so prose bullets are left alone.
-/** Vendored skills sit under '### Xeno' and link into xeno/; our own never do. */
+/** Upstream skills sit under '### Upstream skills' and link to their upstream folder; our own never do. */
 export function checkReadmeSkillList(
   readmeText: string,
   skillNames: ReadonlySet<string>,
-  xenoNames: ReadonlySet<string> = new Set(),
+  upstream: readonly UpstreamSkill[] = [],
 ): void {
   const scannable = readmeSection(readmeText, "Available Skills");
-  const xenoStart = scannable.indexOf("### Xeno");
-  if (xenoNames.size > 0 && xenoStart === -1) {
-    fail("README.md: missing the '### Xeno' subsection for the vendored skills");
+  const upstreamStart = scannable.indexOf(UPSTREAM_HEADING);
+  if (upstream.length > 0 && upstreamStart === -1) {
+    fail(`README.md: missing the '${UPSTREAM_HEADING}' subsection for the upstream skills`);
   }
-  const nextHeading = xenoStart === -1 ? -1 : scannable.indexOf("\n### ", xenoStart + 1);
-  const xenoEnd = nextHeading === -1 ? scannable.length : nextHeading;
-  const listed = new Map<string, { target: string; underExternal: boolean }>();
+  const nextHeading = upstreamStart === -1 ? -1 : scannable.indexOf("\n### ", upstreamStart + 1);
+  const upstreamEnd = nextHeading === -1 ? scannable.length : nextHeading;
+  const listed = new Map<string, { target: string; underUpstream: boolean }>();
   for (const match of scannable.matchAll(/^- \[\/?([^\]]+)\]\(([^)]+)\)/gm)) {
     const name = (match[1] ?? "").trim();
     if (!KEBAB_CASE.test(name)) continue;
@@ -457,30 +474,33 @@ export function checkReadmeSkillList(
     }
     listed.set(name, {
       target: match[2] ?? "",
-      underExternal:
-        xenoStart !== -1 && (match.index ?? 0) > xenoStart && (match.index ?? 0) < xenoEnd,
+      underUpstream:
+        upstreamStart !== -1 &&
+        (match.index ?? 0) > upstreamStart &&
+        (match.index ?? 0) < upstreamEnd,
     });
   }
-  for (const [name, { target, underExternal }] of listed) {
-    const xeno = xenoNames.has(name);
-    if (!xeno && !skillNames.has(name)) {
+  const pages = new Map(upstream.map((skill) => [skill.name, upstreamPage(skill)]));
+  for (const [name, { target, underUpstream }] of listed) {
+    const page = pages.get(name);
+    if (page === undefined && !skillNames.has(name)) {
       fail(
         `README.md: '[${name}]' in the Available Skills list has no matching` +
           ` skills/${name}/ folder -- remove the stale entry or restore the folder`,
       );
     }
-    const page = `./${xeno ? "xeno" : "skills"}/${name}/SKILL.md`;
-    if (target !== page) {
-      fail(`README.md: the '[${name}]' entry must link to ${page}`);
+    const wanted = page ?? `./skills/${name}/SKILL.md`;
+    if (target !== wanted) {
+      fail(`README.md: the '[${name}]' entry must link to ${wanted}`);
     }
-    if (xeno !== underExternal) {
+    if ((page !== undefined) !== underUpstream) {
       fail(
-        `README.md: '${name}' must be listed ${xeno ? "under" : "outside"} '### Xeno'` +
-          ` -- it is ${xeno ? "a vendored copy" : "one of this repository's own skills"}`,
+        `README.md: '${name}' must be listed ${page === undefined ? "outside" : "under"}` +
+          ` '${UPSTREAM_HEADING}' -- it is ${page === undefined ? "one of this repository's own skills" : "an upstream skill"}`,
       );
     }
   }
-  for (const name of [...skillNames, ...xenoNames]) {
+  for (const name of [...skillNames, ...pages.keys()]) {
     if (!listed.has(name)) {
       fail(`README.md: the Available Skills list is missing an entry for '${name}'`);
     }
@@ -496,7 +516,7 @@ export function checkReadmeSkillList(
 export function checkReadmeMermaidGraph(
   readmeText: string,
   skillNames: ReadonlySet<string>,
-  xenoNames: ReadonlySet<string> = new Set(),
+  upstream: readonly UpstreamSkill[] = [],
 ): void {
   const fence = /```mermaid\n([\s\S]*?)```/.exec(readmeText);
   if (fence === null) fail("README.md: missing the mermaid skill-reference graph");
@@ -548,6 +568,7 @@ export function checkReadmeMermaidGraph(
     }
   }
 
+  const pages = new Map(upstream.map((skill) => [skill.name, upstreamPage(skill)]));
   const clicked = new Set<string>();
   for (const rawLine of body.split("\n")) {
     const line = rawLine.trim();
@@ -558,7 +579,7 @@ export function checkReadmeMermaidGraph(
       if (name === undefined) {
         fail(`README.md: mermaid click '${line}' references '${alias}', which no node labels`);
       }
-      const page = `./${xenoNames.has(name) ? "xeno" : "skills"}/${name}/SKILL.md`;
+      const page = pages.get(name) ?? `./skills/${name}/SKILL.md`;
       if (click[2] !== page) {
         fail(`README.md: mermaid click for '${alias}' must link to ${page}, found '${click[2]}'`);
       }
@@ -589,8 +610,6 @@ export function checkReadmeMermaidGraph(
 export interface InvocationGroupingEntry {
   readonly name: string;
   readonly disabled: boolean;
-  /** A vendored copy under xeno/: grouped under '### Xeno', not by invocation. */
-  readonly xeno?: boolean;
 }
 
 // The README's Automatic vs "Invoked by you" grouping must track the
@@ -605,8 +624,7 @@ export function checkReadmeInvocationGrouping(
   const invokedIndex = area.indexOf("### Invoked by you");
   if (invokedIndex === -1) fail("README.md: missing the '### Invoked by you' subsection");
   const invokedArea = area.slice(invokedIndex);
-  for (const { name, disabled, xeno } of skills) {
-    if (xeno) continue;
+  for (const { name, disabled } of skills) {
     const inInvoked = invokedArea.includes(`- [/${name}](`);
     if (disabled !== inInvoked) {
       fail(
@@ -641,7 +659,7 @@ export function checkReadmeUsageExplicitRoster(
   }
   const named = new Set<string>();
   for (const entry of (sentence[1] ?? "").split(", ")) {
-    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/(?:skills|(xeno))\/\1\/SKILL\.md\)$/.exec(entry);
+    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/skills\/\1\/SKILL\.md\)$/.exec(entry);
     if (link === null) {
       fail(
         `README.md: cannot parse Usage explicit-invocation-only roster entry '${entry}'` +
@@ -653,13 +671,6 @@ export function checkReadmeUsageExplicitRoster(
       fail(`README.md: duplicate Usage explicit-invocation-only roster entry for '${name}'`);
     }
     named.add(name);
-    const xeno = skills.find((skill) => skill.name === name)?.xeno === true;
-    if (xeno !== (link[2] !== undefined)) {
-      fail(
-        `README.md: the Usage roster entry for '${name}' must link to` +
-          ` ./${xeno ? "xeno" : "skills"}/${name}/SKILL.md`,
-      );
-    }
   }
   const known = new Set(skills.map(({ name }) => name));
   for (const name of named) {

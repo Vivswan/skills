@@ -283,8 +283,13 @@ export function validateMarketplace(
         fail(`${where}: plugin name ${JSON.stringify(name)} must be kebab-case`);
       }
       const source = plugin.source;
+      // A source object names another repository (git-subdir, github, url, and the rest): nothing of it is in this
+      // checkout for the path rules below to hold, and Claude Code validates the object's own shape.
+      if (isRecord(source) && typeof source.source === "string" && source.source !== "") return;
       if (typeof source !== "string" || source === "") {
-        fail(`${where}: plugin '${name}' needs a source path (the starter seeds "./")`);
+        fail(
+          `${where}: plugin '${name}' needs a source path (the starter seeds "./") or a source object naming another repository`,
+        );
       }
       const resolvedSource = resolve(root, source);
       if (resolvedSource !== root && !resolvedSource.startsWith(`${root}/`)) {
