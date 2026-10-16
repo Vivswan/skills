@@ -33,7 +33,7 @@ Every brief includes:
     - A typecheck where the language has one, then only the tests the change and its proof touch: the changed files' tests, the named census or proof target, one e2e slice when a scenario is the target. Never the full suite, the repository's aggregate check command, or a lint-plus-build sweep: CI runs those. A wider local run states its reason (an unknown target) and happens at most once per PR.
     - The brief says whether CI minutes are metered or scarce (for example a private repository on a metered plan). Where they are, the full check runs locally once before the push instead. A brief that does not say is a question back to the lead, and a lead who is not sure asks the user.
     - Only as many gates run at once as the machine and the reviewer backend handle without stalling (about three is a safe start), every long run carries an explicit timeout, and a process is killed by the PID the agent spawned, never by pattern.
-    - Every wait is a short foreground call repeated, never one long call: a call that outlives the harness's foreground limit is moved to the background and never wakes an idle subagent (The Stop-and-Wait Ban, below; the review block is the `/rubber-duck-review` skill's step 5).
+    - Every wait is a short foreground call repeated, never one long call: each wait is its own foreground tool call, never a shell loop, which is one long call again, since a call that outlives the harness's foreground limit is moved to the background and never wakes an idle subagent (The Stop-and-Wait Ban, below; the review block is the `/rubber-duck-review` skill's step 5).
     - The install comes first. A fresh worktree has no installed dependencies. Hooks may fail without them, and some runners resolve the parent checkout's binaries and pass anyway, so the brief's first command after item 14's worktree preflight is the repository's own install (for example `npm ci`, `bun install --frozen-lockfile`, `uv sync`).
 
       After a lead directive, the builder's re-review prompt states what changed since the last round. When the directive changed the diff's shape, the builder rewrites the amended commit's body to match (the directive can say so explicitly): `--amend --no-edit` left stale bodies twice in one wave.
@@ -138,7 +138,9 @@ One nuance from production: a notification can occasionally fire while an untrac
 
 **The long-call trap (Claude Code):** a tool call that runs past the harness's foreground limit (about two minutes, or the explicit timeout the call carries, ten minutes at most) is moved to the background, and the turn continues without it. Its completion never wakes a subagent that has gone idle. Three builders in one wave idled after a single long `--wait` and were resumed by hand.
 
-So every wait inside a subagent is a short foreground call repeated, never one long call. For a review verdict the call is the `/rubber-duck-review` skill's step 5 subagent block; for a gate queue, a slot check with five-second polls, the same way. Each call carries an explicit timeout that outlasts it, and a review launched foreground under one is such a call.
+So every wait inside a subagent is a short foreground call repeated, never one long call: each wait is its own foreground tool call, never a shell loop, which is one long call again.
+
+For a review verdict the call is the `/rubber-duck-review` skill's step 5 subagent block; for a gate queue, a slot check with five-second polls. Each call carries an explicit timeout that outlasts it, and a review launched foreground under one is such a call.
 
 **The named-spawn trap (Claude Code):** an Agent-tool spawn WITH a `name` detaches and runs in the background even when the brief said `run_in_background: false`. Only unnamed spawns honor the synchronous flag. This single fact produced five strands across three builders in one production session, and each builder believed its reviewer was synchronous.
 
