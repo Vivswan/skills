@@ -96,6 +96,7 @@ graph LR
   nw --> wt
   om --> rdr
   om --> wgh
+  om --> se
   wgh --> se
   om --> cs
   om --> pid

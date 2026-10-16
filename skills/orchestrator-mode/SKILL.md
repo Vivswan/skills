@@ -50,13 +50,13 @@ Confirm what the repo itself answers instead of asking open-ended: branch protec
    - One exception: a dependent track MAY build concurrently by basing on its dependency's branch (or the mainline plus an interface stub the brief names), accepting the restack and re-gate when the dependency moves. Mechanics in `references/landing.md`.
    - Give each agent an explicit file whitelist and do-not-touch boundary so branches merge without conflicts. When parts share files, they stay with one agent.
 2. **Create the task board** (task list) from the decomposed tracks.
-3. **Spawn the fleet monitor first**: one subagent whose only job is watching the others and messaging the lead when any agent stalls or dies.
+3. **Start the fleet monitor first**: the `fleet-events` daemon (`scripts/fleet-events.mts`, this skill's source for the `/session-events` skill's daemon), once per session as a BACKGROUND task, then `watch session --repo <root>` before any builder spawns. It reads each subagent's transcript and the worktrees, and every transition arrives as a message: an agent waiting on a tool, a quiet turn, a head move, a wipe. Never a subagent.
 
-   The rule is per-FLEET, not per-session. When a monitor has stood down and a new wave of workers spawns later in the same session, a fresh monitor spawns FIRST, same as at session start, pointed at the prior monitor's ledger for continuity.
-   - Its spawn brief names the script paths it runs, so it never hand-rolls a probe: `scripts/sweep.mts` (this skill's directory) for the periodic sweep, `scripts/probe.mts` for content claims, `scripts/ledger.mts` for standing states and flags, and `scripts/baseline.mts` at landings.
-   - Liveness probing is full of false-conclusion traps. The scripts retire the mechanical ones by construction, and `references/fleet-monitor.md` carries the wiring plus the judgment layer. Follow it exactly.
-   - Lead directives the monitor must honor across sweeps go into that ledger (states, grants, standing flags with their retractions), never only into a message. The delivery rule lives in `references/fleet-monitor.md`, Reporting Discipline.
-   - The brief names the session's PII needle file (`/tmp/fleet-<sessionId>/pii-needles.txt`, written by the lead at session start, outside the repository). On every sweep where a worktree's `headSha` moved, the monitor greps that track's added lines and commit messages with it and flags a hit to the lead. Wiring in `references/fleet-monitor.md`, PII on Every HEAD Move.
+   The daemon is per session: a new wave needs no new monitor. It says what moved and for how long; judgment and every action stay the lead's.
+   - `references/fleet-monitor.md` carries the events, what the daemon cannot see (a wait on a message, a permission prompt, a stall against a worker composing a large edit), and the judgment rules. Follow it exactly. `scripts/sweep.mts` is the same worktree reading as a one-shot.
+   - The lead's instruments, never hand-rolled: `scripts/probe.mts` for content claims, `scripts/ledger.mts` for standing states and grants, `scripts/baseline.mts` at landings.
+   - Standing state (a parked worker, a grant, a flag with its retraction) goes into the ledger the lead creates at session start, never only into a message, and every daemon event is read against it. The rule lives in `references/fleet-monitor.md`, Reporting Discipline.
+   - The lead writes the session's PII needle file at session start (`/tmp/fleet-<sessionId>/pii-needles.txt`, outside the repository). On every `head` event, the lead greps that track's added lines and commit messages with it. Wiring in `references/fleet-monitor.md`, PII on Every HEAD Move.
 4. **In the PR gate, read `references/landing.md` BEFORE fanning out.** Dependency-based (stacked) tracks initialize their chain before builders spawn: each dependent branch is created off its dependency's branch, with the dependency tip it branched from recorded, per landing.md's stacked subsection. Every brief must name who pushes and opens each draft PR.
 5. **Pre-mortem the wave brief.** Before launching a wave, spend five minutes writing the answer to "it is tomorrow and this wave failed. Why?" Each named risk becomes a constraint line in the brief: the risk "builders will re-wrap every paragraph they touch" becomes the brief line "never re-wrap paragraphs; one line per paragraph". This is for waves, not trivial single tasks.
 6. **Pilot first when tracks share one brief.** When N similar tasks would launch from ONE brief, launch a single pilot and review it through the session's ordinary landing gate (its PR review, or the direct-mode review). Fold every amendment into the corrected brief, and only then fan the remaining N-1 out with it.
@@ -66,7 +66,7 @@ Confirm what the repo itself answers instead of asking open-ended: branch protec
    - Every spawn brief is self-contained per `references/spawn-briefs.md`: the full task contract inline, the territory whitelist, the gates, the signal format, the stop-and-wait ban, the TODO ban, and the test rule (red-then-green for behavior changes only). Where the `/code-standards` skill is installed, briefs point builders at it for the comment rules and the rest of the house standards.
    - Every claim the brief asks for in the signal names its read-back command (the GraphQL `isResolved` read, the daemon's `status` line, `git ls-remote origin refs/heads/<branch>`), and the signal quotes what was read back, never what was run: `references/spawn-briefs.md`, Read-back reporting.
    - One-shot watchers and gate reviewers spawn UNNAMED where the harness delivers a completed agent's output automatically. A named watcher must remember to report at exactly the seam where agents strand (details in `references/spawn-briefs.md`).
-8. **Rely on harness notifications** for subagent completion. The lead never sleeps or polls while waiting on a subagent, and spawn briefs propagate the rule to workers. The fleet monitor's periodic sweeps are different: they probe for stalls, not completion.
+8. **Rely on harness notifications** for subagent completion. The lead never sleeps or polls while waiting on a subagent, and spawn briefs propagate the rule to workers. The fleet monitor's polls are different: they report waits and stalls, not completion.
 
 ## 3. Keep the Fleet Parallel
 
@@ -159,7 +159,7 @@ After each landing on the mainline, and again over the combined delta once all s
 At phase boundaries (a wave finishing, a landing), stop subagents whose work is delivered and delete completed tasks, so the visible lists show only live work.
 
 - **Before stopping an agent**, check nothing still owes output, and copy handoff facts a later step needs into a still-open task first.
-- **Long-lived service agents** (the fleet monitor) stay up until their exit condition. The GitHub daemon is not one: it is a background task of the session, the `/session-events` skill's daemon on the `/watch-github` skill's source, never a subagent, and it exits with the session.
+- **The fleet monitor and the GitHub watcher are background tasks, never subagents**: the `/session-events` skill's daemon on this skill's `fleet-events` source and on the `/watch-github` skill's, and each exits with the session. A long-lived service agent, where a session still has one, stays up until its exit condition.
 - **Worktree handovers, removals, and fan-out file ownership** have destructive failure modes. Follow the `/worktree-hygiene` skill for those rules.
 
 ## Harness Variations
@@ -188,5 +188,5 @@ Triage findings against sections 2 (Decompose, Board, Monitor, Builders) and 7 (
 ## References
 
 - `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, the test rule, unnamed one-shot watchers, git-fixture hygiene for test suites)
-- `references/fleet-monitor.md`: the monitor's script wiring (sweep, probe, ledger, baseline) and the judgment rules learned from production false alarms
+- `references/fleet-monitor.md`: the daemon's events and the judgment rules; `sweep.mts` for a one-shot reading; probe, ledger, and baseline as the lead's instruments
 - `references/landing.md`: the two landing gates (direct commits, and PRs with per-track bases, including the stacked-chain flow and the worktree rules around it)

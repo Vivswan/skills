@@ -10,7 +10,7 @@ metadata:
 
 One daemon per Claude Code session, started by the session as a background task, polls a system for the targets that session watches and delivers what changed as messages, one per poll, and as lines in a log any agent can read. What it polls is a source: a script of a few lines that says what a target is, how it is read, and what its events say.
 
-Two sources ship in this catalog: the `/watch-github` skill polls GitHub for PRs and branch tips, and `scripts/examples/log-source.mts` watches a file's size. A session writes its own source for anything else that must be polled.
+Three sources ship in this catalog: the `/watch-github` skill polls GitHub for PRs and branch tips, the `/orchestrator-mode` skill's `fleet-events` polls a fleet's agent transcripts and worktrees, and `scripts/examples/log-source.mts` watches a file's size. A session writes its own source for anything else that must be polled.
 
 Operating envelope: one Claude Code session, one user, the daemon started once by that session, the polled system reachable.
 
