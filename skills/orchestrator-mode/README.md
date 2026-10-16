@@ -21,7 +21,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/session-events
 npx skills add https://github.com/Vivswan/skills/tree/main/skills/orchestrator-mode -g
 ```
 
-Four companion skills carry rules this one points at, so a single-skill install should add all four. The PR body format lives in [`/pr-and-issue-discipline`](../pr-and-issue-discipline/), and the landing mechanics (draft discipline, comment convergence, line accounting, who merges) in [`/pr-landing-discipline`](../pr-landing-discipline/).
+Beyond the required `/session-events` skill, four companion skills carry rules this one points at, so an install should add all four too. The PR body format lives in [`/pr-and-issue-discipline`](../pr-and-issue-discipline/), and the landing mechanics (draft discipline, comment convergence, line accounting, who merges) in [`/pr-landing-discipline`](../pr-landing-discipline/).
 
 The worktree rules (removal safety, handovers, shared trees) live in [`/worktree-hygiene`](../worktree-hygiene/), and the fleet monitor's general measurement rules (the six controls a reading survives before it becomes a claim) in [`/verify-with-controls`](../verify-with-controls/):
 
