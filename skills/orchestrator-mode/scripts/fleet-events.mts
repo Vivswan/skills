@@ -55,14 +55,16 @@ interface AgentEntry extends Transcript {
   baseline: string | null;
 }
 
-/** One worktree's last reading: the head, the tree size, the activity fingerprint, and how long it has sat idle. */
+/** One worktree's last reading: the head, the tree size, the activity fingerprint, the dirty-tree reading, and how long it has sat idle. */
 interface WorktreeEntry {
   branch: string | null;
   headSha: string | null;
   treeFileCount: number | null;
   fingerprint: string | null;
+  /** The dirty-tree reading alone (newest dirty mtime and status hash): what the quiet count watches. */
+  tree: string | null;
   processes: { workers: number; shells: number };
-  /** Polls in a row with no worker process and an unchanged fingerprint; the quiet event fires when it reaches QUIET_POLLS. */
+  /** Polls in a row with no worker process and an unchanged dirty tree; the quiet event fires when it reaches QUIET_POLLS. */
   quietPolls: number;
 }
 
@@ -476,8 +478,12 @@ function readAgents(
 
 // --- the worktrees ----------------------------------------------------------------
 
+function treeOf(row: WorktreeRow & { ok: true }): string {
+  return `${row.newestDirtyMtime ?? "-"} ${row.statusHash}`;
+}
+
 function fingerprintOf(row: WorktreeRow & { ok: true }): string {
-  return `${row.headSha} ${row.newestDirtyMtime ?? "-"} ${row.statusHash}`;
+  return `${row.headSha} ${treeOf(row)}`;
 }
 
 // The daemon's own row is never a worker, wherever it stands.
@@ -511,6 +517,7 @@ function worktreeTransitions(
   const label = `worktree ${row.branch ?? row.headSha.slice(0, SHORT_SHA)}`;
   const url = fileUrl(row.worktree);
   const fingerprint = fingerprintOf(row);
+  const tree = treeOf(row);
   const processes = countProcesses(row.processes);
   const previous = target.worktrees[row.worktree];
   const moved = previous?.fingerprint !== fingerprint;
@@ -538,12 +545,13 @@ function worktreeTransitions(
 
   // Under a downed or degraded lsof an empty process list is not verified inactivity, and a
   // worktree an agent's sidecar claims is judged by that transcript, so its count holds at zero
-  // until the claim ends.
+  // until the claim ends. A bare head move with a clean tree and no process (the lead restacking
+  // from outside) is not work: the count resets on a worker in the row or a dirty-tree change.
   const idle =
     attributionOk &&
     processes.workers === 0 &&
-    !moved &&
     previous !== undefined &&
+    previous.tree === tree &&
     !claimed.has(resolve(row.worktree));
   const quietPolls = idle ? previous.quietPolls + 1 : 0;
   if (quietPolls === QUIET_POLLS) {
@@ -560,6 +568,7 @@ function worktreeTransitions(
     headSha: row.headSha,
     treeFileCount: row.treeFileCount,
     fingerprint,
+    tree,
     processes,
     quietPolls,
   };

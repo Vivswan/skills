@@ -29,7 +29,7 @@ const TEAMMATE_SPAN = /<\\?teammate-message\s[^>]*>[\s\S]*?<\\?\/teammate-messag
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
 const NEWLINE = 0x0a;
 
-/** A tool call with no result yet: mid-call, or killed with the agent. `taskId` is the name an Agent call gives its child (what a TaskStop later takes) or a TaskStop's own task_id; null for every other tool. */
+/** A tool call with no result yet: mid-call, or killed with the agent. `taskId` is the name an Agent call gives its child (what a TaskStop later takes), a TaskStop's own task_id, or a SendMessage's `to`; null for every other tool. */
 export interface PendingCall {
   tool: string;
   at: string;
@@ -41,7 +41,7 @@ export interface Job {
   at: string;
 }
 
-/** An agent this one spawned, keyed by agentId, kept after it finished so a later poll still sees a stop. */
+/** An agent this one spawned, keyed by agentId, kept after it finished so a later poll still sees a stop; `at` is the spawn, or the message that resumed it. */
 export interface Child {
   name: string | null;
   at: string;
@@ -202,6 +202,16 @@ function finishTask(state: Activity, taskId: string): void {
   finishChild(state, taskId);
 }
 
+// Claude Code resumes a finished teammate when it is sent a message, from its own transcript. A
+// stopped one stays stopped: TaskStop is final.
+function resumeChild(state: Activity, taskId: string, at: string): void {
+  const id = childOf(state, taskId);
+  const child = id === undefined ? undefined : state.children[id];
+  if (child?.outcome !== "finished") return;
+  child.outcome = "running";
+  child.at = at;
+}
+
 // TaskStop takes a job id, an agentId, or the name given at spawn. One this file never launched
 // or spawned is nobody's: nothing is recorded.
 function stopTask(state: Activity, taskId: string): void {
@@ -233,6 +243,7 @@ function reduceAssistant(state: Activity, line: Record<string, unknown>, at: str
     let taskId: string | null = null;
     if (tool === "Agent") taskId = str(input?.name);
     if (tool === "TaskStop") taskId = str(input?.task_id);
+    if (tool === "SendMessage") taskId = str(input?.to);
     state.pending[id] = { tool, at, taskId };
   }
 }
@@ -270,8 +281,11 @@ function reduceResults(
     delete state.pending[id];
     if (call === undefined || call.taskId === null) continue;
     if (call.tool === "Agent") spawning = call.taskId;
-    // A stop counts once its result confirms it: an errored TaskStop (no such task) stopped nothing.
-    if (call.tool === "TaskStop" && item.is_error !== true) stopTask(state, call.taskId);
+    // A stop or a resume counts once its result confirms it: an errored TaskStop (no such task)
+    // stopped nothing, an errored SendMessage reached nobody.
+    if (item.is_error === true) continue;
+    if (call.tool === "TaskStop") stopTask(state, call.taskId);
+    if (call.tool === "SendMessage") resumeChild(state, call.taskId, at);
   }
 
   const result = record(line.toolUseResult);
