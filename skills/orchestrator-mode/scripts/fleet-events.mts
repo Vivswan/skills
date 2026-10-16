@@ -51,7 +51,7 @@ interface AgentEntry extends Transcript {
   observed: string | null;
   /** The situation key last announced; null before anything was said. */
   said: string | null;
-  /** The situation key the baseline poll found, which is never news; null for an agent first seen later. */
+  /** The situation key the baseline poll found, never news while it holds; null once the situation first differs, and for an agent first seen later. */
   baseline: string | null;
 }
 
@@ -350,8 +350,10 @@ function agentTransition(
     entry.baseline = key;
     return null;
   }
-  // The state the watch began in is not a change; movement after it is news only once a stillness was said.
-  if (key === entry.baseline && key !== "moving") return null;
+  // The state the watch began in is not a change; the first reading that differs retires it, and
+  // every later entry into a stillness is news.
+  if (key === entry.baseline) return null;
+  entry.baseline = null;
 
   let announce = false;
   if (situation.kind === "stopped") announce = entry.said !== "stopped";
