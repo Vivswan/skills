@@ -4,6 +4,7 @@ import {
   mkdirSync,
   renameSync,
   statSync,
+  symlinkSync,
   truncateSync,
   utimesSync,
   writeFileSync,
@@ -368,7 +369,7 @@ describe("the transcript reducer", () => {
     expect(isStopped(stopped, REBORN, "reviewer")).toBe(true);
   });
 
-  test("one user line can carry several teammate envelopes, and a body can quote a tag or a whole envelope: only the sender whose own body carries an idle notification is finished; a batch with none is an interruption", () => {
+  test("an idle notification is one bare JSON body under its own envelope tag: only its sender is finished whatever the order, a text body quoting a tag shifts nothing, a JSON body holding a tag is no notification, a batch with none interrupts", () => {
     const batch = (...parts: Array<[string, string]>): string =>
       parts
         .map(
@@ -377,38 +378,39 @@ describe("the transcript reducer", () => {
         )
         .join("\n");
     const idleReviewer = '{"type":"idle_notification","agent":"reviewer"}';
-    const after: Activity["children"] = {
+    const running: Activity["children"] = {
       [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
       [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "running" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "running" },
+    };
+    const reviewerDone: Activity["children"] = {
+      ...running,
       [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "finished" },
     };
+    const line = (...parts: Array<[string, string]>) => userText(at(10), batch(...parts));
+    expect(
+      fold([...spawns, line(["builder-b", "still working on it"], ["reviewer", idleReviewer])])
+        .children,
+    ).toEqual(reviewerDone);
+    expect(
+      fold([...spawns, line(["reviewer", idleReviewer], ["builder-b", "still working on it"])])
+        .children,
+    ).toEqual(reviewerDone);
+    const quotedTag = 'I saw `<teammate-message teammate_id="quoted">` in the parser';
     expect(
       fold([
         ...spawns,
-        userText(at(10), batch(["builder-b", "still working on it"], ["reviewer", idleReviewer])),
+        line(["builder-b", quotedTag], ["reviewer", idleReviewer], ["other", "fine"]),
       ]).children,
-    ).toEqual(after);
-    expect(
-      fold([
-        ...spawns,
-        userText(at(10), batch(["reviewer", idleReviewer], ["builder-b", "still working on it"])),
-      ]).children,
-    ).toEqual(after);
+    ).toEqual(reviewerDone);
+    const tagInJson = '{"note":"a literal <teammate-message tag","type":"idle_notification"}';
+    expect(fold([...spawns, line(["reviewer", tagInJson])]).children).toEqual(running);
     const interrupted = fold([
       ...spawns,
       toolUse(at(11), "toolu_09", "Bash", { command: "bun test" }),
-      userText(at(12), batch(["builder-b", "still working on it"])),
+      line(["builder-b", "still working on it"]),
     ]);
     expect(interrupted.pending).toEqual({});
-    // A body that quotes an opening tag, and one that quotes a whole envelope: the balancing closing tag ends a body.
-    const quotedTag = `{"note":"a literal <teammate-message tag","type":"idle_notification"}`;
-    expect(fold([...spawns, userText(at(10), batch(["reviewer", quotedTag]))]).children).toEqual(
-      after,
-    );
-    const quotedEnvelope = `${batch(["builder-b", "still working on it"])}\n${idleReviewer}`;
-    expect(
-      fold([...spawns, userText(at(10), batch(["reviewer", quotedEnvelope]))]).children,
-    ).toEqual(after);
   });
 
   test("timestamps are not monotonic (a queued attachment keeps its enqueue time), and lastMovedAt never moves backwards", () => {
@@ -618,6 +620,16 @@ describe("the files Claude Code writes", () => {
     expect(
       locateSession("00000000-0000-4000-8000-000000000000", home, "/home/user/repo"),
     ).toBeNull();
+    // A project directory that is a symlink is scanned too.
+    const elsewhere = temp.dir("fleet-elsewhere-");
+    const linked = "11111111-2222-4333-8444-555555555555";
+    mkdirSync(join(elsewhere, linked, "subagents"), { recursive: true });
+    writeFileSync(join(elsewhere, `${linked}.jsonl`), "");
+    symlinkSync(elsewhere, join(home, ".claude", "projects", "-home-user-linked"));
+    expect(locateSession(linked, home, "/home/user/repo")).toEqual({
+      sessionFile: join(home, ".claude", "projects", "-home-user-linked", `${linked}.jsonl`),
+      subagentsDir: join(home, ".claude", "projects", "-home-user-linked", linked, "subagents"),
+    });
     expect(locateSession(SESSION, temp.dir("fleet-nohome-"), "/home/user/repo")).toBeNull();
   });
 });

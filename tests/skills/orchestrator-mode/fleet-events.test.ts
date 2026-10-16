@@ -320,7 +320,7 @@ describe("fleet-events.mts", () => {
       form: "dir",
       quietAfterMinutes: 1,
       polls: 5,
-      agents: { [A]: { said: "moving", observed: "moving", baseline: `stall:${quietSince}` } },
+      agents: { [A]: { said: "moving", observed: "moving", baseline: null } },
     });
     s.stop({ inbox: box.path });
   }, 30000);
@@ -529,6 +529,12 @@ describe("fleet-events.mts", () => {
     expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
     expect(polled(s, box.path)).toBe(0);
     expect(polled(s, box.path)).toBe(0);
+    expect(s.state().targets[session.dir]).toMatchObject({
+      agents: {
+        [A]: { baseline: `ended:${endedAt}`, said: null },
+        [B]: { baseline: `ended:${endedAt}`, said: null },
+      },
+    });
 
     appendLines(pathA, exchange(ago(0), "toolu_a9", A));
     appendLines(pathB, [toolUse(ago(5), "toolu_b9", "Bash", { command: "bun test" }, B)]);
@@ -539,9 +545,54 @@ describe("fleet-events.mts", () => {
     ]);
     expect(s.state().targets[session.dir]).toMatchObject({
       agents: {
-        [A]: { baseline: `ended:${endedAt}`, said: null, observed: "moving" },
-        [B]: { baseline: `ended:${endedAt}`, said: "tool:toolu_b9", observed: "tool:toolu_b9" },
+        [A]: { baseline: null, said: null, observed: "moving" },
+        [B]: { baseline: null, said: "tool:toolu_b9", observed: "tool:toolu_b9" },
       },
+    });
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("the baseline yields after the first change: an agent that began the watch waiting on a child, then waited on Bash, then returned to the child is said again, since the baseline key no longer holds", async () => {
+    const s = new Scenario(PROGRAM, "again");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      toolUse(ago(30), "toolu_bg", "Agent", {
+        name: "runner",
+        description: "run it",
+        subagent_type: "general-purpose",
+        prompt: "run",
+        run_in_background: true,
+      }),
+      toolResult(ago(30), "toolu_bg", { toolUseResult: { status: "async_launched", agentId: C } }),
+      said(ago(30), "end_turn"),
+    ]);
+    writeAgent(
+      session,
+      C,
+      { name: "runner", description: "run it", parentAgentId: A },
+      exchange(ago(0), "toolu_c1", C),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+
+    appendLines(pathA, [toolUse(ago(14), "toolu_b", "Bash", { command: "bun test" })]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(1);
+    appendLines(pathA, [toolResult(ago(12), "toolu_b"), said(ago(12), "end_turn")]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["agent", "agent builder-a: waiting on Bash for 14 min", fileUrl(pathA)],
+      [
+        "agent",
+        "agent builder-a: waiting on agent runner for 30 min; runner last moved 0 min ago",
+        fileUrl(pathA),
+      ],
+    ]);
+    expect(s.state().targets[session.dir]).toMatchObject({
+      agents: { [A]: { baseline: null, said: `child:${C}`, observed: `child:${C}` } },
     });
     s.stop({ inbox: box.path });
   }, 30000);

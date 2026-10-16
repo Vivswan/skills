@@ -6,7 +6,6 @@
 import {
   closeSync,
   constants,
-  type Dirent,
   existsSync,
   fstatSync,
   openSync,
@@ -14,16 +13,16 @@ import {
   readFileSync,
   readSync,
   type Stats,
+  statSync,
 } from "node:fs";
 import { join } from "node:path";
 
 const TASK_NOTIFICATION = /<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/;
 const TASK_ID = /<task-id>\s*([^<\s][^<]*?)\s*<\/task-id>/;
-// One user line can carry many envelopes, and a body can quote a whole envelope; the closing tag
-// is the one that balances its opening.
-const TEAMMATE_TAG =
-  /<\\?\/teammate-message>|<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>/g;
-const IDLE_NOTIFICATION = /"type"\s*:\s*"idle_notification"/;
+// An idle notification is an envelope whose body is one bare JSON object with no tag inside,
+// closed directly by its own tag, so a text body quoting a tag cannot shift the boundary.
+const IDLE_ENVELOPE =
+  /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>\s*\{[^<]*"type"\s*:\s*"idle_notification"[^<]*\}\s*<\\?\/teammate-message>/g;
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
 const NEWLINE = 0x0a;
 
@@ -141,25 +140,9 @@ function taskIdOf(text: string): string | null {
   return TASK_ID.exec(block[1] as string)?.[1] ?? null;
 }
 
-/** The senders of the idle notifications in `text`, one per top-level envelope whose own body carries one. */
+/** The senders of the idle notifications in `text`, one per envelope that is one. */
 function idleTeammatesOf(text: string): string[] {
-  const names: string[] = [];
-  let depth = 0;
-  let sender: string | null = null;
-  let bodyStart = 0;
-  for (const tag of text.matchAll(TEAMMATE_TAG)) {
-    const opening = tag[1] !== undefined;
-    if (opening && depth === 0) {
-      sender = tag[1] as string;
-      bodyStart = tag.index + tag[0].length;
-    }
-    depth = opening ? depth + 1 : Math.max(0, depth - 1);
-    if (opening || depth > 0 || sender === null) continue;
-    if (IDLE_NOTIFICATION.test(text.slice(bodyStart, tag.index))) names.push(sender);
-    sender = null;
-  }
-  if (sender !== null && IDLE_NOTIFICATION.test(text.slice(bodyStart))) names.push(sender);
-  return names;
+  return [...text.matchAll(IDLE_ENVELOPE)].map((envelope) => envelope[1] as string);
 }
 
 // A name is rebound when an agent is respawned under it, and Claude Code resolves it to the latest
@@ -508,17 +491,19 @@ export function locateSession(sessionId: string, home: string, cwd: string): Ses
   const guess = sessionPaths(cwd, sessionId, home);
   if (existsSync(guess.sessionFile)) return guess;
 
-  let entries: Dirent[];
+  let names: string[];
   try {
-    entries = readdirSync(projectsRoot(home), { withFileTypes: true });
+    names = readdirSync(projectsRoot(home));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const paths = pathsIn(join(projectsRoot(home), entry.name), sessionId);
+  // stat, not the directory entry's type: a project directory may be a symlink.
+  for (const name of names) {
+    const project = join(projectsRoot(home), name);
+    if (!statSync(project, { throwIfNoEntry: false })?.isDirectory()) continue;
+    const paths = pathsIn(project, sessionId);
     if (existsSync(paths.sessionFile)) return paths;
   }
   return null;
