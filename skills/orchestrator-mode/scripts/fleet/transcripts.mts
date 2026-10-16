@@ -353,6 +353,8 @@ function reduceAttachment(state: Activity, line: Record<string, unknown>): void 
     return;
   }
 
+  // A notice is the turn's input in this form as in the user-line form: the turn it lands in is open.
+  state.turn = "open";
   for (const taskId of taskIdsOf(str(attachment.prompt) ?? "")) finishTask(state, taskId);
 }
 

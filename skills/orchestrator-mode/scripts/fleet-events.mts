@@ -318,8 +318,10 @@ function situationKey(situation: Situation): string {
     case "stopped":
       return situation.kind;
     case "tool":
+      return `tool:${situation.id}`;
     case "child":
-      return `${situation.kind}:${situation.id}`;
+      // The run too: a child finished and resumed between two polls is a new wait, not the old one.
+      return `child:${situation.id}:${situation.since}`;
     case "jobs":
       return `jobs:${situation.ids}`;
     case "stall":

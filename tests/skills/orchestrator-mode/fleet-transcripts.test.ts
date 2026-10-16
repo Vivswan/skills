@@ -295,6 +295,19 @@ describe("the transcript reducer", () => {
     );
   });
 
+  test("a task notification reopens the turn in either form: after an end_turn, the attachment form clears the job and leaves the turn open, as the string form does", () => {
+    const ended = [...launch, said(at(2), "end_turn")];
+    expect(fold(ended).turn).toBe("ended");
+    const formB = attachment(at(6), {
+      type: "queued_command",
+      commandMode: "task-notification",
+      prompt: notice("b1a2b3c4d"),
+    });
+    expect(fold([...ended, formB])).toEqual(activity({ lastMovedAt: at(6), lines: 4 }));
+    const formA = userText(at(6), notice("b1a2b3c4d"), { kind: "task-notification" });
+    expect(fold([...ended, formA])).toEqual(activity({ lastMovedAt: at(6), lines: 4 }));
+  });
+
   test("a prompt_snapshot or any other attachment spelling the notification tags is noise, never a notice: the job it names stays", () => {
     const lines = [
       ...launch,

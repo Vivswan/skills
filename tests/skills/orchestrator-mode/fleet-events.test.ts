@@ -548,16 +548,19 @@ describe("fleet-events.mts", () => {
     const s = new Scenario(PROGRAM, "again");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
+    const spawnedAt = ago(30);
     const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
-      toolUse(ago(30), "toolu_bg", "Agent", {
+      toolUse(spawnedAt, "toolu_bg", "Agent", {
         name: "runner",
         description: "run it",
         subagent_type: "general-purpose",
         prompt: "run",
         run_in_background: true,
       }),
-      toolResult(ago(30), "toolu_bg", { toolUseResult: { status: "async_launched", agentId: C } }),
-      said(ago(30), "end_turn"),
+      toolResult(spawnedAt, "toolu_bg", {
+        toolUseResult: { status: "async_launched", agentId: C },
+      }),
+      said(spawnedAt, "end_turn"),
     ]);
     writeAgent(
       session,
@@ -584,7 +587,13 @@ describe("fleet-events.mts", () => {
       ],
     ]);
     expect(s.state().targets[session.dir]).toMatchObject({
-      agents: { [A]: { baseline: null, said: `child:${C}`, observed: `child:${C}` } },
+      agents: {
+        [A]: {
+          baseline: null,
+          said: `child:${C}:${spawnedAt}`,
+          observed: `child:${C}:${spawnedAt}`,
+        },
+      },
     });
     s.stop({ inbox: box.path });
   }, 30000);
@@ -1131,6 +1140,55 @@ describe("fleet-events.mts", () => {
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
       ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a resumed child's wait is a new situation: after the parent's wait on it was said, a finish and a resume between two polls make the next wait news again", async () => {
+    const s = new Scenario(PROGRAM, "rerun");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const pathB = writeAgent(
+      session,
+      B,
+      { name: "builder-b", description: "build" },
+      exchange(ago(40), "toolu_b0", B),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    appendLines(pathB, [
+      toolUse(
+        ago(10),
+        "toolu_spawn",
+        "Agent",
+        {
+          name: "reviewer",
+          description: "review",
+          subagent_type: "general-purpose",
+          prompt: "review",
+          run_in_background: true,
+        },
+        B,
+      ),
+      toolResult(ago(10), "toolu_spawn", {
+        toolUseResult: { status: "async_launched", agentId: C },
+        agentId: B,
+      }),
+    ]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(1);
+    // Between two polls the reviewer finishes and the parent's message resumes it: a new run.
+    appendLines(pathB, [
+      userText(ago(6), notice(C), B),
+      toolUse(ago(5), "toolu_msg", "SendMessage", { to: C, message: "once more", summary: "s" }, B),
+      toolResult(ago(5), "toolu_msg", { agentId: B }),
+    ]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["agent", "agent builder-b: waiting on agent reviewer for 10 min", fileUrl(pathB)],
+      ["agent", "agent builder-b: waiting on agent reviewer for 5 min", fileUrl(pathB)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
