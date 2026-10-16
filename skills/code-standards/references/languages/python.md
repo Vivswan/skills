@@ -68,8 +68,8 @@ What it reads, exactly:
 
 ## Module layout
 
-- **`__all__` per module,** right after the imports, naming what other modules import.
-- **One public thing per module,** the file named after it in its own case: `GaussianNoise.py` holds the class `GaussianNoise`, `reduce_precision.py` the function `reduce_precision`. The layout rules and the specimen tree: `../structure.md`, A predictable layout.
+- **`__all__` only in a module with a name to keep out of its interface,** right after the imports, naming what other modules import. A module where every name is public carries none. Specimen: a tree where every name was public carried an `__all__` in every module, all removed.
+- **One main thing per module, with its helpers,** the file named after it in its own case: `GaussianNoise.py` holds the class `GaussianNoise`, `reduce_precision.py` the function `reduce_precision`. A stage's records, constants, and small functions share its `records.py`, `constants.py`, and `util.py`. The layout rules, the one-function module defect, and the specimen tree: `../structure.md`, A predictable layout.
 - **`__init__.py` stays empty** unless absolutely necessary; the package root's carries only the package's name, author, and version. Re-exporting from it builds a barrel: the real dependency graph hides behind the package name and import cycles become easy to mint. Importers name the defining module (`from pkg.user import User`, never `from pkg import User`).
 
 ## Cleanup and ugly one-liners
@@ -84,7 +84,7 @@ The ugly-to-clear table in `../shape.md` is written in Python; nothing is added 
 - **An `Args:` line reads `name: what it is`;** annotated code may omit the parenthesised type, and `name (type): what it is` is fine too. Pick one per repository and stop flipping.
 - **A docstring says what the function returns and what the arguments mean.** One over three short paragraphs, or one narrating the function's behaviour, is a sign the function does too much. Specimen: a four-paragraph cache narrative on a `transcribe` function, replaced by a split of the function and one-line docstrings.
 - **Every signature annotated,** held by ruff's `ANN` family.
-- **No underscore-prefixed functions, constants, or caches.** The one exception is a third-party hook whose name the framework fixes, commented as such.
+- **No underscore-prefixed names,** module level or attribute: not functions, constants, caches, or fields. The underscore marks only what the module's user must never touch (the common case: the value behind a property and its setter) and a third-party hook whose name the framework fixes, commented as such. Specimen: classes with `self._x` fields and no accessor, all made public.
 
 The docstring shape, from the `train` specimen with its syntax modernised:
 

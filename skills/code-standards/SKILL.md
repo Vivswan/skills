@@ -36,7 +36,9 @@ Code quality outweighs diff size and effort spent. A big refactor beats a fix do
 
 ### Prefer a library over hand-rolling
 
-Never hand-roll what a good library already does; a tool already in the repository counts. The search happens before the first line and is recorded in the brief, then the PR body or landing report. A large library or an unclear fit is a question to the owner first. Specimen: five CI scripts whose whole job a published package or `git diff --exit-code` already did. Full detail: `references/design.md`.
+Never hand-roll what a good library already does; a tool already in the repository counts: a declared direct dependency or its own code, never a transitive dependency, a library's private module, or a skill's script. The search happens before the first line and is recorded in the brief, then the PR body or landing report. A large library or an unclear fit is a question to the owner first.
+
+Specimen: five CI scripts whose whole job a published package or `git diff --exit-code` already did. Full detail: `references/design.md`.
 
 ### Minimum standard for tests
 
@@ -61,10 +63,11 @@ Malformed state with one unambiguous repair is repaired at the boundary and repo
 Code always looks beautiful and reads once. A module reads top to bottom with nothing to scroll back for, and a function reads as the list of its steps. Everything below this heading is a default, not a law: the case decides, a deviation that reads better stands, and a reviewer who flags one says what would read better.
 
 - **Module:** imports, every constant in one block (caches included), types, then functions. A function sits above its callers, so the entry point is the last definition. Where that order cannot be had or reads worse, readability wins and the deviation is stated. A section separator marks a small bounded group only: a module that wants sections is two modules.
-- **Function:** one concept each, nameable in a few words, long when the concept is long. Guards first, each its own paragraph and never counted as a second concept; an early return with the body unwrapped after it; a loop that `continue`s instead of nesting. Two nameable things split into named steps; a complexity lint is the backstop, raised with a reason or split, never silenced inline.
+- **Function:** one concept each, nameable in a few words, long when the concept is long. Guards first, each its own paragraph and never counted as a second concept; an early return with the body unwrapped after it; a loop that `continue`s instead of nesting.
+- **Split, or fold:** two nameable things split into named steps, and a step called from one place that is no concept of its own folds back into its caller. A complexity lint is the backstop, raised with a reason or split, never silenced inline, and never set tighter than the language page's floor.
 - **Line:** no ugly one-liners (nested conditionals, conditional splices, first-match lookups, assignment in a condition, `and`/`or` as control flow). One computation per line under a plain-noun name; named arguments once three values share a type; cleanup bound to its acquisition (`with`, `defer`, `Drop`, `using`).
 - **Body:** blank lines after the setup, between decisions and branches, before the return; none inside an `if` and its single consequence.
-- **Surface:** every signature typed; a doc comment on every public item saying what it returns and what the arguments mean, never a narrative of its behaviour; no underscore-prefixed module-level names (functions, constants, caches) beyond the language's own visibility.
+- **Surface:** every signature typed; a doc comment on every public item saying what it returns and what the arguments mean, never a narrative of its behaviour; no underscore-prefixed names, module level or attribute, beyond the language's own visibility, except on what the module's user must never touch (the value behind a property and its setter, a framework-fixed hook).
 
 Specimen, the body that set the paragraph rule:
 
@@ -97,7 +100,9 @@ The rules and their specimens: `references/shape.md`. The lint floor and the idi
 
 Delete an import-only index, a "keep old importers compiling" re-export, and a function whose whole body forwards to another. Repoint the importers or callers at the defining module. A wrapper earns its existence only by adding something real: a default, a conversion, error mapping, an injected dependency, a narrowed type.
 
-A confusing layout is the same defect one level up. A predictable one names each file after the one public thing in it, gives every sibling in a folder the same internal template, and repeats file names across sibling stages, so a reader knows where a thing sits before opening it. Not sure where a thing goes: ask the user, with options.
+A confusing layout is the same defect one level up. A predictable one names each file after its main public thing and keeps its helpers beside it, gives every sibling in a folder the same internal template, and repeats file names across sibling stages, so a reader knows where a thing sits before opening it. Not sure where a thing goes: ask the user, with options.
+
+A stage's records, constants, and small functions gather in its `records.py`, `constants.py`, and `util.py`, and a package that fits one module is one module. A one-function or one-constant module outside those three is a defect. Specimen: one sweep split a tree into 269 modules, among them a file holding a single format-conversion function and another holding a default layer list.
 
 Any file may move, a pure move is its own PR with an export census and an equal test count, and a whole-repo reorganisation is proposed as a target layout first. Full detail: `references/structure.md`; the barrel in each language: `references/languages/`.
 
@@ -144,15 +149,16 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - Special-casing: a new near-copy of existing logic where the varying axis should be a parameter.
 - Complexity added to keep a diff small: flags, nesting, or repeated checks where a cleaner refactor or a stronger type was available (the `/no-invalid-states` skill covers the type-level fix).
 - Hand-rolled code, added, moved, touched, reused, or depended on, whose whole job a good library or a tool already in the repository does; the finding names the library and what it covers. A change in a library-shaped category whose record (the brief, then the PR body or the landing report) names no library and no search.
+- A skill's script copied into a repository, or a library finding that counts a transitive dependency or a library's private module as already in the repository.
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
 - Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), several ideas in one sentence, prose packed to fit a cap.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - A boundary that refuses state the tool outputs and could repair unambiguously, repairs input the tool only reads, or lets malformed input through to fail later; a healing step whose comment argues instead of stating the rule.
-- A module constant below the first function, a function above one it calls, a section separator where a split was due, a function holding two nameable concepts, or a complexity finding silenced inline instead of split or raised at config level with its reason.
+- A module constant below the first function, a function above one it calls, a section separator where a split was due, a function holding two nameable concepts, a one-caller step that is no concept of its own kept out of its caller, a complexity finding silenced inline instead of split or raised at config level with its reason, or a lint cap tighter than the language page's floor.
 - A nested conditional expression, a conditional splice, a first-match lookup where a keyed table reads once, an assignment inside a condition, `and`/`or` as control flow, a guard's body wrapped in an `else`, a loop nesting what a `continue` would skip, or a hand-written cleanup block where the language binds cleanup to the acquisition.
-- A body with no blank line between its decisions, an untyped signature, a public item without a doc comment in the language's form, a docstring over three short paragraphs or narrating behaviour instead of stating what the function returns, or an underscore-prefixed module-level name.
+- A body with no blank line between its decisions, an untyped signature, a public item without a doc comment in the language's form, a docstring over three short paragraphs or narrating behaviour instead of stating what the function returns, or an underscore-prefixed name, module level or attribute, on what the module's user may touch.
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
-- A file holding two public things or named unlike the one it holds, a sibling whose internal template differs from the folder's, or a concept spelled differently across sibling stages.
+- A file holding two main things, or named unlike the one it holds, a one-function or one-constant module outside `records.py`, `constants.py`, or `util.py`, a sibling whose internal template differs from the folder's, or a concept spelled differently across sibling stages.
 - A move that leaves a path it changed unrepaired (an importer, a workflow or manifest path, a comment, a relative path inside the moved file), that edits the moved code beyond its paths in the same PR, or that lacks the export census and test count; a confusing layout kept because moving files is "churn".
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.

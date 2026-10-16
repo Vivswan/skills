@@ -44,7 +44,7 @@ def transcribe(video: Path, model: str) -> list[Segment]:
 
 - **Constants sit in one block after the imports,** caches included. A constant placed mid-file beside its one use is a finding: the reader meets module state in one place or hunts for it.
 - **A table that names functions** (a dispatch dict, a handler list) cannot sit in that block without breaking the order rule below. It is built inside the function that uses it.
-- **Types before functions:** aliases, data classes, and the one class a module is named after come after the constants and before the first function. One public thing per module, the module named after it in that thing's own case (`structure.md`, A predictable layout), where the language's package model allows (`languages/go.md` is the exception).
+- **Types before functions:** aliases, data classes, and the one class a module is named after come after the constants and before the first function. One main thing per module, held with its helpers, the module named after it in that thing's own case (`structure.md`, A predictable layout), where the language's package model allows (`languages/go.md` is the exception).
 - **Section separators mark a small, clearly bounded group only.** A module that wants `# ----- section` comments is usually two modules: split it, one module per concern.
 
 Readability and beauty come first: this rule yields where following it would read worse, and the deviation is said in a line.
@@ -65,7 +65,11 @@ Readability and beauty come first: this rule yields where following it would rea
 
 A function does one thing a reader can name in a few words: train the model, read the cache, apply the window. It may be long when the thing is long: the `train` specimen is sixty lines and one concept. The guards at its top never count as a second concept.
 
-A function doing two nameable things, or whose raises serve two different concepts, is split into named steps, and the caller reads like the list of those steps. A complexity lint is the backstop, not the definition (the thresholds are on each language page). A violation is split, or the threshold is raised at config level with its reason; it is never silenced inline.
+A function doing two nameable things, or whose raises serve two different concepts, is split into named steps, and the caller reads like the list of those steps. The rule runs both ways: a step called from one place that is not a concept of its own folds back into its caller.
+
+A complexity lint is the backstop, not the definition (the thresholds are on each language page). A violation is split, or the threshold is raised at config level with its reason; it is never silenced inline.
+
+A cap tighter than the language page's floor is a defect, since it forces splits that read worse. Specimen: one tree capped at 8 statements, 8 branches, 30 lines, 6 arguments, and 4 returns, against a floor of 12, 12, 50, 8, and 6, went from 324 functions to 543.
 
 Before, one function holding three concepts:
 
@@ -179,7 +183,7 @@ Readability and beauty come first: this rule yields where following it would rea
 
 - **Every signature is typed,** parameters and return, where the language lets a signature go untyped.
 - **A doc comment on every public function and type,** in the language's doc form (a Google-style docstring, JSDoc, `///`, a Go doc comment), carrying what the signature cannot say: the comments standard applies to it. A small helper whose name says what it does carries none.
-- **No underscore-prefixed names** at module level beyond what the language's visibility model means: not functions, not constants, not caches. A module's names are its interface, and a reader should not meet two visibilities. The one exception is a third-party hook whose name the framework fixes, commented as such.
+- **No underscore-prefixed names,** module level or attribute, beyond the language's own visibility: not functions, constants, caches, or fields, so a reader meets one visibility per interface. The underscore marks only what the module's user must never touch (the common case: the value behind a property and its setter) and a framework-fixed hook name, commented as such. Specimen: classes with `self._x` fields and no accessor, all made public.
 
 Readability and beauty come first: this rule yields where following it would read worse, and the deviation is said in a line.
 
@@ -187,6 +191,6 @@ Readability and beauty come first: this rule yields where following it would rea
 
 - Writing a module: lay the constants block down first, then write the leaves, then the function that uses them, so the order falls out of the writing.
 - A complexity finding: name the concepts the function holds and split along them. The names are the design. One nameable concept over the threshold raises the threshold, with the reason beside it.
-- Sweeping a tree: enable the lint floor first, then split what it finds. One tree enabled the floor after a shape sweep and found dozens of multi-concept functions the sweep had passed.
+- Sweeping a tree: enable the lint floor first, at its thresholds and no tighter, then split what it finds. One tree enabled the floor after a shape sweep and found dozens of multi-concept functions the sweep had passed.
 - Reviewing: the checker runs before the review, and its empty output is a verified line in the review prompt. Then read every body for its paragraphs, its guards, and the ugly one-liners in the table.
 - A review prompt that asks for correctness alone reviews half the standard. Many correctness rounds on one tool found real defects every time and passed every nested conditional, splice, and a sixteen-argument call; the shape criteria in SKILL.md go into the prompt.
