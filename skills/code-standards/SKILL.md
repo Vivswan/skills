@@ -102,7 +102,7 @@ Delete an import-only index, a "keep old importers compiling" re-export, and a f
 
 A confusing layout is the same defect one level up. A predictable one names each file after its main public thing and keeps its helpers beside it, gives every sibling in a folder the same internal template, and repeats file names across sibling stages, so a reader knows where a thing sits before opening it. Not sure where a thing goes: ask the user, with options.
 
-A stage's records, constants, and small functions gather in its `records.py`, `constants.py`, and `util.py`, and a package that fits one module is one module. A module named after its main thing may hold that thing alone; the defect is a helper of one caller, or a constant, given its own module outside those three.
+A stage's records, constants, and small functions gather in its `records`, `constants`, and `util` modules, and a package that fits one module is one module. A module named after its main thing may hold that thing alone; the defect is a helper of one caller, or a constant, given its own module outside those three.
 
 Specimen: one sweep split a tree into 269 modules, among them a file holding a single format-conversion helper and another holding a default layer list.
 
@@ -160,7 +160,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - A nested conditional expression, a conditional splice, a first-match lookup where a keyed table reads once, an assignment inside a condition, `and`/`or` as control flow, a guard's body wrapped in an `else`, a loop nesting what a `continue` would skip, or a hand-written cleanup block where the language binds cleanup to the acquisition.
 - A body with no blank line between its decisions, an untyped signature, a public item without a doc comment in the language's form, a docstring over three short paragraphs or narrating behaviour instead of stating what the function returns, or an underscore-prefixed name, module level or attribute, on what the module's user may touch.
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
-- A file holding two main things, or named unlike the one it holds, a helper of one caller or a constant given its own module outside `records.py`, `constants.py`, or `util.py`, a sibling whose internal template differs from the folder's, or a concept spelled differently across sibling stages.
+- A file holding two main things, or named unlike the one it holds, a helper of one caller or a constant given its own module outside the `records`, `constants`, and `util` modules, a sibling whose internal template differs from the folder's, or a concept spelled differently across sibling stages.
 - A move that leaves a path it changed unrepaired (an importer, a workflow or manifest path, a comment, a relative path inside the moved file), that edits the moved code beyond its paths in the same PR, or that lacks the export census and test count; a confusing layout kept because moving files is "churn".
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
