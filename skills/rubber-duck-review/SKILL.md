@@ -167,22 +167,28 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" --timeout 3600 > "${out%/*}/verdict.out" 2>&1
   ```
 
-  **A subagent** (a worktree builder, a spawned worker) launches with `--background` once, then repeats this call until a verdict or a failure line:
+  **A subagent** (a worktree builder, a spawned worker) launches with `--background` once, then repeats this call, each run its own foreground tool call with the Bash timeout parameter at 300000 ms, until a verdict, a failure line, or the stall line:
   ```bash
-  out=<the path from the output-file: line>
-  bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" --timeout 240   # exit 0: the verdict; exit 1 with reason "--wait timed out": call again; any other exit 1: relaunch
+  out=<the path from the output-file: line>; record="${out%/*}/review.status"
+  ! grep -q '"status"' "$record" && find "$record" -mmin +60 | grep -q . && { echo "review stalled: no verdict an hour after the launch; report it to the lead"; exit 3; }
+  bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" --timeout 240
   ```
-  Every wait is a short foreground call repeated, never one long call: `--extract --wait <file> --timeout 240` in a loop, each call its own foreground tool call with an explicit timeout above 240 s. A shell loop around it is one long call again.
+  What the call printed decides the next step, never its exit code alone, since exit 1 covers both a wait that timed out and a review that failed:
 
-  The brief's side of the same rule is the `/orchestrator-mode` skill's `references/spawn-briefs.md`, The Stop-and-Wait Ban. For both shapes:
+  | The call printed | It means | Next |
+  | --- | --- | --- |
+  | the JSON report on stdout, exit 0 | the verdict | act on it, below |
+  | `review FAILED - relaunch (--wait timed out: ...)` on stderr, exit 1 | no verdict yet | run the call again |
+  | `review FAILED - relaunch (<any other reason>)` on stderr, exit 1 | the review failed | relaunch it |
+  | `review stalled: ...`, exit 3 | the launch record is an hour old and still has no `status`: the block's own cap, not the launcher's | report the stall to the lead |
+
+  Every wait is a short foreground call repeated, never one long call; a shell loop around the call is one long call again, and the harness backgrounds it. The `/orchestrator-mode` skill's `references/spawn-briefs.md`, The Stop-and-Wait Ban, carries the brief's side and points here for the block.
+  For both shapes:
   - `<reviewer>` is the argument the review was launched with.
   - The lead's verdict lands in `verdict.out` inside that review's capture dir, so parallel reviews (step 2) never overwrite one another. It travels and is removed with the dir. A subagent's foreground call prints the verdict as the tool result.
   - The script polls the launch record every 2 s until the monitor records the exit, then prints the same JSON report. When `--timeout <seconds>` (default 3600) passes first, it exits 1 with the reason `--wait timed out` on stderr and prints no report.
-  - It validates the reviewer and output file against what the launch recorded, so waiting on the wrong reviewer or file fails at once.
-  - Exit codes, same as a foreground run:
-    - 0: verdict printed.
-    - 1: review failed (relaunch), or `--wait timed out` (the lead relaunches; a subagent calls again).
-    - 2: wrong reviewer or file, or no launch record beside the output file.
+  - It validates the reviewer and output file against what the launch recorded, so waiting on the wrong reviewer or file, or on a file with no launch record beside it, fails at once with exit 2.
+  - The lead's single wait reads the same lines as the table above, with one difference: any `review FAILED - relaunch` line, the timeout included, means relaunch.
 - `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>` without `--wait` reads a finished run once: it exits 1 (`no exit status recorded`) while the reviewer is still running instead of blocking.
 - Every run that reached the reviewer keeps its scratch dir for 24 hours (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). The script snapshots your prompt into that dir, so everything the launcher writes travels and cleans up together.
   - The reviewer's own transcript is codex's, kept in its home, in every launch mode.
