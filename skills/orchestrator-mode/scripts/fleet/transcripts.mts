@@ -19,10 +19,10 @@ import { join } from "node:path";
 
 const TASK_NOTIFICATION = /<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/;
 const TASK_ID = /<task-id>\s*([^<\s][^<]*?)\s*<\/task-id>/;
-// An idle notification is an envelope whose body is one bare JSON object with no tag inside,
-// closed directly by its own tag, so a text body quoting a tag cannot shift the boundary.
-const IDLE_ENVELOPE =
-  /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>\s*\{[^<]*"type"\s*:\s*"idle_notification"[^<]*\}\s*<\\?\/teammate-message>/g;
+// Each teammate envelope with its body: the regex locates, the parsed body decides. A body with a
+// tag inside is text, never a notice, so it is not captured.
+const TEAMMATE_ENVELOPE =
+  /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>([^<]*)<\\?\/teammate-message>/g;
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
 const NEWLINE = 0x0a;
 
@@ -107,6 +107,14 @@ function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function parseRecord(text: string): Record<string, unknown> | null {
+  try {
+    return record(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
 function timestampOf(line: Record<string, unknown>): string | null {
   const at = str(line.timestamp);
   if (at === null || Number.isNaN(Date.parse(at))) return null;
@@ -140,9 +148,20 @@ function taskIdOf(text: string): string | null {
   return TASK_ID.exec(block[1] as string)?.[1] ?? null;
 }
 
-/** The senders of the idle notifications in `text`, one per envelope that is one. */
+// The harness writes an idle notice as one bare JSON object whose top-level type says so; a nested
+// field that spells the word, or a body that is not JSON, is not one.
+function isIdleNotice(body: string): boolean {
+  const notice = parseRecord(body.trim());
+  return notice !== null && notice.type === "idle_notification";
+}
+
+/** The senders of the idle notifications in `text`, one per envelope whose body is one. */
 function idleTeammatesOf(text: string): string[] {
-  return [...text.matchAll(IDLE_ENVELOPE)].map((envelope) => envelope[1] as string);
+  const names: string[] = [];
+  for (const envelope of text.matchAll(TEAMMATE_ENVELOPE)) {
+    if (isIdleNotice(envelope[2] as string)) names.push(envelope[1] as string);
+  }
+  return names;
 }
 
 // A name is rebound when an agent is respawned under it, and Claude Code resolves it to the latest
@@ -327,14 +346,6 @@ function readBytes(fd: number, from: number, length: number): Buffer {
     filled += read;
   }
   return buffer.subarray(0, filled);
-}
-
-function parseRecord(text: string): Record<string, unknown> | null {
-  try {
-    return record(JSON.parse(text));
-  } catch {
-    return null;
-  }
 }
 
 /**
