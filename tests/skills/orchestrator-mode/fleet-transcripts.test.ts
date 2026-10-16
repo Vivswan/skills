@@ -368,6 +368,49 @@ describe("the transcript reducer", () => {
     expect(isStopped(stopped, REBORN, "reviewer")).toBe(true);
   });
 
+  test("one user line can carry several teammate envelopes, and a body can quote a tag or a whole envelope: only the sender whose own body carries an idle notification is finished; a batch with none is an interruption", () => {
+    const batch = (...parts: Array<[string, string]>): string =>
+      parts
+        .map(
+          ([name, body]) =>
+            `<teammate-message teammate_id="${name}" summary="s">\n${body}\n</teammate-message>`,
+        )
+        .join("\n");
+    const idleReviewer = '{"type":"idle_notification","agent":"reviewer"}';
+    const after: Activity["children"] = {
+      [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
+      [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "running" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "finished" },
+    };
+    expect(
+      fold([
+        ...spawns,
+        userText(at(10), batch(["builder-b", "still working on it"], ["reviewer", idleReviewer])),
+      ]).children,
+    ).toEqual(after);
+    expect(
+      fold([
+        ...spawns,
+        userText(at(10), batch(["reviewer", idleReviewer], ["builder-b", "still working on it"])),
+      ]).children,
+    ).toEqual(after);
+    const interrupted = fold([
+      ...spawns,
+      toolUse(at(11), "toolu_09", "Bash", { command: "bun test" }),
+      userText(at(12), batch(["builder-b", "still working on it"])),
+    ]);
+    expect(interrupted.pending).toEqual({});
+    // A body that quotes an opening tag, and one that quotes a whole envelope: the balancing closing tag ends a body.
+    const quotedTag = `{"note":"a literal <teammate-message tag","type":"idle_notification"}`;
+    expect(fold([...spawns, userText(at(10), batch(["reviewer", quotedTag]))]).children).toEqual(
+      after,
+    );
+    const quotedEnvelope = `${batch(["builder-b", "still working on it"])}\n${idleReviewer}`;
+    expect(
+      fold([...spawns, userText(at(10), batch(["reviewer", quotedEnvelope]))]).children,
+    ).toEqual(after);
+  });
+
   test("timestamps are not monotonic (a queued attachment keeps its enqueue time), and lastMovedAt never moves backwards", () => {
     const lines = [
       toolUse(at(30), "toolu_01", "Bash", { command: "bun test" }),
@@ -480,6 +523,28 @@ describe("the incremental reader", () => {
       }),
     });
 
+    // Same inode, an unfinished tail, then a shrink that stays above the offset of the last complete
+    // line: the bytes before that offset are gone too, so the state starts over.
+    appendFileSync(file, "z".repeat(900));
+    utimesSync(file, new Date(at(57)), new Date(at(57)));
+    expect(readTranscript(transcript, file)).toBe(true);
+    const before = { ...transcript.cursor };
+    const other = JSON.stringify(toolUse(at(59), "toolu_12", "Bash", { command: "b".repeat(650) }));
+    expect(Buffer.byteLength(other) + 1).toBeGreaterThan(before.offset);
+    expect(Buffer.byteLength(other) + 1).toBeLessThan(before.size);
+    writeFileSync(file, `${other}\n`);
+    utimesSync(file, new Date(at(59)), new Date(at(59)));
+    expect(readTranscript(transcript, file)).toBe(true);
+    expect(transcript).toEqual({
+      cursor: cursor(Buffer.byteLength(other) + 1),
+      state: activity({
+        lastMovedAt: at(59),
+        pending: { toolu_12: { tool: "Bash", at: at(59), taskId: null } },
+        lines: 1,
+      }),
+    });
+    expect(transcript.cursor.ino).toBe(before.ino);
+
     expect(() => readIncrement(dir, { offset: 0, ino: null, size: 0 })).toThrow(
       `${dir} is not a regular file`,
     );
@@ -487,7 +552,7 @@ describe("the incremental reader", () => {
 });
 
 describe("the files Claude Code writes", () => {
-  test("sessionPaths maps the cwd to the project slug (every non-alphanumeric becomes a dash); displayName falls back name, description, agentId; a missing sidecar is null, a malformed one throws; locateSession finds a session by id in any project", () => {
+  test("sessionPaths maps the cwd to the project slug (every non-alphanumeric becomes a dash); displayName falls back name, description, agentId; a missing sidecar is null, a malformed one throws; locateSession finds a session by id", () => {
     expect(sessionPaths("/home/user/repo", SESSION, "/home/user")).toEqual({
       sessionFile: `/home/user/.claude/projects/-home-user-repo/${SESSION}.jsonl`,
       subagentsDir: `/home/user/.claude/projects/-home-user-repo/${SESSION}/subagents`,
