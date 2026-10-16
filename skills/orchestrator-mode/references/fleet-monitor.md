@@ -334,3 +334,31 @@ exits: 0 clean; 1 drift found or ok:false; 2 usage error
   The flip is INVALID for a dependent (stacked) successor. Its branch already contains the sibling's tokens before the restack, so the pre-restack probe correctly passes and the rule would report a false failure. Verify dependent successors by stack ancestry and the per-site postconditions in `references/landing.md` instead.
 - **A disjointness claim is bound to when it was measured.** A track measured disjoint at spawn can grow into a real collision with a sibling that is already strict-ready. Re-verify with `probe set <worktree> <base>` whenever a track's file set grows, never once.
 - **Executable landing baselines, negative-controlled.** For a wave where each landing ships whole files, keep one runnable per-landing check: file presence, a minimum size, and a structural count (exported symbols, section headings: something a mangled merge cannot preserve by accident). Then negative-control the CHECKER itself, in addition to its tokens, against a ref that lacks the files (the pre-landing mainline), per `/verify-with-controls` rule 6.
+
+## The Daemon
+
+The same readings run as a session-events source, `bun <skill-dir>/scripts/fleet-events.mts`, which the lead's session starts once as a background task and which delivers each agent's waits, stalls, and head moves as messages (its `--help`):
+
+```text usage=skills/orchestrator-mode/scripts/fleet-events.mts
+usage: fleet-events.mts <command> [options]
+  daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]
+  watch <target> [the source's flags] [--id <name>]
+  unwatch <target> | --all [--id <name>]
+  wait [--since <id>] [--timeout <s>] [--id <name>]
+  poll | status | stop [--id <name>]
+the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET and exits with it;
+--id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;
+--mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;
+--interval is 60 s by default, 1 to 86400
+targets: session (this session's transcript and subagents dir, from CLAUDE_CODE_SESSION_ID and the cwd), or an absolute path to a session directory
+--repo <root>            add the worktree reading for every worktree of this repository (absolute path)
+--base <ref>             aheadBehind against this committish (default: origin's default branch)
+--quiet-after <minutes>  a wait or a stall is this long before it is said (default 10)
+the session-events skill must be installed beside this one; without it every command exits 2 naming the install: npx skills add Vivswan/skills -g --skill session-events
+files: <dir>/<pid>-<start>.fleet-events.{state.json,events.jsonl,log} and <dir>/<pid>.fleet-events.sock for a session; <id>.fleet-events.* for a file sink;
+  <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
+prints: one message per poll with events, wrapped in <cross-session-message from="uds:<socket>" from-name="fleet-events" from-mode="<mode>"> and ending "automated notice from fleet-events; no reply needed";
+  wait prints the new events as JSON lines, then cursor: <id>
+exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too); 2 usage, a state file that is not JSON, or no runtime directory;
+       3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line
+```
