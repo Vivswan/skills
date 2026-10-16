@@ -4,6 +4,7 @@ import {
   cpSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -33,6 +34,7 @@ const A = "a1b2c3d4e5f60718";
 const B = "b2c3d4e5f6071829";
 const C = "c3d4e5f607182930";
 const D = "d4e5f60718293041";
+const E = "e5f6071829304152";
 const MARKER = "MARKER-sunflower-9c1d";
 const GIT_TIMEOUT = 60_000;
 
@@ -570,13 +572,17 @@ describe("fleet-events.mts", () => {
     GIT_TIMEOUT,
   );
 
-  test("a FIFO transcript, a directory or FIFO sidecar, and a vanished subagents dir are trouble, said once, one agent's while the rest are polled; a failed read is no observation, so a wait seen before an outage is said once seen again", async () => {
+  test("a FIFO transcript, a directory or FIFO sidecar, and a vanished subagents dir are trouble, said once; a per-agent failure leaves the others' transitions flowing, a fleet-wide failure is a non-observation that keeps every continuity", async () => {
     const s = new Scenario(PROGRAM, "fifo");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const lines = [toolUse(ago(5), "toolu_01", "Bash", { command: "bun test" })];
-    const meta = { name: "builder-a", description: "build" };
-    const pathA = writeAgent(session, A, meta, lines);
+    const waiting = (agentId: string): Line[] => [
+      toolUse(ago(5), `toolu_${agentId.slice(0, 4)}`, "Bash", { command: "bun test" }, agentId),
+    ];
+    const metaA = { name: "builder-a", description: "build" };
+    const pathA = writeAgent(session, A, metaA, waiting(A));
+    const fifo = join(session.subagents, `agent-${B}.jsonl`);
+    expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
     writeAgent(
       session,
       C,
@@ -595,18 +601,23 @@ describe("fleet-events.mts", () => {
     const sidecarD = join(session.subagents, `agent-${D}.meta.json`);
     rmSync(sidecarD);
     expect(Bun.spawnSync(["mkfifo", sidecarD]).exitCode).toBe(0);
-    const fifo = join(session.subagents, `agent-${B}.jsonl`);
-    expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
     await s.start({ inbox: box.path });
     expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    // The three failures hold while agent A's wait is said: a per-agent failure is that agent's alone.
+    expect(polled(s, box.path)).toBe(1);
 
+    const metaE = { name: "builder-e", description: "build" };
+    const pathE = writeAgent(session, E, metaE, waiting(E));
+    expect(polled(s, box.path)).toBe(1);
+    // The listing fails: a non-observation, so E's wait keeps the one reading it has and is said on the next.
     rmSync(session.subagents, { recursive: true });
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
     mkdirSync(session.subagents);
-    writeAgent(session, A, meta, lines);
-    expect(polled(s, box.path)).toBe(0);
+    writeAgent(session, A, metaA, waiting(A));
+    writeAgent(session, E, metaE, waiting(E));
     expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
       [
         "trouble",
@@ -623,12 +634,126 @@ describe("fleet-events.mts", () => {
         `fleet: cannot read agent-${D}.meta.json: ${sidecarD} is not a regular file`,
         fileUrl(sidecarD),
       ],
-      ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
       ["agent", "agent builder-a: waiting on Bash for 5 min", fileUrl(pathA)],
+      ["agent", "agent builder-e: started", fileUrl(pathE)],
+      ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
+      ["agent", "agent builder-e: waiting on Bash for 5 min", fileUrl(pathE)],
     ]);
     expect(s.log()).toContain(`${B}: ${fifo} is not a regular file`);
     s.stop({ inbox: box.path });
   }, 30000);
+
+  test("a session transcript that cannot be read makes the whole poll a non-observation: one trouble event, no transition from the stale lead state; the next readable poll says the stop alone", async () => {
+    const s = new Scenario(PROGRAM, "lead");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      ...exchange(ago(5), "toolu_01"),
+      said(ago(5), null),
+    ]);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+
+    // The lead's file becomes unreadable on the poll that would have said the stall.
+    rmSync(session.sessionFile);
+    mkdirSync(session.sessionFile);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+
+    rmSync(session.sessionFile, { recursive: true });
+    writeFileSync(session.sessionFile, "");
+    appendLines(session.sessionFile, [
+      toolUse(
+        ago(8),
+        "toolu_spawn",
+        "Agent",
+        {
+          name: "builder-a",
+          description: "build",
+          subagent_type: "general-purpose",
+          prompt: "build",
+        },
+        null,
+      ),
+      toolResult(ago(8), "toolu_spawn", {
+        toolUseResult: { status: "teammate_spawned", agentId: A, name: "builder-a" },
+        agentId: null,
+      }),
+      toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
+      toolResult(ago(2), "toolu_stop", { agentId: null }),
+    ]);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      [
+        "trouble",
+        `fleet: cannot read the session transcript: ${session.sessionFile} is not a regular file`,
+        fileUrl(session.sessionFile),
+      ],
+      ["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test(
+    "a subagents listing that fails under --repo is a non-observation for the worktrees too: no quiet count advances and nothing is said; the next readable poll honours the claim the unread sidecar carried",
+    async () => {
+      const s = new Scenario(PROGRAM, "wide");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      writeAgent(
+        session,
+        A,
+        { name: "builder-a", description: "build" },
+        exchange(ago(0), "toolu_01"),
+      );
+      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      try {
+        await s.start({ inbox: box.path });
+        expect(
+          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
+            inbox: box.path,
+          }).code,
+        ).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+
+        const pathB = writeAgent(
+          session,
+          B,
+          { name: "builder-b", description: "build", worktreePath: wtA, worktreeBranch: "track-a" },
+          exchange(ago(0), "toolu_02", B),
+        );
+        renameSync(session.subagents, `${session.subagents}.aside`);
+        writeFileSync(session.subagents, "");
+        expect(polled(s, box.path)).toBe(1);
+        expect(s.state().targets[session.dir]).toMatchObject({
+          worktrees: { [wtA]: { quietPolls: 1 }, [wtB]: { quietPolls: 1 } },
+        });
+
+        rmSync(session.subagents);
+        renameSync(`${session.subagents}.aside`, session.subagents);
+        expect(polled(s, box.path)).toBe(2);
+        expect(polled(s, box.path)).toBe(0);
+        expect(rows(s)).toEqual([
+          [
+            "trouble",
+            `fleet: cannot list ${session.subagents}: ENOTDIR`,
+            fileUrl(session.subagents),
+          ],
+          ["agent", "agent builder-b: started", fileUrl(pathB)],
+          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
+        ]);
+        expect(s.state().targets[session.dir]).toMatchObject({
+          worktrees: { [wtA]: { quietPolls: 0 }, [wtB]: { quietPolls: 3 } },
+        });
+      } finally {
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
 
   test("a marker planted in a tool_result body, in toolUseResult, and in a prompt_snapshot attachment reaches no frame, no log line, no event, and no state file", async () => {
     const s = new Scenario(PROGRAM, "mark");
