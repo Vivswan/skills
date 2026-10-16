@@ -137,10 +137,10 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - `--stdin-prompt` (codex/claude only): add it if the environment rejects the prompt as a command argument, or the prompt is very large. The prompt file itself is served as the reviewer's stdin.
 
   A file fd is EOF-terminated, so it cannot hang. The stdin hang trap is an open pipe, not a used stdin.
-- Foreground (the default) blocks until the reviewer exits, so give the tool call a generous timeout. Subagents (worktree builders, spawned workers) always run foreground: a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
+- Foreground (the default) blocks until the reviewer exits, so give the tool call a generous explicit timeout. Subagents (worktree builders, spawned workers) run the launch foreground under one, or `--background` and then wait in bounded foreground calls (step 5): a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
 - `--background` prints exactly two lines, `output-file: <path>` and `pid: <n>`.
   - `output-file` is the captured stream. A detached monitor records the reviewer's exit status beside it.
-  - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 5).
+  - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 5); a subagent uses it for a review that may outlast one foreground call, with step 5's bounded waits.
   - Killing that PID cancels the review (the signal is forwarded to the reviewer).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line; the codex copy mode adds its notice first). Silence in between is normal. A real review can take a while.
 - Runtime: `bun`. `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
@@ -159,18 +159,29 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 
   It means the stream was empty, cut mid-turn, truncated on its final line, held a failed turn or an error with no verdict after it, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. While the captured stream still exists, the failure message names its path.
 - **Exit 2**: fix the invocation or install the missing reviewer binary. Nothing was reviewed.
-- After a `--background` launch, wait for the verdict in a background shell so the harness wakes you when it lands. Never poll `review.status` or the output path by hand:
+- After a `--background` launch, the wait for the verdict has two shapes, one per actor. They differ for one reason: a subagent that goes idle after one long call is never woken, while the lead's session is re-invoked when a background command ends.
+
+  **The lead** (a session the harness re-invokes) waits in one background shell, so the harness delivers the completion. Never poll `review.status` or the output path by hand:
   ```bash
   out=<the path from the output-file: line>
-  bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" > "${out%/*}/verdict.out" 2>&1
+  bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" --timeout 3600 > "${out%/*}/verdict.out" 2>&1
   ```
+
+  **A subagent** (a worktree builder, a spawned worker) launches with `--background` once, then repeats this call until a verdict or a failure line:
+  ```bash
+  out=<the path from the output-file: line>
+  bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" --timeout 240   # exit 0: the verdict; exit 1 with reason "--wait timed out": call again; any other exit 1: relaunch
+  ```
+  Every wait is a short foreground call repeated, never one long call: `--extract --wait <file> --timeout 240` in a loop, each call its own foreground tool call with an explicit timeout above 240 s. A shell loop around it is one long call again.
+
+  The brief's side of the same rule is the `/orchestrator-mode` skill's `references/spawn-briefs.md`, The Stop-and-Wait Ban. For both shapes:
   - `<reviewer>` is the argument the review was launched with.
-  - The verdict lands in `verdict.out` inside that review's capture dir, so parallel reviews (step 2) never overwrite one another. It travels and is removed with the dir.
-  - The script polls the launch record every 2 s until the monitor records the exit (`--timeout <seconds>`, default 3600), then prints the same JSON report.
+  - The lead's verdict lands in `verdict.out` inside that review's capture dir, so parallel reviews (step 2) never overwrite one another. It travels and is removed with the dir. A subagent's foreground call prints the verdict as the tool result.
+  - The script polls the launch record every 2 s until the monitor records the exit, then prints the same JSON report. When `--timeout <seconds>` (default 3600) passes first, it exits 1 with the reason `--wait timed out` on stderr and prints no report.
   - It validates the reviewer and output file against what the launch recorded, so waiting on the wrong reviewer or file fails at once.
   - Exit codes, same as a foreground run:
     - 0: verdict printed.
-    - 1: review failed or `--wait timed out` (relaunch).
+    - 1: review failed (relaunch), or `--wait timed out` (the lead relaunches; a subagent calls again).
     - 2: wrong reviewer or file, or no launch record beside the output file.
 - `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>` without `--wait` reads a finished run once: it exits 1 (`no exit status recorded`) while the reviewer is still running instead of blocking.
 - Every run that reached the reviewer keeps its scratch dir for 24 hours (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). The script snapshots your prompt into that dir, so everything the launcher writes travels and cleans up together.
