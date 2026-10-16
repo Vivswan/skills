@@ -282,11 +282,25 @@ function reduceResults(
   }
 }
 
+// A user line with no tool_result block is injected input whatever its form: the text blocks of an
+// array are read as the string they would have been.
 function reduceUser(state: Activity, line: Record<string, unknown>, at: string): void {
   state.turn = "open";
   const content = record(line.message)?.content;
-  if (typeof content === "string") reduceInjected(state, content);
-  else if (Array.isArray(content)) reduceResults(state, line, at, content);
+  if (typeof content === "string") {
+    reduceInjected(state, content);
+    return;
+  }
+  if (!Array.isArray(content)) return;
+
+  const parts = content.map(record);
+  if (parts.some((part) => part?.type === "tool_result")) {
+    reduceResults(state, line, at, content);
+    return;
+  }
+
+  const texts = parts.map((part) => (part?.type === "text" ? (str(part.text) ?? "") : ""));
+  reduceInjected(state, texts.join("\n"));
 }
 
 // A subagent's file sees a notice only as a queued_command attachment. Every other attachment is

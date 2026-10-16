@@ -629,6 +629,45 @@ describe("fleet-events.mts", () => {
   }, 30000);
 
   test(
+    "the instrument excludes itself: a daemon started from inside a worktree does not count as that worktree's worker, so an idle unclaimed worktree it sits in still goes quiet",
+    async () => {
+      const s = new Scenario(PROGRAM, "own");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const cwd = process.cwd();
+      try {
+        // The daemon inherits the test process's cwd at spawn: park it in wt-b for the start only.
+        process.chdir(wtB);
+        try {
+          await s.start({ inbox: box.path });
+        } finally {
+          process.chdir(cwd);
+        }
+        expect(
+          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
+            inbox: box.path,
+          }).code,
+        ).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(2);
+        expect(rows(s)).toEqual([
+          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
+          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
+        ]);
+        expect(s.state().targets[session.dir]).toMatchObject({
+          worktrees: { [wtB]: { processes: { workers: 0, shells: 0 } } },
+        });
+      } finally {
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
     "with --repo, a head move is head (with ahead and behind against --base), a tree collapse is wipe, an unclaimed idle worktree is quiet after two polls, a claimed one or one holding a sleep is not, and a claim ending starts the count at zero",
     async () => {
       const s = new Scenario(PROGRAM, "tree");

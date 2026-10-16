@@ -206,6 +206,49 @@ describe("the transcript reducer", () => {
     expect(fold(lines)).toEqual(activity({ lastMovedAt: at(2), lines: 3 }));
   });
 
+  test("a user line whose content is an array with no tool_result is injected input like a string: its text blocks abandon pending calls and carry an idle notice, while an array with a tool_result clears that call alone", () => {
+    const pending = [
+      toolUse(at(0), "toolu_01", "Bash", { command: "bun test" }),
+      toolUse(at(0, 1), "toolu_02", "Read", { file_path: "/home/user/repo/README.md" }),
+    ];
+    const blocks = (...texts: string[]): Line => ({
+      ...envelope("user", at(2)),
+      message: { role: "user", content: texts.map((text) => ({ type: "text", text })) },
+    });
+    expect(fold([...pending, blocks("stop,", "change of plan")])).toEqual(
+      activity({ lastMovedAt: at(2), lines: 3 }),
+    );
+    const mixed: Line = {
+      ...envelope("user", at(2)),
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_01", content: "ok" },
+          { type: "text", text: "and a note beside the result" },
+        ],
+      },
+      toolUseResult: { stdout: "ok", stderr: "" },
+    };
+    expect(fold([...pending, mixed])).toEqual(
+      activity({
+        lastMovedAt: at(2),
+        pending: { toolu_02: { tool: "Read", at: at(0, 1), taskId: null } },
+        lines: 3,
+      }),
+    );
+    const idleInArray = {
+      ...blocks(
+        '<teammate-message teammate_id="reviewer" summary="s">\n{"type":"idle_notification","agent":"reviewer"}\n</teammate-message>',
+      ),
+      timestamp: at(10),
+    };
+    expect(fold([...spawns, idleInArray]).children[CHILD_C]).toEqual({
+      name: "reviewer",
+      at: at(2, 1),
+      outcome: "finished",
+    });
+  });
+
   test("only a message's last block ends the turn: a thinking block's null stop_reason keeps it open, the final end_turn block ends it, a later user line reopens it, and a synthetic API-error stop_sequence never ends it", () => {
     const lines = [
       toolUse(at(0), "toolu_01", "Bash", { command: "bun test" }),
