@@ -26,7 +26,7 @@ No turn was spent on "nothing changed yet", and no subagent sweeps. The daemon i
 
 | Argument | Means |
 | --- | --- |
-| `session` | this session's transcript and subagents directory, resolved from `CLAUDE_CODE_SESSION_ID` and the cwd |
+| `session` | this session's transcript and subagents directory, found by `CLAUDE_CODE_SESSION_ID` under `~/.claude/projects` (the cwd's project tried first) |
 | `/abs/<sessionId>` | an absolute session directory, for another session's fleet |
 | `--repo <root>` | adds the worktree reading of that repository: what `sweep.mts` prints, every poll |
 | `--base <ref>` | the ahead/behind base (default: origin's default branch) |
