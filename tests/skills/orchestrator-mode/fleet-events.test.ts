@@ -597,6 +597,35 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a subagents directory that does not exist yet is an empty fleet: the baseline happens with no agents, the first transcript is started and its aged wait is said, and once listed a directory that vanishes is a fleet-wide failure", async () => {
+    const s = new Scenario(PROGRAM, "none");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    rmSync(session.subagents, { recursive: true });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    expect(s.events()).toEqual([]);
+    expect(polled(s, box.path)).toBe(0);
+
+    mkdirSync(session.subagents);
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      toolUse(ago(5), "toolu_01", "Bash", { command: "bun test" }),
+    ]);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+
+    rmSync(session.subagents, { recursive: true });
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["agent", "agent builder-a: started", fileUrl(pathA)],
+      ["agent", "agent builder-a: waiting on Bash for 5 min", fileUrl(pathA)],
+      ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test(
     "with --repo, a head move is head (with ahead and behind against --base), a tree collapse is wipe, an unclaimed idle worktree is quiet after two polls, a claimed one or one holding a sleep is not, and a claim ending starts the count at zero",
     async () => {

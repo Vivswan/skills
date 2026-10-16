@@ -80,6 +80,8 @@ interface Target {
   worktrees: Record<string, WorktreeEntry>;
   /** The trouble conditions in force, by key, each with the text said when it began. */
   trouble: Record<string, string>;
+  /** Whether the subagents directory has ever been listed; before the first worker is spawned it does not exist, and that is an empty fleet. */
+  subagentsListed: boolean;
 }
 
 type Situation =
@@ -214,6 +216,7 @@ function parseTarget(args: string[]): Target {
     lead: initialTranscript(),
     worktrees: {},
     trouble: {},
+    subagentsListed: false,
   };
 }
 
@@ -388,12 +391,19 @@ function readAgents(
   try {
     names = readdirSync(target.subagentsDir);
   } catch (error) {
+    // The lead may watch before spawning anyone: a directory that has never existed is an empty
+    // fleet, so the baseline happens with no agents. Once listed, its absence is a failed read.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && !target.subagentsListed) {
+      return { events, busy, refreshed };
+    }
     throw new FleetReadError(
       "subagents",
       `fleet: cannot list ${target.subagentsDir}: ${(error as NodeJS.ErrnoException).code ?? "error"}`,
       fileUrl(target.subagentsDir),
     );
   }
+
+  target.subagentsListed = true;
 
   const listed = new Set<string>();
   for (const name of names.sort()) {
