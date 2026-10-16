@@ -87,13 +87,13 @@ prints: one JSON line each, in this order, each only when its condition holds
 exits: 0 the sweep ran (ok:false rows included); 1 control failure; 2 usage error
 ```
 
-It prints one JSON line per worktree of `<repo-root>` (a real captured row, wrapped here for width):
+It prints one JSON line per worktree of `<repo-root>` (one row, example values, wrapped here for width):
 
 ```json
-{"worktree":"/repo/.claude/worktrees/agent-a0e0514bb44bad3e8","branch":"worktree-agent-a0e0514bb44bad3e8",
- "ok":true,"headSha":"05387480f58e11df4f74776bb29b3a7e3f0871e0","aheadBehind":{"ahead":0,"behind":0},
- "treeFileCount":130,"dirtyCount":1,"untrackedCount":0,"newestDirtyMtime":"2026-08-26T07:41:36.177Z",
- "statusHash":"405808942a362a72","processes":[{"pid":5835,"command":"bun","state":"S+"}]}
+{"worktree":"/repo/.claude/worktrees/agent-a1b2c3d4e5f60718","branch":"worktree-agent-a1b2c3d4e5f60718",
+ "ok":true,"headSha":"0123abcd0123abcd0123abcd0123abcd0123abcd","aheadBehind":{"ahead":0,"behind":0},
+ "treeFileCount":130,"dirtyCount":1,"untrackedCount":0,"newestDirtyMtime":"2026-01-01T00:00:00.000Z",
+ "statusHash":"0123456789abcdef","processes":[{"pid":4242,"command":"bun","state":"S+"}]}
 ```
 
 How to read the row:
