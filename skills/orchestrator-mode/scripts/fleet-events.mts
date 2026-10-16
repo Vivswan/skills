@@ -93,6 +93,17 @@ interface Trouble {
   url: string;
 }
 
+/** A read the whole poll depends on failed, so nothing this poll saw can be judged; `key` names the condition in the trouble ledger. */
+class FleetReadError extends Error {
+  constructor(
+    readonly key: string,
+    message: string,
+    readonly url: string,
+  ) {
+    super(message);
+  }
+}
+
 let base: typeof import("../../session-events/scripts/session-events.mts");
 try {
   base = await import("../../session-events/scripts/session-events.mts");
@@ -359,12 +370,11 @@ function readAgents(
   try {
     names = readdirSync(target.subagentsDir);
   } catch (error) {
-    trouble.set("subagents", {
-      text: `fleet: cannot list ${target.subagentsDir}: ${(error as NodeJS.ErrnoException).code ?? "error"}`,
-      url: fileUrl(target.subagentsDir),
-    });
-    for (const entry of Object.values(target.agents)) entry.observed = null;
-    return { events, busy, refreshed };
+    throw new FleetReadError(
+      "subagents",
+      `fleet: cannot list ${target.subagentsDir}: ${(error as NodeJS.ErrnoException).code ?? "error"}`,
+      fileUrl(target.subagentsDir),
+    );
   }
 
   const listed = new Set<string>();
@@ -527,9 +537,7 @@ async function readWorktrees(
 
   const discovered = await discoverWorktrees(repo);
   if (!discovered.ok) {
-    trouble.set("worktrees", { text: `fleet: ${discovered.reason}`, url: fileUrl(repo) });
-    for (const entry of Object.values(target.worktrees)) entry.quietPolls = 0;
-    return { events, busy };
+    throw new FleetReadError("worktrees", `fleet: ${discovered.reason}`, fileUrl(repo));
   }
 
   const { processesByWorktree, lsofLine } = await attributeProcesses(discovered.paths);
@@ -587,45 +595,78 @@ function troubleTransitions(target: Target, trouble: Map<string, Trouble>): Even
   return events;
 }
 
-async function pollTarget(target: Target, nowMs: number, io: Io): Promise<PollResult> {
+/** Every reading and judgment of one poll, on `draft`; a fleet-wide read that fails throws before anything is judged. */
+async function readFleet(
+  draft: Target,
+  nowMs: number,
+  io: Io,
+): Promise<{ events: EventInput[]; busy: boolean; trouble: Map<string, Trouble> }> {
   const trouble = new Map<string, Trouble>();
   let busy = false;
 
   try {
-    if (readTranscript(target.lead, target.sessionFile)) busy = true;
+    busy = readTranscript(draft.lead, draft.sessionFile);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    io.log(`session file: ${reason}`);
-    trouble.set("session", {
-      text: `fleet: cannot read the session transcript: ${reason}`,
-      url: fileUrl(target.sessionFile),
-    });
+    throw new FleetReadError(
+      "session",
+      `fleet: cannot read the session transcript: ${reason}`,
+      fileUrl(draft.sessionFile),
+    );
   }
 
-  const agents = readAgents(target, trouble, io);
+  const agents = readAgents(draft, trouble, io);
   busy ||= agents.busy;
 
   const worktrees =
-    target.repo === null
+    draft.repo === null
       ? { events: [], busy: false }
-      : await readWorktrees(target, target.repo, trouble, io);
+      : await readWorktrees(draft, draft.repo, trouble, io);
   busy ||= worktrees.busy;
 
   const transitions: EventInput[] = [];
   for (const agentId of agents.refreshed) {
-    const event = agentTransition(target, agentId, target.agents[agentId] as AgentEntry, nowMs);
+    const event = agentTransition(draft, agentId, draft.agents[agentId] as AgentEntry, nowMs);
     if (event !== null) transitions.push(event);
   }
 
-  target.polls += 1;
+  draft.polls += 1;
+  return { events: [...agents.events, ...transitions, ...worktrees.events], busy, trouble };
+}
+
+/** The one trouble event of a failed fleet-wide read, said on entering; the conditions already in force stay recorded. */
+function troubleOnly(target: Target, failure: FleetReadError): PollResult {
+  const events: EventInput[] = [];
+  if (!Object.hasOwn(target.trouble, failure.key)) {
+    events.push({ kind: "trouble", text: failure.message, url: failure.url });
+  }
+  target.trouble[failure.key] = failure.message;
+  return { events, busy: false };
+}
+
+/**
+ * One poll of a target, read and judged on a draft copy. A fleet-wide read that fails (the session
+ * transcript, the subagents listing, the worktree discovery, or any dependency read added later
+ * that throws past the per-agent catches) discards the draft: no transition is said, no counter
+ * moves, every continuity stays as it was, and the one trouble event is said. A poll that reads
+ * commits the draft. An error that is not a read failure is the daemon's failed poll, which saves
+ * nothing either.
+ */
+async function pollTarget(target: Target, nowMs: number, io: Io): Promise<PollResult> {
+  const draft = structuredClone(target);
+  let outcome: Awaited<ReturnType<typeof readFleet>>;
+  try {
+    outcome = await readFleet(draft, nowMs, io);
+  } catch (error) {
+    if (!(error instanceof FleetReadError)) throw error;
+    io.log(error.message);
+    return troubleOnly(target, error);
+  }
+
+  Object.assign(target, draft);
   return {
-    events: [
-      ...troubleTransitions(target, trouble),
-      ...agents.events,
-      ...transitions,
-      ...worktrees.events,
-    ],
-    busy,
+    events: [...troubleTransitions(target, outcome.trouble), ...outcome.events],
+    busy: outcome.busy,
   };
 }
 
