@@ -780,7 +780,7 @@ describe("fleet-events.mts", () => {
   );
 
   test(
-    "a bare head move keeps a quiet worktree quiet: a commit from outside with a clean tree and no process is a head event and no second quiet line, while a head move with a worker in the tree resets the count so quiet re-fires once the worker leaves",
+    "a bare head move keeps a quiet worktree quiet: a commit from outside with a clean tree and no process is a head event and no second quiet line, while a head move with a worker in the tree is active again and quiet re-fires once the worker leaves",
     async () => {
       const s = new Scenario(PROGRAM, "rest");
       const box = await s.inbox("a");
@@ -810,7 +810,7 @@ describe("fleet-events.mts", () => {
         worker = Bun.spawn(["sleep", "60"], { cwd: wtA, stdout: "ignore" });
         git(wtA, "commit", "--allow-empty", "-m", "worked");
         const worked = git(wtA, "rev-parse", "HEAD").trim();
-        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(2);
         expect(polled(s, box.path)).toBe(0);
         worker.kill();
         await worker.exited;
@@ -822,10 +822,154 @@ describe("fleet-events.mts", () => {
           ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
           ["head", `worktree track-a: head moved to ${restacked.slice(0, 12)}`, fileUrl(wtA)],
           ["head", `worktree track-a: head moved to ${worked.slice(0, 12)}`, fileUrl(wtA)],
+          ["active", "worktree track-a: active again", fileUrl(wtA)],
           ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
         ]);
       } finally {
         worker?.kill();
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
+    "a worktree whose quiet line was said is active again once when a worker arrives or a dirty file lands, and never when its quiet was not said; quiet is said again once it is still",
+    async () => {
+      const s = new Scenario(PROGRAM, "wake");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const workers: Array<ReturnType<typeof Bun.spawn>> = [];
+      try {
+        await s.start({ inbox: box.path });
+        expect(
+          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
+            inbox: box.path,
+          }).code,
+        ).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+
+        // wt-b gains a worker before its quiet is said: nothing to retract; wt-a's quiet is said.
+        workers.push(Bun.spawn(["sleep", "60"], { cwd: wtB, stdout: "ignore" }));
+        expect(polled(s, box.path)).toBe(1);
+        // wt-a gains a worker after its quiet was said: active again, once.
+        workers.push(Bun.spawn(["sleep", "60"], { cwd: wtA, stdout: "ignore" }));
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        for (const worker of workers.splice(0)) {
+          worker.kill();
+          await worker.exited;
+        }
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(2);
+        // A dirty file in wt-b, head unchanged: active again by the tree reading.
+        writeFileSync(join(wtB, "scratch.txt"), "notes\n");
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        expect(rows(s)).toEqual([
+          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
+          ["active", "worktree track-a: active again", fileUrl(wtA)],
+          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
+          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
+          ["active", "worktree track-b: active again", fileUrl(wtB)],
+        ]);
+      } finally {
+        for (const worker of workers) worker.kill();
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
+    "a worktree a successful discovery no longer lists is gone, once, with its last head as a field, and its row is dropped so no quiet line follows",
+    async () => {
+      const s = new Scenario(PROGRAM, "gone2");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const headB = git(wtB, "rev-parse", "HEAD").trim();
+      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      try {
+        await s.start({ inbox: box.path });
+        expect(
+          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
+            inbox: box.path,
+          }).code,
+        ).toBe(0);
+        git(repo, "worktree", "remove", "--force", wtB);
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        expect(rows(s)).toEqual([
+          ["gone", "worktree track-b: gone", fileUrl(wtB)],
+          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
+        ]);
+        expect(s.events()[0]).toMatchObject({ worktree: wtB, sha: headB });
+        const target = s.state().targets[session.dir] as { worktrees: Record<string, unknown> };
+        expect(Object.keys(target.worktrees).sort()).toEqual([repo, wtA].sort());
+      } finally {
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
+    "process attribution down, then degraded, is one trouble line each, and each is followed by one restored line when attribution works again",
+    async () => {
+      const s = new Scenario(PROGRAM, "lsof");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      // A stand-in lsof the test can take down (exit 1, no output) or degrade (real output, exit 1).
+      const realLsof = Bun.which("lsof");
+      if (realLsof === null) throw new Error("lsof is not installed");
+      const bin = join(s.fixtureDir, "bin");
+      const down = join(s.fixtureDir, "lsof-down");
+      const degraded = join(s.fixtureDir, "lsof-degraded");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "lsof"),
+        `#!/bin/sh\n[ -e "${down}" ] && exit 1\nif [ -e "${degraded}" ]; then "${realLsof}" "$@"; exit 1; fi\nexec "${realLsof}" "$@"\n`,
+        { mode: 0o755 },
+      );
+      writeFileSync(down, "");
+      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      try {
+        await s.start({ inbox: box.path, env: { PATH: `${bin}:${process.env.PATH ?? ""}` } });
+        expect(
+          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
+            inbox: box.path,
+          }).code,
+        ).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+        rmSync(down);
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(2);
+        expect(polled(s, box.path)).toBe(0);
+        writeFileSync(degraded, "");
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        rmSync(degraded);
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        expect(rows(s).map((row) => [row[0], row[1]])).toEqual([
+          ["trouble", expect.stringMatching(/^fleet: process attribution is down: /)],
+          ["restored", "fleet: process attribution restored"],
+          ["quiet", "worktree track-a: no worker process and no change for 2 polls"],
+          ["quiet", "worktree track-b: no worker process and no change for 2 polls"],
+          ["trouble", expect.stringMatching(/^fleet: process attribution degraded: /)],
+          ["restored", "fleet: process attribution restored"],
+        ]);
+        expect(rows(s)[2]?.[2]).toBe(fileUrl(wtA));
+        expect(rows(s)[3]?.[2]).toBe(fileUrl(wtB));
+      } finally {
         parked.kill();
       }
       s.stop({ inbox: box.path });
