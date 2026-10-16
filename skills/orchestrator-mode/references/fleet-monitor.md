@@ -50,8 +50,11 @@ Each event is one line and its `file://` URL, inside the `/session-events` skill
 | `agent` | `agent <name>: moving again` | the wait or the quiet ended; a standing flag on it is void |
 | `head` | `worktree <branch>: head moved to <sha12>` | the PII grep below, and every content claim about the track re-verified on the new sha |
 | `wipe` | `worktree <branch>: 130 files at HEAD -> 3` | a commit on top of deleting the repo reads normal on every other reading; the tree is read before the track lands |
-| `quiet` | `worktree <branch>: no worker process and no change for 2 polls` | the only liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
+| `quiet` | `worktree <branch>: no worker process and no change for 2 polls` | the liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
+| `active` | `worktree <branch>: active again` | the quiet ended: a worker is in the tree or the dirty tree changed; a standing flag on it is void |
+| `gone` | `worktree <branch>: gone` | discovery no longer lists it: a landed track swept, or a removed worktree; the `sha` field is its last head |
 | `trouble` | `fleet: <reason>` | the daemon could not take a reading: tooling trouble, never a quiet fleet; the `/session-events` skill's line after three failed polls is the same kind |
+| `restored` | `fleet: process attribution restored` | lsof answers again after a trouble line; empty process lists are verified inactivity once more |
 
 What stays the lead's, by hand: content claims through `probe.mts`, standing state in `ledger.mts`, the PII grep on every `head` event, `baseline.mts` at landings, and every nudge and directive. Codex and Copilot workers write no Claude transcript, so for them the daemon has only the worktree reading.
 
