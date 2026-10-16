@@ -2,7 +2,12 @@
 // lsof cwd and never by argv, which a shell pipeline or a wrapper can misreport.
 
 import { existsSync, realpathSync } from "node:fs";
+import { parse } from "node:path";
 import { run } from "./git.mts";
+
+// The instrument's own children run from the filesystem root, which no worktree holds: spawned
+// where the caller stands, lsof (which lists itself) and ps would be attributed to that worktree.
+const FILESYSTEM_ROOT = parse(process.cwd()).root;
 
 export interface ProcessRow {
   pid: number;
@@ -73,6 +78,7 @@ export async function processStates(pids: number[]): Promise<Map<number, string>
   if (pids.length === 0) return states;
   const result = await run("ps", ["-o", "pid=,stat=", "-p", pids.join(",")], {
     acceptStdoutOnError: true, // ps exits 1 when some pids exited mid-sweep
+    cwd: FILESYSTEM_ROOT,
   });
   if (!result.ok) return states;
   for (const line of result.stdout.toString("utf8").split("\n")) {
@@ -108,6 +114,7 @@ export async function attributeProcesses(
 
   const lsofResult = await run("lsof", ["-a", "-d", "cwd", "-F", "pcn0"], {
     acceptStdoutOnError: true,
+    cwd: FILESYSTEM_ROOT,
   });
   let attributed = new Map<string, CwdEntry[]>();
   let lsofLine: LsofLine = lsofResult.ok ? null : { lsof: { ok: false, error: lsofResult.error } };

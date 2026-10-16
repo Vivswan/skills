@@ -8,7 +8,7 @@
 //   bun "<skill-dir>/scripts/fleet-events.mts" watch /abs/session-dir --quiet-after 5
 
 import { readdirSync, statSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { EventInput, Io, PollResult } from "../../session-events/scripts/session-events.mts";
@@ -702,10 +702,6 @@ async function pollTarget(target: Target, nowMs: number, io: Io): Promise<PollRe
 }
 
 async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult> {
-  // The instrument stands outside every worktree: the daemon's cwd is the directory the lead
-  // started it from, and the lsof, ps, and git it spawns inherit it, so they would count as that
-  // worktree's workers.
-  process.chdir(tmpdir());
   const nowMs = Date.now();
   const events: EventInput[] = [];
   let busy = false;
