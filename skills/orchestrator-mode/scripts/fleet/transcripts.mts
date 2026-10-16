@@ -1,0 +1,432 @@
+// What each agent of a fleet is waiting on, read from the JSONL transcripts Claude Code writes
+// under ~/.claude/projects. The state carries ids, names, tool names, and times only: the daemon's
+// words land in the lead's session as user-role text, where a quoted tool result would read as
+// something the owner wrote.
+
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
+import { join } from "node:path";
+
+const TASK_NOTIFICATION = /<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/;
+const TASK_ID = /<task-id>\s*([^<\s][^<]*?)\s*<\/task-id>/;
+const TEAMMATE_TAG = /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"/;
+const IDLE_NOTIFICATION = /"type"\s*:\s*"idle_notification"/;
+const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
+const NEWLINE = 0x0a;
+
+/** A tool call with no result yet: mid-call, or killed with the agent. `taskId` is the name an Agent call gives its child (what a TaskStop later takes) or a TaskStop's own task_id; null for every other tool. */
+export interface PendingCall {
+  tool: string;
+  at: string;
+  taskId: string | null;
+}
+
+/** A background job this agent launched, keyed by its task id, until its notice arrives. */
+export interface Job {
+  at: string;
+}
+
+/** An agent this one spawned, keyed by agentId, kept after it finished so a later poll still sees a stop. */
+export interface Child {
+  name: string | null;
+  at: string;
+  outcome: "running" | "finished" | "stopped";
+}
+
+/** What an agent's transcript says it is doing. `lastMovedAt` is the newest timestamp seen, floored by the file's mtime once read from disk. */
+export interface Activity {
+  lastMovedAt: string | null;
+  turn: "open" | "ended";
+  pending: Record<string, PendingCall>;
+  jobs: Record<string, Job>;
+  children: Record<string, Child>;
+  lines: number;
+  /** Lines that were not a JSON object with a timestamp: counted, never fatal. */
+  skipped: number;
+}
+
+/** Bytes consumed up to and including the last newline; the unfinished tail is read again next time. */
+export interface Cursor {
+  offset: number;
+}
+
+/** One transcript as the daemon remembers it between polls. */
+export interface Transcript {
+  cursor: Cursor;
+  state: Activity;
+}
+
+/** What one read of a transcript returned: the complete new lines and where the next read starts. */
+export interface Increment {
+  lines: Record<string, unknown>[];
+  skipped: number;
+  cursor: Cursor;
+  mtimeMs: number;
+  /** The file is shorter than the cursor: truncated or rotated, so the read started over. */
+  shrank: boolean;
+}
+
+/** The `agent-<agentId>.meta.json` beside a transcript; its mtime is the spawn time. */
+export interface Sidecar {
+  name: string | null;
+  description: string | null;
+  agentType: string | null;
+  parentAgentId: string | null;
+  worktreePath: string | null;
+  worktreeBranch: string | null;
+  toolUseId: string | null;
+  spawnedAt: string;
+}
+
+/** A session's own transcript and the directory of its subagents' transcripts and sidecars. */
+export interface SessionPaths {
+  sessionFile: string;
+  subagentsDir: string;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function str(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function timestampOf(line: Record<string, unknown>): string | null {
+  const at = str(line.timestamp);
+  if (at === null || Number.isNaN(Date.parse(at))) return null;
+  return at;
+}
+
+// Timestamps are not monotonic: a queued attachment keeps its enqueue time, up to an hour behind
+// its neighbours, so the newest wins and nothing moves the mark back.
+function moveTo(state: Activity, at: string): void {
+  if (state.lastMovedAt === null || Date.parse(at) > Date.parse(state.lastMovedAt)) {
+    state.lastMovedAt = at;
+  }
+}
+
+function initialActivity(): Activity {
+  return {
+    lastMovedAt: null,
+    turn: "open",
+    pending: {},
+    jobs: {},
+    children: {},
+    lines: 0,
+    skipped: 0,
+  };
+}
+
+/** The task id inside the first `<task-notification>` block of `text`, or null when there is none. */
+function taskIdOf(text: string): string | null {
+  const block = TASK_NOTIFICATION.exec(text);
+  if (block === null) return null;
+  return TASK_ID.exec(block[1] as string)?.[1] ?? null;
+}
+
+function idleTeammateOf(text: string): string | null {
+  const tag = TEAMMATE_TAG.exec(text);
+  if (tag === null || !IDLE_NOTIFICATION.test(text)) return null;
+  return tag[1] as string;
+}
+
+// A name is rebound when an agent is respawned under it, and Claude Code resolves it to the latest
+// agent, so every lookup by name here does too.
+function childNamed(state: Activity, name: string): string | undefined {
+  let found: string | undefined;
+  let foundAt = Number.NEGATIVE_INFINITY;
+  for (const [id, child] of Object.entries(state.children)) {
+    if (child.name !== name) continue;
+    const at = Date.parse(child.at);
+    if (at < foundAt) continue;
+    found = id;
+    foundAt = at;
+  }
+  return found;
+}
+
+/** The one resolution of a task id to a child: an agentId as written, else the latest child spawned under that name. */
+function childOf(state: Activity, taskId: string): string | undefined {
+  if (Object.hasOwn(state.children, taskId)) return taskId;
+  return childNamed(state, taskId);
+}
+
+function finishChild(state: Activity, taskId: string): void {
+  const id = childOf(state, taskId);
+  const child = id === undefined ? undefined : state.children[id];
+  if (child?.outcome === "running") child.outcome = "finished";
+}
+
+function finishTask(state: Activity, taskId: string): void {
+  delete state.jobs[taskId];
+  finishChild(state, taskId);
+}
+
+// TaskStop takes a job id, an agentId, or the name given at spawn. One this file never launched
+// or spawned is nobody's: nothing is recorded.
+function stopTask(state: Activity, taskId: string): void {
+  if (Object.hasOwn(state.jobs, taskId)) {
+    delete state.jobs[taskId];
+    return;
+  }
+
+  const id = childOf(state, taskId);
+  if (id !== undefined) (state.children[id] as Child).outcome = "stopped";
+}
+
+// One line per content block, and only the message's last block carries the real stop_reason:
+// the others say null, which keeps the turn open until the final block says end_turn.
+function reduceAssistant(state: Activity, line: Record<string, unknown>, at: string): void {
+  const message = record(line.message);
+  state.turn = message?.stop_reason === "end_turn" ? "ended" : "open";
+
+  const content = message?.content;
+  if (!Array.isArray(content)) return;
+
+  for (const part of content) {
+    const block = record(part);
+    if (block?.type !== "tool_use") continue;
+    const id = str(block.id);
+    const tool = str(block.name);
+    if (id === null || tool === null) continue;
+    const input = record(block.input);
+    let taskId: string | null = null;
+    if (tool === "Agent") taskId = str(input?.name);
+    if (tool === "TaskStop") taskId = str(input?.task_id);
+    state.pending[id] = { tool, at, taskId };
+  }
+}
+
+// A string arriving while a call is pending reached the agent before any result could: the call
+// was abandoned. A notice is not an interruption: it is queued and delivered between turns.
+function reduceInjected(state: Activity, text: string): void {
+  if (text.startsWith("<task-notification>")) {
+    const taskId = taskIdOf(text);
+    if (taskId !== null) finishTask(state, taskId);
+    return;
+  }
+
+  const teammate = idleTeammateOf(text);
+  if (teammate !== null) {
+    finishChild(state, teammate);
+    return;
+  }
+
+  state.pending = {};
+}
+
+function reduceResults(
+  state: Activity,
+  line: Record<string, unknown>,
+  at: string,
+  parts: unknown[],
+): void {
+  let spawning: string | null = null;
+  for (const part of parts) {
+    const item = record(part);
+    if (item?.type !== "tool_result") continue;
+    const id = str(item.tool_use_id);
+    if (id === null) continue;
+    const call = state.pending[id];
+    delete state.pending[id];
+    if (call === undefined || call.taskId === null) continue;
+    if (call.tool === "Agent") spawning = call.taskId;
+    // A stop counts once its result confirms it: an errored TaskStop (no such task) stopped nothing.
+    if (call.tool === "TaskStop" && item.is_error !== true) stopTask(state, call.taskId);
+  }
+
+  const result = record(line.toolUseResult);
+  if (result === null) return;
+
+  // A job also when a foreground command timed out and was moved to the background.
+  const job = str(result.backgroundTaskId);
+  if (job !== null) state.jobs[job] = { at };
+
+  const agentId = str(result.agentId);
+  if (agentId !== null && SPAWN_STATUSES.has(str(result.status) ?? "")) {
+    state.children[agentId] = { name: str(result.name) ?? spawning, at, outcome: "running" };
+  }
+}
+
+function reduceUser(state: Activity, line: Record<string, unknown>, at: string): void {
+  state.turn = "open";
+  const content = record(line.message)?.content;
+  if (typeof content === "string") reduceInjected(state, content);
+  else if (Array.isArray(content)) reduceResults(state, line, at, content);
+}
+
+// A subagent's file sees a notice only as a queued_command attachment. Every other attachment is
+// noise, and a prompt_snapshot spells the tag names, so nothing else is searched.
+function reduceAttachment(state: Activity, line: Record<string, unknown>): void {
+  const attachment = record(line.attachment);
+  if (attachment?.type !== "queued_command" || attachment.commandMode !== "task-notification") {
+    return;
+  }
+
+  const taskId = taskIdOf(str(attachment.prompt) ?? "");
+  if (taskId !== null) finishTask(state, taskId);
+}
+
+/**
+ * Folds one parsed transcript line into `state`, in place, and returns it, so an array of lines
+ * folds with `Array.prototype.reduce`. A line without a usable timestamp is counted as skipped.
+ */
+export function reduce(state: Activity, line: Record<string, unknown>): Activity {
+  const at = timestampOf(line);
+  if (at === null) {
+    state.skipped += 1;
+    return state;
+  }
+
+  state.lines += 1;
+  moveTo(state, at);
+  switch (line.type) {
+    case "assistant":
+      reduceAssistant(state, line, at);
+      break;
+    case "user":
+      reduceUser(state, line, at);
+      break;
+    case "attachment":
+      reduceAttachment(state, line);
+      break;
+    default:
+      break;
+  }
+  return state;
+}
+
+/** Whether `parent` stopped the agent: by its id, else by the name its sidecar gives it. */
+export function isStopped(parent: Activity, agentId: string, name: string | null): boolean {
+  let id = childOf(parent, agentId);
+  if (id === undefined && name !== null) id = childOf(parent, name);
+  return id !== undefined && parent.children[id]?.outcome === "stopped";
+}
+
+function readBytes(fd: number, from: number, length: number): Buffer {
+  const buffer = Buffer.allocUnsafe(length);
+  let filled = 0;
+  while (filled < length) {
+    const read = readSync(fd, buffer, filled, length - filled, from + filled);
+    if (read === 0) break;
+    filled += read;
+  }
+  return buffer.subarray(0, filled);
+}
+
+function parseRecord(text: string): Record<string, unknown> | null {
+  try {
+    return record(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The complete lines appended since `cursor`, each parsed; a line that is not a JSON object is
+ * counted in `skipped`. The read is non-blocking so a FIFO in a transcript's place is refused
+ * instead of waited on.
+ *
+ * @throws {Error} the path is not a regular file, or cannot be opened
+ */
+export function readIncrement(path: string, cursor: Cursor): Increment {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`${path} is not a regular file`);
+
+    const shrank = stat.size < cursor.offset;
+    const from = shrank ? 0 : cursor.offset;
+    const bytes = readBytes(fd, from, stat.size - from);
+    const complete = bytes.lastIndexOf(NEWLINE) + 1;
+
+    const lines: Record<string, unknown>[] = [];
+    let skipped = 0;
+    for (const raw of bytes.subarray(0, complete).toString("utf8").split("\n")) {
+      if (raw === "") continue;
+      const line = parseRecord(raw);
+      if (line === null) skipped += 1;
+      else lines.push(line);
+    }
+
+    return { lines, skipped, cursor: { offset: from + complete }, mtimeMs: stat.mtimeMs, shrank };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** A transcript nothing has been read from: the cursor at byte 0 and an empty state. */
+export function initialTranscript(): Transcript {
+  return { cursor: { offset: 0 }, state: initialActivity() };
+}
+
+/**
+ * Reads what `path` appended since the last call into `transcript`, in place. A file that shrank
+ * starts the state over, silently.
+ *
+ * @returns whether the cursor moved
+ * @throws {Error} the path is not a regular file, or cannot be opened
+ */
+export function readTranscript(transcript: Transcript, path: string): boolean {
+  const increment = readIncrement(path, transcript.cursor);
+  if (increment.shrank) transcript.state = initialActivity();
+
+  for (const line of increment.lines) reduce(transcript.state, line);
+  transcript.state.skipped += increment.skipped;
+  moveTo(transcript.state, new Date(increment.mtimeMs).toISOString());
+
+  const moved = increment.shrank || increment.cursor.offset !== transcript.cursor.offset;
+  transcript.cursor = increment.cursor;
+  return moved;
+}
+
+/** The sidecar at `path`, or null when it is missing or not a JSON object. */
+export function readSidecar(path: string): Sidecar | null {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+
+  const meta = parseRecord(text);
+  if (meta === null) return null;
+
+  return {
+    name: str(meta.name),
+    description: str(meta.description),
+    agentType: str(meta.agentType),
+    parentAgentId: str(meta.parentAgentId),
+    worktreePath: str(meta.worktreePath),
+    worktreeBranch: str(meta.worktreeBranch),
+    toolUseId: str(meta.toolUseId),
+    spawnedAt: new Date(statSync(path).mtimeMs).toISOString(),
+  };
+}
+
+/** The sidecar's name, else its description, else the agentId. */
+export function displayName(agentId: string, sidecar: Sidecar | null): string {
+  return sidecar?.name ?? sidecar?.description ?? agentId;
+}
+
+/**
+ * Where Claude Code writes a session's transcript and its subagents' transcripts: under the
+ * project slug, the cwd with every character that is not a letter or digit replaced by a dash.
+ */
+export function sessionPaths(cwd: string, sessionId: string, home: string): SessionPaths {
+  const project = join(home, ".claude", "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
+  return {
+    sessionFile: join(project, `${sessionId}.jsonl`),
+    subagentsDir: join(project, sessionId, "subagents"),
+  };
+}
