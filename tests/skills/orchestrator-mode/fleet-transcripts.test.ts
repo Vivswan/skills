@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  renameSync,
+  statSync,
+  truncateSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   type Activity,
@@ -403,9 +410,13 @@ describe("the transcript reducer", () => {
 });
 
 describe("the incremental reader", () => {
-  test("the reader resumes at its byte offset: a line cut mid-write completes on the next read, a 1.3 MB line is one line, a non-JSON line is counted and skipped, the mtime floors lastMovedAt, and a shrunk file starts cursor and state over", () => {
+  test("the reader resumes at its byte offset: a cut line completes next read, growth inside it is movement, a 1.3 MB line is one line, a non-JSON line is skipped and counted, mtime floors lastMovedAt, a shrunk or replaced file starts over", () => {
     const dir = temp.dir("fleet-transcripts-");
     const file = join(dir, `agent-${AGENT}.jsonl`);
+    const cursor = (offset: number) => {
+      const stat = statSync(file);
+      return { offset, ino: stat.ino, size: stat.size };
+    };
     const first = JSON.stringify(toolUse(at(0), "toolu_01", "Bash", { command: "bun test" }));
     const second = JSON.stringify(toolResult(at(1), "toolu_01"));
     writeFileSync(file, `${first}\n${second.slice(0, 40)}`);
@@ -413,24 +424,29 @@ describe("the incremental reader", () => {
     const transcript = initialTranscript();
 
     expect(readTranscript(transcript, file)).toBe(true);
-    expect(transcript).toEqual({
-      cursor: { offset: Buffer.byteLength(first) + 1 },
-      state: activity({
-        lastMovedAt: at(0, 30),
-        pending: { toolu_01: { tool: "Bash", at: at(0), taskId: null } },
-        lines: 1,
-      }),
+    const pending = activity({
+      lastMovedAt: at(0, 30),
+      pending: { toolu_01: { tool: "Bash", at: at(0), taskId: null } },
+      lines: 1,
     });
+    expect(transcript).toEqual({ cursor: cursor(Buffer.byteLength(first) + 1), state: pending });
     expect(readTranscript(transcript, file)).toBe(false);
 
+    // The unfinished line grows without a newline: movement, nothing new to fold.
+    appendFileSync(file, second.slice(40, 60));
+    utimesSync(file, new Date(at(0, 45)), new Date(at(0, 45)));
+    expect(readTranscript(transcript, file)).toBe(true);
+    expect(transcript).toEqual({
+      cursor: cursor(Buffer.byteLength(first) + 1),
+      state: { ...pending, lastMovedAt: at(0, 45) },
+    });
+
     const big = JSON.stringify(toolResult(at(2), "toolu_02", { content: "x".repeat(1_300_000) }));
-    appendFileSync(file, `${second.slice(40)}\n${big}\nnot json at all\n`);
+    appendFileSync(file, `${second.slice(60)}\n${big}\nnot json at all\n`);
     utimesSync(file, new Date(at(1)), new Date(at(1)));
     expect(readTranscript(transcript, file)).toBe(true);
     expect(transcript).toEqual({
-      cursor: {
-        offset: Buffer.byteLength(`${first}\n${second}\n${big}\nnot json at all\n`),
-      },
+      cursor: cursor(Buffer.byteLength(`${first}\n${second}\n${big}\nnot json at all\n`)),
       state: activity({ lastMovedAt: at(2), lines: 3, skipped: 1 }),
     });
 
@@ -440,16 +456,36 @@ describe("the incremental reader", () => {
     utimesSync(file, new Date(at(40)), new Date(at(40)));
     expect(readTranscript(transcript, file)).toBe(true);
     expect(transcript).toEqual({
-      cursor: { offset: Buffer.byteLength(fresh) + 1 },
+      cursor: cursor(Buffer.byteLength(fresh) + 1),
       state: activity({ lastMovedAt: at(40), turn: "ended", lines: 1 }),
     });
 
-    expect(() => readIncrement(dir, { offset: 0 })).toThrow(`${dir} is not a regular file`);
+    // Replaced by a longer file under the same name: another inode, so the old offset means nothing.
+    const swapped = JSON.stringify(
+      toolUse(at(50), "toolu_09", "Bash", { command: "y".repeat(600) }),
+    );
+    const staging = `${file}.next`;
+    writeFileSync(staging, `${swapped}\n`);
+    utimesSync(staging, new Date(at(50)), new Date(at(50)));
+    renameSync(staging, file);
+    expect(readTranscript(transcript, file)).toBe(true);
+    expect(transcript).toEqual({
+      cursor: cursor(Buffer.byteLength(swapped) + 1),
+      state: activity({
+        lastMovedAt: at(50),
+        pending: { toolu_09: { tool: "Bash", at: at(50), taskId: null } },
+        lines: 1,
+      }),
+    });
+
+    expect(() => readIncrement(dir, { offset: 0, ino: null, size: 0 })).toThrow(
+      `${dir} is not a regular file`,
+    );
   });
 });
 
 describe("the files Claude Code writes", () => {
-  test("sessionPaths maps the cwd to the project slug (every non-alphanumeric becomes a dash) under <home>/.claude/projects; a sidecar's display name falls back name, description, agentId, and a missing or non-JSON sidecar is null", () => {
+  test("sessionPaths maps the cwd to the project slug (every non-alphanumeric becomes a dash) under <home>/.claude/projects; a sidecar's display name falls back name, description, agentId, a missing sidecar is null, and a malformed one throws", () => {
     expect(sessionPaths("/home/user/repo", SESSION, "/home/user")).toEqual({
       sessionFile: `/home/user/.claude/projects/-home-user-repo/${SESSION}.jsonl`,
       subagentsDir: `/home/user/.claude/projects/-home-user-repo/${SESSION}/subagents`,
@@ -497,8 +533,7 @@ describe("the files Claude Code writes", () => {
     });
     expect(displayName(CHILD_A, sidecar)).toBe("builder-a");
     expect(displayName(CHILD_B, readSidecar(described))).toBe("review the source");
-    expect(readSidecar(broken)).toBeNull();
-    expect(displayName(CHILD_C, readSidecar(broken))).toBe(CHILD_C);
+    expect(() => readSidecar(broken)).toThrow(`${broken} is not a JSON object`);
     expect(readSidecar(join(dir, `agent-${UNKNOWN}.meta.json`))).toBeNull();
   });
 });

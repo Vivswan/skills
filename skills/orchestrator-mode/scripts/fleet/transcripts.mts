@@ -52,9 +52,11 @@ export interface Activity {
   skipped: number;
 }
 
-/** Bytes consumed up to and including the last newline; the unfinished tail is read again next time. */
+/** Where the next read starts: bytes consumed through the last newline (the unfinished tail is read again), with the inode and size seen, so a replaced or shrunk file is told from growth. */
 export interface Cursor {
   offset: number;
+  ino: number | null;
+  size: number;
 }
 
 /** One transcript as the daemon remembers it between polls. */
@@ -69,8 +71,8 @@ export interface Increment {
   skipped: number;
   cursor: Cursor;
   mtimeMs: number;
-  /** The file is shorter than the cursor: truncated or rotated, so the read started over. */
-  shrank: boolean;
+  /** Another inode, or shorter than the cursor: replaced, truncated, or rotated, so the read started over. */
+  restarted: boolean;
 }
 
 /** The `agent-<agentId>.meta.json` beside a transcript; its mtime is the spawn time. */
@@ -344,8 +346,9 @@ export function readIncrement(path: string, cursor: Cursor): Increment {
     const stat = fstatSync(fd);
     if (!stat.isFile()) throw new Error(`${path} is not a regular file`);
 
-    const shrank = stat.size < cursor.offset;
-    const from = shrank ? 0 : cursor.offset;
+    const replaced = cursor.ino !== null && stat.ino !== cursor.ino;
+    const restarted = replaced || stat.size < cursor.offset;
+    const from = restarted ? 0 : cursor.offset;
     const bytes = readBytes(fd, from, stat.size - from);
     const complete = bytes.lastIndexOf(NEWLINE) + 1;
 
@@ -358,7 +361,13 @@ export function readIncrement(path: string, cursor: Cursor): Increment {
       else lines.push(line);
     }
 
-    return { lines, skipped, cursor: { offset: from + complete }, mtimeMs: stat.mtimeMs, shrank };
+    return {
+      lines,
+      skipped,
+      cursor: { offset: from + complete, ino: stat.ino, size: stat.size },
+      mtimeMs: stat.mtimeMs,
+      restarted,
+    };
   } finally {
     closeSync(fd);
   }
@@ -366,30 +375,39 @@ export function readIncrement(path: string, cursor: Cursor): Increment {
 
 /** A transcript nothing has been read from: the cursor at byte 0 and an empty state. */
 export function initialTranscript(): Transcript {
-  return { cursor: { offset: 0 }, state: initialActivity() };
+  return { cursor: { offset: 0, ino: null, size: 0 }, state: initialActivity() };
 }
 
 /**
  * Reads what `path` appended since the last call into `transcript`, in place. A file that shrank
- * starts the state over, silently.
+ * or was replaced starts the state over, silently.
  *
- * @returns whether the cursor moved
+ * @returns whether the file changed since the last read
  * @throws {Error} the path is not a regular file, or cannot be opened
  */
 export function readTranscript(transcript: Transcript, path: string): boolean {
   const increment = readIncrement(path, transcript.cursor);
-  if (increment.shrank) transcript.state = initialActivity();
+  if (increment.restarted) transcript.state = initialActivity();
 
   for (const line of increment.lines) reduce(transcript.state, line);
   transcript.state.skipped += increment.skipped;
   moveTo(transcript.state, new Date(increment.mtimeMs).toISOString());
 
-  const moved = increment.shrank || increment.cursor.offset !== transcript.cursor.offset;
+  // Bytes inside an unfinished line are movement too (the agent is mid-write), and so is a line
+  // completed at the same size.
+  const moved =
+    increment.restarted ||
+    increment.cursor.size !== transcript.cursor.size ||
+    increment.cursor.offset !== transcript.cursor.offset;
   transcript.cursor = increment.cursor;
   return moved;
 }
 
-/** The sidecar at `path`, or null when it is missing or not a JSON object. */
+/**
+ * The sidecar at `path`, or null while Claude Code has not written it yet.
+ *
+ * @throws {Error} the file is not a JSON object, or cannot be read
+ */
 export function readSidecar(path: string): Sidecar | null {
   let text: string;
   try {
@@ -400,7 +418,7 @@ export function readSidecar(path: string): Sidecar | null {
   }
 
   const meta = parseRecord(text);
-  if (meta === null) return null;
+  if (meta === null) throw new Error(`${path} is not a JSON object`);
 
   return {
     name: str(meta.name),
