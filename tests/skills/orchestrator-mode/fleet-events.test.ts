@@ -4,6 +4,7 @@ import {
   cpSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -206,9 +207,10 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.toString();
 }
 
-/** A repository of six files with two worktrees, one per track. */
+/** A repository of six files with two worktrees, one per track. The paths are canonical, as git and the daemon report them: a temp dir can sit behind a symlink. */
 function scratchRepo(root: string): { repo: string; wtA: string; wtB: string } {
-  const repo = join(root, "repo");
+  const base = realpathSync(root);
+  const repo = join(base, "repo");
   mkdirSync(repo);
   git(repo, "init", "-b", "main");
   writeFileSync(join(repo, "tracked.txt"), "v1\n");
@@ -218,8 +220,8 @@ function scratchRepo(root: string): { repo: string; wtA: string; wtB: string } {
   }
   git(repo, "add", ".");
   git(repo, "commit", "-m", "initial");
-  const wtA = join(root, "wt-a");
-  const wtB = join(root, "wt-b");
+  const wtA = join(base, "wt-a");
+  const wtB = join(base, "wt-b");
   git(repo, "worktree", "add", wtA, "-b", "track-a");
   git(repo, "worktree", "add", wtB, "-b", "track-b");
   return { repo, wtA, wtB };
@@ -973,7 +975,8 @@ describe("fleet-events.mts", () => {
 
 describe("the two skills side by side", () => {
   test("installed as sibling folders, copied or symlinked, the fleet source finds the library; with the base removed it exits 2 naming the install command", () => {
-    const root = temp.dir("fleet-events-layout-");
+    // bun names a script by its real path, so the layout sits under the canonical temp dir.
+    const root = realpathSync(temp.dir("fleet-events-layout-"));
     const canon = join(root, "canonical");
     mkdirSync(canon);
     for (const skill of ["session-events", "orchestrator-mode"]) {
