@@ -38,6 +38,7 @@ export function expand(root: string, pattern: string): string[] {
 
 if (import.meta.main) {
   const root = process.argv[2] ?? ROOT;
+  let findings = false;
   for (const { flags, patterns } of PAGE_SETS) {
     let pages: string[];
     try {
@@ -51,6 +52,14 @@ if (import.meta.main) {
       stdout: "inherit",
       stderr: "inherit",
     });
+
+    // The probe exits 1 for findings and 2 for a broken run (usage, an unreadable page). Findings let
+    // the next set run so one run reports every page; a broken run stops the gate at once.
+    if (proc.exitCode === 1) {
+      findings = true;
+      continue;
+    }
     if (proc.exitCode !== 0) process.exit(proc.exitCode ?? 1);
   }
+  if (findings) process.exit(1);
 }
