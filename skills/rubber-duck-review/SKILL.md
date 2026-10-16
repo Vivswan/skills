@@ -183,6 +183,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   | `review stalled: ...`, exit 3 | the launch record is an hour old and still has no `status`: the block's own cap, not the launcher's | report the stall to the lead |
 
   Every wait is a short foreground call repeated, never one long call: each wait is its own foreground tool call, never a shell loop, which is one long call again. The `/orchestrator-mode` skill's `references/spawn-briefs.md`, The Stop-and-Wait Ban, carries the brief's side and points here for the block.
+
   For both shapes:
   - `<reviewer>` is the argument the review was launched with.
   - The lead's verdict lands in `verdict.out` inside that review's capture dir, so parallel reviews (step 2) never overwrite one another. It travels and is removed with the dir. A subagent's foreground call prints the verdict as the tool result.
