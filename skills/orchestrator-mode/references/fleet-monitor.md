@@ -130,7 +130,7 @@ A broken probe is loud, never zero:
 
 The row is data. These rules are what it means:
 
-- **Two observations before any flag.** For "did anything happen": ALL THREE of `newestDirtyMtime`, `headSha`, and `statusHash` stable across two readings, which is why the daemon's `quiet` line comes after two polls, never one. Deletions are invisible to mtime, so the hash is load-bearing.
+- **Two observations before any flag.** For "did anything happen" in a sweep: ALL THREE of `newestDirtyMtime`, `headSha`, and `statusHash` stable across two readings mean no commit landed and no file moved. Deletions are invisible to mtime, so the hash is load-bearing. The daemon's `quiet` reads only the first and third over two polls: no worker process, no dirty-tree change. A commit that landed is the `head` line, never the quiet.
 
   For "is anything happening now": judge the `processes` list by its command names and state codes across two sweeps. The sweep emits exactly `pid`, `command`, and `state` per process, nothing more.
 - **Presence is not work.** A `processes` list that is a single shell row (one `zsh`/`bash` entry) parked on the worktree cwd reads as "alive" under a presence test and silently voids idle counts that should keep running. The daemon reads a lone shell row as presence, so its quiet count keeps running.
