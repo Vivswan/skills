@@ -26,7 +26,6 @@ const TREE: Record<string, string> = {
   "README.md": CLEAN,
   "CONTRIBUTING.md": CLEAN,
   "docs/guide.md": CLEAN,
-  "xeno/README.md": CLEAN,
   "skills/README.md": CLEAN,
   "skills/one/README.md": CLEAN,
   "memories/note.md": CLEAN,
@@ -60,7 +59,7 @@ describe("check-docs", () => {
       {},
       [
         0,
-        "docs-probe: 9 page(s) clean (cap 70 words)\ndocs-probe: 4 page(s) clean (cap 70 words)\n",
+        "docs-probe: 8 page(s) clean (cap 70 words)\ndocs-probe: 4 page(s) clean (cap 70 words)\n",
         "",
       ],
     ],
@@ -78,7 +77,7 @@ describe("check-docs", () => {
       { "skills/one/references/languages/nested.md": LONG },
       [
         1,
-        "docs-probe: 9 page(s) clean (cap 70 words)\n",
+        "docs-probe: 8 page(s) clean (cap 70 words)\n",
         `docs-probe: 1 finding(s)\n  skills/one/references/languages/nested.md:3: ${LONG_FINDING}\n`,
       ],
     ],

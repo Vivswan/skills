@@ -15,7 +15,6 @@ export const PAGE_SETS: readonly { flags: readonly string[]; patterns: readonly 
       "README.md",
       "CONTRIBUTING.md",
       "docs/*.md",
-      "xeno/README.md",
       "skills/README.md",
       "skills/*/README.md",
       "memories/*.md",
