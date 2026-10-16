@@ -7,7 +7,7 @@
     "vivswan-skills": "bin/install.mjs"
   },
   "scripts": {
-    "prepare": "bun scripts/install-hooks.mts",
+    "hooks": "bun scripts/install-hooks.mts",
     "typecheck": "tsc -p .",
     "validate": "bun .github/actions/validate-skills/validate-skills.ts",
     "link": "bun scripts/link-agents.mts",
