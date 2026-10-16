@@ -977,6 +977,63 @@ describe("fleet-events.mts", () => {
     GIT_TIMEOUT,
   );
 
+  test("the lead's stop by name reaches only its own children: a nested agent spawned by another fleet agent under a name the lead once stopped keeps reporting its start and its wait", async () => {
+    const s = new Scenario(PROGRAM, "nest");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    // The lead spawned A as "reviewer" and stopped it; B is a builder that will spawn its own reviewer.
+    appendLines(session.sessionFile, [
+      toolUse(
+        ago(30),
+        "toolu_spawn_a",
+        "Agent",
+        {
+          name: "reviewer",
+          description: "review",
+          subagent_type: "general-purpose",
+          prompt: "review",
+        },
+        null,
+      ),
+      toolResult(ago(30), "toolu_spawn_a", {
+        toolUseResult: { status: "teammate_spawned", agentId: A, name: "reviewer" },
+        agentId: null,
+      }),
+      toolUse(ago(20), "toolu_stop_a", "TaskStop", { task_id: "reviewer" }, null),
+      toolResult(ago(20), "toolu_stop_a", { agentId: null }),
+    ]);
+    writeAgent(
+      session,
+      A,
+      { name: "reviewer", description: "review" },
+      exchange(ago(25), "toolu_a1"),
+    );
+    writeAgent(
+      session,
+      B,
+      { name: "builder-b", description: "build" },
+      exchange(ago(0), "toolu_b1", B),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+
+    const pathC = writeAgent(
+      session,
+      C,
+      { name: "reviewer", description: "review B's patch", parentAgentId: B },
+      [toolUse(ago(5), "toolu_c1", "Bash", { command: "bun test" }, C)],
+    );
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["agent", "agent reviewer: started", fileUrl(pathC)],
+      ["agent", "agent reviewer: waiting on Bash for 5 min", fileUrl(pathC)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test(
     "with --repo, a head move is head (with ahead and behind against --base), a tree collapse is wipe, an unclaimed idle worktree is quiet after two polls, a claimed one or one holding a sleep is not, and a claim ending starts the count at zero",
     async () => {
