@@ -723,6 +723,63 @@ describe("fleet-events.mts", () => {
   );
 
   test(
+    "a failed per-agent read is no observation for that agent: its sidecar removed and its transcript unreadable in one poll keep the last good claim, while a removed sidecar beside a readable transcript drops it",
+    async () => {
+      const s = new Scenario(PROGRAM, "held");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const pathA = writeAgent(
+        session,
+        A,
+        { name: "builder-a", description: "build", worktreePath: wtA, worktreeBranch: "track-a" },
+        exchange(ago(0), "toolu_01"),
+      );
+      const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
+      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      try {
+        await s.start({ inbox: box.path });
+        expect(
+          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
+            inbox: box.path,
+          }).code,
+        ).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+
+        // Sidecar gone AND transcript unreadable: the agent's poll failed as a whole, its claim holds.
+        rmSync(sidecarA);
+        rmSync(pathA);
+        mkdirSync(pathA);
+        expect(polled(s, box.path)).toBe(2);
+        expect(polled(s, box.path)).toBe(0);
+        expect(s.state().targets[session.dir]).toMatchObject({
+          worktrees: { [wtA]: { quietPolls: 0 } },
+        });
+
+        // Control: the transcript readable again with no sidecar, so the claim is gone.
+        rmSync(pathA, { recursive: true });
+        writeFileSync(pathA, "");
+        appendLines(pathA, exchange(ago(0), "toolu_02"));
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+        expect(rows(s)).toEqual([
+          [
+            "trouble",
+            `fleet: cannot read agent-${A}.jsonl: ${pathA} is not a regular file`,
+            fileUrl(pathA),
+          ],
+          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
+          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
+        ]);
+      } finally {
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
     "with --repo, a head move is head (with ahead and behind against --base), a tree collapse is wipe, an unclaimed idle worktree is quiet after two polls, a claimed one or one holding a sleep is not, and a claim ending starts the count at zero",
     async () => {
       const s = new Scenario(PROGRAM, "tree");

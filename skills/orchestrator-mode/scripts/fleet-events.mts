@@ -412,14 +412,19 @@ function readAgents(
     listed.add(agentId);
     const path = join(target.subagentsDir, name);
     const known = target.agents[agentId];
-    const entry = known ?? {
-      ...initialTranscript(),
-      path,
-      sidecar: null,
-      observed: null,
-      said: null,
-      baseline: null,
-    };
+    // Both reads land on a copy, kept only when both succeed: a sidecar read that returned (null
+    // for a removed one) before the transcript read failed must not reach the known entry.
+    const entry: AgentEntry =
+      known === undefined
+        ? {
+            ...initialTranscript(),
+            path,
+            sidecar: null,
+            observed: null,
+            said: null,
+            baseline: null,
+          }
+        : structuredClone(known);
     const sidecarName = `agent-${agentId}.meta.json`;
     // A read that fails is this one agent's trouble, never the poll's: the rest of the fleet is still read.
     const failed = (file: string, error: unknown): void => {
