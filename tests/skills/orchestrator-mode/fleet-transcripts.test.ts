@@ -485,7 +485,7 @@ describe("the incremental reader", () => {
 });
 
 describe("the files Claude Code writes", () => {
-  test("sessionPaths maps the cwd to the project slug (every non-alphanumeric becomes a dash) under <home>/.claude/projects; a sidecar's display name falls back name, description, agentId, a missing sidecar is null, and a malformed one throws", () => {
+  test("sessionPaths maps the cwd to the project slug (every non-alphanumeric becomes a dash) under <home>/.claude/projects; displayName falls back name, description, agentId; a missing sidecar is null, a malformed or non-regular one throws", () => {
     expect(sessionPaths("/home/user/repo", SESSION, "/home/user")).toEqual({
       sessionFile: `/home/user/.claude/projects/-home-user-repo/${SESSION}.jsonl`,
       subagentsDir: `/home/user/.claude/projects/-home-user-repo/${SESSION}/subagents`,
@@ -534,6 +534,7 @@ describe("the files Claude Code writes", () => {
     expect(displayName(CHILD_A, sidecar)).toBe("builder-a");
     expect(displayName(CHILD_B, readSidecar(described))).toBe("review the source");
     expect(() => readSidecar(broken)).toThrow(`${broken} is not a JSON object`);
+    expect(() => readSidecar(dir)).toThrow(`${dir} is not a regular file`);
     expect(readSidecar(join(dir, `agent-${UNKNOWN}.meta.json`))).toBeNull();
   });
 });

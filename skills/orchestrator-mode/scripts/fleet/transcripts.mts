@@ -10,7 +10,7 @@ import {
   openSync,
   readFileSync,
   readSync,
-  statSync,
+  type Stats,
 } from "node:fs";
 import { join } from "node:path";
 
@@ -334,18 +334,30 @@ function parseRecord(text: string): Record<string, unknown> | null {
 }
 
 /**
+ * Opens `path` for reading without blocking and refuses anything but a regular file: a FIFO in a
+ * transcript's or a sidecar's place would otherwise hold the open forever. The caller closes `fd`.
+ *
+ * @throws {Error} the path is not a regular file, or cannot be opened
+ */
+function openRegularFile(path: string): { fd: number; stat: Stats } {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  const stat = fstatSync(fd);
+  if (!stat.isFile()) {
+    closeSync(fd);
+    throw new Error(`${path} is not a regular file`);
+  }
+  return { fd, stat };
+}
+
+/**
  * The complete lines appended since `cursor`, each parsed; a line that is not a JSON object is
- * counted in `skipped`. The read is non-blocking so a FIFO in a transcript's place is refused
- * instead of waited on.
+ * counted in `skipped`.
  *
  * @throws {Error} the path is not a regular file, or cannot be opened
  */
 export function readIncrement(path: string, cursor: Cursor): Increment {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  const { fd, stat } = openRegularFile(path);
   try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile()) throw new Error(`${path} is not a regular file`);
-
     const replaced = cursor.ino !== null && stat.ino !== cursor.ino;
     const restarted = replaced || stat.size < cursor.offset;
     const from = restarted ? 0 : cursor.offset;
@@ -406,15 +418,22 @@ export function readTranscript(transcript: Transcript, path: string): boolean {
 /**
  * The sidecar at `path`, or null while Claude Code has not written it yet.
  *
- * @throws {Error} the file is not a JSON object, or cannot be read
+ * @throws {Error} the file is not a regular file or not a JSON object, or cannot be read
  */
 export function readSidecar(path: string): Sidecar | null {
-  let text: string;
+  let opened: { fd: number; stat: Stats };
   try {
-    text = readFileSync(path, "utf8");
+    opened = openRegularFile(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
+  }
+
+  let text: string;
+  try {
+    text = readFileSync(opened.fd, "utf8");
+  } finally {
+    closeSync(opened.fd);
   }
 
   const meta = parseRecord(text);
@@ -428,7 +447,7 @@ export function readSidecar(path: string): Sidecar | null {
     worktreePath: str(meta.worktreePath),
     worktreeBranch: str(meta.worktreeBranch),
     toolUseId: str(meta.toolUseId),
-    spawnedAt: new Date(statSync(path).mtimeMs).toISOString(),
+    spawnedAt: new Date(opened.stat.mtimeMs).toISOString(),
   };
 }
 
