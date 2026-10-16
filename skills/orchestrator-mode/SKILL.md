@@ -66,7 +66,7 @@ Confirm what the repo itself answers instead of asking open-ended: branch protec
    - Every spawn brief is self-contained per `references/spawn-briefs.md`: the full task contract inline, the territory whitelist, the gates, the signal format, the stop-and-wait ban, the TODO ban, and the test rule (red-then-green for behavior changes only). Where the `/code-standards` skill is installed, briefs point builders at it for the comment rules and the rest of the house standards.
    - Every claim the brief asks for in the signal names its read-back command (the GraphQL `isResolved` read, the daemon's `status` line, `git ls-remote origin refs/heads/<branch>`), and the signal quotes what was read back, never what was run: `references/spawn-briefs.md`, Read-back reporting.
    - One-shot watchers and gate reviewers spawn UNNAMED where the harness delivers a completed agent's output automatically. A named watcher must remember to report at exactly the seam where agents strand (details in `references/spawn-briefs.md`).
-8. **Rely on harness notifications** for subagent completion. The lead never sleeps or polls while waiting on a subagent, and spawn briefs propagate the rule to workers. The fleet monitor's polls are different: they report waits and stalls, not completion.
+8. **Rely on harness notifications** for subagent completion: the lead never sleeps or polls while waiting on a subagent, since the notification re-invokes it. A bounded foreground wait on a process the harness does not track (a review launcher, a queue slot) is not polling for a subagent; `references/spawn-briefs.md`, The Stop-and-Wait Ban, carries the subagent form, and every brief states it. The fleet monitor's polls report waits and stalls, not completion.
 
 ## 3. Keep the Fleet Parallel
 
