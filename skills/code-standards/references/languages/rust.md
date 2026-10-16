@@ -24,7 +24,7 @@ needless_return = "deny"
 if_not_else = "deny"
 missing_errors_doc = "deny"
 missing_panics_doc = "deny"
-module_name_repetitions = "allow"  # noise::GaussianNoise is the layout rule, the module named after its main type
+module_name_repetitions = "allow"  # noise::GaussianNoise is the layout rule, the module named after its main thing
 ```
 
 ```toml
@@ -71,7 +71,7 @@ pub fn transcribe(video: &Path, model: &str, window: Option<Window>) -> Result<V
 ```
 
 - **`use` lines, then every `const` and `static` in one block,** then types (structs, enums, aliases), then `impl` blocks, then free functions with the entry point last. A binary's `main` is the last function in `main.rs`.
-- **One main type per module, with its helpers,** the module named after it in snake case (`gaussian_noise.rs` holds `GaussianNoise`, which is why `module_name_repetitions` is allowed); a folder's siblings of one kind share a `records`, `constants`, or `util` module. The layout rules and the specimen tree: `../structure.md`, A predictable layout.
+- **One main thing per module, with its helpers,** a behaviour type or a stage's main function, the module named after it in snake case (`gaussian_noise.rs` holds `GaussianNoise`, which is why `module_name_repetitions` is allowed; `transcribe.rs` above centres on `transcribe` with its `Segment` type); a folder's siblings of one kind share a `records`, `constants`, or `util` module. The layout rules and the specimen tree: `../structure.md`, A predictable layout.
 - **A `mod.rs` whose `pub use` fan only re-exports names is a barrel.** The exception is the crate root, where `lib.rs`'s `pub use` defines the public API. Importers name the defining module.
 
 ## One concept per function
@@ -208,7 +208,7 @@ impl Drop for PidFile {
 ## Types and docs
 
 - **A `///` doc comment on every `pub` item** (`missing_docs`): a one-line summary, then `# Errors` on a `Result` (`missing_errors_doc`), `# Panics` where it can (`missing_panics_doc`), `# Examples` where one helps, carrying what the signature cannot say. A private helper whose name says what it does carries none.
-- **Visibility is the language's:** `pub` where another module uses it, nothing else. No `_` prefix on a used name; a leading underscore means "unused" to the compiler and nothing else.
+- **Visibility is the language's:** `pub` where another module uses it, nothing else. A private field or helper is what the module's user must never touch, so it carries no `_` prefix: a getter `fn x(&self)` sits beside a private field `x`. A leading underscore means "unused" to the compiler and stays only on a name a framework or linker fixes, commented as such.
 
 The doc shape, on the `transcribe` specimen:
 
