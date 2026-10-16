@@ -6,8 +6,11 @@
 import {
   closeSync,
   constants,
+  type Dirent,
+  existsSync,
   fstatSync,
   openSync,
+  readdirSync,
   readFileSync,
   readSync,
   type Stats,
@@ -456,14 +459,49 @@ export function displayName(agentId: string, sidecar: Sidecar | null): string {
   return sidecar?.name ?? sidecar?.description ?? agentId;
 }
 
-/**
- * Where Claude Code writes a session's transcript and its subagents' transcripts: under the
- * project slug, the cwd with every character that is not a letter or digit replaced by a dash.
- */
-export function sessionPaths(cwd: string, sessionId: string, home: string): SessionPaths {
-  const project = join(home, ".claude", "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
+/** Claude Code's project directory for a cwd: every character that is not a letter or digit becomes a dash. */
+function projectDir(cwd: string, home: string): string {
+  return join(projectsRoot(home), cwd.replace(/[^A-Za-z0-9]/g, "-"));
+}
+
+function pathsIn(project: string, sessionId: string): SessionPaths {
   return {
     sessionFile: join(project, `${sessionId}.jsonl`),
     subagentsDir: join(project, sessionId, "subagents"),
   };
+}
+
+/** The directory under `home` that holds every project directory. */
+export function projectsRoot(home: string): string {
+  return join(home, ".claude", "projects");
+}
+
+/** Where Claude Code writes a session's transcript and its subagents' transcripts for a session launched in `cwd`. */
+export function sessionPaths(cwd: string, sessionId: string, home: string): SessionPaths {
+  return pathsIn(projectDir(cwd, home), sessionId);
+}
+
+/**
+ * A session's paths found by its id: the project directory of `cwd` first (the common case, no
+ * scan), then every project directory, since the project directory is the session's launch cwd
+ * and a shell may have moved since. Null when no project directory holds `<sessionId>.jsonl`.
+ */
+export function locateSession(sessionId: string, home: string, cwd: string): SessionPaths | null {
+  const guess = sessionPaths(cwd, sessionId, home);
+  if (existsSync(guess.sessionFile)) return guess;
+
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(projectsRoot(home), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const paths = pathsIn(join(projectsRoot(home), entry.name), sessionId);
+    if (existsSync(paths.sessionFile)) return paths;
+  }
+  return null;
 }

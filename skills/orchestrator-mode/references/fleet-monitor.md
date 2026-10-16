@@ -350,7 +350,7 @@ the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET 
 --id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;
 --mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;
 --interval is 60 s by default, 1 to 86400
-targets: session (this session's transcript and subagents dir, from CLAUDE_CODE_SESSION_ID and the cwd), or an absolute path to a session directory
+targets: session (this session's transcript and subagents dir, found by CLAUDE_CODE_SESSION_ID under ~/.claude/projects), or an absolute path to a session directory
 --repo <root>            add the worktree reading for every worktree of this repository (absolute path)
 --base <ref>             aheadBehind against this committish (default: origin's default branch)
 --quiet-after <minutes>  a wait or a stall is this long before it is said (default 10)

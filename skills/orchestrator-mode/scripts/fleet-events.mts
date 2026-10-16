@@ -25,10 +25,11 @@ import {
   displayName,
   initialTranscript,
   isStopped,
+  locateSession,
+  projectsRoot,
   readSidecar,
   readTranscript,
   type Sidecar,
-  sessionPaths,
   type Transcript,
 } from "./fleet/transcripts.mts";
 
@@ -164,7 +165,7 @@ function parseFlags(flags: string[]): {
   return { repo, base: ref, quietAfterMinutes };
 }
 
-/** `session` resolves here, in the CLI process, from the session's own environment; a path must be an existing absolute directory. */
+/** `session` resolves here, in the CLI process, by the session id under the user's home; a path must be an existing absolute directory. */
 function parseTarget(args: string[]): Target {
   const [text, ...flags] = args;
   const options = parseFlags(flags);
@@ -179,7 +180,14 @@ function parseTarget(args: string[]): Target {
       );
     }
     form = "session";
-    paths = sessionPaths(process.cwd(), sessionId, homedir());
+    const home = homedir();
+    const found = locateSession(sessionId, home, process.cwd());
+    if (found === null) {
+      throw new UsageError(
+        `no transcript ${sessionId}.jsonl under ${projectsRoot(home)}: CLAUDE_CODE_SESSION_ID names a session this home has not written`,
+      );
+    }
+    paths = found;
   } else {
     const dir = text as string;
     if (!isAbsolute(dir))
@@ -687,7 +695,7 @@ runEvents<Target>({
   interval: 60,
   idleInterval: 300,
   usage: [
-    "targets: session (this session's transcript and subagents dir, from CLAUDE_CODE_SESSION_ID and the cwd), or an absolute path to a session directory",
+    "targets: session (this session's transcript and subagents dir, found by CLAUDE_CODE_SESSION_ID under ~/.claude/projects), or an absolute path to a session directory",
     "--repo <root>            add the worktree reading for every worktree of this repository (absolute path)",
     "--base <ref>             aheadBehind against this committish (default: origin's default branch)",
     `--quiet-after <minutes>  a wait or a stall is this long before it is said (default ${DEFAULT_QUIET_AFTER_MINUTES})`,
