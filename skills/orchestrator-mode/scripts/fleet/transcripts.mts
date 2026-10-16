@@ -41,10 +41,15 @@ export interface Job {
   at: string;
 }
 
-/** An agent this one spawned, keyed by agentId, kept after it finished so a later poll still sees a stop; `at` is the spawn, or the message that resumed it. */
+/**
+ * An agent this one spawned, keyed by agentId, kept after it finished so a later poll still sees a
+ * stop. `at` is the spawn and never moves, since a name resolves to the latest spawn; `since` is
+ * when its current run began: the spawn, or the message that resumed it.
+ */
 export interface Child {
   name: string | null;
-  at: string;
+  readonly at: string;
+  since: string;
   outcome: "running" | "finished" | "stopped";
 }
 
@@ -55,6 +60,8 @@ export interface Activity {
   pending: Record<string, PendingCall>;
   jobs: Record<string, Job>;
   children: Record<string, Child>;
+  /** Successful TaskStops on a task id that is no job and no child here, by that exact id: a nested agent another agent spawned, stopped by the lead. */
+  stops: Record<string, string>;
   lines: number;
   /** Lines that were not a JSON object with a timestamp: counted, never fatal. */
   skipped: number;
@@ -139,6 +146,7 @@ function initialActivity(): Activity {
     pending: {},
     jobs: {},
     children: {},
+    stops: {},
     lines: 0,
     skipped: 0,
   };
@@ -171,12 +179,12 @@ function idleTeammatesOf(text: string): string[] {
 }
 
 // A name is rebound when an agent is respawned under it, and Claude Code resolves it to the latest
-// agent, so every lookup by name here does too.
-function childNamed(state: Activity, name: string): string | undefined {
+// spawn, so every lookup by name here does too, among the children of the asked-for outcome.
+function childNamed(state: Activity, name: string, outcome?: Child["outcome"]): string | undefined {
   let found: string | undefined;
   let foundAt = Number.NEGATIVE_INFINITY;
   for (const [id, child] of Object.entries(state.children)) {
-    if (child.name !== name) continue;
+    if (child.name !== name || (outcome !== undefined && child.outcome !== outcome)) continue;
     const at = Date.parse(child.at);
     if (at < foundAt) continue;
     found = id;
@@ -191,8 +199,10 @@ function childOf(state: Activity, taskId: string): string | undefined {
   return childNamed(state, taskId);
 }
 
+// An idle notification names its sender, and a resumed elder may share the name with a later
+// spawn: the running one is the sender.
 function finishChild(state: Activity, taskId: string): void {
-  const id = childOf(state, taskId);
+  const id = Object.hasOwn(state.children, taskId) ? taskId : childNamed(state, taskId, "running");
   const child = id === undefined ? undefined : state.children[id];
   if (child?.outcome === "running") child.outcome = "finished";
 }
@@ -209,19 +219,20 @@ function resumeChild(state: Activity, taskId: string, at: string): void {
   const child = id === undefined ? undefined : state.children[id];
   if (child?.outcome !== "finished") return;
   child.outcome = "running";
-  child.at = at;
+  child.since = at;
 }
 
-// TaskStop takes a job id, an agentId, or the name given at spawn. One this file never launched
-// or spawned is nobody's: nothing is recorded.
-function stopTask(state: Activity, taskId: string): void {
+// TaskStop takes a job id, an agentId, or the name given at spawn. An id this file never launched
+// or spawned is still a stop by that id: the lead stopping an agent another agent spawned.
+function stopTask(state: Activity, taskId: string, at: string): void {
   if (Object.hasOwn(state.jobs, taskId)) {
     delete state.jobs[taskId];
     return;
   }
 
   const id = childOf(state, taskId);
-  if (id !== undefined) (state.children[id] as Child).outcome = "stopped";
+  if (id === undefined) state.stops[taskId] = at;
+  else (state.children[id] as Child).outcome = "stopped";
 }
 
 // One line per content block, and only the message's last block carries the real stop_reason:
@@ -284,7 +295,7 @@ function reduceResults(
     // A stop or a resume counts once its result confirms it: an errored TaskStop (no such task)
     // stopped nothing, an errored SendMessage reached nobody.
     if (item.is_error === true) continue;
-    if (call.tool === "TaskStop") stopTask(state, call.taskId);
+    if (call.tool === "TaskStop") stopTask(state, call.taskId, at);
     if (call.tool === "SendMessage") resumeChild(state, call.taskId, at);
   }
 
@@ -297,7 +308,12 @@ function reduceResults(
 
   const agentId = str(result.agentId);
   if (agentId !== null && SPAWN_STATUSES.has(str(result.status) ?? "")) {
-    state.children[agentId] = { name: str(result.name) ?? spawning, at, outcome: "running" };
+    state.children[agentId] = {
+      name: str(result.name) ?? spawning,
+      at,
+      since: at,
+      outcome: "running",
+    };
   }
 }
 
@@ -362,8 +378,9 @@ export function reduce(state: Activity, line: Record<string, unknown>): Activity
   return state;
 }
 
-/** Whether `parent` stopped the agent: by its id, else by the name its sidecar gives it. */
+/** Whether `parent` stopped the agent: by its exact id, spawned here or not, else by the name its sidecar gives it. */
 export function isStopped(parent: Activity, agentId: string, name: string | null): boolean {
+  if (Object.hasOwn(parent.stops, agentId)) return true;
   let id = childOf(parent, agentId);
   if (id === undefined && name !== null) id = childOf(parent, name);
   return id !== undefined && parent.children[id]?.outcome === "stopped";

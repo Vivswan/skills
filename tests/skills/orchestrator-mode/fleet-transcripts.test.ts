@@ -137,6 +137,7 @@ function activity(overrides: Partial<Activity>): Activity {
     pending: {},
     jobs: {},
     children: {},
+    stops: {},
     lines: 0,
     skipped: 0,
     ...overrides,
@@ -245,6 +246,7 @@ describe("the transcript reducer", () => {
     expect(fold([...spawns, idleInArray]).children[CHILD_C]).toEqual({
       name: "reviewer",
       at: at(2, 1),
+      since: at(2, 1),
       outcome: "finished",
     });
   });
@@ -308,13 +310,13 @@ describe("the transcript reducer", () => {
     );
   });
 
-  test("either spawn status is a running child named by the result or the call; a notice finishes one, an idle notification another, a TaskStop by name stops the third once its result lands, an errored stop or an unknown id records nothing", () => {
+  test("either spawn status is a running child; a notice finishes one, an idle notification another, a TaskStop by name stops the third at its result; an errored stop records nothing, an id never spawned here is a stop by that id", () => {
     const running = activity({
       lastMovedAt: at(2, 1),
       children: {
-        [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
-        [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "running" },
-        [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "running" },
+        [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
+        [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "running" },
+        [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "running" },
       },
       lines: 6,
     });
@@ -335,9 +337,9 @@ describe("the transcript reducer", () => {
         lastMovedAt: at(12),
         pending: { toolu_04: { tool: "TaskStop", at: at(12), taskId: "reviewer" } },
         children: {
-          [CHILD_A]: { name: null, at: at(0, 1), outcome: "finished" },
-          [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "finished" },
-          [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "running" },
+          [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "finished" },
+          [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "finished" },
+          [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "running" },
         },
         lines: 9,
       }),
@@ -354,10 +356,11 @@ describe("the transcript reducer", () => {
       activity({
         lastMovedAt: at(14, 1),
         children: {
-          [CHILD_A]: { name: null, at: at(0, 1), outcome: "finished" },
-          [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "finished" },
-          [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "stopped" },
+          [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "finished" },
+          [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "finished" },
+          [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "stopped" },
         },
+        stops: { [UNKNOWN]: at(13, 1) },
         lines: 14,
       }),
     );
@@ -365,7 +368,7 @@ describe("the transcript reducer", () => {
       false,
       false,
       true,
-      false,
+      true,
     ]);
     // A sidecar names the agent and the stop named it too, under an id the stop did not carry.
     expect(isStopped(state, "ffffffffffffffff", "reviewer")).toBe(true);
@@ -390,10 +393,10 @@ describe("the transcript reducer", () => {
     ];
     const rebound = fold(lines);
     expect(rebound.children).toEqual({
-      [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
-      [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "running" },
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "stopped" },
-      [REBORN]: { name: "reviewer", at: at(20, 1), outcome: "running" },
+      [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
+      [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "running" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "stopped" },
+      [REBORN]: { name: "reviewer", at: at(20, 1), since: at(20, 1), outcome: "running" },
     });
     expect(isStopped(rebound, REBORN, "reviewer")).toBe(false);
     expect(isStopped(rebound, CHILD_C, "reviewer")).toBe(true);
@@ -422,13 +425,13 @@ describe("the transcript reducer", () => {
         .join("\n");
     const idleReviewer = '{"type":"idle_notification","agent":"reviewer"}';
     const running: Activity["children"] = {
-      [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
-      [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "running" },
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "running" },
+      [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
+      [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "running" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "running" },
     };
     const reviewerDone: Activity["children"] = {
       ...running,
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "finished" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "finished" },
     };
     const line = (...parts: Array<[string, string]>) => userText(at(10), batch(...parts));
     expect(
@@ -512,7 +515,67 @@ describe("the transcript reducer", () => {
     );
   });
 
-  test("a SendMessage to a finished named child resumes it at the message's time (the latest child under that name), a stopped one stays stopped, and an errored or unknown send resumes nothing", () => {
+  test("a resume keeps the child's spawn time: a send or a TaskStop by name reaches the latest spawn, not the resumed elder, while the elder's idle notification by that name finishes the elder, the running one", () => {
+    const reviewer = {
+      name: "reviewer",
+      description: "review",
+      subagent_type: "general-purpose",
+      prompt: "review",
+      run_in_background: true,
+    };
+    const twoReviewers = [
+      toolUse(at(1), "toolu_old", "Agent", reviewer),
+      toolResult(at(1, 1), "toolu_old", {
+        toolUseResult: { status: "async_launched", agentId: CHILD_B },
+      }),
+      toolUse(at(2), "toolu_new", "Agent", reviewer),
+      toolResult(at(2, 1), "toolu_new", {
+        toolUseResult: { status: "async_launched", agentId: CHILD_C },
+      }),
+      attachment(at(10), {
+        type: "queued_command",
+        commandMode: "task-notification",
+        prompt: notice(CHILD_B),
+      }),
+      attachment(at(10, 1), {
+        type: "queued_command",
+        commandMode: "task-notification",
+        prompt: notice(CHILD_C),
+      }),
+    ];
+    const send = (id: string, to: string, timestamp: string): Line =>
+      toolUse(timestamp, id, "SendMessage", { to, message: "carry on", summary: "s" });
+    const resumedOld = [
+      ...twoReviewers,
+      send("toolu_m1", CHILD_B, at(20)),
+      toolResult(at(20, 1), "toolu_m1"),
+    ];
+    expect(fold(resumedOld).children[CHILD_B]).toMatchObject({ at: at(1, 1), outcome: "running" });
+    expect(fold(resumedOld).children[CHILD_C]?.outcome).toBe("finished");
+
+    // The elder's own idle notification arrives under the shared name: it finishes the running one, the elder.
+    const idledOld = [...resumedOld, userText(at(20, 30), idle("reviewer"))];
+    expect(fold(idledOld).children[CHILD_B]?.outcome).toBe("finished");
+    expect(fold(idledOld).children[CHILD_C]?.outcome).toBe("finished");
+
+    const sentByName = [
+      ...resumedOld,
+      send("toolu_m2", "reviewer", at(21)),
+      toolResult(at(21, 1), "toolu_m2"),
+    ];
+    expect(fold(sentByName).children[CHILD_C]?.outcome).toBe("running");
+
+    const stoppedByName = [
+      ...sentByName,
+      toolUse(at(22), "toolu_stop", "TaskStop", { task_id: "reviewer" }),
+      toolResult(at(22, 1), "toolu_stop"),
+    ];
+    const children = fold(stoppedByName).children;
+    expect(children[CHILD_C]?.outcome).toBe("stopped");
+    expect(children[CHILD_B]).toMatchObject({ at: at(1, 1), outcome: "running" });
+  });
+
+  test("a SendMessage to a finished named child (the latest spawn under that name) resumes it as of the message, keeping its spawn time; a stopped one stays stopped, and an errored or unknown send resumes nothing", () => {
     const finished = [
       ...spawns,
       attachment(at(10), {
@@ -534,9 +597,9 @@ describe("the transcript reducer", () => {
       toolResult(at(19, 3), "toolu_m3"),
     ]);
     expect(untouched.children).toEqual({
-      [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
-      [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "stopped" },
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "finished" },
+      [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
+      [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "stopped" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "finished" },
     });
     const resumed = fold([
       ...finished,
@@ -546,9 +609,9 @@ describe("the transcript reducer", () => {
       toolResult(at(21, 1), "toolu_m2"),
     ]);
     expect(resumed.children).toEqual({
-      [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
-      [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "stopped" },
-      [CHILD_C]: { name: "reviewer", at: at(20, 1), outcome: "running" },
+      [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
+      [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "stopped" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(20, 1), outcome: "running" },
     });
     expect(resumed.pending).toEqual({});
   });
@@ -589,7 +652,7 @@ describe("the transcript reducer", () => {
     expect(state).toEqual(
       activity({
         lastMovedAt: at(4, 1),
-        children: { [CHILD_A]: { name: null, at: at(4, 1), outcome: "running" } },
+        children: { [CHILD_A]: { name: null, at: at(4, 1), since: at(4, 1), outcome: "running" } },
         lines: 7,
       }),
     );
