@@ -230,10 +230,14 @@ function agentName(agentId: string, entry: AgentEntry | undefined): string {
   return oneLine(displayName(agentId, entry?.sidecar ?? null));
 }
 
-function oldest<T extends { at: string }>(entries: Record<string, T>): [string, T] | undefined {
+function oldest<T>(
+  entries: Record<string, T>,
+  since: (entry: T) => string,
+): [string, T] | undefined {
   let found: [string, T] | undefined;
   for (const pair of Object.entries(entries)) {
-    if (found === undefined || Date.parse(pair[1].at) < Date.parse(found[1].at)) found = pair;
+    if (found === undefined || Date.parse(since(pair[1])) < Date.parse(since(found[1])))
+      found = pair;
   }
   return found;
 }
@@ -266,7 +270,7 @@ function situationOf(target: Target, agentId: string, entry: AgentEntry, nowMs: 
     return { kind: "moving" };
   }
 
-  const call = oldest(state.pending);
+  const call = oldest(state.pending, (pending) => pending.at);
   if (call !== undefined) {
     const [id, pending] = call;
     const childId = pending.tool === "Agent" ? childOfCall(target, id) : undefined;
@@ -284,15 +288,15 @@ function situationOf(target: Target, agentId: string, entry: AgentEntry, nowMs: 
   const running = Object.fromEntries(
     Object.entries(state.children).filter(([, child]) => child.outcome === "running"),
   );
-  const child = oldest(running);
+  const child = oldest(running, (spawned) => spawned.since);
   if (child !== undefined) {
     const [id, spawned] = child;
     const name =
       target.agents[id] === undefined ? (spawned.name ?? id) : agentName(id, target.agents[id]);
-    return { kind: "child", id, name: oneLine(name), since: spawned.at };
+    return { kind: "child", id, name: oneLine(name), since: spawned.since };
   }
 
-  const job = oldest(state.jobs);
+  const job = oldest(state.jobs, (started) => started.at);
   if (job !== undefined) {
     const ids = Object.keys(state.jobs).sort().join(",");
     return { kind: "jobs", ids, count: Object.keys(state.jobs).length, since: job[1].at };

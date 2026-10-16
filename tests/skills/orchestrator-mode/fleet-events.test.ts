@@ -977,6 +977,116 @@ describe("fleet-events.mts", () => {
     GIT_TIMEOUT,
   );
 
+  test("a parent's child wait is its oldest current run: a finished elder resumed by message counts from the message, so the child spawned meanwhile is the wait named", async () => {
+    const s = new Scenario(PROGRAM, "elder");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const pathB = writeAgent(
+      session,
+      B,
+      { name: "builder-b", description: "build" },
+      exchange(ago(40), "toolu_b0", B),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+
+    const spawn = (id: string, name: string, agentId: string, timestamp: string): Line[] => [
+      toolUse(
+        timestamp,
+        id,
+        "Agent",
+        {
+          name,
+          description: "run",
+          subagent_type: "general-purpose",
+          prompt: "run",
+          run_in_background: true,
+        },
+        B,
+      ),
+      toolResult(timestamp, id, {
+        toolUseResult: { status: "async_launched", agentId },
+        agentId: B,
+      }),
+    ];
+    appendLines(pathB, [
+      ...spawn("toolu_elder", "elder", D, ago(29)),
+      userText(ago(25), notice(D), B),
+      ...spawn("toolu_ongoing", "ongoing", E, ago(20)),
+      toolUse(ago(10), "toolu_msg", "SendMessage", { to: D, message: "carry on", summary: "s" }, B),
+      toolResult(ago(10), "toolu_msg", { agentId: B }),
+    ]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["agent", "agent builder-b: waiting on agent ongoing for 20 min", fileUrl(pathB)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a TaskStop by exact id stops a nested worker the lead never spawned, said once with nothing further from it, while a stop by name still reaches the lead's own child", async () => {
+    const s = new Scenario(PROGRAM, "exact");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const spawn = (id: string, name: string, agentId: string): Line[] => [
+      toolUse(
+        ago(30),
+        id,
+        "Agent",
+        { name, description: "build", subagent_type: "general-purpose", prompt: "build" },
+        null,
+      ),
+      toolResult(ago(30), id, {
+        toolUseResult: { status: "teammate_spawned", agentId, name },
+        agentId: null,
+      }),
+    ];
+    appendLines(session.sessionFile, [
+      ...spawn("toolu_spawn_a", "builder-a", A),
+      ...spawn("toolu_spawn_b", "builder-b", B),
+    ]);
+    const pathA = writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build" },
+      exchange(ago(0), "toolu_a1"),
+    );
+    writeAgent(
+      session,
+      B,
+      { name: "builder-b", description: "build" },
+      exchange(ago(0), "toolu_b1", B),
+    );
+    const pathC = writeAgent(
+      session,
+      C,
+      { name: "reviewer", description: "review B's patch", parentAgentId: B },
+      exchange(ago(10), "toolu_c1", C),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+
+    // C begins a wait the daemon would say after two observations; the lead stops C by its id and A by its name.
+    appendLines(pathC, [toolUse(ago(5), "toolu_c2", "Bash", { command: "bun test" }, C)]);
+    appendLines(session.sessionFile, [
+      toolUse(ago(2), "toolu_stop_c", "TaskStop", { task_id: C }, null),
+      toolResult(ago(2), "toolu_stop_c", { agentId: null }),
+      toolUse(ago(2), "toolu_stop_a", "TaskStop", { task_id: "builder-a" }, null),
+      toolResult(ago(2), "toolu_stop_a", { agentId: null }),
+    ]);
+    expect(polled(s, box.path)).toBe(2);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)],
+      ["agent", "agent reviewer: stopped by the lead", fileUrl(pathC)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("the lead's stop by name reaches only its own children: a nested agent spawned by another fleet agent under a name the lead once stopped keeps reporting its start and its wait", async () => {
     const s = new Scenario(PROGRAM, "nest");
     const box = await s.inbox("a");
