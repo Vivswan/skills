@@ -19,7 +19,10 @@ import { join } from "node:path";
 
 const TASK_NOTIFICATION = /<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/;
 const TASK_ID = /<task-id>\s*([^<\s][^<]*?)\s*<\/task-id>/;
-const TEAMMATE_TAG = /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"/;
+// One user line can carry many envelopes, and a body can quote a whole envelope; the closing tag
+// is the one that balances its opening.
+const TEAMMATE_TAG =
+  /<\\?\/teammate-message>|<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>/g;
 const IDLE_NOTIFICATION = /"type"\s*:\s*"idle_notification"/;
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
 const NEWLINE = 0x0a;
@@ -55,7 +58,7 @@ export interface Activity {
   skipped: number;
 }
 
-/** Where the next read starts: bytes consumed through the last newline (the unfinished tail is read again), with the inode and size seen, so a replaced or shrunk file is told from growth. */
+/** Where the next read starts: bytes consumed through the last newline (the unfinished tail is read again), with the inode and size seen, so a replaced or shrunk file (any smaller size) is told from growth. */
 export interface Cursor {
   offset: number;
   ino: number | null;
@@ -74,7 +77,7 @@ export interface Increment {
   skipped: number;
   cursor: Cursor;
   mtimeMs: number;
-  /** Another inode, or shorter than the cursor: replaced, truncated, or rotated, so the read started over. */
+  /** Another inode, or smaller than the size seen: replaced, truncated, or rotated, so the read started over. */
   restarted: boolean;
 }
 
@@ -138,10 +141,25 @@ function taskIdOf(text: string): string | null {
   return TASK_ID.exec(block[1] as string)?.[1] ?? null;
 }
 
-function idleTeammateOf(text: string): string | null {
-  const tag = TEAMMATE_TAG.exec(text);
-  if (tag === null || !IDLE_NOTIFICATION.test(text)) return null;
-  return tag[1] as string;
+/** The senders of the idle notifications in `text`, one per top-level envelope whose own body carries one. */
+function idleTeammatesOf(text: string): string[] {
+  const names: string[] = [];
+  let depth = 0;
+  let sender: string | null = null;
+  let bodyStart = 0;
+  for (const tag of text.matchAll(TEAMMATE_TAG)) {
+    const opening = tag[1] !== undefined;
+    if (opening && depth === 0) {
+      sender = tag[1] as string;
+      bodyStart = tag.index + tag[0].length;
+    }
+    depth = opening ? depth + 1 : Math.max(0, depth - 1);
+    if (opening || depth > 0 || sender === null) continue;
+    if (IDLE_NOTIFICATION.test(text.slice(bodyStart, tag.index))) names.push(sender);
+    sender = null;
+  }
+  if (sender !== null && IDLE_NOTIFICATION.test(text.slice(bodyStart))) names.push(sender);
+  return names;
 }
 
 // A name is rebound when an agent is respawned under it, and Claude Code resolves it to the latest
@@ -220,9 +238,9 @@ function reduceInjected(state: Activity, text: string): void {
     return;
   }
 
-  const teammate = idleTeammateOf(text);
-  if (teammate !== null) {
-    finishChild(state, teammate);
+  const idle = idleTeammatesOf(text);
+  if (idle.length > 0) {
+    for (const name of idle) finishChild(state, name);
     return;
   }
 
@@ -362,7 +380,7 @@ export function readIncrement(path: string, cursor: Cursor): Increment {
   const { fd, stat } = openRegularFile(path);
   try {
     const replaced = cursor.ino !== null && stat.ino !== cursor.ino;
-    const restarted = replaced || stat.size < cursor.offset;
+    const restarted = replaced || stat.size < cursor.size;
     const from = restarted ? 0 : cursor.offset;
     const bytes = readBytes(fd, from, stat.size - from);
     const complete = bytes.lastIndexOf(NEWLINE) + 1;

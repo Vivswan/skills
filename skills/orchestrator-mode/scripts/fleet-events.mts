@@ -51,6 +51,8 @@ interface AgentEntry extends Transcript {
   observed: string | null;
   /** The situation key last announced; null before anything was said. */
   said: string | null;
+  /** The situation key the baseline poll found, which is never news; null for an agent first seen later. */
+  baseline: string | null;
 }
 
 /** One worktree's last reading: the head, the tree size, the activity fingerprint, and how long it has sat idle. */
@@ -329,9 +331,10 @@ function isStillness(key: string | null): boolean {
 }
 
 /**
- * The transition to announce for one agent, or null. A stop and a return to movement are facts
- * said at once; a wait, a stall, or an ended turn is said once the same reading was seen on the
- * poll before (two observations before a flag), and once only while it holds.
+ * The transition to announce for one agent, or null. The baseline poll records the situation and
+ * says nothing. After it, a stop and a return to movement are facts said at once; a wait, a stall,
+ * or an ended turn is said once the same reading was seen on the poll before (two observations
+ * before a flag), and once only while it holds.
  */
 function agentTransition(
   target: Target,
@@ -343,7 +346,12 @@ function agentTransition(
   const key = situationKey(situation);
   const seenBefore = entry.observed === key;
   entry.observed = key;
-  if (target.polls === 0) return null;
+  if (target.polls === 0) {
+    entry.baseline = key;
+    return null;
+  }
+  // The state the watch began in is not a change; movement after it is news only once a stillness was said.
+  if (key === entry.baseline && key !== "moving") return null;
 
   let announce = false;
   if (situation.kind === "stopped") announce = entry.said !== "stopped";
@@ -398,6 +406,7 @@ function readAgents(
       sidecar: null,
       observed: null,
       said: null,
+      baseline: null,
     };
     const sidecarName = `agent-${agentId}.meta.json`;
     // A read that fails is this one agent's trouble, never the poll's: the rest of the fleet is still read.

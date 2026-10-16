@@ -295,14 +295,19 @@ describe("fleet-events.mts", () => {
     const s = new Scenario(PROGRAM, "wait");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const path = writeAgent(session, A, { name: "builder-a", description: "build it" }, [
-      ...exchange(ago(9), "toolu_01"),
-      toolUse(ago(5), "toolu_02", "Bash", { command: "bun run check" }),
-    ]);
+    const quietSince = ago(9);
+    const path = writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build it" },
+      exchange(quietSince, "toolu_01"),
+    );
     await s.start({ inbox: box.path });
     expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    expect(polled(s, box.path)).toBe(1);
+    // The baseline records the agent as quiet mid-turn; the pending call that follows is the change.
+    appendLines(path, [toolUse(ago(5), "toolu_02", "Bash", { command: "bun run check" })]);
     expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
 
     appendLines(path, [toolResult(ago(0), "toolu_02")]);
@@ -315,7 +320,7 @@ describe("fleet-events.mts", () => {
       form: "dir",
       quietAfterMinutes: 1,
       polls: 5,
-      agents: { [A]: { said: "moving", observed: "moving" } },
+      agents: { [A]: { said: "moving", observed: "moving", baseline: `stall:${quietSince}` } },
     });
     s.stop({ inbox: box.path });
   }, 30000);
@@ -339,16 +344,19 @@ describe("fleet-events.mts", () => {
       session,
       A,
       { name: "builder-a", description: "build" },
-      launched(A, "b1a2b3c4d"),
+      exchange(ago(9), "toolu_a0", A),
     );
     const pathB = writeAgent(
       session,
       B,
       { name: "builder-b", description: "build" },
-      launched(B, "b9z8y7x6w"),
+      exchange(ago(9), "toolu_b0", B),
     );
     await s.start({ inbox: box.path });
     expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    appendLines(pathA, launched(A, "b1a2b3c4d"));
+    appendLines(pathB, launched(B, "b9z8y7x6w"));
+    expect(polled(s, box.path)).toBe(0);
     expect(polled(s, box.path)).toBe(2);
 
     appendLines(pathA, [userText(ago(0), notice("b1a2b3c4d"))]);
@@ -377,13 +385,19 @@ describe("fleet-events.mts", () => {
     const s = new Scenario(PROGRAM, "kids");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+    const pathA = writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build" },
+      exchange(ago(9), "toolu_a0", A),
+    );
+    const callA = [
       toolUse(ago(6), "toolu_fg", "Agent", {
         description: "scout the repo",
         subagent_type: "Explore",
         prompt: "look",
       }),
-    ]);
+    ];
     writeAgent(
       session,
       C,
@@ -395,7 +409,13 @@ describe("fleet-events.mts", () => {
       },
       [...exchange(ago(0), "toolu_c1", C)],
     );
-    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+    const pathB = writeAgent(
+      session,
+      B,
+      { name: "builder-b", description: "build" },
+      exchange(ago(9), "toolu_b0", B),
+    );
+    const callB = [
       toolUse(
         ago(4),
         "toolu_bg",
@@ -414,7 +434,7 @@ describe("fleet-events.mts", () => {
         agentId: B,
       }),
       said(ago(4), "end_turn", B),
-    ]);
+    ];
     writeAgent(
       session,
       D,
@@ -423,6 +443,9 @@ describe("fleet-events.mts", () => {
     );
     await s.start({ inbox: box.path });
     expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    appendLines(pathA, callA);
+    appendLines(pathB, callB);
+    expect(polled(s, box.path)).toBe(0);
     expect(polled(s, box.path)).toBe(2);
     expect(rows(s)).toEqual([
       [
@@ -440,22 +463,25 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("an end_turn with nothing outstanding is turn ended, once; a TaskStop in the session file on a quiet agent is stopped, never a stall, while a quiet agent nobody stopped is a stall", async () => {
+  test("an end_turn with nothing outstanding is turn ended, once; a TaskStop in the session file on a quiet agent is stopped, never a stall, while a quiet agent nobody stopped is a stall; each said only as a change after the baseline", async () => {
     const s = new Scenario(PROGRAM, "ends");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
     const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
-      ...exchange(ago(3), "toolu_01"),
-      said(ago(3), "end_turn"),
+      toolUse(ago(9), "toolu_01", "Bash", { command: "bun test" }),
     ]);
     const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
-      ...exchange(ago(5), "toolu_02", B),
-      said(ago(5), null, B),
+      toolUse(ago(9), "toolu_02", "Bash", { command: "bun test" }, B),
     ]);
     const pathC = writeAgent(session, C, { name: "builder-c", description: "build" }, [
-      ...exchange(ago(5), "toolu_03", C),
-      said(ago(5), null, C),
+      toolUse(ago(9), "toolu_03", "Bash", { command: "bun test" }, C),
     ]);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+
+    appendLines(pathA, [toolResult(ago(3), "toolu_01"), said(ago(3), "end_turn")]);
+    appendLines(pathB, [toolResult(ago(5), "toolu_02", { agentId: B }), said(ago(5), null, B)]);
+    appendLines(pathC, [toolResult(ago(5), "toolu_03", { agentId: C }), said(ago(5), null, C)]);
     // The lead's own file: the spawn that named builder-b, then the stop by that name.
     appendLines(session.sessionFile, [
       toolUse(
@@ -477,15 +503,46 @@ describe("fleet-events.mts", () => {
       toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-b" }, null),
       toolResult(ago(2), "toolu_stop", { agentId: null }),
     ]);
-    await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    expect(polled(s, box.path)).toBe(3);
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(2);
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
-      ["agent", "agent builder-a: turn ended 3 min ago, nothing outstanding", fileUrl(pathA)],
       ["agent", "agent builder-b: stopped by the lead", fileUrl(pathB)],
+      ["agent", "agent builder-a: turn ended 3 min ago, nothing outstanding", fileUrl(pathA)],
       ["agent", "agent builder-c: quiet for 5 min mid-turn, nothing pending", fileUrl(pathC)],
     ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("the baseline records each agent's current situation: a turn that ended hours before the watch is never said, a fresh line after it is not moving again, and only a change that ages past the window after the watch is said", async () => {
+    const s = new Scenario(PROGRAM, "old");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const endedAt = ago(1222);
+    const finished = (agentId: string): Line[] => [
+      ...exchange(endedAt, `toolu_${agentId.slice(0, 4)}`, agentId),
+      said(endedAt, "end_turn", agentId),
+    ];
+    const pathA = writeAgent(session, A, { name: "scout-a", description: "explore" }, finished(A));
+    const pathB = writeAgent(session, B, { name: "scout-b", description: "explore" }, finished(B));
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+
+    appendLines(pathA, exchange(ago(0), "toolu_a9", A));
+    appendLines(pathB, [toolUse(ago(5), "toolu_b9", "Bash", { command: "bun test" }, B)]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s)).toEqual([
+      ["agent", "agent scout-b: waiting on Bash for 5 min", fileUrl(pathB)],
+    ]);
+    expect(s.state().targets[session.dir]).toMatchObject({
+      agents: {
+        [A]: { baseline: `ended:${endedAt}`, said: null, observed: "moving" },
+        [B]: { baseline: `ended:${endedAt}`, said: "tool:toolu_b9", observed: "tool:toolu_b9" },
+      },
+    });
     s.stop({ inbox: box.path });
   }, 30000);
 
@@ -580,7 +637,8 @@ describe("fleet-events.mts", () => {
       toolUse(ago(5), `toolu_${agentId.slice(0, 4)}`, "Bash", { command: "bun test" }, agentId),
     ];
     const metaA = { name: "builder-a", description: "build" };
-    const pathA = writeAgent(session, A, metaA, waiting(A));
+    const baseA = exchange(ago(9), "toolu_a0", A);
+    const pathA = writeAgent(session, A, metaA, baseA);
     const fifo = join(session.subagents, `agent-${B}.jsonl`);
     expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
     writeAgent(
@@ -604,6 +662,8 @@ describe("fleet-events.mts", () => {
     await s.start({ inbox: box.path });
     expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
     // The three failures hold while agent A's wait is said: a per-agent failure is that agent's alone.
+    appendLines(pathA, waiting(A));
+    expect(polled(s, box.path)).toBe(0);
     expect(polled(s, box.path)).toBe(1);
 
     const metaE = { name: "builder-e", description: "build" };
@@ -614,7 +674,7 @@ describe("fleet-events.mts", () => {
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
     mkdirSync(session.subagents);
-    writeAgent(session, A, metaA, waiting(A));
+    writeAgent(session, A, metaA, [...baseA, ...waiting(A)]);
     writeAgent(session, E, metaE, waiting(E));
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
@@ -648,11 +708,12 @@ describe("fleet-events.mts", () => {
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
     const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
-      ...exchange(ago(5), "toolu_01"),
-      said(ago(5), null),
+      toolUse(ago(9), "toolu_01", "Bash", { command: "bun test" }),
     ]);
     await s.start({ inbox: box.path });
     expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    appendLines(pathA, [toolResult(ago(5), "toolu_01"), said(ago(5), null)]);
+    expect(polled(s, box.path)).toBe(0);
 
     // The lead's file becomes unreadable on the poll that would have said the stall.
     rmSync(session.sessionFile);
@@ -759,17 +820,18 @@ describe("fleet-events.mts", () => {
     const s = new Scenario(PROGRAM, "mark");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    writeAgent(session, A, { name: "builder-a", description: "build" }, [
+    const path = writeAgent(session, A, { name: "builder-a", description: "build" }, [
       toolUse(ago(7), "toolu_01", "Bash", { command: `echo ${MARKER}` }),
       toolResult(ago(7), "toolu_01", {
         content: [{ type: "text", text: MARKER }],
         toolUseResult: { stdout: MARKER, stderr: "" },
       }),
       attachment(ago(7), { type: "prompt_snapshot", prompt: `${MARKER} ${notice("b1a2b3c4d")}` }),
-      toolUse(ago(6), "toolu_02", "Bash", { command: `grep ${MARKER}` }),
     ]);
     await s.start({ inbox: box.path });
     expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    appendLines(path, [toolUse(ago(6), "toolu_02", "Bash", { command: `grep ${MARKER}` })]);
+    expect(polled(s, box.path)).toBe(0);
     expect(polled(s, box.path)).toBe(1);
     const frames = await box.frames(1);
     expect(frames).toHaveLength(1);
