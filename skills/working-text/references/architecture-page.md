@@ -153,8 +153,6 @@ exits: 0 the page names real code; 1 problems, each printed; 2 usage or an unrea
 | `line 41: the diagram has no "Demonstrated by:" line before the next heading` | Add the line with a link to the covering test |
 | `expected <n> concept diagrams, found <n-1>` | A diagram vanished, or you added one: update `--expect-diagrams` in the same change |
 
-Repositories that already have a bun test suite can import the same functions instead: `diagramProblems`, `conceptCounts`, `lintArchitecture`, `renderArchitectureMermaid` are exported by the scripts.
-
 ### 5. Wire the gates
 
 The three commands are the agent's instruments, run from the skill directory while the page is authored and before a change to the layering or the page lands. Where the repository publishes a docs site, the page is part of it.

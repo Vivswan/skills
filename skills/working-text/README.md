@@ -46,7 +46,7 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/working-text -
 - [`scripts/architecture/check-page.mts`](./scripts/architecture/check-page.mts): the page test. `--expect-diagrams <n>` pins the count, `--repo-url` resolves absolute links
 - [`scripts/architecture/`](./scripts/architecture/) also holds the readers those three share: `declaration.mts` (`readArchitecture`, `renderArchitectureMermaid`), `sources.mts` (`parseModule`, `importSpecifiers`), `page.mts` (`readPage`), `paths.mts` (`pathLabel`)
 
-The scripts bundle their dependencies (the mdast readers, `@babel/parser`) into the skill's `.build` folder on first run, so they need bun and, that once, the network; [`references/architecture-page.md`](./references/architecture-page.md) has the copy step for a repository that runs them without the skill installed.
+The scripts bundle their dependencies (the mdast readers, `@babel/parser`) into the skill's `.build` folder on first run, so they need bun and, that once, the network. They run from the installed skill folder, never from a copy; a gate a repository runs itself is a published package or its own code ([`references/architecture-page.md`](./references/architecture-page.md), step 5).
 
 ## Exit Codes
 
