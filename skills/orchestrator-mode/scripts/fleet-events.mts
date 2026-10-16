@@ -459,8 +459,12 @@ function readAgents(
     }
   }
 
+  // The listing is the truth: an agent it no longer shows is gone, and its worktree claim with it;
+  // one it still shows whose read failed keeps its last good sidecar (the per-agent trouble above).
   for (const [agentId, entry] of Object.entries(target.agents)) {
-    if (!listed.has(agentId)) entry.observed = null;
+    if (listed.has(agentId)) continue;
+    entry.observed = null;
+    entry.sidecar = null;
   }
   return { events, busy, refreshed };
 }
