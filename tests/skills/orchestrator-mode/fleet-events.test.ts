@@ -1,25 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendFileSync,
-  cpSync,
   mkdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
-  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ROOT } from "../../../scripts/lib.mts";
+import { git, park, scratchRepo } from "../../helpers/scratch-repo";
 import {
   digest,
   type Program,
   Scenario,
   sessionEventsHarness,
 } from "../../helpers/session-events-scenario";
+import { sideBySide } from "../../helpers/skill-layout";
 
 // Contract tests for the fleet source through the daemon: a session directory laid out the way
 // Claude Code writes one, hand-written transcript lines with timestamps in the past so a wait ages
@@ -38,6 +37,7 @@ const D = "d4e5f60718293041";
 const E = "e5f6071829304152";
 const MARKER = "MARKER-sunflower-9c1d";
 const GIT_TIMEOUT = 60_000;
+const TRACKS = { "wt-a": "track-a", "wt-b": "track-b" };
 
 type Line = Record<string, unknown>;
 
@@ -175,56 +175,6 @@ function polled(s: Scenario, inbox: string): number {
 
 function rows(s: Scenario): Array<[string, string, string]> {
   return s.events().map((event) => [event.kind, event.text, event.url as string]);
-}
-
-function cleanEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("GIT_")) delete env[key];
-  }
-  return env;
-}
-
-function git(cwd: string, ...args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], {
-    cwd,
-    timeout: 30_000,
-    env: {
-      ...cleanEnv(),
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_AUTHOR_NAME: "fixture",
-      GIT_AUTHOR_EMAIL: "fixture@example.com",
-      GIT_COMMITTER_NAME: "fixture",
-      GIT_COMMITTER_EMAIL: "fixture@example.com",
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
-  }
-  return result.stdout.toString();
-}
-
-/** A repository of six files with two worktrees, one per track. The paths are canonical, as git and the daemon report them: a temp dir can sit behind a symlink. */
-function scratchRepo(root: string): { repo: string; wtA: string; wtB: string } {
-  const base = realpathSync(root);
-  const repo = join(base, "repo");
-  mkdirSync(repo);
-  git(repo, "init", "-b", "main");
-  writeFileSync(join(repo, "tracked.txt"), "v1\n");
-  mkdirSync(join(repo, "lib"));
-  for (const name of ["a", "b", "c", "d", "e"]) {
-    writeFileSync(join(repo, "lib", `${name}.txt`), `${name}\n`);
-  }
-  git(repo, "add", ".");
-  git(repo, "commit", "-m", "initial");
-  const wtA = join(base, "wt-a");
-  const wtB = join(base, "wt-b");
-  git(repo, "worktree", "add", wtA, "-b", "track-a");
-  git(repo, "worktree", "add", wtB, "-b", "track-b");
-  return { repo, wtA, wtB };
 }
 
 describe("fleet-events.mts", () => {
@@ -634,8 +584,11 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "own");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      const parked = park(repo);
       const cwd = process.cwd();
       try {
         // The daemon inherits the test process's cwd at spawn: park it in wt-b for the start only.
@@ -673,7 +626,10 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "gone");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
       const pathA = writeAgent(
         session,
         A,
@@ -681,7 +637,7 @@ describe("fleet-events.mts", () => {
         exchange(ago(0), "toolu_01"),
       );
       const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const parked = park(repo);
       try {
         await s.start({ inbox: box.path });
         expect(
@@ -728,7 +684,10 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "held");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
       const pathA = writeAgent(
         session,
         A,
@@ -736,7 +695,7 @@ describe("fleet-events.mts", () => {
         exchange(ago(0), "toolu_01"),
       );
       const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const parked = park(repo);
       try {
         await s.start({ inbox: box.path });
         expect(
@@ -785,8 +744,11 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "rest");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      const parked = park(repo);
       let worker: ReturnType<typeof Bun.spawn> | null = null;
       try {
         await s.start({ inbox: box.path });
@@ -807,7 +769,7 @@ describe("fleet-events.mts", () => {
         expect(polled(s, box.path)).toBe(0);
 
         // A worker in the tree while the head moves: the count resets, and quiet re-fires once it leaves.
-        worker = Bun.spawn(["sleep", "60"], { cwd: wtA, stdout: "ignore" });
+        worker = park(wtA);
         git(wtA, "commit", "--allow-empty", "-m", "worked");
         const worked = git(wtA, "rev-parse", "HEAD").trim();
         expect(polled(s, box.path)).toBe(2);
@@ -840,8 +802,11 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "wake");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      const parked = park(repo);
       const workers: Array<ReturnType<typeof Bun.spawn>> = [];
       try {
         await s.start({ inbox: box.path });
@@ -853,10 +818,10 @@ describe("fleet-events.mts", () => {
         expect(polled(s, box.path)).toBe(0);
 
         // wt-b gains a worker before its quiet is said: nothing to retract; wt-a's quiet is said.
-        workers.push(Bun.spawn(["sleep", "60"], { cwd: wtB, stdout: "ignore" }));
+        workers.push(park(wtB));
         expect(polled(s, box.path)).toBe(1);
         // wt-a gains a worker after its quiet was said: active again, once.
-        workers.push(Bun.spawn(["sleep", "60"], { cwd: wtA, stdout: "ignore" }));
+        workers.push(park(wtA));
         expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
         for (const worker of workers.splice(0)) {
@@ -891,9 +856,12 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "gone2");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
       const headB = git(wtB, "rev-parse", "HEAD").trim();
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const parked = park(repo);
       try {
         await s.start({ inbox: box.path });
         expect(
@@ -926,7 +894,10 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "lsof");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
       // A stand-in lsof the test can take down (exit 1, no output) or degrade (real output, exit 1).
       const realLsof = Bun.which("lsof");
       if (realLsof === null) throw new Error("lsof is not installed");
@@ -940,7 +911,7 @@ describe("fleet-events.mts", () => {
         { mode: 0o755 },
       );
       writeFileSync(down, "");
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const parked = park(repo);
       try {
         await s.start({ inbox: box.path, env: { PATH: `${bin}:${process.env.PATH ?? ""}` } });
         expect(
@@ -1150,14 +1121,17 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "tree");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
       writeAgent(
         session,
         A,
         { name: "builder-a", description: "build", worktreePath: wtA, worktreeBranch: "track-a" },
         [...exchange(ago(0), "toolu_01")],
       );
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const parked = park(repo);
       try {
         await s.start({ inbox: box.path });
         expect(
@@ -1362,14 +1336,17 @@ describe("fleet-events.mts", () => {
       const s = new Scenario(PROGRAM, "wide");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
-      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
       writeAgent(
         session,
         A,
         { name: "builder-a", description: "build" },
         exchange(ago(0), "toolu_01"),
       );
-      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      const parked = park(repo);
       try {
         await s.start({ inbox: box.path });
         expect(
@@ -1493,20 +1470,10 @@ describe("fleet-events.mts", () => {
 
 describe("the two skills side by side", () => {
   test("installed as sibling folders, copied or symlinked, the fleet source finds the library; with the base removed it exits 2 naming the install command", () => {
-    // bun names a script by its real path, so the layout sits under the canonical temp dir.
-    const root = realpathSync(temp.dir("fleet-events-layout-"));
-    const canon = join(root, "canonical");
-    mkdirSync(canon);
-    for (const skill of ["session-events", "orchestrator-mode"]) {
-      cpSync(join(ROOT, "skills", skill), join(canon, skill), { recursive: true });
-    }
-    const agent = join(root, "agent");
-    mkdirSync(agent);
-    for (const skill of ["session-events", "orchestrator-mode"]) {
-      symlinkSync(join(canon, skill), join(agent, skill));
-    }
-    const runtime = join(root, "runtime");
-    mkdirSync(runtime);
+    const layout = sideBySide(temp.dir("fleet-events-layout-"), [
+      "session-events",
+      "orchestrator-mode",
+    ]);
     const run = (skillsDir: string) => {
       const result = Bun.spawnSync(
         [
@@ -1516,19 +1483,23 @@ describe("the two skills side by side", () => {
           "--id",
           "layout",
         ],
-        { env: { ...process.env, SESSION_EVENTS_DIR: runtime }, stdout: "pipe", stderr: "pipe" },
+        {
+          env: { ...process.env, SESSION_EVENTS_DIR: layout.runtime },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
       );
       return { code: result.exitCode, stderr: result.stderr.toString() };
     };
-    for (const skillsDir of [canon, agent]) {
+    for (const skillsDir of [layout.canon, layout.agent]) {
       const r = run(skillsDir);
       expect(r.code).toBe(3);
       expect(r.stderr).toContain(
-        `bun "${join(canon, "orchestrator-mode", "scripts", "fleet-events.mts")}" daemon --id layout`,
+        `bun "${join(layout.canon, "orchestrator-mode", "scripts", "fleet-events.mts")}" daemon --id layout`,
       );
     }
-    rmSync(join(canon, "session-events"), { recursive: true });
-    for (const skillsDir of [canon, agent]) {
+    layout.remove("session-events");
+    for (const skillsDir of [layout.canon, layout.agent]) {
       const r = run(skillsDir);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain(
