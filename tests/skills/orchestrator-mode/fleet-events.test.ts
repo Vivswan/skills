@@ -780,6 +780,60 @@ describe("fleet-events.mts", () => {
   );
 
   test(
+    "a bare head move keeps a quiet worktree quiet: a commit from outside with a clean tree and no process is a head event and no second quiet line, while a head move with a worker in the tree resets the count so quiet re-fires once the worker leaves",
+    async () => {
+      const s = new Scenario(PROGRAM, "rest");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const { repo, wtA, wtB } = scratchRepo(s.fixtureDir);
+      const parked = Bun.spawn(["sleep", "60"], { cwd: repo, stdout: "ignore" });
+      let worker: ReturnType<typeof Bun.spawn> | null = null;
+      try {
+        await s.start({ inbox: box.path });
+        expect(
+          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
+            inbox: box.path,
+          }).code,
+        ).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(2);
+
+        // The lead restacks from outside: the tree is clean before and after, nobody is in it.
+        git(wtA, "commit", "--allow-empty", "-m", "restack");
+        const restacked = git(wtA, "rev-parse", "HEAD").trim();
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+
+        // A worker in the tree while the head moves: the count resets, and quiet re-fires once it leaves.
+        worker = Bun.spawn(["sleep", "60"], { cwd: wtA, stdout: "ignore" });
+        git(wtA, "commit", "--allow-empty", "-m", "worked");
+        const worked = git(wtA, "rev-parse", "HEAD").trim();
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
+        worker = null;
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+        expect(rows(s)).toEqual([
+          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
+          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
+          ["head", `worktree track-a: head moved to ${restacked.slice(0, 12)}`, fileUrl(wtA)],
+          ["head", `worktree track-a: head moved to ${worked.slice(0, 12)}`, fileUrl(wtA)],
+          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
+        ]);
+      } finally {
+        worker?.kill();
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
     "with --repo, a head move is head (with ahead and behind against --base), a tree collapse is wipe, an unclaimed idle worktree is quiet after two polls, a claimed one or one holding a sleep is not, and a claim ending starts the count at zero",
     async () => {
       const s = new Scenario(PROGRAM, "tree");
@@ -811,9 +865,11 @@ describe("fleet-events.mts", () => {
         git(wtB, "rm", "-r", "-q", "lib");
         git(wtB, "commit", "-m", "wipe");
         const headB = git(wtB, "rev-parse", "HEAD").trim();
-        expect(polled(s, box.path)).toBe(2);
+        // The wipe commit moved the head with a clean tree before and after, so wt-b's quiet count
+        // runs on through it and quiet lands in the same poll as the head and wipe events.
+        expect(polled(s, box.path)).toBe(3);
         expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
         expect(polled(s, box.path)).toBe(0);
         expect(rows(s)).toEqual([
           ["head", `worktree track-a: head moved to ${headA.slice(0, 12)}`, fileUrl(wtA)],
@@ -826,7 +882,7 @@ describe("fleet-events.mts", () => {
           worktrees: {
             [repo]: { branch: "main", processes: { workers: 1, shells: 0 }, quietPolls: 0 },
             [wtA]: { branch: "track-a", headSha: headA, treeFileCount: 7, quietPolls: 0 },
-            [wtB]: { branch: "track-b", headSha: headB, treeFileCount: 1, quietPolls: 3 },
+            [wtB]: { branch: "track-b", headSha: headB, treeFileCount: 1, quietPolls: 5 },
           },
         });
         // A sidecar malformed for a poll is that agent's trouble; its last good reading keeps the claim.

@@ -512,6 +512,47 @@ describe("the transcript reducer", () => {
     );
   });
 
+  test("a SendMessage to a finished named child resumes it at the message's time (the latest child under that name), a stopped one stays stopped, and an errored or unknown send resumes nothing", () => {
+    const finished = [
+      ...spawns,
+      attachment(at(10), {
+        type: "queued_command",
+        commandMode: "task-notification",
+        prompt: notice(CHILD_C),
+      }),
+      toolUse(at(11), "toolu_stop", "TaskStop", { task_id: "builder-b" }),
+      toolResult(at(11, 1), "toolu_stop"),
+    ];
+    const send = (id: string, to: string, timestamp: string): Line =>
+      toolUse(timestamp, id, "SendMessage", { to, message: "carry on", summary: "s" });
+    // The errored send comes while the reviewer is still finished, so a missing error guard would show.
+    const untouched = fold([
+      ...finished,
+      send("toolu_m4", "reviewer", at(19)),
+      toolResult(at(19, 1), "toolu_m4", { content: "no such agent", isError: true }),
+      send("toolu_m3", "nobody", at(19, 2)),
+      toolResult(at(19, 3), "toolu_m3"),
+    ]);
+    expect(untouched.children).toEqual({
+      [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
+      [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "stopped" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "finished" },
+    });
+    const resumed = fold([
+      ...finished,
+      send("toolu_m1", "reviewer", at(20)),
+      toolResult(at(20, 1), "toolu_m1"),
+      send("toolu_m2", "builder-b", at(21)),
+      toolResult(at(21, 1), "toolu_m2"),
+    ]);
+    expect(resumed.children).toEqual({
+      [CHILD_A]: { name: null, at: at(0, 1), outcome: "running" },
+      [CHILD_B]: { name: "builder-b", at: at(1, 1), outcome: "stopped" },
+      [CHILD_C]: { name: "reviewer", at: at(20, 1), outcome: "running" },
+    });
+    expect(resumed.pending).toEqual({});
+  });
+
   test("timestamps are not monotonic (a queued attachment keeps its enqueue time), and lastMovedAt never moves backwards", () => {
     const lines = [
       toolUse(at(30), "toolu_01", "Bash", { command: "bun test" }),
