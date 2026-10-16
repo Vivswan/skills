@@ -369,7 +369,7 @@ describe("the transcript reducer", () => {
     expect(isStopped(stopped, REBORN, "reviewer")).toBe(true);
   });
 
-  test("an idle notification is one bare JSON body under its own envelope tag: only its sender is finished whatever the order, a text body quoting a tag shifts nothing, a JSON body holding a tag is no notification, a batch with none interrupts", () => {
+  test("an idle notification is one bare JSON body under its own envelope tag whose top-level type says so: only its sender is finished whatever the order, a nested type field or a quoted tag is no notification, a batch with none interrupts", () => {
     const batch = (...parts: Array<[string, string]>): string =>
       parts
         .map(
@@ -405,6 +405,11 @@ describe("the transcript reducer", () => {
     ).toEqual(reviewerDone);
     const tagInJson = '{"note":"a literal <teammate-message tag","type":"idle_notification"}';
     expect(fold([...spawns, line(["reviewer", tagInJson])]).children).toEqual(running);
+    // Idleness is the body's top-level type, parsed, never a nested field that spells it.
+    const nestedType = '{"type":"message","example":{"type":"idle_notification"}}';
+    expect(fold([...spawns, line(["reviewer", nestedType])]).children).toEqual(running);
+    const reordered = '{"agent":"reviewer","type":"idle_notification"}';
+    expect(fold([...spawns, line(["reviewer", reordered])]).children).toEqual(reviewerDone);
     const interrupted = fold([
       ...spawns,
       toolUse(at(11), "toolu_09", "Bash", { command: "bun test" }),
