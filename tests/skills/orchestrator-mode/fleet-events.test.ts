@@ -488,7 +488,7 @@ describe("fleet-events.mts", () => {
   }, 30000);
 
   test(
-    "with --repo, a head move is head (with ahead and behind against --base), a tree collapse is wipe, and a worktree no sidecar claims with no worker and no change is quiet after two polls; a claimed one and one holding a sleep are not",
+    "with --repo, a head move is head (with ahead and behind against --base), a tree collapse is wipe, an unclaimed idle worktree is quiet after two polls, a claimed one or one holding a sleep is not, and a claim ending starts the count at zero",
     async () => {
       const s = new Scenario(PROGRAM, "tree");
       const box = await s.inbox("a");
@@ -533,10 +533,22 @@ describe("fleet-events.mts", () => {
         expect(s.state().targets[session.dir]).toMatchObject({
           worktrees: {
             [repo]: { branch: "main", processes: { workers: 1, shells: 0 }, quietPolls: 0 },
-            [wtA]: { branch: "track-a", headSha: headA, treeFileCount: 7 },
+            [wtA]: { branch: "track-a", headSha: headA, treeFileCount: 7, quietPolls: 0 },
             [wtB]: { branch: "track-b", headSha: headB, treeFileCount: 1, quietPolls: 3 },
           },
         });
+        // The claim ends: the count starts from zero, so two unchanged unclaimed polls say quiet.
+        writeFileSync(
+          join(session.subagents, `agent-${A}.meta.json`),
+          JSON.stringify({ name: "builder-a", description: "build" }),
+        );
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+        expect(rows(s).at(-1)).toEqual([
+          "quiet",
+          "worktree track-a: no worker process and no change for 2 polls",
+          fileUrl(wtA),
+        ]);
       } finally {
         parked.kill();
       }
@@ -545,13 +557,22 @@ describe("fleet-events.mts", () => {
     GIT_TIMEOUT,
   );
 
-  test("a FIFO in place of a transcript and a vanished subagents dir are trouble, each said once; a poll that could not read is no observation, so a wait seen once before the outage is said only after it is seen again", async () => {
+  test("a FIFO transcript, a directory for a sidecar, and a vanished subagents dir are trouble, said once, one agent's while the rest are polled; a failed read is no observation, so a wait seen before an outage is said once seen again", async () => {
     const s = new Scenario(PROGRAM, "fifo");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
     const lines = [toolUse(ago(5), "toolu_01", "Bash", { command: "bun test" })];
     const meta = { name: "builder-a", description: "build" };
     const pathA = writeAgent(session, A, meta, lines);
+    writeAgent(
+      session,
+      C,
+      { name: "builder-c", description: "build" },
+      exchange(ago(0), "toolu_c1", C),
+    );
+    const sidecarC = join(session.subagents, `agent-${C}.meta.json`);
+    rmSync(sidecarC);
+    mkdirSync(sidecarC);
     const fifo = join(session.subagents, `agent-${B}.jsonl`);
     expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
     await s.start({ inbox: box.path });
@@ -569,6 +590,11 @@ describe("fleet-events.mts", () => {
         "trouble",
         `fleet: cannot read agent-${B}.jsonl: ${fifo} is not a regular file`,
         fileUrl(fifo),
+      ],
+      [
+        "trouble",
+        expect.stringMatching(new RegExp(`^fleet: cannot read agent-${C}\\.meta\\.json: EISDIR`)),
+        fileUrl(sidecarC),
       ],
       ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
       ["agent", "agent builder-a: waiting on Bash for 5 min", fileUrl(pathA)],
