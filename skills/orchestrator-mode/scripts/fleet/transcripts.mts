@@ -17,12 +17,15 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-const TASK_NOTIFICATION = /<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/;
+// One injected text can carry several notices: two jobs finishing in one turn arrive as two blocks.
+const TASK_NOTIFICATION = /<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/g;
 const TASK_ID = /<task-id>\s*([^<\s][^<]*?)\s*<\/task-id>/;
 // Each teammate envelope with its body: the regex locates, the parsed body decides. A body with a
 // tag inside is text, never a notice, so it is not captured.
 const TEAMMATE_ENVELOPE =
   /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>([^<]*)<\\?\/teammate-message>/g;
+// Whatever a teammate's message quotes, a notice included, is that teammate's words.
+const TEAMMATE_SPAN = /<\\?teammate-message\s[^>]*>[\s\S]*?<\\?\/teammate-message>/g;
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
 const NEWLINE = 0x0a;
 
@@ -141,11 +144,14 @@ function initialActivity(): Activity {
   };
 }
 
-/** The task id inside the first `<task-notification>` block of `text`, or null when there is none. */
-function taskIdOf(text: string): string | null {
-  const block = TASK_NOTIFICATION.exec(text);
-  if (block === null) return null;
-  return TASK_ID.exec(block[1] as string)?.[1] ?? null;
+/** The task ids of every `<task-notification>` block in `text`, in order. */
+function taskIdsOf(text: string): string[] {
+  const ids: string[] = [];
+  for (const block of text.matchAll(TASK_NOTIFICATION)) {
+    const id = TASK_ID.exec(block[1] as string)?.[1];
+    if (id !== undefined) ids.push(id);
+  }
+  return ids;
 }
 
 // The harness writes an idle notice as one bare JSON object whose top-level type says so; a nested
@@ -231,22 +237,21 @@ function reduceAssistant(state: Activity, line: Record<string, unknown>, at: str
   }
 }
 
-// A string arriving while a call is pending reached the agent before any result could: the call
-// was abandoned. A notice is not an interruption: it is queued and delivered between turns.
-function reduceInjected(state: Activity, text: string): void {
-  if (text.startsWith("<task-notification>")) {
-    const taskId = taskIdOf(text);
-    if (taskId !== null) finishTask(state, taskId);
-    return;
-  }
-
-  const idle = idleTeammatesOf(text);
-  if (idle.length > 0) {
+// A text arriving while a call is pending reached the agent before any result could: the call was
+// abandoned. Notices are not interruptions: they are queued and delivered between turns, one per
+// text, and every one counts. A notice is a text that IS one, from its first character; a notice
+// quoted inside a teammate's message is that teammate's words.
+function reduceInjected(state: Activity, texts: string[]): void {
+  let notices = 0;
+  for (const text of texts) {
+    const notice = text.trimStart().startsWith("<task-notification>");
+    const tasks = notice ? taskIdsOf(text.replace(TEAMMATE_SPAN, "")) : [];
+    const idle = idleTeammatesOf(text);
+    for (const taskId of tasks) finishTask(state, taskId);
     for (const name of idle) finishChild(state, name);
-    return;
+    notices += tasks.length + idle.length;
   }
-
-  state.pending = {};
+  if (notices === 0) state.pending = {};
 }
 
 function reduceResults(
@@ -282,13 +287,13 @@ function reduceResults(
   }
 }
 
-// A user line with no tool_result block is injected input whatever its form: the text blocks of an
-// array are read as the string they would have been.
+// A user line with no tool_result block is injected input whatever its form: each text block of an
+// array is read as a string of its own.
 function reduceUser(state: Activity, line: Record<string, unknown>, at: string): void {
   state.turn = "open";
   const content = record(line.message)?.content;
   if (typeof content === "string") {
-    reduceInjected(state, content);
+    reduceInjected(state, [content]);
     return;
   }
   if (!Array.isArray(content)) return;
@@ -300,7 +305,7 @@ function reduceUser(state: Activity, line: Record<string, unknown>, at: string):
   }
 
   const texts = parts.map((part) => (part?.type === "text" ? (str(part.text) ?? "") : ""));
-  reduceInjected(state, texts.join("\n"));
+  reduceInjected(state, texts);
 }
 
 // A subagent's file sees a notice only as a queued_command attachment. Every other attachment is
@@ -311,8 +316,7 @@ function reduceAttachment(state: Activity, line: Record<string, unknown>): void 
     return;
   }
 
-  const taskId = taskIdOf(str(attachment.prompt) ?? "");
-  if (taskId !== null) finishTask(state, taskId);
+  for (const taskId of taskIdsOf(str(attachment.prompt) ?? "")) finishTask(state, taskId);
 }
 
 /**
