@@ -167,6 +167,46 @@ function fileUrl(path: string): string {
   return pathToFileURL(path).href;
 }
 
+/** The lead's transcript lines spawning a named teammate whose result carries the agent id. */
+function spawnLines(id: string, name: string, agentId: string): Line[] {
+  return [
+    toolUse(
+      ago(30),
+      id,
+      "Agent",
+      { name, description: "build", subagent_type: "general-purpose", prompt: "build" },
+      null,
+    ),
+    toolResult(ago(30), id, {
+      toolUseResult: { status: "teammate_spawned", agentId, name },
+      agentId: null,
+    }),
+  ];
+}
+
+/** The saved target as JSON holds it: the maps a test rewrites into an older version's shape. */
+interface PersistedTarget {
+  polls: number;
+  subagentsListed?: boolean;
+  lead: { state: Record<string, unknown> };
+  agents: Record<string, { state: Record<string, unknown> }>;
+  worktrees: Record<string, Record<string, unknown>>;
+}
+
+function persistedTarget(s: Scenario): PersistedTarget {
+  const targets = Object.values(s.state().targets);
+  expect(targets).toHaveLength(1);
+  return targets[0] as PersistedTarget;
+}
+
+/** Rewrites the one saved target in place while the daemon is stopped. */
+function rewriteState(s: Scenario, mutate: (target: PersistedTarget) => void): void {
+  const state = s.state();
+  for (const target of Object.values(state.targets as Record<string, PersistedTarget>))
+    mutate(target);
+  writeFileSync(s.files().state, JSON.stringify(state));
+}
+
 function polled(s: Scenario, inbox: string): number {
   const result = s.run(["poll"], { inbox });
   expect(result.code).toBe(0);
@@ -947,6 +987,153 @@ describe("fleet-events.mts", () => {
     },
     GIT_TIMEOUT,
   );
+
+  test("a state file from before `stops` and `since` loads: the poll takes the defaults, says the stop it then reads, and saves the current shape", async () => {
+    const s = new Scenario(PROGRAM, "older");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    appendLines(session.sessionFile, spawnLines("toolu_spawn_a", "builder-a", A));
+    const pathA = writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build" },
+      exchange(ago(0), "toolu_a1"),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+    s.stop({ inbox: box.path });
+
+    // What the version before `stops` wrote: activities without it, children without `since`.
+    rewriteState(s, (target) => {
+      const older = (activity: Record<string, unknown>) => {
+        delete activity.stops;
+        for (const child of Object.values(
+          activity.children as Record<string, Record<string, unknown>>,
+        ))
+          delete child.since;
+      };
+      older(target.lead.state);
+      for (const entry of Object.values(target.agents)) older(entry.state);
+    });
+    // The lead stopped A while the daemon was down; the restart polls at once and says it.
+    appendLines(session.sessionFile, [
+      toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
+      toolResult(ago(2), "toolu_stop", { agentId: null }),
+    ]);
+    await s.start({ inbox: box.path });
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)]]);
+    const saved = persistedTarget(s);
+    expect(saved.lead.state.stops).toEqual({});
+    const child = (saved.lead.state.children as Record<string, Record<string, unknown>>)[A];
+    expect(child?.since).toBe(child?.at);
+    expect(s.log()).not.toContain("poll failed");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("worktree rows saved before `tree` and `said` load: the quiet count and the said quiet carry over, so a worker arriving is active again", async () => {
+    const s = new Scenario(PROGRAM, "olderwt");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build" },
+      exchange(ago(0), "toolu_a1"),
+    );
+    const {
+      repo,
+      worktrees: { "wt-a": wtA },
+    } = scratchRepo(s.fixtureDir, TRACKS);
+    const parked = park(repo);
+    let worker: ReturnType<typeof park> | null = null;
+    try {
+      await s.start({ inbox: box.path });
+      expect(
+        s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
+          inbox: box.path,
+        }).code,
+      ).toBe(0);
+      expect(polled(s, box.path)).toBe(0);
+      expect(polled(s, box.path)).toBe(2);
+      s.stop({ inbox: box.path });
+
+      // What the version before `tree` and `said` wrote: rows with a fingerprint and a quiet count only.
+      rewriteState(s, (target) => {
+        for (const row of Object.values(target.worktrees)) {
+          delete row.tree;
+          delete row.said;
+        }
+      });
+      await s.start({ inbox: box.path });
+      expect(polled(s, box.path)).toBe(0);
+      worker = park(wtA);
+      expect(polled(s, box.path)).toBe(1);
+      expect(rows(s).slice(2)).toEqual([
+        ["active", "worktree track-a: active again", fileUrl(wtA)],
+      ]);
+      s.stop({ inbox: box.path });
+    } finally {
+      parked.kill();
+      worker?.kill();
+    }
+  }, 30000);
+
+  test("a saved map that is not an object starts the target over at its baseline instead of failing every poll", async () => {
+    const s = new Scenario(PROGRAM, "reshape");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    appendLines(session.sessionFile, spawnLines("toolu_spawn_a", "builder-a", A));
+    const pathA = writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build" },
+      exchange(ago(0), "toolu_a1"),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+    expect(persistedTarget(s).polls).toBe(2);
+    s.stop({ inbox: box.path });
+
+    rewriteState(s, (target) => {
+      target.lead.state.children = 5;
+    });
+    // The restart's own poll is the new baseline; this one is the second.
+    await s.start({ inbox: box.path });
+    expect(polled(s, box.path)).toBe(0);
+    expect(persistedTarget(s).polls).toBe(2);
+    expect(s.log()).toContain("starts over at its baseline");
+    expect(s.log()).not.toContain("poll failed");
+    appendLines(session.sessionFile, [
+      toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
+      toolResult(ago(2), "toolu_stop", { agentId: null }),
+    ]);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s)).toEqual([["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)]]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a saved target from before `subagentsListed` that polled an empty subagents directory treats its disappearance as a failed listing, not an empty fleet", async () => {
+    const s = new Scenario(PROGRAM, "olderdir");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    s.stop({ inbox: box.path });
+
+    rewriteState(s, (target) => {
+      delete target.subagentsListed;
+    });
+    rmSync(session.subagents, { recursive: true });
+    await s.start({ inbox: box.path });
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
 
   test("a parent's child wait is its oldest current run: a finished elder resumed by message counts from the message, so the child spawned meanwhile is the wait named", async () => {
     const s = new Scenario(PROGRAM, "elder");

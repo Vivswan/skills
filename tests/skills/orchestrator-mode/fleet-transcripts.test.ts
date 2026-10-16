@@ -16,6 +16,7 @@ import {
   initialTranscript,
   isStopped,
   locateSession,
+  normalizeTranscript,
   readIncrement,
   readSidecar,
   readTranscript,
@@ -573,6 +574,32 @@ describe("the transcript reducer", () => {
     const children = fold(stoppedByName).children;
     expect(children[CHILD_C]?.outcome).toBe("stopped");
     expect(children[CHILD_B]).toMatchObject({ at: at(1, 1), outcome: "running" });
+  });
+
+  test("a saved transcript without `stops` is replayed from its start, since its children's `at` may be resume times; one with `stops` keeps its cursor, a cursor without `size` taking its offset; a map that is not an object is no transcript", () => {
+    const children = {
+      [CHILD_B]: { name: "reviewer", at: at(20, 1), outcome: "running" },
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "finished" },
+    };
+    const saved = {
+      cursor: { offset: 4096, ino: 7, size: 4200 },
+      state: { ...activity({}), children },
+    };
+    const { stops: _stops, ...withoutStops } = saved.state;
+    expect(normalizeTranscript({ ...saved, state: withoutStops })).toEqual(initialTranscript());
+
+    const kept = normalizeTranscript({
+      cursor: { offset: 4096 },
+      state: { ...saved.state, children: { [CHILD_C]: { ...children[CHILD_C], since: at(2, 1) } } },
+    });
+    expect(kept?.cursor).toEqual({ offset: 4096, ino: null, size: 4096 });
+    expect(kept?.state.children).toEqual({
+      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "finished" },
+    });
+
+    expect(normalizeTranscript({ ...saved, state: { ...saved.state, children: 5 } })).toBeNull();
+    expect(normalizeTranscript({ ...saved, state: { ...withoutStops, children: 5 } })).toBeNull();
+    expect(normalizeTranscript({ cursor: "far", state: saved.state })).toBeNull();
   });
 
   test("a SendMessage to a finished named child (the latest spawn under that name) resumes it as of the message, keeping its spawn time; a stopped one stays stopped, and an errored or unknown send resumes nothing", () => {

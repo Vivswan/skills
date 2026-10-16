@@ -108,13 +108,20 @@ export interface SessionPaths {
   subagentsDir: string;
 }
 
-function record(value: unknown): Record<string, unknown> | null {
+/** A JSON object, or null for anything else. */
+export function record(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
 }
 
-function str(value: unknown): string | null {
+/** A string, or null for anything else. */
+export function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+/** A finite number, or null for anything else. */
+export function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function parseRecord(text: string): Record<string, unknown> | null {
@@ -454,6 +461,85 @@ export function initialTranscript(): Transcript {
   return { cursor: { offset: 0, ino: null, size: 0 }, state: initialActivity() };
 }
 
+// --- persisted state from any version --------------------------------------------------------
+// A daemon restarted on newer code reads the state the older code saved. A map or field added
+// since takes its default here, at the load; a shape no version wrote is null, and the caller
+// starts that target over.
+
+/** A saved map read entry by entry: absent is empty, a non-object or a bad entry is null. */
+export function normalizeMap<T>(
+  value: unknown,
+  entry: (item: unknown) => T | null,
+): Record<string, T> | null {
+  if (value === undefined) return {};
+  const map = record(value);
+  if (map === null) return null;
+  const made: Record<string, T> = {};
+  for (const [key, item] of Object.entries(map)) {
+    const read = entry(item);
+    if (read === null) return null;
+    made[key] = read;
+  }
+  return made;
+}
+
+function normalizePending(value: unknown): PendingCall | null {
+  const call = record(value);
+  const tool = str(call?.tool);
+  const at = str(call?.at);
+  if (call === null || tool === null || at === null) return null;
+  return { tool, at, taskId: str(call.taskId) };
+}
+
+function normalizeJob(value: unknown): Job | null {
+  const at = str(record(value)?.at);
+  return at === null ? null : { at };
+}
+
+function normalizeChild(value: unknown): Child | null {
+  const child = record(value);
+  const at = str(child?.at);
+  const outcome = child?.outcome;
+  if (child === null || at === null) return null;
+  if (outcome !== "running" && outcome !== "finished" && outcome !== "stopped") return null;
+  return { name: str(child.name), at, since: str(child.since) ?? at, outcome };
+}
+
+/** A saved activity: `stops` and a child's `since` came later and take their defaults; a shape no version wrote is null. */
+export function normalizeActivity(value: unknown): Activity | null {
+  const saved = record(value);
+  if (saved === null) return null;
+  const pending = normalizeMap(saved.pending, normalizePending);
+  const jobs = normalizeMap(saved.jobs, normalizeJob);
+  const children = normalizeMap(saved.children, normalizeChild);
+  const stops = normalizeMap(saved.stops, str);
+  if (pending === null || jobs === null || children === null || stops === null) return null;
+  return {
+    lastMovedAt: str(saved.lastMovedAt),
+    turn: saved.turn === "ended" ? "ended" : "open",
+    pending,
+    jobs,
+    children,
+    stops,
+    lines: num(saved.lines) ?? 0,
+    skipped: num(saved.skipped) ?? 0,
+  };
+}
+
+/** A saved transcript: its cursor and activity, read from the start again when saved before `stops`; null for a shape no version wrote. */
+export function normalizeTranscript(value: unknown): Transcript | null {
+  const saved = record(value);
+  const cursor = record(saved?.cursor);
+  const offset = num(cursor?.offset);
+  const state = normalizeActivity(saved?.state);
+  if (cursor === null || offset === null || state === null) return null;
+  // The version that added `stops` also stopped moving a resumed child's `at` to the message, so
+  // an older activity's `at` values are not the spawn times the name lookup needs: replay the file.
+  if (record(saved?.state)?.stops === undefined) return initialTranscript();
+  // A cursor saved without `size` has read `offset` bytes: a file smaller than that restarts.
+  return { cursor: { offset, ino: num(cursor.ino), size: num(cursor.size) ?? offset }, state };
+}
+
 /**
  * Reads what `path` appended since the last call into `transcript`, in place. A file that shrank
  * or was replaced starts the state over, silently.
@@ -503,6 +589,11 @@ export function readSidecar(path: string): Sidecar | null {
   const meta = parseRecord(text);
   if (meta === null) throw new Error(`${path} is not a JSON object`);
 
+  return sidecarOf(meta, new Date(opened.stat.mtimeMs).toISOString());
+}
+
+/** The sidecar's fields read off its JSON object; every field but `spawnedAt` is a string or null. */
+export function sidecarOf(meta: Record<string, unknown>, spawnedAt: string): Sidecar {
   return {
     name: str(meta.name),
     description: str(meta.description),
@@ -511,7 +602,7 @@ export function readSidecar(path: string): Sidecar | null {
     worktreePath: str(meta.worktreePath),
     worktreeBranch: str(meta.worktreeBranch),
     toolUseId: str(meta.toolUseId),
-    spawnedAt: new Date(opened.stat.mtimeMs).toISOString(),
+    spawnedAt,
   };
 }
 

@@ -26,10 +26,16 @@ import {
   initialTranscript,
   isStopped,
   locateSession,
+  normalizeMap,
+  normalizeTranscript,
+  num,
   projectsRoot,
   readSidecar,
   readTranscript,
+  record,
   type Sidecar,
+  sidecarOf,
+  str,
   type Transcript,
 } from "./fleet/transcripts.mts";
 
@@ -768,11 +774,105 @@ async function pollTarget(target: Target, nowMs: number, io: Io): Promise<PollRe
   };
 }
 
+/** A saved worktree row: `tree` and `said` came later and are read off the fingerprint and the quiet count; a shape no version wrote is null. */
+function normalizeWorktree(value: unknown): WorktreeEntry | null {
+  const saved = record(value);
+  if (saved === null) return null;
+  const fingerprint = str(saved.fingerprint);
+  const processes = record(saved.processes);
+  const quietPolls = num(saved.quietPolls) ?? 0;
+  const saidQuiet =
+    saved.said === "quiet" || (saved.said === undefined && quietPolls >= QUIET_POLLS);
+  return {
+    branch: str(saved.branch),
+    headSha: str(saved.headSha),
+    treeFileCount: num(saved.treeFileCount),
+    fingerprint,
+    tree:
+      str(saved.tree) ??
+      (fingerprint === null ? null : fingerprint.slice(fingerprint.indexOf(" ") + 1)),
+    processes: { workers: num(processes?.workers) ?? 0, shells: num(processes?.shells) ?? 0 },
+    quietPolls,
+    said: saidQuiet ? "quiet" : null,
+  };
+}
+
+/** A saved agent entry: its transcript, path, sidecar, and the three situation keys; a shape no version wrote is null. */
+function normalizeAgent(value: unknown): AgentEntry | null {
+  const saved = record(value);
+  const transcript = normalizeTranscript(value);
+  const path = str(saved?.path);
+  if (saved === null || transcript === null || path === null) return null;
+  let sidecar: Sidecar | null = null;
+  if (saved.sidecar !== null && saved.sidecar !== undefined) {
+    const meta = record(saved.sidecar);
+    const spawnedAt = str(meta?.spawnedAt);
+    if (meta === null || spawnedAt === null) return null;
+    sidecar = sidecarOf(meta, spawnedAt);
+  }
+  return {
+    ...transcript,
+    path,
+    sidecar,
+    observed: str(saved.observed),
+    said: str(saved.said),
+    baseline: str(saved.baseline),
+  };
+}
+
+/**
+ * The target as the last poll saved it, read back in the shape that version used: maps and fields
+ * added since take their defaults. A shape no version wrote starts the target over at its baseline,
+ * with its configuration kept, and the log says so.
+ */
+function normalizeTarget(saved: Target, key: string, io: Io): Target {
+  const raw = saved as unknown as Record<string, unknown>;
+  const config = {
+    form: saved.form,
+    sessionFile: saved.sessionFile,
+    subagentsDir: saved.subagentsDir,
+    repo: saved.repo,
+    base: saved.base,
+    quietAfterMinutes: saved.quietAfterMinutes,
+  };
+  const lead = normalizeTranscript(raw.lead);
+  const agents = normalizeMap(raw.agents, normalizeAgent);
+  const worktrees = normalizeMap(raw.worktrees, normalizeWorktree);
+  const trouble = normalizeMap(raw.trouble, str);
+  if (lead === null || agents === null || worktrees === null || trouble === null) {
+    io.log(
+      `${key}: the saved state is in no shape this daemon writes; the target starts over at its baseline`,
+    );
+    return {
+      ...config,
+      polls: 0,
+      agents: {},
+      lead: initialTranscript(),
+      worktrees: {},
+      trouble: {},
+      subagentsListed: false,
+    };
+  }
+  const polls = num(raw.polls) ?? 0;
+  return {
+    ...config,
+    polls,
+    agents,
+    lead,
+    worktrees,
+    trouble,
+    // Before the flag existed a poll advanced only past a listing, so a polled target had one.
+    subagentsListed: raw.subagentsListed === undefined ? polls > 0 : raw.subagentsListed === true,
+  };
+}
+
 async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult> {
   const nowMs = Date.now();
   const events: EventInput[] = [];
   let busy = false;
-  for (const target of Object.values(targets)) {
+  for (const [key, saved] of Object.entries(targets)) {
+    const target = normalizeTarget(saved, key, io);
+    targets[key] = target;
     const result = await pollTarget(target, nowMs, io);
     events.push(...result.events);
     busy ||= result.busy;
