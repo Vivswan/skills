@@ -461,6 +461,57 @@ describe("the transcript reducer", () => {
     expect(interrupted.pending).toEqual({});
   });
 
+  test("every notice in one injected text counts: two in one string clear both jobs, two text blocks clear both, a notice beside an idle envelope clears the job and finishes the child, and a notice quoted inside a teammate's message is not one", () => {
+    const twoJobs = [
+      ...launch,
+      toolUse(at(1), "toolu_02", "Bash", { command: "bun run lint", run_in_background: true }),
+      toolResult(at(1, 1), "toolu_02", {
+        toolUseResult: { backgroundTaskId: "b9z8y7x6w", stdout: "", stderr: "" },
+      }),
+    ];
+    const both = `${notice("b1a2b3c4d")}\n${notice("b9z8y7x6w", "failed")}`;
+    expect(fold([...twoJobs, userText(at(5), both)])).toEqual(
+      activity({ lastMovedAt: at(5), lines: 5 }),
+    );
+    const blocks: Line = {
+      ...envelope("user", at(5)),
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: notice("b1a2b3c4d") },
+          { type: "text", text: notice("b9z8y7x6w", "failed") },
+        ],
+      },
+    };
+    expect(fold([...twoJobs, blocks])).toEqual(activity({ lastMovedAt: at(5), lines: 5 }));
+    const idleReviewer =
+      '<teammate-message teammate_id="reviewer" summary="s">\n{"type":"idle_notification","agent":"reviewer"}\n</teammate-message>';
+    const mixed = fold([
+      ...spawns,
+      ...launch,
+      userText(at(10), `${notice("b1a2b3c4d")}\n${idleReviewer}`),
+    ]);
+    expect(mixed.jobs).toEqual({});
+    expect(mixed.children[CHILD_C]?.outcome).toBe("finished");
+    expect(mixed.children[CHILD_A]?.outcome).toBe("running");
+    // A notice quoted inside a teammate's message is that teammate's words: the job runs on, and the
+    // message interrupts the pending call like any other.
+    const quoted = `<teammate-message teammate_id="reviewer" summary="example">\nUse this parser fixture: ${notice("b1a2b3c4d")}\n</teammate-message>`;
+    const interrupted = fold([
+      ...launch,
+      toolUse(at(2), "toolu_09", "Read", { file_path: "/home/user/repo/README.md" }),
+      userText(at(3), quoted),
+    ]);
+    expect(interrupted).toEqual(
+      activity({ lastMovedAt: at(3), jobs: { b1a2b3c4d: { at: at(0, 1) } }, lines: 4 }),
+    );
+    // A real notice up front does not lend its standing to a notice quoted further down.
+    const quotedB = `<teammate-message teammate_id="reviewer" summary="example">\nUse this parser fixture: ${notice("b9z8y7x6w")}\n</teammate-message>`;
+    expect(fold([...twoJobs, userText(at(5), `${notice("b1a2b3c4d")}\n${quotedB}`)])).toEqual(
+      activity({ lastMovedAt: at(5), jobs: { b9z8y7x6w: { at: at(1, 1) } }, lines: 5 }),
+    );
+  });
+
   test("timestamps are not monotonic (a queued attachment keeps its enqueue time), and lastMovedAt never moves backwards", () => {
     const lines = [
       toolUse(at(30), "toolu_01", "Bash", { command: "bun test" }),
