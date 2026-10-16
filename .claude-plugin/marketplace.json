@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Public repository for agent skills and plugin-ready workflows",
-    "version": "1.11.0"
+    "version": "1.12.0"
   },
   "plugins": [
     {
@@ -16,10 +16,30 @@
       "source": "./"
     },
     {
-      "name": "xeno",
-      "description": "Vendored copies of other repositories' skills, pinned to an upstream commit and refreshed nightly",
-      "source": "./xeno",
-      "skills": ["./design-taste-frontend", "./frontend-design", "./unslop"]
+      "name": "design-taste-frontend",
+      "description": "Art direction for public-facing web pages, dealt from a library of researched directions and held to a no-slop house style with a browser inspector",
+      "source": {
+        "source": "git-subdir",
+        "url": "Leonxlnx/taste-skill",
+        "path": "skills/taste-skill"
+      },
+      "skills": ["./"]
+    },
+    {
+      "name": "frontend-design",
+      "description": "Distinctive, intentional visual design for new or reshaped UI: aesthetic direction, typography, and choices that do not read as templated defaults",
+      "source": {
+        "source": "git-subdir",
+        "url": "anthropics/skills",
+        "path": "skills/frontend-design"
+      },
+      "skills": ["./"]
+    },
+    {
+      "name": "unslop",
+      "description": "Cuts AI tells from any writing",
+      "source": { "source": "git-subdir", "url": "cursor/plugins", "path": "pstack/skills/unslop" },
+      "skills": ["./"]
     }
   ]
 }

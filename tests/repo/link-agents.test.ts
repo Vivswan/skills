@@ -158,7 +158,7 @@ function pruneFixture(): PruneFixture {
   const agentDir = join(root, "claude-skills");
   mkdirSync(agentDir);
   const options = (overrides: Partial<PruneOptions> = {}): PruneOptions => ({
-    repoSkillsDirs: [repoSkills, join(root, "repo", "xeno")],
+    repoSkillsDirs: [repoSkills, join(root, "repo", "more-skills")],
     currentSkills: new Set(["demo-skill"]),
     agentsSkillsDir: agentsSkills,
     agentSkillDirs: [agentDir],
@@ -180,17 +180,17 @@ function entryExists(path: string): boolean {
 }
 
 describe("repoSkillSources", () => {
-  test("maps each name to its one directory, skills and xeno alike", () => {
-    const sources = repoSkillSources(["/repo/skills/a", "/repo/xeno/b"]);
+  test("maps each name to its one directory, whichever directory ships it", () => {
+    const sources = repoSkillSources(["/repo/skills/a", "/repo/more-skills/b"]);
     expect([...sources.entries()]).toEqual([
       ["a", "/repo/skills/a"],
-      ["b", "/repo/xeno/b"],
+      ["b", "/repo/more-skills/b"],
     ]);
   });
 
-  test("a name shipped from both skills/ and xeno/ fails instead of linking one and reporting the other", () => {
+  test("a name shipped from two directories fails instead of linking one and reporting the other", () => {
     expectCheckFailure(
-      () => repoSkillSources(["/repo/skills/dup", "/repo/xeno/dup"]),
+      () => repoSkillSources(["/repo/skills/dup", "/repo/more-skills/dup"]),
       /skill "dup" has two sources/,
     );
   });
@@ -322,13 +322,13 @@ describe("pruneStaleSkills", () => {
     expect(entryExists(join(agentsSkills, ".DS_Store"))).toBe(true);
   });
 
-  test("prunes a dangling symlink into this repo's xeno dir: vendored skills are ours too", () => {
+  test("prunes a dangling symlink into any of this repo's skill dirs, not only the first", () => {
     const f = pruneFixture();
-    const gone = join(f.root, "repo", "xeno", "retired-vendored");
-    symlinkSync(gone, join(f.agentsSkills, "retired-vendored"), "dir");
+    const gone = join(f.root, "repo", "more-skills", "retired-skill");
+    symlinkSync(gone, join(f.agentsSkills, "retired-skill"), "dir");
     const actions = pruneStaleSkills(f.options());
     expect(actions.map((a) => a.kind)).toEqual(["pruned"]);
-    expect(entryExists(join(f.agentsSkills, "retired-vendored"))).toBe(false);
+    expect(entryExists(join(f.agentsSkills, "retired-skill"))).toBe(false);
   });
 
   test("prunes a symlink dangling several levels below this repo's skills dir", () => {

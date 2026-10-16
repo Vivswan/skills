@@ -438,6 +438,19 @@ describe("validateMarketplace", () => {
     }
   });
 
+  test("leaves an entry whose source object names another repository to Claude Code", () => {
+    const root = tempDir();
+    const upstream = { source: "git-subdir", url: "example-org/example", path: "skills/one" };
+    const entries = [
+      { name: "x-y", source: "./" },
+      { name: "one", source: upstream, skills: ["./"] },
+    ];
+    expect(run(root, { name: "x-y", plugins: entries })).toEqual([]);
+    expect(run(root, { name: "x-y", plugins: [{ name: "one", source: {} }] })).toEqual([
+      "marketplace.json: plugin 'one' needs a source path (the starter seeds \"./\") or a source object naming another repository",
+    ]);
+  });
+
   test("accepts a single skill path string, as the marketplace schema allows", () => {
     const root = tempDir();
     mkdirSync(join(root, "skills", "one-skill"), { recursive: true });

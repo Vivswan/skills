@@ -22,8 +22,8 @@ import { ROOT } from "../../scripts/lib.mts";
  * The fix is never a hand edit: paste `bun <script> --help`, run from the repository root.
  */
 
-/** Not pages of this repository: dependencies and vendored copies. Dot directories (.git, .build, .claude) are outside a glob by default. */
-const SKIPPED_DIRS = new Set(["node_modules", "xeno"]);
+/** Not pages of this repository: dependencies. Dot directories (.git, .build, .claude) are outside a glob by default. */
+const SKIPPED_DIRS = new Set(["node_modules"]);
 /** A dependency install plus a bundle on the first run; the next runs take the built bundle. */
 const BUILD_TIMEOUT_MS = 180_000;
 

@@ -15,7 +15,7 @@ import { tempDirs } from "../helpers/temp-dirs";
 
 const temp = tempDirs();
 
-// scripts/install-hooks.mts (the package "prepare" script) copies the
+// scripts/install-hooks.mts (`bun run hooks`, once per clone) copies the
 // dispatcher into the repository's hooks directory and removes any stale
 // core.hooksPath, so hooks work identically in the main checkout and every
 // linked worktree, and a checkout without hook logic fails closed at commit
@@ -342,7 +342,7 @@ describe("install-hooks", () => {
   });
 
   test("a transient GIT_CONFIG_GLOBAL mask cannot hide the global hooksPath", () => {
-    // The reported bypass: `GIT_CONFIG_GLOBAL=/dev/null bun install` would
+    // The reported bypass: `GIT_CONFIG_GLOBAL=/dev/null bun run hooks` would
     // blind the survivor check while every later UNMASKED commit still
     // resolves ~/.gitconfig's hooksPath and silently skips the dispatcher.
     // The installer scrubs the selector, reads the real global file, and

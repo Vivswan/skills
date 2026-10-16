@@ -5,15 +5,11 @@
  * `bun scripts/<name>.mts` works on a fresh checkout without an install step.
  */
 
-import { lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 export const ROOT = resolve(import.meta.dir, "..");
 export const SKILLS_DIR = join(ROOT, "skills");
-/** Vendored copies of other repositories' skills, beside skills/ (ours); scripts/sync-xeno.mts is their only writer. */
-export const XENO_DIR = join(ROOT, "xeno");
-/** The marketplace plugin that groups the vendored copies under their own CLI heading ("Xeno"). */
-export const XENO_PLUGIN = "xeno";
 
 export const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -174,17 +170,6 @@ export function skillDirs(): string[] {
     .sort();
   if (dirs.length === 0) fail("skills/: no public skills found");
   return dirs;
-}
-
-/** The vendored external skills, one directory each under xeno/; none when the folder is absent. */
-export function xenoSkillDirs(): string[] {
-  const stat = lstatSync(XENO_DIR, { throwIfNoEntry: false });
-  if (!stat) return [];
-  if (!stat.isDirectory()) fail("xeno/: must be a real directory, not a symlink");
-  return readdirSync(XENO_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => join(XENO_DIR, entry.name))
-    .sort();
 }
 
 export function walkFiles(dir: string): string[] {

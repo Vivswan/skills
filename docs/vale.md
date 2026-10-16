@@ -1,16 +1,16 @@
 # Vale styles
 
-Three skills ship their rules as [Vale](https://vale.sh) styles, each inside its own folder under `vale/`. A consumer pins this repository by sha and points Vale at the checkout root, so a skill and its lint move together, vendored skills included.
+Two skills ship their rules as [Vale](https://vale.sh) styles, each inside its own folder under `vale/`. A consumer pins this repository by sha and points Vale at the checkout root, so a skill and its lint move together.
 
 | Rule | Skill | What it reports |
 |---|---|---|
 | `skills.working-text.vale.UnitLength` | `/working-text` | a paragraph or list item over 70 words |
-| `xeno.unslop.vale.AIVocabulary`, `xeno.unslop.vale.PlainWords` | `/unslop` (vendored; the folder is declared `own` in `xeno/sources.yaml`) | rules 7 and 8 (AI vocabulary, fancy ways to say "is"); rules 23 and 31 (filler phrases, plain words) |
+| `skills.natural-writing.vale.AIVocabulary`, `skills.natural-writing.vale.PlainWords` | `/natural-writing`, derived from the upstream `/unslop` skill's text | unslop rules 7 and 8 (AI vocabulary, fancy ways to say "is"); rules 23 and 31 (filler phrases, plain words) |
 | `skills.natural-writing.vale.Vocabulary`, `Significance`, `Formula`, `TrailingParticiple` | `/natural-writing` | the lists of `references/words-to-avoid.md`: vocabulary and copula avoidance, inflated significance, formula endings with weasel attributions and promotional words, sentence-final participles |
 
 One owner per token: no word or phrase is listed by two rules, so a word-level hit is reported once. A phrase rule can still overlap a word rule (`pivotal role` in `Significance`, `pivotal` in `Unslop`), and then both report, which is right: two different tells.
 
-`tests/repo/vale-styles.test.ts` pins three things: the exact-token ownership, every token's presence in the skill text it comes from, and that no other `.yml` sits under `skills/` or `xeno/`, since Vale would read it as a rule.
+`tests/repo/vale-styles.test.ts` pins three things: the exact-token ownership, every token's presence in the skill text it comes from (the two unslop-derived rules excepted, since that text lives upstream), and that no other `.yml` sits under `skills/`, since Vale would read it as a rule.
 
 ## Wiring a consumer
 
@@ -21,10 +21,10 @@ StylesPath = .skills
 MinAlertLevel = error
 
 [*.md]
-BasedOnStyles = skills, xeno
+BasedOnStyles = skills
 ```
 
-Vale reads the `*.yml` files under the two named folders and ignores everything else there. A page that quotes the tells as examples (a style guide, this repository's own skill pages) is not a page to lint with them.
+Vale reads the `*.yml` files under the named folder and ignores everything else there. A page that quotes the tells as examples (a style guide, this repository's own skill pages) is not a page to lint with them.
 
 ## Verifying a change
 
@@ -39,8 +39,8 @@ Each of the seven rules fires exactly once on its planted token:
 control.md:1:3:skills.natural-writing.vale.Vocabulary:'robust' is an AI tell
 control.md:1:22:skills.natural-writing.vale.Significance:'focal point' claims significance
 control.md:1:33:skills.natural-writing.vale.TrailingParticiple:', ensuring' is trailing analysis
-control.md:1:47:xeno.unslop.vale.AIVocabulary:'delve' is an AI tell (unslop rules 7 and 8)
-control.md:1:62:xeno.unslop.vale.PlainWords:Write 'to' for 'In order to' (unslop rules 23 and 31)
+control.md:1:47:skills.natural-writing.vale.AIVocabulary:'delve' is an AI tell (unslop rules 7 and 8)
+control.md:1:62:skills.natural-writing.vale.PlainWords:Write 'to' for 'In order to' (unslop rules 23 and 31)
 control.md:1:80:skills.natural-writing.vale.Formula:'not just' is a formula
 control.md:3:1:skills.working-text.vale.UnitLength:71 words in one paragraph or list item; the cap is 70
 ```

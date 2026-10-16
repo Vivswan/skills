@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!.github/repo-platform-manifest.json", "!xeno"]
+    "includes": ["**", "!.github/repo-platform-manifest.json"]
   },
   "formatter": {
     "enabled": true,

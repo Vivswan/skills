@@ -12,12 +12,12 @@ const FILES = new Map<string, string>([
     "scripts/run-tests.mts",
     'import { hermeticGitEnv } from "./hermetic-git-env.mts";\nimport { ROOT } from "./lib.mts";',
   ],
-  ["scripts/sync-xeno.mts", 'import { ROOT } from "./lib.mts";'],
+  ["scripts/catalog.mts", 'import { ROOT } from "./lib.mts";'],
   ["scripts/probe.ts", "export const probe = 1;"],
   // A quoted glob inside a fixture is not a declaration, nor is a reaches line below the first: only the first line selects by pattern.
   [
-    "tests/repo/sync-xeno.test.ts",
-    'import { update } from "../../scripts/sync-xeno.mts";\nconst text = `path: "*/*"\n// reaches: **/*.md\n`;',
+    "tests/repo/catalog.test.ts",
+    'import { update } from "../../scripts/catalog.mts";\nconst text = `path: "*/*"\n// reaches: **/*.md\n`;',
   ],
   ["tests/repo/probe.test.ts", 'import { probe } from "../../scripts/probe";'],
   ["tests/repo/read.test.ts", 'const SCRIPT = join(ROOT, "scripts", "read.mts");'],
@@ -55,8 +55,8 @@ describe("selectTests", () => {
   test.each([
     [
       "a script selects the test that imports it",
-      ["scripts/sync-xeno.mts"],
-      ["tests/repo/sync-xeno.test.ts"],
+      ["scripts/catalog.mts"],
+      ["tests/repo/catalog.test.ts"],
     ],
     ["an extension-less import is followed", ["scripts/probe.ts"], ["tests/repo/probe.test.ts"]],
     ["a launcher module no test imports selects every test", ["scripts/hermetic-git-env.mts"], ALL],
@@ -121,6 +121,6 @@ describe("selectTests", () => {
     // Without the launcher importing lib, the selection is exactly the import chains that reach it.
     const files = new Map(FILES);
     files.set("scripts/run-tests.mts", 'import { hermeticGitEnv } from "./hermetic-git-env.mts";');
-    expect(selectTests(["scripts/lib.mts"], files)).toEqual(["tests/repo/sync-xeno.test.ts"]);
+    expect(selectTests(["scripts/lib.mts"], files)).toEqual(["tests/repo/catalog.test.ts"]);
   });
 });

@@ -6,9 +6,8 @@
  * catalog or drift ACROSS files that still passes structural validation.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
-import { validateSkillDir } from "../.github/actions/validate-skills/validate-skills.ts";
 import type { Frontmatter, Marketplace, RootManifest } from "./lib.mts";
 import {
   errorMessage,
@@ -29,9 +28,6 @@ import {
   SKILLS_DIR,
   skillDirs,
   walkFiles,
-  XENO_DIR,
-  XENO_PLUGIN,
-  xenoSkillDirs,
 } from "./lib.mts";
 import {
   checkDescriptionTriggerForm,
@@ -46,8 +42,8 @@ import {
   ensureBuiltTemplate,
   SCRIPT_EXTENSIONS,
   SEMVER,
+  type UpstreamSkill,
 } from "./smoke-checks.mts";
-import { parseSources } from "./sync-xeno.mts";
 
 // Strings that should only ever appear in template/, never in a published skill.
 const PLACEHOLDER_MARKERS = ["Replace with", "Replace this", "template-skill", "Template Skill"];
@@ -266,42 +262,94 @@ function checkCatalogCoverage(manifest: RootManifest, dirs: readonly string[]): 
 }
 
 function checkMarketplaceAgainstManifest(marketplace: Marketplace, manifest: RootManifest): void {
-  // This repo publishes itself: every entry but the xeno plugin resolves to the repo root, and the root plugin is
-  // what marketplace installs and the CLI grouping key on, so it must be there once, under plugin.json's name.
-  const roots = marketplace.plugins.filter((plugin) => plugin.name !== XENO_PLUGIN);
-  if (roots.length !== 1 || roots[0]?.name !== manifest.name) {
+  // This repo publishes itself: the plugin named like plugin.json resolves to the repo root and is what marketplace
+  // installs and the CLI grouping key on, so it must be there once. Every other entry is an upstream skill.
+  const roots = marketplace.plugins.filter((plugin) => plugin.name === manifest.name);
+  const [plugin] = roots;
+  if (roots.length !== 1 || plugin === undefined) {
     fail(
       `${rel(marketplace.path)}: exactly one plugin must publish the repository root, named` +
         ` '${manifest.name}' like .claude-plugin/plugin.json`,
     );
   }
-  for (const plugin of marketplace.plugins) {
-    const source = plugin.name === XENO_PLUGIN ? `./${basename(XENO_DIR)}` : "./";
-    if (plugin.source !== source) {
-      fail(`${rel(marketplace.path)}: plugin '${plugin.name}' source must be "${source}"`);
-    }
-    if (plugin.name === XENO_PLUGIN) continue;
-    // strict defaults to true (plugin.json is the authority). strict:false
-    // alongside a component-declaring plugin.json is a load-time conflict.
-    if (plugin.strict === false && COMPONENT_FIELDS.some((field) => field in manifest.raw)) {
+  if (plugin.source !== "./") {
+    fail(`${rel(marketplace.path)}: plugin '${manifest.name}' source must be "./"`);
+  }
+  // strict defaults to true (plugin.json is the authority). strict:false
+  // alongside a component-declaring plugin.json is a load-time conflict.
+  if (plugin.strict === false && COMPONENT_FIELDS.some((field) => field in manifest.raw)) {
+    fail(
+      `.claude-plugin/marketplace.json: plugin '${manifest.name}' sets strict:false while` +
+        " .claude-plugin/plugin.json declares components -- Claude Code refuses to load this",
+    );
+  }
+
+  // Any manifest field repeated on the marketplace entry must agree with the
+  // manifest, otherwise the two files drift apart silently.
+  for (const [key, value] of Object.entries(plugin)) {
+    if (MARKETPLACE_ONLY_FIELDS.has(key) || !(key in manifest.raw)) continue;
+    if (JSON.stringify(value) !== JSON.stringify(manifest.raw[key])) {
       fail(
-        `.claude-plugin/marketplace.json: plugin '${plugin.name}' sets strict:false while` +
-          " .claude-plugin/plugin.json declares components -- Claude Code refuses to load this",
+        `.claude-plugin/marketplace.json: plugin '${manifest.name}' field '${key}' disagrees` +
+          " with .claude-plugin/plugin.json -- keep them identical or drop the duplicate",
       );
     }
-
-    // Any manifest field repeated on the marketplace entry must agree with the
-    // manifest, otherwise the two files drift apart silently.
-    for (const [key, value] of Object.entries(plugin)) {
-      if (MARKETPLACE_ONLY_FIELDS.has(key) || !(key in manifest.raw)) continue;
-      if (JSON.stringify(value) !== JSON.stringify(manifest.raw[key])) {
-        fail(
-          `.claude-plugin/marketplace.json: plugin '${plugin.name}' field '${key}' disagrees` +
-            " with .claude-plugin/plugin.json -- keep them identical or drop the duplicate",
-        );
-      }
-    }
   }
+}
+
+const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/**
+ * Every marketplace entry other than the root plugin publishes one skill of another repository through a git-subdir
+ * source: the fetched folder carries no plugin.json, so the entry is the manifest and the folder itself is the skill.
+ * The entries carry no sha and no ref, so each skill follows its upstream's default branch, and nothing of the
+ * upstream is copied into this repository.
+ */
+function checkUpstreamPlugins(
+  marketplace: Marketplace,
+  manifest: RootManifest,
+  skillNames: ReadonlySet<string>,
+): UpstreamSkill[] {
+  const skills: UpstreamSkill[] = [];
+  for (const plugin of marketplace.plugins) {
+    if (plugin.name === manifest.name) continue;
+    const where = `${rel(marketplace.path)}: plugin '${String(plugin.name)}'`;
+    if (typeof plugin.name !== "string" || !KEBAB_CASE.test(plugin.name)) {
+      fail(`${where}: name must be kebab-case`);
+    }
+    if (skillNames.has(plugin.name) || skills.some((skill) => skill.name === plugin.name)) {
+      fail(`${where}: the name is taken by another skill of this catalog -- one name, one skill`);
+    }
+    const source = plugin.source;
+    if (!isRecord(source) || source.source !== "git-subdir") {
+      fail(
+        `${where}: source must be a git-subdir object -- only the root plugin is published from this repository`,
+      );
+    }
+    if (typeof source.url !== "string" || !GITHUB_REPO.test(source.url)) {
+      fail(`${where}: source.url must be the upstream as GitHub owner/repo`);
+    }
+    if (typeof source.path !== "string" || !/^[^/](.*[^/])?$/.test(source.path)) {
+      fail(
+        `${where}: source.path must be the skill folder, repository-relative, without a leading or trailing slash`,
+      );
+    }
+    if ("sha" in source || "ref" in source) {
+      fail(
+        `${where}: carries a sha or ref -- the upstream skills follow their default branch, so the entry pins nothing`,
+      );
+    }
+    if (JSON.stringify(plugin.skills) !== JSON.stringify(["./"])) {
+      fail(`${where}: skills must be ["./"] -- the fetched folder is the skill itself`);
+    }
+    if (typeof plugin.description !== "string" || plugin.description.trim() === "") {
+      fail(
+        `${where}: needs a description -- before install, users see nothing else of a git-subdir entry`,
+      );
+    }
+    skills.push({ name: plugin.name, repo: source.url, path: source.path });
+  }
+  return skills;
 }
 
 // The two hand-kept skill lists (the manifest's skills[] and the bug form's dropdown) stay
@@ -651,86 +699,6 @@ function checkPlaceholderMarkersStillInTemplate(): void {
   }
 }
 
-/** The `xeno` marketplace plugin exists exactly when vendored copies do, and its roster is exactly their folders. */
-function checkExternalPlugin(marketplace: Marketplace, xenoNames: ReadonlySet<string>): void {
-  const entries = marketplace.plugins.filter((entry) => entry.name === XENO_PLUGIN);
-  const where = rel(marketplace.path);
-  if (entries.length > 1) fail(`${where}: plugin '${XENO_PLUGIN}' is listed more than once`);
-  const plugin = entries[0];
-  if (xenoNames.size === 0) {
-    if (plugin)
-      fail(`${where}: plugin '${XENO_PLUGIN}' has no vendored copies to publish -- remove it`);
-    return;
-  }
-  if (!plugin) {
-    fail(
-      `${where}: missing the '${XENO_PLUGIN}' plugin (source "./xeno", skills ./<name>)` +
-        " that groups the vendored copies under their own CLI heading",
-    );
-  }
-  if (typeof plugin.description !== "string" || plugin.description.trim() === "") {
-    fail(`${where}: plugin '${XENO_PLUGIN}' needs a description`);
-  }
-  const listed = isUnknownArray(plugin.skills) ? plugin.skills : [];
-  const expected = [...xenoNames].sort().map((name) => `./${name}`);
-  if (JSON.stringify([...listed].sort()) !== JSON.stringify(expected)) {
-    fail(
-      `${where}: plugin '${XENO_PLUGIN}' skills must be exactly ${JSON.stringify(expected)}` +
-        ` (one './<name>' per folder under xeno/), got ${JSON.stringify(listed)}`,
-    );
-  }
-}
-
-/**
- * Every folder under xeno/ is a pinned copy: in sources.yaml, indexed in the group README, and held to the same
- * per-folder contract the action applies to skills/ (a vendored copy carries only what its upstream folder carries,
- * so this catalog's own extras, README.md and the codex manifest, are not required of it).
- */
-function checkExternalSources(xenoDirs: readonly string[]): void {
-  const sourcesPath = join(XENO_DIR, "sources.yaml");
-  if (xenoDirs.length === 0 && !existsSync(sourcesPath)) return;
-  requireFile(sourcesPath);
-  const indexPath = join(XENO_DIR, "README.md");
-  requireFile(indexPath);
-  let sources: ReturnType<typeof parseSources>;
-  try {
-    sources = parseSources(readTextFile(sourcesPath), rel(sourcesPath));
-  } catch (error) {
-    fail(errorMessage(error));
-  }
-  const folders = new Set(xenoDirs.map((dir) => basename(dir)));
-  for (const name of Object.keys(sources)) {
-    if (!folders.has(name)) {
-      fail(`${rel(sourcesPath)}: '${name}' has no xeno/${name}/ folder -- run bun run sync-xeno`);
-    }
-  }
-  const indexText = readTextFile(indexPath);
-  for (const dir of xenoDirs) {
-    const name = basename(dir);
-    if (!Object.hasOwn(sources, name)) {
-      fail(
-        `${rel(dir)}: not in ${rel(sourcesPath)} -- external folders are written only by the sync`,
-      );
-    }
-    const errors = validateSkillDir(dir, rel(dir));
-    if (errors.length > 0) fail(errors.join("\n"));
-    // A declared own path that is not there is a stale claim: the sync would keep nothing, and the check would hide a hole.
-    for (const own of sources[name]?.own ?? []) {
-      // The slash is stripped so lstat inspects the entry itself: a symlink there is not a directory of ours.
-      const target = join(dir, own.replace(/\/$/, ""));
-      const stat = lstatSync(target, { throwIfNoEntry: false });
-      const wanted = own.endsWith("/") ? stat?.isDirectory() : stat?.isFile();
-      if (!wanted)
-        fail(
-          `${rel(sourcesPath)}: ${name}.own names ${own}, which is not a ${own.endsWith("/") ? "directory" : "file"} in ${rel(dir)}/`,
-        );
-    }
-    if (!indexText.includes(`[\`${name}\`](./${name}/)`)) {
-      fail(`${rel(indexPath)}: the table is missing a row for '${name}' linking ./${name}/`);
-    }
-  }
-}
-
 // rubber-duck-review auto-discovers companions: every installed skill that
 // declares a '## Review Criteria' section joins the reviewer prompt, no
 // registry. Guard both halves: the SKILL.md must still state that rule, and
@@ -985,15 +953,14 @@ function main(): void {
   const manifest = loadRootManifest();
   const dirs = skillDirs();
   const skillNames: ReadonlySet<string> = new Set(dirs.map((dir) => basename(dir)));
-  const xenoDirs = xenoSkillDirs();
-  const xenoNames: ReadonlySet<string> = new Set(xenoDirs.map((dir) => basename(dir)));
-  const allNames: ReadonlySet<string> = new Set([...skillNames, ...xenoNames]);
 
   checkCatalogVersion(marketplace);
   checkMarketplacePluginVersionBan(rel(marketplace.path), marketplace.plugins);
   checkRootManifestVersion(manifest);
   checkCatalogCoverage(manifest, dirs);
   checkMarketplaceAgainstManifest(marketplace, manifest);
+  const upstream = checkUpstreamPlugins(marketplace, manifest, skillNames);
+  const allNames: ReadonlySet<string> = new Set([...skillNames, ...upstream.map((s) => s.name)]);
 
   const rootPackage = loadJsonObject(join(ROOT, "package.json"));
   const rootDevDependencies = isRecord(rootPackage.devDependencies)
@@ -1042,24 +1009,17 @@ function main(): void {
 
   checkManifestEntriesHaveFolders(manifest, skillNames);
   const readmeText = readTextFile(join(ROOT, "README.md"));
-  checkReadmeSkillList(readmeText, skillNames, xenoNames);
-  checkReadmeMermaidGraph(readmeText, allNames, xenoNames);
-  const groupingEntries = [
-    ...skillFrontmatters.map(({ path, frontmatter }) => ({
-      name: basename(dirname(path)),
-      disabled: frontmatter["disable-model-invocation"] === true,
-    })),
-    ...xenoDirs.map((dir) => ({
-      name: basename(dir),
-      disabled: parseFrontmatter(join(dir, "SKILL.md"))["disable-model-invocation"] === true,
-      xeno: true,
-    })),
-  ];
+  checkReadmeSkillList(readmeText, skillNames, upstream);
+  checkReadmeMermaidGraph(readmeText, allNames, upstream);
+  // The upstream skills carry their own frontmatter, which this repository does not hold, so the invocation grouping
+  // and the Usage roster cover this repository's own skills only.
+  const groupingEntries = skillFrontmatters.map(({ path, frontmatter }) => ({
+    name: basename(dirname(path)),
+    disabled: frontmatter["disable-model-invocation"] === true,
+  }));
   checkReadmeInvocationGrouping(readmeText, groupingEntries);
   checkReadmeUsageExplicitRoster(readmeText, groupingEntries);
-  checkIssueTemplateOptionsMatchFolders(allNames);
-  checkExternalSources(xenoDirs);
-  checkExternalPlugin(marketplace, xenoNames);
+  checkIssueTemplateOptionsMatchFolders(skillNames);
   // The metadata.author loop is the only consumer of the frontmatter list in
   // checkAuthorIdentity, so appending the template holds its pre-filled
   // author to the canonical one without joining any other per-skill check.
@@ -1076,7 +1036,7 @@ function main(): void {
   checkGrepTermsCoveredByWordList();
   checkReviewerPreamble();
 
-  console.log(`Smoke test passed (${dirs.length} skill(s), ${xenoDirs.length} xeno, checked).`);
+  console.log(`Smoke test passed (${dirs.length} skill(s), ${upstream.length} upstream, checked).`);
 }
 
 runChecks(main);

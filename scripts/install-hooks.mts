@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Wire the git-native pre-commit hook; runs as the package "prepare" script on every `bun install`.
+ * Wire the git-native pre-commit hook; `bun run hooks`, run once per clone. No lifecycle script does it: npm's git
+ * fetcher runs any of those inside its clone, devDependencies and all, on every `npx -y github:Vivswan/skills`.
  *
  * The dispatcher (.githooks/pre-commit) is COPIED into the common hooks directory, shared by every
  * linked worktree, instead of setting core.hooksPath, because a checkout-relative hooksPath fails
@@ -31,7 +32,7 @@ import { ROOT } from "./lib.mts";
 // unmasked `git commit` will read, and several GIT_* variables redirect that read transiently. The
 // whole prefix is scrubbed rather than a blocklist, since a blocklist loses one new variable at a time.
 // Inherited unscrubbed, each of these would bend those checks:
-//   GIT_CONFIG_GLOBAL=/dev/null bun install           -> the check passes, dispatcher shadowed at every later commit
+//   GIT_CONFIG_GLOBAL=/dev/null bun run hooks         -> the check passes, dispatcher shadowed at every later commit
 //   GIT_DIR, GIT_CONFIG, GIT_CONFIG_COUNT/KEY_n/VALUE_n -> another repository, another file, injected entries
 // Tests isolate the global scope through HOME/XDG_CONFIG_HOME instead, which git reads unmasked.
 const env: Record<string, string> = {};
@@ -73,7 +74,7 @@ if (git("rev-parse", "--git-dir").code !== 0) {
   // follow it into "no entry here".
   if (lstatSync(join(process.cwd(), ".git"), { throwIfNoEntry: false })) {
     fail(
-      "a .git entry exists but git cannot read the repository; fix the checkout, then rerun 'bun install'.",
+      "a .git entry exists but git cannot read the repository; fix the checkout, then rerun 'bun run hooks'.",
     );
   }
   console.error("install-hooks: not inside a git repository; skipping hook installation.");
@@ -113,7 +114,7 @@ const isHusky = (value: string) =>
 if (local.code === 0 && (localValues.length === 0 || !localValues.every(isHusky))) {
   fail(
     `local core.hooksPath is set to something this repo did not write:\n  ${localValues.map((value) => JSON.stringify(value)).join("\n  ")}\n` +
-      "Migrate it yourself (git config --local --unset-all core.hooksPath), then rerun 'bun install'.",
+      "Migrate it yourself (git config --local --unset-all core.hooksPath), then rerun 'bun run hooks'.",
   );
 }
 
@@ -142,7 +143,7 @@ for (let i = 0; i < scopedFields.length; i += 2) {
 if (outer.length > 0) {
   fail(
     `core.hooksPath is still set outside the repository scope:\n  ${outer.join("\n  ")}\n` +
-      "Remove it (git config --unset in that scope), then rerun 'bun install'.",
+      "Remove it (git config --unset in that scope), then rerun 'bun run hooks'.",
   );
 }
 
@@ -177,13 +178,13 @@ const existing = lstatSync(target, { throwIfNoEntry: false });
 if (existing && !existing.isFile()) {
   fail(
     `${target} exists and is not a regular file (symlink or otherwise); refusing to touch it.\n` +
-      "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
+      "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun run hooks'.",
   );
 }
 if (existing?.isFile() && !hasMarkerLine(readFileSync(target, "utf-8"))) {
   fail(
     `${target} already exists and was not installed by this repo; refusing to overwrite it.\n` +
-      "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun install'.",
+      "Move it aside (or merge it into .githooks/pre-commit.mts), then rerun 'bun run hooks'.",
   );
 }
 
@@ -229,7 +230,7 @@ if (local.code === 0) {
         remaining.raw,
       )
         .map((value) => JSON.stringify(value))
-        .join("\n  ")}\nRemove it from the included file, then rerun 'bun install'.`,
+        .join("\n  ")}\nRemove it from the included file, then rerun 'bun run hooks'.`,
     );
   }
 }
