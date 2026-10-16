@@ -527,7 +527,7 @@ describe("fleet-events.mts", () => {
           ["head", `worktree track-a: head moved to ${headA.slice(0, 12)}`, fileUrl(wtA)],
           ["head", `worktree track-b: head moved to ${headB.slice(0, 12)}`, fileUrl(wtB)],
           ["wipe", "worktree track-b: 6 files at HEAD -> 1", fileUrl(wtB)],
-          ["quiet", "worktree track-b: no process and no change for 2 polls", fileUrl(wtB)],
+          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
         ]);
         expect(s.events()[0]).toMatchObject({ worktree: wtA, sha: headA, ahead: 1, behind: 0 });
         expect(s.state().targets[session.dir]).toMatchObject({

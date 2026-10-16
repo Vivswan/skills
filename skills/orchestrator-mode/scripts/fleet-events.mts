@@ -481,7 +481,7 @@ function worktreeTransitions(
   if (quietPolls === QUIET_POLLS && !claimed.has(resolve(row.worktree))) {
     events.push({
       kind: "quiet",
-      text: `${label}: no process and no change for ${QUIET_POLLS} polls`,
+      text: `${label}: no worker process and no change for ${QUIET_POLLS} polls`,
       url,
       worktree: row.worktree,
     });
