@@ -86,7 +86,7 @@ if (import.meta.main) { ... }
 ```
 
 - **Imports, then every module constant in one block** (`const` at module level, caches, regexes, and a command's `USAGE` block included), then types and interfaces, then functions, the exported entry point last. The `import.meta.main` block is the last statement, as the Python main guard is.
-- **One exported concept per file,** the file named after it in the repository's casing (`gaussian-noise.ts`, or `GaussianNoise.tsx` where components are PascalCase). The layout rules and the specimen tree: `../structure.md`, A predictable layout.
+- **One main exported thing per file, with its helpers,** the file named after it in the repository's casing (`gaussian-noise.ts`, or `GaussianNoise.tsx` where components are PascalCase); a folder's siblings of one kind share a `records`, `constants`, or `util` module. The layout rules, the one-function module defect, and the specimen tree: `../structure.md`, A predictable layout.
 - **Named exports from the defining module.** An `index.ts` that only re-exports is a barrel (`noBarrelFile`), and an `export * from` line a re-export shim (`noReExportAll`). Importers name the defining file.
 
 ## One concept per function
@@ -125,6 +125,8 @@ export function load(path: string, model: string, window?: Window): Segment[] {
   return withinWindow(segments, window);
 }
 ```
+
+The rule runs both ways: a step called from one place that is no concept of its own folds back into its caller. A `biome.json` threshold tighter than the floor above (complexity 15, 80 lines, 6 parameters) is a defect, since it forces splits that read worse.
 
 ## Bodies and guards
 
@@ -207,7 +209,7 @@ try {
 
 - **Strict mode, no `any`, an explicit return type on every exported function.** biome's `useExplicitType` (nursery) carries the last where it is enabled; otherwise the reviewer reads it.
 - **A JSDoc block on every exported function and type,** carrying what the signature cannot say (the comments standard): the one-line summary, `@param` only where the name does not say it, `@returns` only where the type does not, `@throws` always. A helper whose name says what it does carries none.
-- **No underscore-prefixed exports or module names.** An unexported `const` is already private to the module.
+- **No underscore-prefixed names,** exported, module level, or on a class: an unexported `const` is already private to the module, and `private` or `#field` is the class's own visibility. The underscore marks only what the module's user must never touch (the common case: the field behind a `get` and `set` pair) and a framework-fixed hook name, commented as such.
 
 The doc shape, on the `transcribe` specimen:
 

@@ -154,7 +154,7 @@ The path check leaves alone, on purpose: placeholders (`<skill-dir>/x`), globs, 
 
 A path resolves against the root, the page's directory, every directory between, and each `--base`. So a skill's reference page may name a script under its own `scripts/` folder, and a page describing a template may name a file by the path it will have in the repositories generated from it.
 
-Copy the script into the repository's scripts directory and run it in the check command. The cap is then a gate, not a taste. The same cap ships as a Vale rule under `vale/`, for repositories that already run Vale. Otherwise wire the probe into the repository's own check command.
+The cap becomes a gate, not a taste, when the repository's check command enforces it: through a published package (the same cap ships as a Vale rule under `vale/`, for repositories that already run Vale) or through the repository's own probe. A skill's script stays an instrument run from the skill directory, never copied into a repository.
 
 ## Restructuring an existing page
 

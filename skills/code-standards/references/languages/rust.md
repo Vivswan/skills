@@ -24,7 +24,7 @@ needless_return = "deny"
 if_not_else = "deny"
 missing_errors_doc = "deny"
 missing_panics_doc = "deny"
-module_name_repetitions = "allow"  # noise::GaussianNoise is the layout rule, one type per module named after it
+module_name_repetitions = "allow"  # noise::GaussianNoise is the layout rule, the module named after its main type
 ```
 
 ```toml
@@ -71,7 +71,7 @@ pub fn transcribe(video: &Path, model: &str, window: Option<Window>) -> Result<V
 ```
 
 - **`use` lines, then every `const` and `static` in one block,** then types (structs, enums, aliases), then `impl` blocks, then free functions with the entry point last. A binary's `main` is the last function in `main.rs`.
-- **One type per module,** the module named after it in snake case (`gaussian_noise.rs` holds `GaussianNoise`, which is why `module_name_repetitions` is allowed). The layout rules and the specimen tree: `../structure.md`, A predictable layout.
+- **One main type per module, with its helpers,** the module named after it in snake case (`gaussian_noise.rs` holds `GaussianNoise`, which is why `module_name_repetitions` is allowed); a folder's siblings of one kind share a `records`, `constants`, or `util` module. The layout rules, the one-function module defect, and the specimen tree: `../structure.md`, A predictable layout.
 - **A `mod.rs` whose `pub use` fan only re-exports names is a barrel.** The exception is the crate root, where `lib.rs`'s `pub use` defines the public API. Importers name the defining module.
 
 ## One concept per function
@@ -116,6 +116,8 @@ pub fn load(path: &Path, model: &str, window: Option<Window>) -> Result<Vec<Segm
     Ok(within_window(segments, window))
 }
 ```
+
+The rule runs both ways: a step called from one place that is no concept of its own folds back into its caller. A `clippy.toml` threshold tighter than the floor above (8 arguments, 100 lines, complexity 15) is a defect, since it forces splits that read worse.
 
 ## Bodies and guards
 

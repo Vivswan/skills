@@ -7,7 +7,7 @@ metadata:
 
 Never hand-roll something a good library already exists for. The search happens before the first line and is recorded in the brief, then the PR body or the landing report: the library used, or what was searched and why nothing fits.
 
-- A tool already in the repository counts as the library (a lint rule in place of a hand-written scanner).
+- A tool already in the repository counts as the library (a lint rule in place of a hand-written scanner); only a declared direct dependency or the repository's own code is already there, never a transitive dependency or a library's private module.
 - Code a change adds, moves, touches, reuses, or depends on counts, not only code it adds.
 - Dependency weight is never a reason to keep the hand-rolled version.
 - A large library or an unclear fit is the owner's question, asked before the work with the library named.
