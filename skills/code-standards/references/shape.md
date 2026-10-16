@@ -69,7 +69,7 @@ A function doing two nameable things, or whose raises serve two different concep
 
 A complexity lint is the backstop, not the definition (the thresholds are on each language page). A violation is split, or the threshold is raised at config level with its reason; it is never silenced inline.
 
-A cap tighter than the language page's floor is a defect, since it forces splits that read worse. Specimen: one tree capped at complexity 8, 8 branches, 30 statements, 6 arguments, and 4 returns, against a floor of 12, 12, 50, 8, and 6, went from 324 functions to 543.
+A cap tighter than the language page's floor is a defect, since it forces splits that read worse. Specimen: one tree capped at complexity 8 against the floor's 12, 8 branches against 12, 30 statements against 50, 6 arguments against 8, and 4 returns against 6, went from 324 functions to 543.
 
 Before, one function holding three concepts:
 

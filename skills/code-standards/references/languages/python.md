@@ -69,7 +69,7 @@ What it reads, exactly:
 ## Module layout
 
 - **`__all__` only in a module with a name to keep out of its interface,** right after the imports, naming what other modules import. A module where every name is public carries none. Specimen: a tree where every name was public carried an `__all__` in every module, all removed.
-- **One main thing per module, with its helpers,** the file named after it in its own case: `GaussianNoise.py` holds the class `GaussianNoise`, `reduce_precision.py` the function `reduce_precision`. A stage's records, constants, and small functions share its `records.py`, `constants.py`, and `util.py`. The layout rules, the one-function module defect, and the specimen tree: `../structure.md`, A predictable layout.
+- **One main thing per module, with its helpers,** the file named after it in its own case: `GaussianNoise.py` holds the class `GaussianNoise`, `reduce_precision.py` the function `reduce_precision`. A stage's records, constants, and small functions share its `records.py`, `constants.py`, and `util.py`. The layout rules and the specimen tree: `../structure.md`, A predictable layout.
 - **`__init__.py` stays empty** unless absolutely necessary; the package root's carries only the package's name, author, and version. Re-exporting from it builds a barrel: the real dependency graph hides behind the package name and import cycles become easy to mint. Importers name the defining module (`from pkg.user import User`, never `from pkg import User`).
 
 ## Cleanup and ugly one-liners

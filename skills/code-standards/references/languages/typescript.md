@@ -86,7 +86,7 @@ if (import.meta.main) { ... }
 ```
 
 - **Imports, then every module constant in one block** (`const` at module level, caches, regexes, and a command's `USAGE` block included), then types and interfaces, then functions, the exported entry point last. The `import.meta.main` block is the last statement, as the Python main guard is.
-- **One main exported thing per file, with its helpers,** the file named after it in the repository's casing (`gaussian-noise.ts`, or `GaussianNoise.tsx` where components are PascalCase); a folder's siblings of one kind share a `records`, `constants`, or `util` module. The layout rules, the one-function module defect, and the specimen tree: `../structure.md`, A predictable layout.
+- **One main exported thing per file, with its helpers,** the file named after it in the repository's casing (`gaussian-noise.ts`, or `GaussianNoise.tsx` where components are PascalCase); a folder's siblings of one kind share a `records`, `constants`, or `util` module. The layout rules and the specimen tree: `../structure.md`, A predictable layout.
 - **Named exports from the defining module.** An `index.ts` that only re-exports is a barrel (`noBarrelFile`), and an `export * from` line a re-export shim (`noReExportAll`). Importers name the defining file.
 
 ## One concept per function
