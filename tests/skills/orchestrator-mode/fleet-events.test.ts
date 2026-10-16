@@ -785,12 +785,12 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("watch session resolves the session directory from CLAUDE_CODE_SESSION_ID, the cwd slug, and HOME in the CLI process; without the variable it exits 2 naming it", async () => {
+  test("watch session finds the session directory by CLAUDE_CODE_SESSION_ID under HOME in the CLI process, under a project directory that is not the cwd's slug; without the variable, or with an id no project holds, it exits 2 naming it", async () => {
     const s = new Scenario(PROGRAM, "self");
     const box = await s.inbox("a");
     const home = join(s.fixtureDir, "home");
-    const slug = process.cwd().replace(/[^A-Za-z0-9]/g, "-");
-    const session = sessionDir(join(home, ".claude", "projects", slug));
+    // The project directory is the session's launch cwd, which the CLI's cwd no longer matches.
+    const session = sessionDir(join(home, ".claude", "projects", "-home-user-repo"));
     const env = { CLAUDE_CODE_SESSION_ID: SESSION, HOME: home };
     await s.start({ inbox: box.path });
     const unset = s.run(["watch", "session"], {
@@ -799,6 +799,15 @@ describe("fleet-events.mts", () => {
     });
     expect(unset.code).toBe(2);
     expect(unset.stderr).toContain("CLAUDE_CODE_SESSION_ID is unset");
+    const lost = "00000000-0000-4000-8000-000000000000";
+    const nowhere = s.run(["watch", "session"], {
+      inbox: box.path,
+      env: { ...env, CLAUDE_CODE_SESSION_ID: lost },
+    });
+    expect(nowhere.code).toBe(2);
+    expect(nowhere.stderr).toContain(
+      `no transcript ${lost}.jsonl under ${join(home, ".claude", "projects")}`,
+    );
 
     const watch = s.run(["watch", "session", "--quiet-after", "1"], { inbox: box.path, env });
     expect(watch.code).toBe(0);
