@@ -66,6 +66,8 @@ interface WorktreeEntry {
   processes: { workers: number; shells: number };
   /** Polls in a row with no worker process and an unchanged dirty tree; the quiet event fires when it reaches QUIET_POLLS. */
   quietPolls: number;
+  /** The worktree state last announced: quiet until a worker or a dirty-tree change retracts it, else null. */
+  said: "quiet" | null;
 }
 
 interface Target {
@@ -554,13 +556,21 @@ function worktreeTransitions(
     previous.tree === tree &&
     !claimed.has(resolve(row.worktree));
   const quietPolls = idle ? previous.quietPolls + 1 : 0;
-  if (quietPolls === QUIET_POLLS) {
+  // Said once on entering quiet and once on leaving it: a quiet never said has nothing to retract,
+  // and a count that restarts after an attribution gap or a claim does not say it again.
+  let said = previous?.said ?? null;
+  if (said === "quiet" && (processes.workers > 0 || previous?.tree !== tree)) {
+    events.push({ kind: "active", text: `${label}: active again`, url, worktree: row.worktree });
+    said = null;
+  }
+  if (quietPolls === QUIET_POLLS && said !== "quiet") {
     events.push({
       kind: "quiet",
       text: `${label}: no worker process and no change for ${QUIET_POLLS} polls`,
       url,
       worktree: row.worktree,
     });
+    said = "quiet";
   }
 
   target.worktrees[row.worktree] = {
@@ -571,6 +581,7 @@ function worktreeTransitions(
     tree,
     processes,
     quietPolls,
+    said,
   };
   return { events, moved };
 }
@@ -579,7 +590,6 @@ async function readWorktrees(
   target: Target,
   repo: string,
   trouble: Map<string, Trouble>,
-  io: Io,
 ): Promise<{ events: EventInput[]; busy: boolean }> {
   const events: EventInput[] = [];
   let busy = false;
@@ -592,10 +602,24 @@ async function readWorktrees(
   const { processesByWorktree, lsofLine } = await attributeProcesses(discovered.paths);
   const lsof = lsofLine?.lsof ?? null;
   const attributionOk = lsof === null;
-  if (lsof?.ok === true) io.log(`lsof degraded: ${lsof.note}`);
+  if (lsof?.ok === true) {
+    trouble.set("lsof", {
+      text: `fleet: process attribution degraded: ${lsof.note}`,
+      url: fileUrl(repo),
+    });
+  }
   if (lsof?.ok === false) {
     trouble.set("lsof", {
       text: `fleet: process attribution is down: ${lsof.error}`,
+      url: fileUrl(repo),
+    });
+  }
+  // The ledger on the draft is the one committed by the last poll: a said attribution trouble
+  // that no longer holds is retracted once.
+  if (attributionOk && Object.hasOwn(target.trouble, "lsof")) {
+    events.push({
+      kind: "restored",
+      text: "fleet: process attribution restored",
       url: fileUrl(repo),
     });
   }
@@ -626,8 +650,18 @@ async function readWorktrees(
     events.push(...outcome.events);
     busy ||= outcome.moved;
   }
-  for (const path of Object.keys(target.worktrees)) {
-    if (!seen.has(path)) delete target.worktrees[path];
+  // A successful discovery is the truth: a worktree it no longer lists is gone, said once, with
+  // its last head so the lead can find the branch; a failed discovery threw above and says nothing.
+  for (const [path, entry] of Object.entries(target.worktrees)) {
+    if (seen.has(path)) continue;
+    events.push({
+      kind: "gone",
+      text: `worktree ${entry.branch ?? path}: gone`,
+      url: fileUrl(path),
+      worktree: path,
+      sha: entry.headSha,
+    });
+    delete target.worktrees[path];
   }
   return { events, busy };
 }
@@ -670,7 +704,7 @@ async function readFleet(
   const worktrees =
     draft.repo === null
       ? { events: [], busy: false }
-      : await readWorktrees(draft, draft.repo, trouble, io);
+      : await readWorktrees(draft, draft.repo, trouble);
   busy ||= worktrees.busy;
 
   const transitions: EventInput[] = [];
