@@ -7,8 +7,9 @@ import { ROOT } from "../../scripts/lib.mts";
 import { tempDirs } from "../helpers/temp-dirs";
 
 // The gate is a wrapper around the probe, so what would drift silently is the wrapper, not the
-// probe: a probe exit it swallows, a --shape-only it drops, or a page set that shrinks to nothing
-// and passes vacuously.
+// probe: a probe exit it swallows, a --shape-only it drops, a page set that shrinks to nothing
+// and passes vacuously, or a first set's failure that hides the second set's findings (a README
+// path finding masked a 71-word skill paragraph, which only a reviewer caught).
 const SCRIPT = join(ROOT, "scripts", "check-docs.mts");
 const temp = tempDirs();
 
@@ -17,19 +18,20 @@ const CLEAN = "# T\n\nShort.\n";
 const LONG = `# T\n\n${words(71)}\n`;
 const LONG_FINDING =
   "paragraph of 71 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps";
+const MISSING_PATH = "# S\n\nRead `docs/gone.md` in your repository.\n";
+const MISSING_PATH_FINDING = "`docs/gone.md` does not exist";
 
 /** One page per pattern of both sets; the skill page names a missing file under a real directory, which only the path check sees. */
 const TREE: Record<string, string> = {
   "README.md": CLEAN,
   "CONTRIBUTING.md": CLEAN,
   "docs/guide.md": CLEAN,
-  "xeno/README.md": CLEAN,
   "skills/README.md": CLEAN,
   "skills/one/README.md": CLEAN,
   "memories/note.md": CLEAN,
   "template/README.md": CLEAN,
   "template/references/ref.md": CLEAN,
-  "skills/one/SKILL.md": "# S\n\nRead `docs/gone.md` in your repository.\n",
+  "skills/one/SKILL.md": MISSING_PATH,
   "skills/one/references/ref.md": CLEAN,
   "skills/one/references/languages/nested.md": CLEAN,
   "template/SKILL.md": CLEAN,
@@ -57,22 +59,35 @@ describe("check-docs", () => {
       {},
       [
         0,
-        "docs-probe: 9 page(s) clean (cap 70 words)\ndocs-probe: 4 page(s) clean (cap 70 words)\n",
+        "docs-probe: 8 page(s) clean (cap 70 words)\ndocs-probe: 4 page(s) clean (cap 70 words)\n",
         "",
       ],
     ],
     [
-      "a long paragraph in a repository page exits 1 with the probe's finding, and the second set does not run",
+      "a long paragraph in a repository page exits 1 with the probe's finding, and the second set still runs",
       { "README.md": LONG },
-      [1, "", `docs-probe: 1 finding(s)\n  README.md:3: ${LONG_FINDING}\n`],
+      [
+        1,
+        "docs-probe: 4 page(s) clean (cap 70 words)\n",
+        `docs-probe: 1 finding(s)\n  README.md:3: ${LONG_FINDING}\n`,
+      ],
     ],
     [
       "a long paragraph in a nested skill reference page exits 1 after the first set passed: shape-only still counts words",
       { "skills/one/references/languages/nested.md": LONG },
       [
         1,
-        "docs-probe: 9 page(s) clean (cap 70 words)\n",
+        "docs-probe: 8 page(s) clean (cap 70 words)\n",
         `docs-probe: 1 finding(s)\n  skills/one/references/languages/nested.md:3: ${LONG_FINDING}\n`,
+      ],
+    ],
+    [
+      "a README path finding and a long skill paragraph both print before the exit 1: the first set's failure never hides the second's",
+      { "README.md": MISSING_PATH, "skills/one/references/languages/nested.md": LONG },
+      [
+        1,
+        "",
+        `docs-probe: 1 finding(s)\n  README.md:3: ${MISSING_PATH_FINDING}\ndocs-probe: 1 finding(s)\n  skills/one/references/languages/nested.md:3: ${LONG_FINDING}\n`,
       ],
     ],
     [
