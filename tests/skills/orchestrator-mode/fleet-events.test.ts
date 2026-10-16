@@ -570,7 +570,7 @@ describe("fleet-events.mts", () => {
     GIT_TIMEOUT,
   );
 
-  test("a FIFO transcript, a directory for a sidecar, and a vanished subagents dir are trouble, said once, one agent's while the rest are polled; a failed read is no observation, so a wait seen before an outage is said once seen again", async () => {
+  test("a FIFO transcript, a directory or FIFO sidecar, and a vanished subagents dir are trouble, said once, one agent's while the rest are polled; a failed read is no observation, so a wait seen before an outage is said once seen again", async () => {
     const s = new Scenario(PROGRAM, "fifo");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
@@ -586,6 +586,15 @@ describe("fleet-events.mts", () => {
     const sidecarC = join(session.subagents, `agent-${C}.meta.json`);
     rmSync(sidecarC);
     mkdirSync(sidecarC);
+    writeAgent(
+      session,
+      D,
+      { name: "builder-d", description: "build" },
+      exchange(ago(0), "toolu_d1", D),
+    );
+    const sidecarD = join(session.subagents, `agent-${D}.meta.json`);
+    rmSync(sidecarD);
+    expect(Bun.spawnSync(["mkfifo", sidecarD]).exitCode).toBe(0);
     const fifo = join(session.subagents, `agent-${B}.jsonl`);
     expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
     await s.start({ inbox: box.path });
@@ -606,8 +615,13 @@ describe("fleet-events.mts", () => {
       ],
       [
         "trouble",
-        expect.stringMatching(new RegExp(`^fleet: cannot read agent-${C}\\.meta\\.json: EISDIR`)),
+        `fleet: cannot read agent-${C}.meta.json: ${sidecarC} is not a regular file`,
         fileUrl(sidecarC),
+      ],
+      [
+        "trouble",
+        `fleet: cannot read agent-${D}.meta.json: ${sidecarD} is not a regular file`,
+        fileUrl(sidecarD),
       ],
       ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
       ["agent", "agent builder-a: waiting on Bash for 5 min", fileUrl(pathA)],
