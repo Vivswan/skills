@@ -245,10 +245,21 @@ function childOfCall(target: Target, toolUseId: string): string | undefined {
   );
 }
 
+/**
+ * Whether the lead's stop by name may reach this agent. The lead names only its own children, so
+ * an agent another fleet agent spawned shares a name with them by coincidence: for it, only a stop
+ * by its exact id counts. A sidecar naming no parent, or the lead's session, is the lead's own child.
+ */
+function stoppableByName(target: Target, entry: AgentEntry): boolean {
+  const parent = entry.sidecar?.parentAgentId ?? null;
+  if (parent === null || parent === basename(target.sessionFile, ".jsonl")) return true;
+  return !Object.hasOwn(target.agents, parent);
+}
+
 function situationOf(target: Target, agentId: string, entry: AgentEntry, nowMs: number): Situation {
   const state: Activity = entry.state;
-  if (isStopped(target.lead.state, agentId, entry.sidecar?.name ?? null))
-    return { kind: "stopped" };
+  const name = stoppableByName(target, entry) ? (entry.sidecar?.name ?? null) : null;
+  if (isStopped(target.lead.state, agentId, name)) return { kind: "stopped" };
 
   const quietMs = target.quietAfterMinutes * MINUTE_MS;
   if (state.lastMovedAt === null || nowMs - Date.parse(state.lastMovedAt) < quietMs) {
