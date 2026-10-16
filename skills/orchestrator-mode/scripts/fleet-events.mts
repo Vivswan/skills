@@ -8,7 +8,7 @@
 //   bun "<skill-dir>/scripts/fleet-events.mts" watch /abs/session-dir --quiet-after 5
 
 import { readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { EventInput, Io, PollResult } from "../../session-events/scripts/session-events.mts";
@@ -471,11 +471,13 @@ function fingerprintOf(row: WorktreeRow & { ok: true }): string {
   return `${row.headSha} ${row.newestDirtyMtime ?? "-"} ${row.statusHash}`;
 }
 
+// The daemon's own row is never a worker, wherever it stands.
 function countProcesses(processes: ProcessRow[]): { workers: number; shells: number } {
   let workers = 0;
   let shells = 0;
-  for (const process of processes) {
-    if (SHELLS.has(basename(process.command))) shells += 1;
+  for (const row of processes) {
+    if (row.pid === process.pid) continue;
+    if (SHELLS.has(basename(row.command))) shells += 1;
     else workers += 1;
   }
   return { workers, shells };
@@ -700,6 +702,10 @@ async function pollTarget(target: Target, nowMs: number, io: Io): Promise<PollRe
 }
 
 async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult> {
+  // The instrument stands outside every worktree: the daemon's cwd is the directory the lead
+  // started it from, and the lsof, ps, and git it spawns inherit it, so they would count as that
+  // worktree's workers.
+  process.chdir(tmpdir());
   const nowMs = Date.now();
   const events: EventInput[] = [];
   let busy = false;
