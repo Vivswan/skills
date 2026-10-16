@@ -51,12 +51,12 @@ Skills written in other repositories. Nothing of them is copied here: the market
 | Where you run | How you install them |
 | --- | --- |
 | Claude Code | `/plugin marketplace add Vivswan/skills`, then `/plugin install unslop@vivswan-skills` (same for `frontend-design` and `design-taste-frontend`) |
-| `npx skills` and Codex | each upstream directly, one line each below |
+| `npx skills` and Codex | `npx -y github:Vivswan/skills -g` installs them with this catalog ([Installation](#installation)), or each upstream directly, one line each below |
 
 ```bash
 npx skills add cursor/plugins/pstack/skills/unslop -g
-npx skills add anthropics/skills --skill frontend-design -g
-npx skills add Leonxlnx/taste-skill --skill design-taste-frontend -g
+npx skills add anthropics/skills/skills/frontend-design -g
+npx skills add Leonxlnx/taste-skill/skills/taste-skill -g
 ```
 
 How the skills reference each other (an arrow means "mentions and hands off to, where installed"):
@@ -152,6 +152,14 @@ graph LR
 
 ## Installation
 
+One command installs this catalog and the three [upstream skills](#upstream-skills) through the skills CLI. Its flags pass through to every `npx skills add` it runs (`-g` for your user, `-a codex` for one agent), and `--help` prints the four commands without running them:
+
+```bash
+npx -y github:Vivswan/skills -g
+```
+
+This catalog alone:
+
 ```bash
 npx skills add Vivswan/skills -g
 ```
@@ -183,7 +191,7 @@ Or install everything as a Claude Code plugin:
 /plugin install vivswan-skills@vivswan-skills
 ```
 
-The three upstream skills install by name from the same marketplace (`/plugin install unslop@vivswan-skills`); see [Upstream skills](#upstream-skills).
+The three upstream skills install by name from the same marketplace (`/plugin install unslop@vivswan-skills`); the per-upstream `npx skills` lines are under [Upstream skills](#upstream-skills).
 
 ## Usage
 

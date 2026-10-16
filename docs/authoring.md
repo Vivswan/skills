@@ -59,8 +59,8 @@ A skill written elsewhere is published by its own entry in [`.claude-plugin/mark
 
 To add one:
 
-1. The entry above, in `.claude-plugin/marketplace.json`.
-2. A bullet under the root README's "Upstream skills", linking to the upstream folder at `tree/HEAD`, and one install line there for `npx skills` and Codex users.
+1. The entry above, in `.claude-plugin/marketplace.json`; the one-command installer, `bin/install.mjs`, reads the entries, so it needs no change.
+2. A bullet under the root README's "Upstream skills", linking to the upstream folder at `tree/HEAD`, and one `npx skills add <owner/repo>/<path> -g` line there.
 3. A node in the mermaid graph, clicking to the same page.
 
 The smoke test holds the entry to that shape and the README to the entries. The layout above does not apply: upstream's folder is the skill as it is.

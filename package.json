@@ -3,6 +3,9 @@
   "private": true,
   "license": "SEE LICENSE IN LICENSE.md",
   "type": "module",
+  "bin": {
+    "vivswan-skills": "bin/install.mjs"
+  },
   "scripts": {
     "prepare": "bun scripts/install-hooks.mts",
     "typecheck": "tsc -p .",
