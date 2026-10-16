@@ -381,18 +381,29 @@ function readAgents(
       observed: null,
       said: null,
     };
-    entry.sidecar = readSidecar(join(target.subagentsDir, `agent-${agentId}.meta.json`));
+    const sidecarName = `agent-${agentId}.meta.json`;
+    // A read that fails is this one agent's trouble, never the poll's: the rest of the fleet is still read.
+    const failed = (file: string, error: unknown): void => {
+      const reason = error instanceof Error ? error.message : String(error);
+      io.log(`${agentId}: ${reason}`);
+      trouble.set(`agent:${agentId}`, {
+        text: `fleet: cannot read ${file}: ${reason}`,
+        url: fileUrl(join(target.subagentsDir, file)),
+      });
+      if (known !== undefined) known.observed = null;
+    };
+
+    try {
+      entry.sidecar = readSidecar(join(target.subagentsDir, sidecarName));
+    } catch (error) {
+      failed(sidecarName, error);
+      continue;
+    }
 
     try {
       if (readTranscript(entry, path)) busy = true;
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      io.log(`${agentId}: ${reason}`);
-      trouble.set(`agent:${agentId}`, {
-        text: `fleet: cannot read ${name}: ${reason}`,
-        url: fileUrl(path),
-      });
-      if (known !== undefined) known.observed = null;
+      failed(name, error);
       continue;
     }
 
@@ -475,10 +486,17 @@ function worktreeTransitions(
     });
   }
 
-  // Under a downed or degraded lsof an empty process list is not verified inactivity.
-  const idle = attributionOk && processes.workers === 0 && !moved && previous !== undefined;
+  // Under a downed or degraded lsof an empty process list is not verified inactivity, and a
+  // worktree an agent's sidecar claims is judged by that transcript, so its count holds at zero
+  // until the claim ends.
+  const idle =
+    attributionOk &&
+    processes.workers === 0 &&
+    !moved &&
+    previous !== undefined &&
+    !claimed.has(resolve(row.worktree));
   const quietPolls = idle ? previous.quietPolls + 1 : 0;
-  if (quietPolls === QUIET_POLLS && !claimed.has(resolve(row.worktree))) {
+  if (quietPolls === QUIET_POLLS) {
     events.push({
       kind: "quiet",
       text: `${label}: no worker process and no change for ${QUIET_POLLS} polls`,
