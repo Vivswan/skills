@@ -537,6 +537,19 @@ describe("fleet-events.mts", () => {
             [wtB]: { branch: "track-b", headSha: headB, treeFileCount: 1, quietPolls: 3 },
           },
         });
+        // A sidecar malformed for a poll is that agent's trouble; its last good reading keeps the claim.
+        const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
+        writeFileSync(sidecarA, "{");
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        expect(rows(s).at(-1)).toEqual([
+          "trouble",
+          `fleet: cannot read agent-${A}.meta.json: ${sidecarA} is not a JSON object`,
+          fileUrl(sidecarA),
+        ]);
+        expect(s.state().targets[session.dir]).toMatchObject({
+          worktrees: { [wtA]: { quietPolls: 0 } },
+        });
         // The claim ends: the count starts from zero, so two unchanged unclaimed polls say quiet.
         writeFileSync(
           join(session.subagents, `agent-${A}.meta.json`),
