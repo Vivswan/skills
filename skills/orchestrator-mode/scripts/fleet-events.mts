@@ -256,14 +256,13 @@ function childOfCall(target: Target, toolUseId: string): string | undefined {
 }
 
 /**
- * Whether the lead's stop by name may reach this agent. The lead names only its own children, so
- * an agent another fleet agent spawned shares a name with them by coincidence: for it, only a stop
- * by its exact id counts. A sidecar naming no parent, or the lead's session, is the lead's own child.
+ * Whether the lead's stop by name may reach this agent. The lead names only its own children: a
+ * sidecar naming no parent, or the lead's session, is one. Any other parent, a fleet agent or one
+ * the fleet never read, makes the shared name a coincidence, and only a stop by exact id counts.
  */
 function stoppableByName(target: Target, entry: AgentEntry): boolean {
   const parent = entry.sidecar?.parentAgentId ?? null;
-  if (parent === null || parent === basename(target.sessionFile, ".jsonl")) return true;
-  return !Object.hasOwn(target.agents, parent);
+  return parent === null || parent === basename(target.sessionFile, ".jsonl");
 }
 
 function situationOf(target: Target, agentId: string, entry: AgentEntry, nowMs: number): Situation {
@@ -758,8 +757,9 @@ function troubleOnly(target: Target, failure: FleetReadError): PollResult {
  * commits the draft. An error that is not a read failure is the daemon's failed poll, which saves
  * nothing either.
  */
-async function pollTarget(target: Target, nowMs: number, io: Io): Promise<PollResult> {
-  const draft = structuredClone(target);
+async function pollTarget(target: Target, key: string, nowMs: number, io: Io): Promise<PollResult> {
+  // The saved shape is read here, on the draft: a poll that fails leaves the saved target as it was.
+  const draft = normalizeTarget(structuredClone(target), key, io);
   let outcome: Awaited<ReturnType<typeof readFleet>>;
   try {
     outcome = await readFleet(draft, nowMs, io);
@@ -872,10 +872,8 @@ async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult
   const nowMs = Date.now();
   const events: EventInput[] = [];
   let busy = false;
-  for (const [key, saved] of Object.entries(targets)) {
-    const target = normalizeTarget(saved, key, io);
-    targets[key] = target;
-    const result = await pollTarget(target, nowMs, io);
+  for (const [key, target] of Object.entries(targets)) {
+    const result = await pollTarget(target, key, nowMs, io);
     events.push(...result.events);
     busy ||= result.busy;
   }

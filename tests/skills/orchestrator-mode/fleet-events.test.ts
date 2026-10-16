@@ -188,7 +188,7 @@ function spawnLines(id: string, name: string, agentId: string): Line[] {
 interface PersistedTarget {
   polls: number;
   subagentsListed?: boolean;
-  lead: { state: Record<string, unknown> };
+  lead: { cursor: Record<string, unknown>; state: Record<string, unknown> };
   agents: Record<string, { state: Record<string, unknown> }>;
   worktrees: Record<string, Record<string, unknown>>;
 }
@@ -1193,6 +1193,65 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a failed read after a restart leaves the saved state as it was: the older shape is normalized only by the poll that reads, so no history is lost to a trouble poll", async () => {
+    const s = new Scenario(PROGRAM, "unread");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    appendLines(session.sessionFile, spawnLines("toolu_spawn_a", "builder-a", A));
+    const pathA = writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build" },
+      exchange(ago(0), "toolu_a1"),
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    s.stop({ inbox: box.path });
+
+    rewriteState(s, (target) => {
+      const older = (activity: Record<string, unknown>) => {
+        delete activity.stops;
+        for (const child of Object.values(
+          activity.children as Record<string, Record<string, unknown>>,
+        ))
+          delete child.since;
+      };
+      older(target.lead.state);
+      for (const entry of Object.values(target.agents)) older(entry.state);
+    });
+    const before = persistedTarget(s);
+    const offset = (before.lead.cursor as { offset: number }).offset;
+    expect(offset).toBeGreaterThan(0);
+    // The session transcript cannot be read: a directory stands where the file was.
+    const parked = `${session.sessionFile}.parked`;
+    renameSync(session.sessionFile, parked);
+    mkdirSync(session.sessionFile);
+    await s.start({ inbox: box.path });
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s).map((row) => row[0])).toEqual(["trouble"]);
+    expect(rows(s)[0]?.[1]).toContain("cannot read the session transcript");
+    const after = persistedTarget(s);
+    expect((after.lead.cursor as { offset: number }).offset).toBe(offset);
+    expect(after.lead.state.stops).toBeUndefined();
+    expect(Object.keys(after.lead.state.children as Record<string, unknown>)).toEqual([A]);
+
+    // Readable again, with a stop appended: this poll normalizes, replays, and says the stop.
+    rmSync(session.sessionFile, { recursive: true });
+    renameSync(parked, session.sessionFile);
+    appendLines(session.sessionFile, [
+      toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
+      toolResult(ago(2), "toolu_stop", { agentId: null }),
+    ]);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(1)).toEqual([
+      ["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)],
+    ]);
+    const normalized = persistedTarget(s);
+    expect(normalized.lead.state.stops).toEqual({});
+    expect((normalized.lead.cursor as { offset: number }).offset).toBeGreaterThan(0);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a parent's child wait is its oldest current run: a finished elder resumed by message counts from the message, so the child spawned meanwhile is the wait named", async () => {
     const s = new Scenario(PROGRAM, "elder");
     const box = await s.inbox("a");
@@ -1303,7 +1362,7 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("the lead's stop by name reaches only its own children: a nested agent spawned by another fleet agent under a name the lead once stopped keeps reporting its start and its wait", async () => {
+  test("the lead's stop by name reaches only its own children: a nested agent under a name the lead once stopped keeps reporting its start and its wait, whether its parent is a fleet agent or one the fleet never read", async () => {
     const s = new Scenario(PROGRAM, "nest");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
@@ -1350,12 +1409,21 @@ describe("fleet-events.mts", () => {
       { name: "reviewer", description: "review B's patch", parentAgentId: B },
       [toolUse(ago(5), "toolu_c1", "Bash", { command: "bun test" }, C)],
     );
-    expect(polled(s, box.path)).toBe(1);
-    expect(polled(s, box.path)).toBe(1);
+    // E's parent D has no entry: never listed, or its first read failed. Not the lead's child either way.
+    const pathE = writeAgent(
+      session,
+      E,
+      { name: "reviewer", description: "review D's patch", parentAgentId: D },
+      [toolUse(ago(5), "toolu_e1", "Bash", { command: "bun test" }, E)],
+    );
+    expect(polled(s, box.path)).toBe(2);
+    expect(polled(s, box.path)).toBe(2);
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
       ["agent", "agent reviewer: started", fileUrl(pathC)],
+      ["agent", "agent reviewer: started", fileUrl(pathE)],
       ["agent", "agent reviewer: waiting on Bash for 5 min", fileUrl(pathC)],
+      ["agent", "agent reviewer: waiting on Bash for 5 min", fileUrl(pathE)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
