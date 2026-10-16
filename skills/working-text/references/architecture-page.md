@@ -51,21 +51,11 @@ The page header says what the checks prove: existence only. A caption-only box (
 
 ## The recipe
 
-The three commands ship with the `/working-text` skill under `scripts/architecture/`, beside the readers they share. Copy that folder and `package.json` into a folder of the repository's own, so its check command runs without the skill installed; `<scripts-dir>` below is the copied `scripts/architecture/`.
+The three commands ship with the `/working-text` skill under `scripts/architecture/`, beside the readers they share, and run from there: `<skill-dir>` below is the installed skill's folder, and nothing is copied into the repository. On first run each command bundles itself with its dependencies into the skill's own `.build` folder, so the repository's tree and its `node_modules` stay untouched.
 
-The output prefixes keep the old command names: `arch-lint:`, `render-architecture-map:`, `check-architecture-page:`.
-
-```bash
-mkdir -p <tools-dir>/working-text/scripts
-cp -r "<skill-dir>/scripts/architecture" <tools-dir>/working-text/scripts/
-cp "<skill-dir>/package.json" <tools-dir>/working-text/
-```
-
-The copy keeps `scripts/` between the folder and `architecture/`: on first run each command bundles itself with its dependencies into a `.build` folder beside the `scripts/` that has `package.json` next to it. Add `.build/` to the repository's `.gitignore`.
+The output prefixes are `arch-lint:`, `render-architecture-map:`, and `check-architecture-page:`.
 
 The commands below use `<docs>/architecture.md` for the page. Put it wherever the repository keeps its pages.
-
-A repository whose `tsc` includes the copied scripts also adds the pins of the copied `package.json` as exact devDependencies: the types resolve from its `node_modules`, the run from the bundle.
 
 ### 1. Declare the layers, then make the lint pass
 
@@ -76,7 +66,7 @@ A repository whose `tsc` includes the copied scripts also adds the pins of the c
 - Run the lint and fix until it prints the match line:
 
 ```bash
-bun <scripts-dir>/lint.mts --root .            # exit 0: arch-lint: imports under src match architecture.yml
+bun <skill-dir>/scripts/architecture/lint.mts --root .            # exit 0: arch-lint: imports under src match architecture.yml
 ```
 
 ```text usage=skills/working-text/scripts/architecture/lint.mts
@@ -108,8 +98,8 @@ Each node is one layer, labelled with the paths it owns; an arrow means the laye
 ```
 
 ```bash
-bun <scripts-dir>/render-map.mts --page <docs>/architecture.md          # writes the fence
-bun <scripts-dir>/render-map.mts --page <docs>/architecture.md --check  # exit 1 on drift, for CI
+bun <skill-dir>/scripts/architecture/render-map.mts --page <docs>/architecture.md          # writes the fence
+bun <skill-dir>/scripts/architecture/render-map.mts --page <docs>/architecture.md --check  # exit 1 on drift, before a change lands
 ```
 
 ```text usage=skills/working-text/scripts/architecture/render-map.mts
@@ -140,7 +130,7 @@ One hand-authored mermaid flowchart per concept, above the module map. Rules per
 Run the check with the diagram count pinned, where `<n>` is the number of concept diagrams on the page. The count changes only when a diagram is added or removed on purpose:
 
 ```bash
-bun <scripts-dir>/check-page.mts --page <docs>/architecture.md \
+bun <skill-dir>/scripts/architecture/check-page.mts --page <docs>/architecture.md \
   --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams <n>
 # exit 0: check-architecture-page: <docs>/architecture.md names real code (concept diagrams: <n>)
 ```
@@ -163,24 +153,11 @@ exits: 0 the page names real code; 1 problems, each printed; 2 usage or an unrea
 | `line 41: the diagram has no "Demonstrated by:" line before the next heading` | Add the line with a link to the covering test |
 | `expected <n> concept diagrams, found <n-1>` | A diagram vanished, or you added one: update `--expect-diagrams` in the same change |
 
-Repositories that already have a bun test suite can import the same functions instead: `diagramProblems`, `conceptCounts`, `lintArchitecture`, `renderArchitectureMermaid` are exported by the scripts.
-
 ### 5. Wire the gates
 
-The lint, the renderer, and the page check run inside the repository's check command and, where the repository publishes a docs site, the page is part of it. The entries, shown for a `package.json`:
+The three commands are the agent's instruments, run from the skill directory while the page is authored and before a change to the layering or the page lands. Where the repository publishes a docs site, the page is part of it.
 
-```json
-{
-  "scripts": {
-    "lint:arch": "bun <scripts-dir>/lint.mts --root .",
-    "build:docs": "bun <scripts-dir>/render-map.mts --page <docs>/architecture.md",
-    "build:check": "bun <scripts-dir>/render-map.mts --page <docs>/architecture.md --check",
-    "test:docs": "bun <scripts-dir>/check-page.mts --page <docs>/architecture.md --repo-url https://github.com/<owner>/<repo>/blob/main/ --expect-diagrams <n>"
-  }
-}
-```
-
-Add `lint:arch`, `test:docs`, and `build:check` to the repository's existing check command, whatever its toolchain.
+A gate the repository runs in its own check command is a published package or the repository's own code, never the skill's scripts or a copy of them. `render-map.mts --check` and `check-page.mts` above show what such a gate proves: no drift inside the generated region, and every box naming real code.
 
 ## Maintaining the page after a change
 

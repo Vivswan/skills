@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // The second reader of architecture.yml: the module map, spliced between the
 // page's `<!-- BEGIN GENERATED: <name> (hint) -->` and `<!-- END GENERATED: <name> -->`
-// markers. A repository's check command runs it with --check so a stale map fails CI.
+// markers. The agent runs it from the skill directory before a change lands; --check reports whether the map is stale.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";

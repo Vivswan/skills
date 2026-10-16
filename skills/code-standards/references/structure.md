@@ -49,11 +49,13 @@ analogvnn/
   utils/        is_cpu_cuda.py  to_tensor_parameter.py  render_autograd_graph.py
 ```
 
-- **The file is named after the one public thing in it,** in that thing's own case: `GaussianNoise.py` holds the class `GaussianNoise`, `reduce_precision.py` the function `reduce_precision`. The import line `from analogvnn.nn.noise.GaussianNoise import GaussianNoise` is predictable from either end.
+- **The file is named after its main public thing,** a behaviour class or a stage's main function, in that thing's own case, and holds that thing with its helpers: `GaussianNoise.py` holds the class `GaussianNoise`, `reduce_precision.py` the function `reduce_precision`. The import line `from analogvnn.nn.noise.GaussianNoise import GaussianNoise` is predictable from either end.
+- **A stage's siblings of one kind share one module:** `records` holds its records, `constants` its constants, `util` its small functions, each in the language's file form (`records.py`, `constants.py`, `util.py` in the specimen's Python), and a package that fits one module is one module.
+- **A module named after its main thing may hold that thing alone.** The defect is a helper of one caller, or a constant, given its own module outside those three. Specimen: one sweep split a tree into 269 modules, among them a file holding a single format-conversion helper and another holding a default layer list.
 - **A folder is a concept,** and inside it the base sits beside one file per variant (`Noise.py` beside the four noises). Adding a variant adds one file; nothing else moves.
 - **Every sibling has the same internal template,** and every module follows the one module template (`shape.md`, Module layout), so the reader knows where the constants, the class, and the entry point sit before opening the file. The specimen's reading: "it is easy to even just predict where the thing will be".
 - **Sibling stages mirror their names.** In a pipeline the stage is the folder and the concept is the file name, repeated across stages: `equations/dpuc_input.py` and `simulation/results_parser/dpuc_input.py` are one concept at two stages.
-- **Entry points sit at the root,** one runnable script per run (`finetune.py`, `run_pca.py`). A `utils/` folder is the one place a file may hold several small functions, grouped by what they serve.
+- **Entry points sit at the root,** one runnable script per run (`finetune.py`, `run_pca.py`). A `utils/` folder holds the small functions several stages share, grouped by what they serve, as a stage's `util.py` holds its own.
 - **Package metadata and constants have one home each:** the root `__init__.py` carries only the package's name, author, and version; a package-wide constant (one that two or more modules read) lives in one constants module, never beside its first use. A module's own constants sit in its constants block (`shape.md`, Module layout).
 - **Not sure where a thing goes: ask the user, with options.** Two or three candidate placements, each with the import line it would give and what sits beside it. A guessed placement is the one the reader cannot predict.
 

@@ -131,6 +131,8 @@ func Load(path, model string, window *Window) ([]Segment, error) {
 }
 ```
 
+The rule runs both ways: a step called from one place that is no concept of its own folds back into its caller. A `.golangci.yml` setting tighter than the floor above (complexity 15, 80 lines, 50 statements) is a defect, since it forces splits that read worse.
+
 ## Bodies and guards
 
 Validation is a run of flat guards at the top, each its own paragraph, and they never count toward the one-concept rule:
