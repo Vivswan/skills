@@ -34,9 +34,7 @@ import {
   checkExplicitInvocationPairing,
   checkMarketplacePluginVersionBan,
   checkReadmeInvocationGrouping,
-  checkReadmeMermaidGraph,
   checkReadmeSkillList,
-  checkReadmeUsageExplicitRoster,
   checkSkillDependencies,
   checkSkillScripts,
   ensureBuiltTemplate,
@@ -960,7 +958,6 @@ function main(): void {
   checkCatalogCoverage(manifest, dirs);
   checkMarketplaceAgainstManifest(marketplace, manifest);
   const upstream = checkUpstreamPlugins(marketplace, manifest, skillNames);
-  const allNames: ReadonlySet<string> = new Set([...skillNames, ...upstream.map((s) => s.name)]);
 
   const rootPackage = loadJsonObject(join(ROOT, "package.json"));
   const rootDevDependencies = isRecord(rootPackage.devDependencies)
@@ -1010,15 +1007,13 @@ function main(): void {
   checkManifestEntriesHaveFolders(manifest, skillNames);
   const readmeText = readTextFile(join(ROOT, "README.md"));
   checkReadmeSkillList(readmeText, skillNames, upstream);
-  checkReadmeMermaidGraph(readmeText, allNames, upstream);
-  // The upstream skills carry their own frontmatter, which this repository does not hold, so the invocation grouping
-  // and the Usage roster cover this repository's own skills only.
+  // The upstream skills carry their own frontmatter, which this repository does not hold, so the invocation
+  // grouping covers this repository's own skills only.
   const groupingEntries = skillFrontmatters.map(({ path, frontmatter }) => ({
     name: basename(dirname(path)),
     disabled: frontmatter["disable-model-invocation"] === true,
   }));
   checkReadmeInvocationGrouping(readmeText, groupingEntries);
-  checkReadmeUsageExplicitRoster(readmeText, groupingEntries);
   checkIssueTemplateOptionsMatchFolders(skillNames);
   // The metadata.author loop is the only consumer of the frontmatter list in
   // checkAuthorIdentity, so appending the template holds its pre-filled

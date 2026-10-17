@@ -6,7 +6,8 @@ Thanks for contributing. Every change lands through a pull request; this page co
 
 - Open a PR as a draft and flip it ready when it converges. PRs are squash-merged, so the PR title becomes the commit subject.
 - PR titles and commit subjects are [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), for example `feat: add X`; the `pr-title` check validates the title.
-- The pre-commit hook runs `bun run check:staged`: the fast static checks plus the tests a staged file reaches, by import, by its skill's test folder, by file name, or by a glob it declares. CI runs the full `bun run check` and gates on the `all-green` check; do not run it locally.
+- The pre-commit hook runs `bun run check:staged`: the static checks listed in [`scripts/check-staged.mts`](./scripts/check-staged.mts), then only the tests a staged file reaches, by import, by its skill's test folder, by file name in the test's text, or by a glob the test's first line declares.
+- CI runs the full `bun run check` (its steps are the `check` script in [`package.json`](./package.json)) through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery.mts`](./scripts/cli-discovery.mts)). It gates on the `all-green` check; do not run it locally.
 - Plain ASCII punctuation only: no curly quotes, em-dashes, or invisible unicode.
 - By opening a pull request, or offering code in an issue or review for inclusion, you agree to the Contributions section of [LICENSE.md](LICENSE.md).
 

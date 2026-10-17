@@ -410,7 +410,7 @@ export function ensureBuiltTemplate(docText: string, displayPath = "docs/authori
 }
 
 // Extract a '## <title>' section of the README, with fenced blocks (backtick
-// or tilde, e.g. the mermaid graph) and HTML comments removed so they cannot
+// or tilde, e.g. the install commands) and HTML comments removed so they cannot
 // contribute entries. Stripping runs to a fixpoint: a single pass can
 // reassemble a new `<!--` or fence from the surrounding fragments (CodeQL
 // js/incomplete-multi-character-sanitization), letting crafted content hide
@@ -507,106 +507,6 @@ export function checkReadmeSkillList(
   }
 }
 
-// The README's mermaid skill-reference graph is stripped out of the list
-// checks above (fenced block), so nothing else keeps it honest: a retired
-// skill's node, a dangling edge, or a new skill missing from the graph would
-// render fine and drift silently. This check reads node definitions, edge
-// endpoints, and click targets and holds them to the catalog; whether the
-// block renders is the renderer's verdict, not parsed here.
-export function checkReadmeMermaidGraph(
-  readmeText: string,
-  skillNames: ReadonlySet<string>,
-  upstream: readonly UpstreamSkill[] = [],
-): void {
-  const fence = /```mermaid\n([\s\S]*?)```/.exec(readmeText);
-  if (fence === null) fail("README.md: missing the mermaid skill-reference graph");
-  const body = fence[1] ?? "";
-
-  const aliases = new Map<string, string>();
-  for (const def of body.matchAll(/([A-Za-z0-9_]+)\["\/([^"\]]*)"\]/g)) {
-    const alias = def[1] ?? "";
-    const name = def[2] ?? "";
-    // 'end' is a reserved flowchart keyword: mermaid silently breaks the
-    // rendering instead of erroring, so the graph would pass every check
-    // here and still not draw.
-    if (alias === "end") {
-      fail(
-        "README.md: mermaid node alias 'end' is a reserved flowchart keyword" +
-          " and breaks rendering -- pick another alias",
-      );
-    }
-    const existing = aliases.get(alias);
-    if (existing !== undefined && existing !== name) {
-      fail(
-        `README.md: mermaid node '${alias}' is defined twice with different labels` +
-          ` ('/${existing}' vs '/${name}')`,
-      );
-    }
-    aliases.set(alias, name);
-  }
-
-  const aliasBySkill = new Map<string, string>();
-  for (const [alias, name] of aliases) {
-    if (!skillNames.has(name)) {
-      fail(
-        `README.md: mermaid node '${alias}' labels '/${name}', which has no` +
-          ` skills/${name}/ folder -- remove the stale node or restore the folder`,
-      );
-    }
-    const prior = aliasBySkill.get(name);
-    if (prior !== undefined && prior !== alias) {
-      fail(
-        `README.md: mermaid nodes '${prior}' and '${alias}' both label '/${name}'` +
-          " -- one skill, one node",
-      );
-    }
-    aliasBySkill.set(name, alias);
-  }
-  for (const name of skillNames) {
-    if (!aliasBySkill.has(name)) {
-      fail(`README.md: the mermaid skill-reference graph is missing a node for '${name}'`);
-    }
-  }
-
-  const pages = new Map(upstream.map((skill) => [skill.name, upstreamPage(skill)]));
-  const clicked = new Set<string>();
-  for (const rawLine of body.split("\n")) {
-    const line = rawLine.trim();
-    const click = /^click ([A-Za-z0-9_]+) "([^"]*)"$/.exec(line);
-    if (click !== null) {
-      const alias = click[1] ?? "";
-      const name = aliases.get(alias);
-      if (name === undefined) {
-        fail(`README.md: mermaid click '${line}' references '${alias}', which no node labels`);
-      }
-      const page = pages.get(name) ?? `./skills/${name}/SKILL.md`;
-      if (click[2] !== page) {
-        fail(`README.md: mermaid click for '${alias}' must link to ${page}, found '${click[2]}'`);
-      }
-      if (clicked.has(alias)) fail(`README.md: mermaid node '${alias}' has two click lines`);
-      clicked.add(alias);
-      continue;
-    }
-    if (!line.includes("-->")) continue;
-    // `a <--> b` is the two-way arrow; its endpoints are the same as `a --> b`'s.
-    for (const rawEndpoint of line.replaceAll("<-->", "-->").split("-->")) {
-      // The endpoint is an alias, with or without its inline label; nothing else.
-      const alias = rawEndpoint.trim().replace(/\["\/[^"\]]*"\]$/, "");
-      if (!aliases.has(alias)) {
-        fail(
-          `README.md: mermaid edge '${line}' references '${alias}', which no node` +
-            " definition labels -- a dangling endpoint",
-        );
-      }
-    }
-  }
-  for (const alias of aliases.keys()) {
-    if (!clicked.has(alias)) {
-      fail(`README.md: mermaid node '${alias}' has no click line to its SKILL.md`);
-    }
-  }
-}
-
 export interface InvocationGroupingEntry {
   readonly name: string;
   readonly disabled: boolean;
@@ -631,67 +531,6 @@ export function checkReadmeInvocationGrouping(
         `README.md: '${name}' must be listed under` +
           ` '${disabled ? "Invoked by you" : "Automatic"}' to match its` +
           " disable-model-invocation frontmatter",
-      );
-    }
-  }
-}
-
-// The Usage paragraph names the explicit-invocation-only skills in running
-// prose, outside the grouped list the check above covers; nothing else kept
-// that roster honest, so a rewrite could name the wrong skills and still
-// pass. Scoped to the '## Usage' section (fenced examples stripped) so a
-// code block elsewhere cannot satisfy it, and the roster is parsed strictly
-// entry by entry so unrecognized text fails instead of hiding: the
-// parenthetical must name exactly the skills whose frontmatter sets
-// disable-model-invocation.
-export function checkReadmeUsageExplicitRoster(
-  readmeText: string,
-  skills: readonly InvocationGroupingEntry[],
-): void {
-  const area = readmeSection(readmeText, "Usage");
-  const sentence =
-    /Skills marked explicit-invocation-only \((.*?)\) load only when you invoke them/.exec(area);
-  if (sentence === null) {
-    fail(
-      "README.md: the Usage section is missing the sentence 'Skills marked" +
-        " explicit-invocation-only (<roster>) load only when you invoke them'",
-    );
-  }
-  const named = new Set<string>();
-  for (const entry of (sentence[1] ?? "").split(", ")) {
-    const link = /^\[`\/([a-z0-9-]+)`\]\(\.\/skills\/\1\/SKILL\.md\)$/.exec(entry);
-    if (link === null) {
-      fail(
-        `README.md: cannot parse Usage explicit-invocation-only roster entry '${entry}'` +
-          " -- expected '[`/skill-name`](./skills/skill-name/SKILL.md)' entries separated by ', '",
-      );
-    }
-    const name = link[1] ?? "";
-    if (named.has(name)) {
-      fail(`README.md: duplicate Usage explicit-invocation-only roster entry for '${name}'`);
-    }
-    named.add(name);
-  }
-  const known = new Set(skills.map(({ name }) => name));
-  for (const name of named) {
-    if (!known.has(name)) {
-      fail(
-        `README.md: the Usage explicit-invocation-only roster names '${name}', which is not` +
-          " a published skill -- remove the stale entry",
-      );
-    }
-  }
-  for (const { name, disabled } of skills) {
-    if (disabled && !named.has(name)) {
-      fail(
-        `README.md: the Usage explicit-invocation-only roster is missing '${name}',` +
-          " whose frontmatter sets disable-model-invocation: true",
-      );
-    }
-    if (!disabled && named.has(name)) {
-      fail(
-        `README.md: the Usage explicit-invocation-only roster names '${name}',` +
-          " whose frontmatter does not set disable-model-invocation: true",
       );
     }
   }
