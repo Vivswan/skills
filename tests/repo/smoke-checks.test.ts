@@ -6,7 +6,6 @@ import {
   checkReadmeInvocationGrouping,
   checkReadmeMermaidGraph,
   checkReadmeSkillList,
-  checkReadmeUsageExplicitRoster,
   checkSkillDependencies,
   checkSkillScripts,
   ensureBuiltTemplate,
@@ -243,119 +242,6 @@ describe("checkMarketplacePluginVersionBan", () => {
         { name: "vivswan-skills", source: "./", version: "9.9.9" },
       ]),
     ).toThrow(/single.*source of truth/s);
-  });
-});
-
-describe("checkReadmeUsageExplicitRoster", () => {
-  function usageReadme(roster: string): string {
-    return `# Skills\n\n## Usage\n\nSkills marked explicit-invocation-only (${roster}) load only when you invoke them (e.g. [\`/beta-two\`](./skills/beta-two/SKILL.md) in Claude Code).\n`;
-  }
-  const skills = [
-    { name: "alpha-one", disabled: false },
-    { name: "beta-two", disabled: true },
-  ];
-
-  test("accepts a roster naming exactly the disabled skills", () => {
-    expect(() =>
-      checkReadmeUsageExplicitRoster(
-        usageReadme("[`/beta-two`](./skills/beta-two/SKILL.md)"),
-        skills,
-      ),
-    ).not.toThrow();
-  });
-
-  test("negative control: a roster missing a disabled skill fails", () => {
-    expect(() =>
-      checkReadmeUsageExplicitRoster(usageReadme("[`/alpha-one`](./skills/alpha-one/SKILL.md)"), [
-        { name: "alpha-one", disabled: true },
-        { name: "beta-two", disabled: true },
-      ]),
-    ).toThrow(/missing 'beta-two'/);
-  });
-
-  test("rejects a roster naming an automatic skill", () => {
-    expect(() =>
-      checkReadmeUsageExplicitRoster(
-        usageReadme(
-          "[`/alpha-one`](./skills/alpha-one/SKILL.md), [`/beta-two`](./skills/beta-two/SKILL.md)",
-        ),
-        skills,
-      ),
-    ).toThrow(/does not set disable-model-invocation/);
-  });
-
-  test("rejects a roster naming a skill that is not published", () => {
-    expect(() =>
-      checkReadmeUsageExplicitRoster(
-        usageReadme(
-          "[`/beta-two`](./skills/beta-two/SKILL.md), [`/gamma-three`](./skills/gamma-three/SKILL.md)",
-        ),
-        skills,
-      ),
-    ).toThrow(/not a published skill/);
-  });
-
-  const hiddenSentence =
-    "Skills marked explicit-invocation-only ([`/beta-two`](./skills/beta-two/SKILL.md)) load only when you invoke them.";
-
-  test.each([
-    {
-      id: "the marker sentence was rewritten away",
-      text: "# Skills\n\n## Usage\n\nAll skills load lazily.\n",
-    },
-    {
-      id: "the sentence sits inside a backtick-fenced block",
-      text: `# Skills\n\n## Usage\n\nAll skills load lazily.\n\n\`\`\`text\n${hiddenSentence}\n\`\`\`\n`,
-      reason: "a code example is not the Usage prose",
-    },
-    {
-      id: "the sentence sits inside a tilde-fenced block",
-      text: `# Skills\n\n## Usage\n\nAll skills load lazily.\n\n~~~text\n${hiddenSentence}\n~~~\n`,
-      reason:
-        "CommonMark fences come in both flavors; stripping only backticks let ~~~ satisfy the check",
-    },
-    {
-      id: "the sentence is outside the Usage section",
-      text: `# Skills\n\n## About\n\n${hiddenSentence}\n\n## Usage\n\nAll skills load lazily.\n`,
-    },
-  ])("rejects a README missing the Usage marker sentence: $id", ({ id, text }) => {
-    expectCheckFailure(
-      () => checkReadmeUsageExplicitRoster(text, skills),
-      /the Usage section is missing the sentence/,
-      id,
-    );
-  });
-
-  test("rejects unrecognized text inside the roster instead of ignoring it", () => {
-    // The link scan alone failed open: '**/ghost-skill**' is not a link, so
-    // it contributed nothing and the roster still passed. Every entry must
-    // parse or the check fails.
-    expect(() =>
-      checkReadmeUsageExplicitRoster(
-        usageReadme("[`/beta-two`](./skills/beta-two/SKILL.md), **/ghost-skill**"),
-        skills,
-      ),
-    ).toThrow(/cannot parse Usage explicit-invocation-only roster entry '\*\*\/ghost-skill\*\*'/);
-  });
-
-  test("rejects a roster link whose target names a different skill", () => {
-    expect(() =>
-      checkReadmeUsageExplicitRoster(
-        usageReadme("[`/beta-two`](./skills/alpha-one/SKILL.md)"),
-        skills,
-      ),
-    ).toThrow(/cannot parse/);
-  });
-
-  test("rejects a duplicate roster entry", () => {
-    expect(() =>
-      checkReadmeUsageExplicitRoster(
-        usageReadme(
-          "[`/beta-two`](./skills/beta-two/SKILL.md), [`/beta-two`](./skills/beta-two/SKILL.md)",
-        ),
-        skills,
-      ),
-    ).toThrow(/duplicate/);
   });
 });
 

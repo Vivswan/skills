@@ -2,13 +2,26 @@
 
 [![CI](https://github.com/Vivswan/skills/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/skills/actions/workflows/ci.yml)
 
-A collection of skills for AI coding agents. Skills are packaged instructions and resources that extend agent capabilities.
+Skills for AI coding agents, installable with one command.
 
-## About This Repository
+## Installation
 
-This repo keeps the collection-style catalog and install flow from `vercel-labs/agent-skills`, while also keeping each skill folder plugin-ready so MCP servers, hooks, or app integrations can be added later without changing the layout.
+One command installs this catalog and the three [upstream skills](#upstream-skills) through the skills CLI:
 
-The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes the catalog as the `vivswan-skills` plugin for Claude Code marketplace installs, with [`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) as the plugin manifest, plus one entry per upstream skill, fetched from its own repository by a `git-subdir` source, but the main experience stays centered on `npx skills add ...`.
+```bash
+npx -y github:Vivswan/skills -g
+```
+
+Its flags pass through to each `npx skills add` it runs (`-g` for your user, `-a codex` for one agent), and `--help` prints the four commands without running them. One skill alone: `npx skills add Vivswan/skills -g --skill <name>`.
+
+Or as a Claude Code plugin. The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes this catalog as the `vivswan-skills` plugin, and each upstream skill by its own name (`/plugin install unslop@vivswan-skills`):
+
+```text
+/plugin marketplace add Vivswan/skills
+/plugin install vivswan-skills@vivswan-skills
+```
+
+Skills come first on Claude Code, Codex, and GitHub Copilot alike: each `SKILL.md` is the whole workflow, and the plugin manifests are optional ([the rules](./docs/authoring.md#compatibility-rules)).
 
 ## Available Skills
 
@@ -48,10 +61,7 @@ Skills written in other repositories. Nothing of them is copied here: the market
 - [/frontend-design](https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design) - Distinctive visual design for new or reshaped UI (from [anthropics/skills](https://github.com/anthropics/skills))
 - [/design-taste-frontend](https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill) - Anti-slop frontend for landing pages, portfolios, and redesigns (from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill))
 
-| Where you run | How you install them |
-| --- | --- |
-| Claude Code | `/plugin marketplace add Vivswan/skills`, then `/plugin install unslop@vivswan-skills` (same for `frontend-design` and `design-taste-frontend`) |
-| `npx skills` and Codex | `npx -y github:Vivswan/skills -g` installs them with this catalog ([Installation](#installation)), or each upstream directly, one line each below |
+Each one alone, through the skills CLI:
 
 ```bash
 npx skills add cursor/plugins/pstack/skills/unslop -g
@@ -150,96 +160,6 @@ graph LR
   click fd "https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design"
   click dtf "https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill"
 ```
-
-## Installation
-
-One command installs this catalog and the three [upstream skills](#upstream-skills) through the skills CLI. Its flags pass through to every `npx skills add` it runs (`-g` for your user, `-a codex` for one agent), and `--help` prints the four commands without running them:
-
-```bash
-npx -y github:Vivswan/skills -g
-```
-
-This catalog alone:
-
-```bash
-npx skills add Vivswan/skills -g
-```
-
-Install a specific skill:
-
-```bash
-npx skills add Vivswan/skills -g --skill rubber-duck-review
-```
-
-Install to a specific agent:
-
-```bash
-npx skills add Vivswan/skills -g --skill rubber-duck-review -a codex
-npx skills add Vivswan/skills -g --skill rubber-duck-review -a claude-code
-npx skills add Vivswan/skills -g --skill rubber-duck-review -a github-copilot
-```
-
-Install directly from the skill folder:
-
-```bash
-npx skills add https://github.com/Vivswan/skills/tree/main/skills/rubber-duck-review -g
-```
-
-Or install everything as a Claude Code plugin:
-
-```text
-/plugin marketplace add Vivswan/skills
-/plugin install vivswan-skills@vivswan-skills
-```
-
-The three upstream skills install by name from the same marketplace (`/plugin install unslop@vivswan-skills`); the per-upstream `npx skills` lines are under [Upstream skills](#upstream-skills).
-
-## Usage
-
-Once installed, a skill fires on its own when its trigger matches the task.
-
-Skills marked explicit-invocation-only ([`/claude-remote-peers`](./skills/claude-remote-peers/SKILL.md), [`/natural-writing`](./skills/natural-writing/SKILL.md), [`/orchestrator-mode`](./skills/orchestrator-mode/SKILL.md)) load only when you invoke them. The upstream skills follow their own frontmatter.
-
-**Examples:**
-
-```bash
-Rubber duck this patch before we merge it
-```
-
-```bash
-Get a second opinion on this refactor
-```
-
-## Compatibility
-
-The repo is designed around a shared skill core plus optional agent-specific plugin metadata.
-
-| Capability | Claude Code | Codex | GitHub Copilot |
-| --- | --- | --- | --- |
-| Install with `npx skills add Vivswan/skills` | Yes | Yes | Yes |
-| Plain `SKILL.md` workflow | Yes | Yes | Yes |
-| Root `.claude-plugin/marketplace.json` | Yes, optional enhancement | Not primary path | Not primary path |
-| Per-skill `.codex-plugin/plugin.json` | Not primary path | Yes, optional enhancement | Not primary path |
-| MCP via per-skill config | Yes, if the plugin host supports it | Yes, if the plugin host supports it | Keep a skill-only fallback |
-
-Compatibility rules for every skill in this repo:
-
-- `npx skills add ...` is the primary install path across agents.
-- `SKILL.md` must contain a complete fallback workflow even if plugin or MCP integrations are added.
-- Plugin manifests are additive enhancements, not a requirement for using the skill.
-- GitHub Copilot compatibility should assume skill-first installation rather than plugin-specific behavior.
-
-## Validation
-
-The pre-commit hook runs the targeted checks on every commit; run them by hand with:
-
-```bash
-bun run check:staged
-```
-
-That runs the static checks listed in [`scripts/check-staged.mts`](./scripts/check-staged.mts), then only the tests a staged file reaches, by import, by its skill's test folder, by file name in the test's text, or by a glob the test's first line declares.
-
-CI runs the full `bun run check` (its steps are the `check` script in [`package.json`](./package.json)) through [`.github/workflows/checks.yml`](./.github/workflows/checks.yml), plus an end-to-end test that the real `npx skills` CLI discovers and groups every skill ([`scripts/cli-discovery.mts`](./scripts/cli-discovery.mts)).
 
 ## License
 
