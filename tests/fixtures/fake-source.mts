@@ -4,13 +4,14 @@
 // it. `FAKE_SOURCE_DIR/poll-<n>.json` serves poll n; when it is missing, the highest-numbered
 // fixture below n repeats. A fixture:
 //
-//   { "events": [{ "target": "t1", "kind": "note", "text": "hello", "url": "https://example.com/t1" }],
+//   { "events": [{ "target": "t1", "kind": "changed", "text": "hello", "url": "https://example.com/t1" }],
 //     "busy": true,
 //     "sleepMs": 2000,
 //     "fail": "boom" }
 //
 // `fail` makes the poll throw after the sleep; `polls.log` in the same directory gets one line per
-// poll, `<n> <when> <the watched keys>`, so a test can ask when polls ran.
+// poll, `<n> <when> <the watched keys>`, so a test can ask when polls ran. `summary.json` maps a
+// target's name to the lines `status` shows under it.
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -68,5 +69,14 @@ runEvents<Target>({
     for (const target of Object.values(targets)) target.polls += 1;
     if (fixture.fail !== undefined) throw new Error(fixture.fail);
     return { events: fixture.events ?? [], busy: fixture.busy ?? false };
+  },
+  summary(target) {
+    const path = join(fixtureDir(), "summary.json");
+    if (!existsSync(path)) return [];
+    // A Map: a target named `__proto__` must find nothing, not the object prototype.
+    const lines = new Map(
+      Object.entries(JSON.parse(readFileSync(path, "utf-8")) as Record<string, string[]>),
+    );
+    return lines.get(target.name) ?? [];
   },
 });

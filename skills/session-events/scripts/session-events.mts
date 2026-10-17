@@ -1,8 +1,9 @@
 // One daemon per Claude Code session, started by that session as a background task, polls a
-// source for the targets the session watches and delivers each poll's events as one message. A
-// source script imports `runEvents` and calls it at top level; this module is the whole CLI and
-// the daemon for that source: the control socket, the delivery, the events log, the saved state,
-// and the schedule. What a target is, how it is read, and what its events say is the source's.
+// source for the targets the session watches, delivers each poll's alerts as one message, and
+// keeps its notes in the events log. A source script imports `runEvents` and calls it at top
+// level; this module is the whole CLI and the daemon for that source: the control socket, the
+// delivery, the events log, the saved state, and the schedule. What a target is, how it is read,
+// and what its events say is the source's.
 //
 // A child of the session is rendered as plain text; a detached process is a cross-session sender
 // whose frames the session holds, which is why the CLI never starts the daemon.
@@ -26,6 +27,7 @@ import {
   appendEvents,
   type Event,
   type Files,
+  type Level,
   loadState,
   noTargets,
   type Owner,
@@ -36,7 +38,7 @@ import {
   saveState,
 } from "./state.mts";
 
-export type { Event } from "./state.mts";
+export type { Event, Level } from "./state.mts";
 
 // --- the source contract -------------------------------------------------------
 
@@ -46,9 +48,13 @@ export class UsageError extends Error {}
 /**
  * What a source hands the daemon for one event; the daemon numbers and stamps it. The text is the
  * source's own words about the polled system (identifiers, counts, states, URLs), never text
- * quoted from it: a message is user-role text in the owner's session, with no data channel.
+ * quoted from it: a message is user-role text in the owner's session, with no data channel. The
+ * level, `alert` unless the source says `note`, decides whether the event is delivered (`Level`).
  */
-export type EventInput = { kind: string; text: string; url: string } & Record<string, unknown>;
+export type EventInput = { kind: string; text: string; url: string; level?: Level } & Record<
+  string,
+  unknown
+>;
 
 export interface Io {
   /** A line in the daemon's log, the first place to read when something is off. */
@@ -78,6 +84,8 @@ export interface Source<Target extends object> {
    * nothing it changed is saved. Three failures in a row are one `trouble` event.
    */
   poll(targets: Record<string, Target>, io: Io): Promise<PollResult>;
+  /** Lines `status` prints under a target, what stands right now (a standing alert each); without it the target line stands alone. */
+  summary?(target: Target): string[];
 }
 
 /** Runs the CLI for `source` on this process's arguments; the source script's one call. */
@@ -155,7 +163,7 @@ function usageText(entry: string, source: Source<object>): string {
     ...(source.usage ?? []),
     `files: <dir>/<pid>-<start>.${source.name}.{state.json,events.jsonl,log} and <dir>/<pid>.${source.name}.sock for a session; <id>.${source.name}.* for a file sink;`,
     "  <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>",
-    `prints: one message per poll with events, wrapped in <cross-session-message from="uds:<socket>" from-name="${source.name}" from-mode="<mode>"> and ending "automated notice from ${source.name}; no reply needed";`,
+    `prints: one message per poll with alerts, wrapped in <cross-session-message from="uds:<socket>" from-name="${source.name}" from-mode="<mode>"> and ending "automated notice from ${source.name}; no reply needed";`,
     "  wait prints the new events as JSON lines, then cursor: <id>",
     "exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too); 2 usage, a state file that is not JSON, or no runtime directory;",
     "       3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line",
@@ -259,7 +267,8 @@ type Command =
 interface Status {
   pid: number;
   lastEventId: number;
-  targets: string[];
+  /** Each watched target by its key, with the source's summary lines for it. */
+  targets: Array<{ key: string; summary: string[] }>;
 }
 
 type Reply =
@@ -391,7 +400,10 @@ async function status(ctx: Context<object>, args: string[]): Promise<number> {
       `log: ${files.log}`,
       `events: ${files.events}`,
       `targets: ${reply.targets.length}`,
-      ...reply.targets.map((key) => `  ${key}`),
+      ...reply.targets.flatMap(({ key, summary }) => [
+        `  ${key}`,
+        ...summary.map((line) => `    ${line}`),
+      ]),
       last
         ? `last event: #${last.id} at ${last.at} ${last.kind}: ${last.text.split("\n")[0]}`
         : "last event: none",
@@ -517,9 +529,9 @@ function closingLine(name: string): string {
 }
 
 /**
- * One poll's events as one message: the receiver drops a second frame from the same sender within
- * the same second, so a poll never sends two. Each event is its text and its URL; a blank line
- * separates events, and the closing line comes once.
+ * One poll's alerts as one message: the receiver drops a second frame from the same sender within
+ * the same second, so a poll never sends two. Each alert is its text and its URL; a blank line
+ * separates alerts, and the closing line comes once.
  */
 function digest(name: string, events: Event[]): string {
   return `${events.map((event) => `${event.text}\n${event.url}`).join("\n\n")}\n${closingLine(name)}`;
@@ -648,7 +660,8 @@ async function runDaemon<Target extends object>(
       `poll: ${events.length} event(s), ${result.busy ? "busy" : "quiet"}; next in ${nextInterval} s`,
     );
     commit(events);
-    await deliverDigest(events);
+    // A note is in the log for `wait` and `status`; the owner's inbox hears only the alerts.
+    await deliverDigest(events.filter((event) => event.level !== "note"));
     return events.length;
   };
 
@@ -745,7 +758,10 @@ async function runDaemon<Target extends object>(
           status: {
             pid: process.pid,
             lastEventId: state.lastEventId,
-            targets: Object.keys(state.targets),
+            targets: Object.entries(state.targets).map(([key, target]) => ({
+              key,
+              summary: source.summary?.(target) ?? [],
+            })),
           },
         };
       case "stop":

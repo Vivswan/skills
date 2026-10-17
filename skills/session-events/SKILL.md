@@ -1,6 +1,6 @@
 ---
 name: session-events
-description: Use when a session needs events from any polled system delivered as messages instead of polls, or when writing the source that polls it, so one daemon the session owns carries every event in the peer envelope with no text quoted from the polled system.
+description: Use when a session needs events from any polled system delivered as messages instead of polls, or when writing the source that polls it, so one daemon the session owns carries each poll's alerts in the peer envelope, keeps its notes in the log, and quotes nothing from the polled system.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -8,7 +8,7 @@ metadata:
 
 # Session Events
 
-One daemon per Claude Code session, started by the session as a background task, polls a system for the targets that session watches and delivers what changed as messages, one per poll, and as lines in a log any agent can read. What it polls is a source: a script of a few lines that says what a target is, how it is read, and what its events say.
+One daemon per Claude Code session, started by the session as a background task, polls a system for the targets that session watches, delivers each poll's alerts as one message, and logs every event as a line any agent can read. What it polls is a source: a script of a few lines that says what a target is, how it is read, and what its events say.
 
 Two sources ship in this catalog: the `/watch-github` skill polls GitHub for PRs and branch tips, and `scripts/examples/log-source.mts` watches a file's size. A session writes its own source for anything else that must be polled.
 
@@ -77,7 +77,7 @@ runEvents<File>({
 
 ## The Source Contract
 
-A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and one optional:
+A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and three optional:
 
 | Field | The file source says | The daemon uses it for |
 | --- | --- | --- |
@@ -87,10 +87,13 @@ A source script imports `runEvents` from `scripts/session-events.mts` and calls 
 | `usage` (optional) | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags |
 | `parseTarget(args)` | the path, refused unless absolute | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2 |
 | `poll(targets, io)` | stat each file, compare with its saved size | every poll: the events, and whether anything is still moving |
+| `summary(target)` (optional) | not set, so the target line stands alone | `status`: the lines printed under each target, what stands right now (a standing alert each) |
 
 The daemon keeps `targets`, a map from the text the user typed to the object `parseTarget` returned, and saves it after every poll. A source writes its cursor onto each target object: the file source keeps the last size there. The daemon adds nothing else to the state but the event counter.
 
 An event is `{ kind, text, url }` plus any field the source adds; the daemon prepends `id` and `at`. The log line is `{"id":17,"at":"2026-10-12T14:03:20Z","kind":"changed","text":"/var/log/build.log: 0 to 1097 bytes","url":"file:///var/log/build.log"}`.
+
+One added field the daemon reads: `level`, either `alert` (the default: delivered as a message) or `note` (numbered, logged, counted, shown by `wait` and `status`, never delivered), so a source says what is wrong as alerts and keeps the rest readable as notes.
 
 Rules a poll keeps:
 
@@ -117,7 +120,7 @@ the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET 
 targets: the absolute path of a file; an event when its size changes or it disappears
 files: <dir>/<pid>-<start>.log-events.{state.json,events.jsonl,log} and <dir>/<pid>.log-events.sock for a session; <id>.log-events.* for a file sink;
   <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
-prints: one message per poll with events, wrapped in <cross-session-message from="uds:<socket>" from-name="log-events" from-mode="<mode>"> and ending "automated notice from log-events; no reply needed";
+prints: one message per poll with alerts, wrapped in <cross-session-message from="uds:<socket>" from-name="log-events" from-mode="<mode>"> and ending "automated notice from log-events; no reply needed";
   wait prints the new events as JSON lines, then cursor: <id>
 exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too); 2 usage, a state file that is not JSON, or no runtime directory;
        3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line
@@ -142,7 +145,7 @@ A frame to a session's inbox is user-role text: the same channel the owner types
 
 The daemon is the session's own child, so its frames are delivered with no permission hold, and it exits on its own when the session does. Started detached (`nohup`, `setsid`, `disown`, a shell that exits), it is a cross-session sender and every message is held (Gotchas below).
 
-One poll is one message, at least 1.1 s after the one before, since the receiver drops a second frame from one sender within a second. Events are separated by a blank line, each its text and its URL, and the message ends `automated notice from <name>; no reply needed`.
+One poll's alerts are one message, at least 1.1 s after the one before, since the receiver drops a second frame from one sender within a second, and its notes stay in the log. The alerts are separated by a blank line, each its text and its URL, and the message ends `automated notice from <name>; no reply needed`.
 
 ## Lifecycle
 
