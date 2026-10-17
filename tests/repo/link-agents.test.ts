@@ -1,3 +1,4 @@
+// reaches: bin/catalog.mjs
 import { describe, expect, test } from "bun:test";
 import {
   lstatSync,
@@ -11,6 +12,7 @@ import {
 import { join, relative } from "node:path";
 import { CheckFailure } from "../../scripts/lib.mts";
 import {
+  addCommands,
   discoverAgentSkillDirs,
   linkSkills,
   loadLockAttribution,
@@ -178,6 +180,23 @@ function installedCopy(dir: string, name: string): string {
 function entryExists(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
+
+describe("addCommands", () => {
+  // What drifts: the skills CLI's grammar is an external contract, and the order is behavior (an upstream
+  // failure must leave this repository's skills as they were).
+  test("installs each upstream folder, then this working tree, every call global", () => {
+    expect(
+      addCommands([
+        { target: "example-org/monorepo/tools/alpha" },
+        { target: "example-org/beta/skills/beta" },
+      ]),
+    ).toEqual([
+      ["npx", "skills", "add", "example-org/monorepo/tools/alpha", "--global"],
+      ["npx", "skills", "add", "example-org/beta/skills/beta", "--global"],
+      ["npx", "skills", "add", ".", "--global"],
+    ]);
+  });
+});
 
 describe("repoSkillSources", () => {
   test("maps each name to its one directory, whichever directory ships it", () => {

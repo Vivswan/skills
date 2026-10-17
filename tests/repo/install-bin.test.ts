@@ -1,4 +1,4 @@
-// reaches: bin/install.mjs .claude-plugin/marketplace.json .claude-plugin/plugin.json
+// reaches: bin/install.mjs bin/catalog.mjs .claude-plugin/marketplace.json .claude-plugin/plugin.json
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -236,7 +236,8 @@ describe("bin/install.mjs", () => {
     expect(result.calls).toEqual([]);
   });
 
-  // The bin resolves its catalog files beside itself, so a copy in a scratch tree reads whatever sits there.
+  // The bin resolves its catalog files beside itself through bin/catalog.mjs, so a copy of the pair in a scratch
+  // tree reads whatever sits there.
   const GOOD_MANIFEST = JSON.stringify({ repository: "https://github.com/example-org/example" });
   function binBeside(files: { manifest?: string; marketplace: string }): {
     bin: string;
@@ -247,6 +248,7 @@ describe("bin/install.mjs", () => {
     mkdirSync(join(root, "bin"));
     mkdirSync(join(root, ".claude-plugin"));
     copyFileSync(BIN, join(root, "bin", "install.mjs"));
+    copyFileSync(join(ROOT, "bin", "catalog.mjs"), join(root, "bin", "catalog.mjs"));
     const manifest = join(root, ".claude-plugin", "plugin.json");
     const marketplace = join(root, ".claude-plugin", "marketplace.json");
     writeFileSync(manifest, files.manifest ?? GOOD_MANIFEST);
