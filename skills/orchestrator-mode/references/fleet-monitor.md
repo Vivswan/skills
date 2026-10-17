@@ -65,13 +65,13 @@ A state is said once on entering and once on leaving. A stuck or idle alert is r
 | note | `agent` | `agent <name>: fine again` | the alert on it is void |
 | note | `agent` | `agent <name>: ended 5760 min ago, long before this watch` | a turn that had ended more than a day before the daemon first judged it (the first poll of a watch over an old session, a transcript first seen): history, said once, never an alert; nothing to do |
 | note | `agent` | `agent <name>: still 5760 min, long before this watch` | a stuck call, a still child, or a stall already a day old when first judged: the same history. One that crosses the day under the watch was judged fresh and stays an alert; a history agent that moves again is judged fresh from then on |
-| alert | `idle` | `worktree <branch>: idle 2 polls after work` | a worktree no agent claims by sidecar or by its own commands, with no worker process and no dirty-tree change, after a worker or a change was seen there earlier in this watch; one where nothing ever worked never says it. The liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
+| alert | `idle` | `worktree <branch>: idle 2 polls after work` | a worktree no agent claims by sidecar or by its own commands, with no worker process lsof could read and no dirty-tree change, after a worker or a change was seen there earlier in this watch; one where nothing ever worked never says it. The liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
 | alert | `wipe` | `worktree <branch>: 130 files at HEAD -> 3` | a commit on top of deleting the repo reads normal on every other reading; the tree is read before the track lands |
 | note | `head` | `worktree <branch>: head moved to <sha12>` | the `sha` field is the new head; content claims about the track are re-verified on it at its report |
 | note | `active` | `worktree <branch>: active again` | the idle ended: a worker is in the tree or the dirty tree changed |
 | note | `gone` | `worktree <branch>: gone` | discovery no longer lists it: a landed track swept, or a removed worktree; the `sha` field is its last head |
 | alert | `trouble` | `fleet: <reason>` | the daemon could not take a reading: tooling trouble, never a quiet fleet; the `/session-events` skill's line after three failed polls is the same kind |
-| note | `restored` | `fleet: reading restored` | the reading that failed is back; an empty process list is verified inactivity once more |
+| note | `restored` | `fleet: reading restored` | the reading that failed is back, and it covers the processes lsof could read: a sandboxed worker it cannot read is invisible, so its worktree can idle beside it |
 
 A worktree an agent claims is not read at all: the transcript says everything the tree could, so its commits, idleness, and removal produce no line. A claim is a sidecar naming the worktree, or a tool call of the agent's naming its path in the input (never a result), or the lead's, for 30 minutes after its last command there; the main checkout is never claimed by command.
 
@@ -192,7 +192,7 @@ The row is data. These rules are what it means:
   For "is anything happening now": judge the `processes` list by its command names and state codes across two sweeps. The sweep emits exactly `pid`, `command`, and `state` per process, nothing more.
 - **Presence is not work.** A `processes` list that is a single shell row (one `zsh`/`bash` entry) parked on the worktree cwd reads as "alive" under a presence test and silently voids idle counts that should keep running. The daemon reads a lone shell row as presence, so its idle count keeps running.
 
-  A working agent shows WORKER rows: every process whose cwd is inside the worktree is its own row, so bun/node/test-host children appear alongside the shell.
+  A working agent shows WORKER rows: every process lsof could read whose cwd is inside the worktree is its own row, so bun/node/test-host children appear alongside the shell.
 
   The sweep row cannot answer "is this lone shell childless and idle" (it carries no child list and no CPU). That is an escalation pair, run only when a suspicious row set warrants it: `pgrep -P <shell-pid>` for children, plus `ps -o pcpu=,stat= -p <pid>` for CPU and state.
 
