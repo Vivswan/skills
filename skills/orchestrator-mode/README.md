@@ -38,7 +38,7 @@ npx skills add Vivswan/skills -g --skill verify-with-controls
 - **Gives every subagent an explicit file whitelist** so branches merge cleanly
 - **Delegates review loops to builders** and gates each landing with an integration review
 - **Gates every landing**: direct pushes onto a mainline or PRs with per-track bases (independent or stacked), with reviews and CI watchers either way
-- **Keeps a fleet monitor**, one role with two instruments. The `fleet-events` daemon, where the harness gives it a session to read, delivers each agent's waits and quiet turns and each worktree's head moves and wipes as messages. A sweep-driven monitor subagent is the fallback on any harness. Judgment stays the lead's
+- **Keeps a fleet monitor**, one role with two instruments. The `fleet-events` daemon, where the harness gives it a session to read, messages only what needs the lead's judgment (a stuck call, a stall, a stranded job, an idle worktree, a wipe) and notes the rest in its log. A sweep-driven monitor subagent is the fallback on any harness, and judgment stays the lead's
 - **Sweeps finished agents, tasks, and worktrees** so only live work stays visible, under the [`/worktree-hygiene`](../worktree-hygiene/) rules for removals, handovers, and shared trees
 
 ## Layout

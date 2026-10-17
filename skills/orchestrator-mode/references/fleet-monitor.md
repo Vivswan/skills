@@ -109,7 +109,7 @@ What the brief names, so the monitor never hand-rolls a probe:
 - **`scripts/probe.mts`**: every content claim, never a raw grep (Content Claims).
 - **`scripts/ledger.mts <file>`**: the standing state, re-read every sweep before any flag (Standing States).
 - **`scripts/baseline.mts`**: pinned copies at landings (Pinned Copies).
-- **`/tmp/fleet-<sessionId>/pii-needles.txt`**: the grep on every sweep where a row's `headSha` moved (PII on Every HEAD Move).
+- **`/tmp/fleet-<sessionId>/pii-needles.txt`**: the grep on every sweep where a row's `headSha` moved. The subagent has no builder report to hook on, so for it the moved head stays the trigger (PII at Every Report and Landing).
 - **The cadence**: every 5 to 10 minutes, a scheduled wakeup where the harness offers one (Claude Code's cron tool), a sleep loop otherwise. Each sweep is one script invocation built to the Probe Cost budget, so the bound is noise, not load.
 
 The reporting rules that are the monitor's:
@@ -254,7 +254,7 @@ The judgment that stays with the operator:
 - **Every narrowed variant of a working probe is a NEW probe** and needs its own positive control before its empty is trusted. The rule and its worked example live in `/verify-with-controls`.
 - **Resolve spreads and follow moved definitions by searching, never by pinned path.** A path-pinned check counts 0 and passes silently after the definition moves.
 
-## PII on Every HEAD Move
+## PII at Every Report and Landing
 
 The lead writes the session's needle file once at session start, outside the repository. The file never enters a worktree or a commit.
 
