@@ -766,6 +766,17 @@ describe("session-events.mts", () => {
       "  t2",
     ]);
     expect(status[7]).toMatch(/^last event: #1 at \S+ changed: first line$/);
+    // A source with a summary gets its lines under each target: what stands right now.
+    s.fixtures({ summary: JSON.stringify({ t1: ["review requested", "2 checks pending"] }) });
+    const summarised = s.run(["status"], { inbox: box.path }).stdout.split("\n");
+    expect(summarised.slice(4, 10)).toEqual([
+      "targets: 2",
+      "  t1",
+      "    review requested",
+      "    2 checks pending",
+      "  t2",
+      status[7] as string,
+    ]);
     const one = s.run(["unwatch", "t1"], { inbox: box.path });
     expect(one.code).toBe(0);
     expect(one.stdout).toBe(`unwatched t1 for session ${process.pid}\n`);
@@ -801,6 +812,8 @@ describe("the example source", () => {
     expect(s.run(["watch", file, ...id]).stdout).toContain(
       `watching ${file} for file sink example`,
     );
+    // No summary on this source: the target line stands alone.
+    expect(s.run(["status", ...id]).stdout).toContain(`targets: 1\n  ${file}\nlast event: none\n`);
     const line = "error[E0425]: cannot find value `conf`\n";
     appendFileSync(file, line);
     expect(s.run(["poll", ...id]).stdout).toContain("1 event(s)");

@@ -10,7 +10,8 @@
 //     "fail": "boom" }
 //
 // `fail` makes the poll throw after the sleep; `polls.log` in the same directory gets one line per
-// poll, `<n> <when> <the watched keys>`, so a test can ask when polls ran.
+// poll, `<n> <when> <the watched keys>`, so a test can ask when polls ran. `summary.json` maps a
+// target's name to the lines `status` shows under it.
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -68,5 +69,11 @@ runEvents<Target>({
     for (const target of Object.values(targets)) target.polls += 1;
     if (fixture.fail !== undefined) throw new Error(fixture.fail);
     return { events: fixture.events ?? [], busy: fixture.busy ?? false };
+  },
+  summary(target) {
+    const path = join(fixtureDir(), "summary.json");
+    if (!existsSync(path)) return [];
+    const lines = JSON.parse(readFileSync(path, "utf-8")) as Record<string, string[]>;
+    return lines[target.name] ?? [];
   },
 });

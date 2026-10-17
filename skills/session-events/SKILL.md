@@ -77,7 +77,7 @@ runEvents<File>({
 
 ## The Source Contract
 
-A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and one optional:
+A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and three optional:
 
 | Field | The file source says | The daemon uses it for |
 | --- | --- | --- |
@@ -87,6 +87,7 @@ A source script imports `runEvents` from `scripts/session-events.mts` and calls 
 | `usage` (optional) | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags |
 | `parseTarget(args)` | the path, refused unless absolute | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2 |
 | `poll(targets, io)` | stat each file, compare with its saved size | every poll: the events, and whether anything is still moving |
+| `summary(target)` (optional) | not set, so the target line stands alone | `status`: the lines printed under each target, what stands right now (a standing alert each) |
 
 The daemon keeps `targets`, a map from the text the user typed to the object `parseTarget` returned, and saves it after every poll. A source writes its cursor onto each target object: the file source keeps the last size there. The daemon adds nothing else to the state but the event counter.
 

@@ -83,6 +83,8 @@ export interface Source<Target extends object> {
    * nothing it changed is saved. Three failures in a row are one `trouble` event.
    */
   poll(targets: Record<string, Target>, io: Io): Promise<PollResult>;
+  /** Lines `status` prints under a target, what stands right now (a standing alert each); without it the target line stands alone. */
+  summary?(target: Target): string[];
 }
 
 /** Runs the CLI for `source` on this process's arguments; the source script's one call. */
@@ -264,7 +266,8 @@ type Command =
 interface Status {
   pid: number;
   lastEventId: number;
-  targets: string[];
+  /** Each watched target by its key, with the source's summary lines for it. */
+  targets: Array<{ key: string; summary: string[] }>;
 }
 
 type Reply =
@@ -396,7 +399,10 @@ async function status(ctx: Context<object>, args: string[]): Promise<number> {
       `log: ${files.log}`,
       `events: ${files.events}`,
       `targets: ${reply.targets.length}`,
-      ...reply.targets.map((key) => `  ${key}`),
+      ...reply.targets.flatMap(({ key, summary }) => [
+        `  ${key}`,
+        ...summary.map((line) => `    ${line}`),
+      ]),
       last
         ? `last event: #${last.id} at ${last.at} ${last.kind}: ${last.text.split("\n")[0]}`
         : "last event: none",
@@ -751,7 +757,10 @@ async function runDaemon<Target extends object>(
           status: {
             pid: process.pid,
             lastEventId: state.lastEventId,
-            targets: Object.keys(state.targets),
+            targets: Object.entries(state.targets).map(([key, target]) => ({
+              key,
+              summary: source.summary?.(target) ?? [],
+            })),
           },
         };
       case "stop":
