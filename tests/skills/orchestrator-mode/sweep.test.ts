@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
-import { cleanEnv, git, park, scratchRepo } from "../../helpers/scratch-repo";
+import { cleanEnv, fakeLsof, git, park, scratchRepo } from "../../helpers/scratch-repo";
 import { tempDirs } from "../../helpers/temp-dirs";
 
 const temp = tempDirs();
@@ -150,9 +150,9 @@ describe("sweep.mts worktree rows", () => {
       try {
         const rows = sweep();
         expect(rows.some((r) => r.control === "FAILED")).toBe(false);
-        // An lsof degraded note (ok:true) is legitimate on multi-user hosts;
-        // an ok:false lsof line here would mean attribution silently died.
-        expect(rows.some((r) => "lsof" in r && r.lsof.ok === false)).toBe(false);
+        // A complete reading prints no lsof line, lsof's exit 1 beside another user's unreadable
+        // process included; any lsof line here means attribution silently died.
+        expect(rows.some((r) => "lsof" in r)).toBe(false);
         expect(rows.some((r) => "defaultRef" in r)).toBe(false);
         expect(rows.filter((r) => "worktree" in r).length).toBe(4);
 
@@ -501,25 +501,54 @@ describe("sweep.mts worktree rows", () => {
     SWEEP_TIMEOUT,
   );
 
-  test(
-    "an lsof exiting 0 with no output is a loud instrument failure, not a quiet fleet",
-    () => {
-      // Zero parsed cwd records is impossible for a working probe (the
-      // sweep's own process holds a cwd), so it must read as broken even on
-      // a clean exit - never as processes:[] fleet-wide with no diagnostic.
-      const binDir = join(fixtureRoot, "fake-bin");
-      mkdirSync(binDir, { recursive: true });
-      writeFileSync(join(binDir, "lsof"), "#!/bin/sh\nexit 0\n");
-      chmodSync(join(binDir, "lsof"), 0o755);
-
-      const rows = sweepWithEnv(repo, { PATH: `${binDir}:${process.env.PATH}` });
-      const line = rows.find((r) => "lsof" in r)?.lsof;
-      expect(line.ok).toBe(false);
-      expect(line.error).toContain("zero cwd records");
-      expect(line.error).toContain("empty output");
-      const main = rowFor(rows, "repo");
-      expect(main.ok).toBe(true);
-      expect(main.processes).toEqual([]);
+  // lsof exits 1 whenever one process it scanned could not be read (another user's sandbox, a pid
+  // gone mid-scan) and still prints every other, so its exit code is read with its rows: the
+  // daemon once said degraded attribution beside a parked worker's reading under a parallel hook
+  // run. Zero records on exit 0 is impossible for a working lsof (the sweep's own process holds a
+  // cwd), so that reads as broken, never as processes:[] fleet-wide with no diagnostic.
+  test.each([
+    [
+      "exit 1 after its rows",
+      "a complete reading, no lsof line",
+      { exit: 1, rows: true },
+      undefined,
+    ],
+    [
+      "exit 1 with no output",
+      "degraded",
+      { exit: 1, rows: false },
+      {
+        ok: true,
+        degraded: true,
+        note: "lsof exited 1 with no cwd records: it answered for no process",
+      },
+    ],
+    [
+      "exit 2 after its rows",
+      "down",
+      { exit: 2, rows: true },
+      { ok: false, error: "lsof exited 2" },
+    ],
+    [
+      "exit 0 with no output",
+      "down",
+      { exit: 0, rows: false },
+      { ok: false, error: "lsof exited 0 and parsed zero cwd records from empty output" },
+    ],
+  ])(
+    "lsof's exit code is read with its rows: %s is %s",
+    (name, _reading, shape, line) => {
+      const binDir = fakeLsof(join(fixtureRoot, `lsof-${name.replaceAll(" ", "-")}`), shape);
+      const parked = park(wtLive);
+      try {
+        const rows = sweepWithEnv(repo, { PATH: `${binDir}:${process.env.PATH}` });
+        expect(rows.find((r) => "lsof" in r)?.lsof).toEqual(line);
+        expect(rowFor(rows, "repo").processes).toEqual(line === undefined ? expect.any(Array) : []);
+        const live: Array<{ pid: number }> = rowFor(rows, "wt-live").processes;
+        expect(live.map((p) => p.pid)).toEqual(line === undefined ? [parked.pid] : []);
+      } finally {
+        parked.kill();
+      }
     },
     SWEEP_TIMEOUT,
   );
