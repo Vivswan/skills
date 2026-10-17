@@ -15,7 +15,7 @@ import {
   type Stats,
   statSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 // The harness writes each queued notice as its own block, so a block that is nothing but
 // `<task-notification>` elements is notices, every one of them; a block carrying anything else (a
@@ -25,6 +25,13 @@ const NOTICE_OPEN = "<task-notification>";
 const NOTICE_CLOSE = "</task-notification>";
 const TASK_ID_OPEN = "<task-id>";
 const TASK_ID_CLOSE = "</task-id>";
+// An absolute path inside a command or a prompt: quoted whole (a space inside stays), or bare
+// after a separator. A path-valued field (`file_path`, `path`, `cwd`) is taken whole instead, so a
+// space never cuts a path into a sibling worktree's root.
+const ABSOLUTE_PATH = /"(\/[^"]+)"|'(\/[^']+)'|`(\/[^`]+)`|(?<![^\s=(,:])\/[^\s"'`;|&<>()]+/g;
+const PATH_FIELD = /path|dir|cwd/i;
+// Distinct paths an agent named, oldest dropped past this: bounded state for a long transcript.
+const MAX_NAMED_PATHS = 1000;
 // Each teammate envelope with its body: the regex locates, the parsed body decides. A body with a
 // tag inside is text, never a notice, so it is not captured.
 const TEAMMATE_ENVELOPE =
@@ -66,6 +73,8 @@ export interface Activity {
   children: Record<string, Child>;
   /** Successful TaskStops on a task id that is no job and no child here, by that exact id: a nested agent another agent spawned, stopped by the lead. */
   stops: Record<string, string>;
+  /** Absolute paths named in this agent's tool-call inputs (never a result or a user text), resolved, distinct, oldest first: the worktrees it works in by its own commands. */
+  named: string[];
   lines: number;
   /** Lines that were not a JSON object with a timestamp: counted, never fatal. */
   skipped: number;
@@ -158,9 +167,38 @@ function initialActivity(): Activity {
     jobs: {},
     children: {},
     stops: {},
+    named: [],
     lines: 0,
     skipped: 0,
   };
+}
+
+/** The absolute paths one input string names: a path field's value whole, else each quoted or bare path in it. */
+function namedPathsIn(text: string, field: string): string[] {
+  const trimmed = text.trim();
+  if (PATH_FIELD.test(field) && trimmed.startsWith("/")) return [trimmed];
+  // A bare path in prose carries the sentence's punctuation; a quoted one carries nothing extra.
+  return [...text.matchAll(ABSOLUTE_PATH)].map(
+    (match) => match[1] ?? match[2] ?? match[3] ?? match[0].replace(/[.,:;]+$/, ""),
+  );
+}
+
+// The worktree an agent works in shows up in its own tool calls (`git -C /abs/wt status`) before
+// anything else does, and a tool call's input is the agent's own words, where a result or a user
+// text is not. Each string is read under the field that holds it, an array under its parent's.
+function namePaths(state: Activity, input: unknown, field = ""): void {
+  if (typeof input === "string") {
+    for (const named of namedPathsIn(input, field)) {
+      const path = resolve(named);
+      if (state.named.includes(path)) continue;
+      state.named.push(path);
+      if (state.named.length > MAX_NAMED_PATHS) state.named.shift();
+    }
+  } else if (Array.isArray(input)) {
+    for (const item of input) namePaths(state, item, field);
+  } else if (typeof input === "object" && input !== null) {
+    for (const [key, item] of Object.entries(input)) namePaths(state, item, key);
+  }
 }
 
 /** The task id a notice's body names, trimmed; undefined without a closed `<task-id>` holding one word of text. */
@@ -282,6 +320,7 @@ function reduceAssistant(state: Activity, line: Record<string, unknown>, at: str
     const tool = str(block.name);
     if (id === null || tool === null) continue;
     const input = record(block.input);
+    namePaths(state, input);
     let taskId: string | null = null;
     if (tool === "Agent") taskId = str(input?.name);
     if (tool === "TaskStop") taskId = str(input?.task_id);
@@ -529,7 +568,7 @@ function normalizeChild(value: unknown): Child | null {
   return { name: str(child.name), at, since: str(child.since) ?? at, outcome };
 }
 
-/** A saved activity: `stops` and a child's `since` came later and take their defaults; a shape no version wrote is null. */
+/** A saved activity: `stops`, a child's `since`, and `named` came later and take their defaults; a shape no version wrote is null. */
 export function normalizeActivity(value: unknown): Activity | null {
   const saved = record(value);
   if (saved === null) return null;
@@ -545,6 +584,7 @@ export function normalizeActivity(value: unknown): Activity | null {
     jobs,
     children,
     stops,
+    named: Array.isArray(saved.named) ? saved.named.filter((p) => typeof p === "string") : [],
     lines: num(saved.lines) ?? 0,
     skipped: num(saved.skipped) ?? 0,
   };

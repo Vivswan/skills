@@ -28,7 +28,7 @@ Under the daemon no turn is spent on "nothing changed yet", and no subagent swee
 | --- | --- |
 | `session` | this session's transcript and subagents directory, found by `CLAUDE_CODE_SESSION_ID` under `~/.claude/projects` (the cwd's project tried first) |
 | `/abs/<sessionId>` | an absolute session directory, for another session's fleet |
-| `--repo <root>` | adds the worktree reading of that repository for every worktree no agent's sidecar claims: what `sweep.mts` prints, every poll |
+| `--repo <root>` | adds the worktree reading of that repository for every worktree no agent claims, by sidecar or by its own commands: what `sweep.mts` prints, every poll |
 | `--quiet-after <minutes>` | how long an open turn with nothing pending stands before it is stuck (default 10) |
 
 The transcript reading is incremental: each poll reads what an `agent-*.jsonl` gained since the last. The interval is 60 s while something moves, backing off to 300 s. The command contract (`--help`) is quoted under The Daemon at the end of this page.
@@ -63,7 +63,7 @@ A state is said once on entering and once on leaving. A stuck or idle alert is r
 | note | `agent` | `agent <name>: started` | nothing yet |
 | note | `agent` | `agent <name>: stopped by the lead` | the stop landed |
 | note | `agent` | `agent <name>: fine again` | the alert on it is void |
-| alert | `idle` | `worktree <branch>: idle 2 polls after work` | an unclaimed worktree with no worker process and no dirty-tree change, after a worker or a change was seen there earlier in this watch; a worktree where nothing ever worked never says it. The liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
+| alert | `idle` | `worktree <branch>: idle 2 polls after work` | a worktree no agent claims by sidecar or by its own commands, with no worker process and no dirty-tree change, after a worker or a change was seen there earlier in this watch; one where nothing ever worked never says it. The liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
 | alert | `wipe` | `worktree <branch>: 130 files at HEAD -> 3` | a commit on top of deleting the repo reads normal on every other reading; the tree is read before the track lands |
 | note | `head` | `worktree <branch>: head moved to <sha12>` | the `sha` field is the new head; content claims about the track are re-verified on it at its report |
 | note | `active` | `worktree <branch>: active again` | the idle ended: a worker is in the tree or the dirty tree changed |
@@ -71,7 +71,7 @@ A state is said once on entering and once on leaving. A stuck or idle alert is r
 | alert | `trouble` | `fleet: <reason>` | the daemon could not take a reading: tooling trouble, never a quiet fleet; the `/session-events` skill's line after three failed polls is the same kind |
 | note | `restored` | `fleet: reading restored` | the reading that failed is back; an empty process list is verified inactivity once more |
 
-A worktree an agent's sidecar claims is not read at all: the transcript says everything the tree could, so its commits, its idleness, and its removal produce no line.
+A worktree an agent claims is not read at all: the transcript says everything the tree could, so its commits, its idleness, and its removal produce no line. A claim is the agent's sidecar naming the worktree, or any tool call of the agent's naming its path in the call's input (never a result); the repository's main checkout is never claimed by a command, since every agent reads files there.
 
 What stays the lead's, by hand: content claims through `probe.mts`, standing state in `ledger.mts`, the PII grep at each builder report and at each landing gate, `baseline.mts` at landings, and every nudge and directive. Codex and Copilot workers write no Claude transcript, so for them the daemon has only the worktree reading, the same rows a monitor subagent sweeps.
 

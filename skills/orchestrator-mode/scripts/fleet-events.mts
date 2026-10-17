@@ -367,6 +367,9 @@ function situationOf(
   failed: ReadonlySet<string>,
 ): Situation {
   const state = entry.state;
+  // A parent whose read failed this poll is stale: nothing read of it judges this agent.
+  const parent = entry.sidecar?.parentAgentId ?? null;
+  if (parent !== null && failed.has(parent)) return { kind: "unread" };
   const ownChild = parentState(target, entry) === target.lead.state;
   if (isStopped(target.lead.state, agentId, ownChild ? (entry.sidecar?.name ?? null) : null)) {
     return { kind: "stopped" };
@@ -510,7 +513,7 @@ function restate(
  * The event for one agent this poll, or null. A stop and an ended turn whose signal arrived are
  * notes, said once while they hold; a return to fine retracts a standing alert with a note; an
  * alert is said on entering and repeated as its duration doubles. A judgment that rests on a
- * child whose read failed this poll is held: nothing said, nothing changed.
+ * parent or a child whose read failed this poll is held: nothing said, nothing changed.
  */
 function agentTransition(
   target: Target,
@@ -642,13 +645,14 @@ function readAgents(
     }
   }
 
-  // The listing is the truth: an agent it no longer shows is gone, with its worktree claim and
-  // its standing alert; one it still shows whose read failed keeps its last good sidecar (the
-  // per-agent trouble above).
+  // The listing is the truth: an agent it no longer shows is gone, with its worktree claims (by
+  // sidecar and by its commands) and its standing alert; one it still shows whose read failed
+  // keeps its last good sidecar (the per-agent trouble above).
   for (const [agentId, entry] of Object.entries(target.agents)) {
     if (listed.has(agentId)) continue;
     entry.sidecar = null;
     entry.said = null;
+    entry.state.named = [];
   }
   return { events, busy, refreshed, failed };
 }
@@ -675,11 +679,21 @@ function countProcesses(processes: ProcessRow[]): { workers: number; shells: num
   return { workers, shells };
 }
 
-/** The worktrees an agent's sidecar claims: the transcript says everything their trees could, so they are not read. */
-function claimedWorktrees(target: Target): Set<string> {
+/**
+ * The worktrees agents claim, by a sidecar's path or by naming the path (or one under it) in a
+ * tool call's input at any time in the watch. The repository's main checkout is never claimed by
+ * a command: every agent reads files there.
+ */
+function claimedWorktrees(target: Target, paths: string[], repo: string): Set<string> {
   const claimed = new Set<string>();
+  const roots = paths.map((path) => resolve(path)).filter((root) => root !== resolve(repo));
   for (const entry of Object.values(target.agents)) {
     if (entry.sidecar?.worktreePath) claimed.add(resolve(entry.sidecar.worktreePath));
+    for (const named of entry.state.named) {
+      for (const root of roots) {
+        if (named === root || named.startsWith(`${root}/`)) claimed.add(root);
+      }
+    }
   }
   return claimed;
 }
@@ -781,30 +795,40 @@ async function readWorktrees(
     throw new FleetReadError("worktrees", `fleet: ${discovered.reason}`, fileUrl(repo));
   }
 
-  const { processesByWorktree, lsofLine } = await attributeProcesses(discovered.paths);
-  const lsof = lsofLine?.lsof ?? null;
-  const attributionOk = lsof === null;
-  if (lsof?.ok === true) {
-    trouble.set("lsof", {
-      text: `fleet: process attribution degraded: ${lsof.note}`,
-      url: fileUrl(repo),
-    });
-  }
-  if (lsof?.ok === false) {
-    trouble.set("lsof", {
-      text: `fleet: process attribution is down: ${lsof.error}`,
-      url: fileUrl(repo),
-    });
+  // A claimed worktree is its agent's: no reading while the claim holds, a fresh one after, and
+  // no process reading at all when every worktree is claimed, so a downed lsof is trouble only
+  // when an unclaimed worktree needs it. The claims are read against the rows saved too, so a
+  // worktree claimed and removed between two polls says no `gone`. Attribution still runs over
+  // every discovered path: a worker in a claimed nested worktree must not land on its ancestor.
+  const claimed = claimedWorktrees(
+    target,
+    [...discovered.paths, ...Object.keys(target.worktrees)],
+    repo,
+  );
+  const unclaimed = discovered.paths.filter((path) => !claimed.has(resolve(path)));
+  let attributionOk = true;
+  let processesByWorktree = new Map<string, ProcessRow[]>();
+  if (unclaimed.length > 0) {
+    const attributed = await attributeProcesses(discovered.paths);
+    processesByWorktree = attributed.processesByWorktree;
+    const lsof = attributed.lsofLine?.lsof ?? null;
+    attributionOk = lsof === null;
+    if (lsof?.ok === true) {
+      trouble.set("lsof", {
+        text: `fleet: process attribution degraded: ${lsof.note}`,
+        url: fileUrl(repo),
+      });
+    }
+    if (lsof?.ok === false) {
+      trouble.set("lsof", {
+        text: `fleet: process attribution is down: ${lsof.error}`,
+        url: fileUrl(repo),
+      });
+    }
   }
 
-  const claimed = claimedWorktrees(target);
   const seen = new Set<string>();
-  for (const path of discovered.paths) {
-    // A claimed worktree is its agent's: no reading while the claim holds, and a fresh one after.
-    if (claimed.has(resolve(path))) {
-      delete target.worktrees[path];
-      continue;
-    }
+  for (const path of unclaimed) {
     seen.add(path);
     const row = await worktreeRow(path, null, processesByWorktree.get(path) ?? []);
     if (!row.ok) {

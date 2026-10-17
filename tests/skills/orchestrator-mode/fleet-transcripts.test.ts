@@ -139,6 +139,7 @@ function activity(overrides: Partial<Activity>): Activity {
     jobs: {},
     children: {},
     stops: {},
+    named: [],
     lines: 0,
     skipped: 0,
     ...overrides,
@@ -209,7 +210,9 @@ describe("the transcript reducer", () => {
       toolUse(at(0, 1), "toolu_02", "Read", { file_path: "/home/user/repo/README.md" }),
       userText(at(2), "stop, change of plan"),
     ];
-    expect(fold(lines)).toEqual(activity({ lastMovedAt: at(2), lines: 3 }));
+    expect(fold(lines)).toEqual(
+      activity({ lastMovedAt: at(2), named: ["/home/user/repo/README.md"], lines: 3 }),
+    );
   });
 
   test("a user line whose content is an array with no tool_result is injected input like a string: its text blocks abandon pending calls and carry an idle notice, while an array with a tool_result clears that call alone", () => {
@@ -222,7 +225,7 @@ describe("the transcript reducer", () => {
       message: { role: "user", content: texts.map((text) => ({ type: "text", text })) },
     });
     expect(fold([...pending, blocks("stop,", "change of plan")])).toEqual(
-      activity({ lastMovedAt: at(2), lines: 3 }),
+      activity({ lastMovedAt: at(2), named: ["/home/user/repo/README.md"], lines: 3 }),
     );
     const mixed: Line = {
       ...envelope("user", at(2)),
@@ -239,6 +242,7 @@ describe("the transcript reducer", () => {
       activity({
         lastMovedAt: at(2),
         pending: { toolu_02: { tool: "Read", at: at(0, 1), taskId: null, timeoutMs: null } },
+        named: ["/home/user/repo/README.md"],
         lines: 3,
       }),
     );
@@ -484,104 +488,154 @@ describe("the transcript reducer", () => {
     expect(interrupted.pending).toEqual({});
   });
 
-  test("a notice block is pure or counts nothing: every notice in a block of notices alone counts, in one string or in two text blocks, while a block carrying a teammate envelope or prose counts no notice, quoted ones included, and an idle envelope beside a notice still finishes its sender", () => {
-    const twoJobs = [
-      ...launch,
-      toolUse(at(1), "toolu_02", "Bash", { command: "bun run lint", run_in_background: true }),
-      toolResult(at(1, 1), "toolu_02", {
-        toolUseResult: { backgroundTaskId: "b9z8y7x6w", stdout: "", stderr: "" },
-      }),
-    ];
-    const both = `${notice("b1a2b3c4d")}\n${notice("b9z8y7x6w", "failed")}`;
-    expect(fold([...twoJobs, userText(at(5), both)])).toEqual(
-      activity({ lastMovedAt: at(5), lines: 5 }),
-    );
-    const blocks: Line = {
-      ...envelope("user", at(5)),
-      message: {
-        role: "user",
-        content: [
-          { type: "text", text: notice("b1a2b3c4d") },
-          { type: "text", text: notice("b9z8y7x6w", "failed") },
-        ],
-      },
-    };
-    expect(fold([...twoJobs, blocks])).toEqual(activity({ lastMovedAt: at(5), lines: 5 }));
-    // The harness writes each queued item as its own block, so a notice beside an envelope is a
-    // teammate's words: the idle envelope still finishes its sender, the notice counts for nothing.
-    const idleReviewer =
-      '<teammate-message teammate_id="reviewer" summary="s">\n{"type":"idle_notification","agent":"reviewer"}\n</teammate-message>';
-    const mixed = fold([
-      ...spawns,
-      ...launch,
-      userText(at(10), `${notice("b1a2b3c4d")}\n${idleReviewer}`),
-    ]);
-    expect(mixed.jobs).toEqual({ b1a2b3c4d: { at: at(0, 1) } });
-    expect(mixed.children[CHILD_C]?.outcome).toBe("finished");
-    expect(mixed.children[CHILD_A]?.outcome).toBe("running");
-    // A notice quoted inside a teammate's message is that teammate's words: the job runs on, and the
-    // message interrupts the pending call like any other.
-    const quoted = `<teammate-message teammate_id="reviewer" summary="example">\nUse this parser fixture: ${notice("b1a2b3c4d")}\n</teammate-message>`;
-    const interrupted = fold([
-      ...launch,
-      toolUse(at(2), "toolu_09", "Read", { file_path: "/home/user/repo/README.md" }),
-      userText(at(3), quoted),
-    ]);
-    expect(interrupted).toEqual(
-      activity({ lastMovedAt: at(3), jobs: { b1a2b3c4d: { at: at(0, 1) } }, lines: 4 }),
-    );
-    // A real notice up front lends nothing to the block: with an envelope in it, neither counts.
-    const quotedB = `<teammate-message teammate_id="reviewer" summary="example">\nUse this parser fixture: ${notice("b9z8y7x6w")}\n</teammate-message>`;
-    expect(fold([...twoJobs, userText(at(5), `${notice("b1a2b3c4d")}\n${quotedB}`)])).toEqual(
-      activity({
-        lastMovedAt: at(5),
-        jobs: { b1a2b3c4d: { at: at(0, 1) }, b9z8y7x6w: { at: at(1, 1) } },
-        lines: 5,
-      }),
-    );
-    // A teammate's envelope that itself quotes an envelope: the inner closing tag once ended the
-    // span the reducer stripped, and the quoted notice after it finished the job it named.
-    const nested = `${notice("b1a2b3c4d")}\n<teammate-message teammate_id="reviewer">\nExamples: <teammate-message teammate_id="example">text</teammate-message> and ${notice("b9z8y7x6w")}\n</teammate-message>`;
-    expect(fold([...twoJobs, userText(at(5), nested)]).jobs).toEqual({
-      b1a2b3c4d: { at: at(0, 1) },
-      b9z8y7x6w: { at: at(1, 1) },
-    });
-    // Written as the harness writes it, each queued item its own block, the real notice counts.
-    const split: Line = {
-      ...envelope("user", at(5)),
-      message: {
-        role: "user",
-        content: [
-          { type: "text", text: notice("b1a2b3c4d") },
-          { type: "text", text: nested.slice(notice("b1a2b3c4d").length + 1) },
-        ],
-      },
-    };
-    expect(fold([...twoJobs, split]).jobs).toEqual({ b9z8y7x6w: { at: at(1, 1) } });
-    // Prose around a notice, or a notice cut short, is not a block of notices.
-    const prosed = `Done: ${notice("b1a2b3c4d")}`;
-    expect(fold([...launch, userText(at(5), prosed)]).jobs).toEqual({
-      b1a2b3c4d: { at: at(0, 1) },
-    });
-    const cut = notice("b1a2b3c4d").replace("</task-notification>", "");
-    expect(fold([...launch, userText(at(5), cut)]).jobs).toEqual({ b1a2b3c4d: { at: at(0, 1) } });
-    // Prose or an envelope BETWEEN two notices is as impure as one around them: a pattern over the
-    // whole block once backtracked across the first closing tag and counted both.
-    const between = `${notice("b1a2b3c4d")}\nprose\n${notice("b9z8y7x6w")}`;
-    expect(fold([...twoJobs, userText(at(5), between)]).jobs).toEqual({
-      b1a2b3c4d: { at: at(0, 1) },
-      b9z8y7x6w: { at: at(1, 1) },
-    });
-    // A block of many empty elements and a stray byte is read in one pass, never by backtracking.
-    const many = `${"<task-notification></task-notification>".repeat(5000)}!`;
-    const unclosed = `<task-notification><task-id>x${" ".repeat(200_000)}</task-notification>`;
-    const started = performance.now();
-    expect(fold([...launch, userText(at(5), many)]).jobs).toEqual({ b1a2b3c4d: { at: at(0, 1) } });
-    expect(fold([...launch, userText(at(5), unclosed)]).jobs).toEqual({
-      b1a2b3c4d: { at: at(0, 1) },
-    });
-    expect(performance.now() - started).toBeLessThan(1000);
-  });
+  test(
+    "a notice block is pure or counts nothing: every notice in a block of notices alone counts, in one string or in two text blocks, " +
+      "while a block carrying a teammate envelope or prose counts no notice, quoted ones included, and an idle envelope beside a notice still finishes its sender",
+    () => {
+      const twoJobs = [
+        ...launch,
+        toolUse(at(1), "toolu_02", "Bash", { command: "bun run lint", run_in_background: true }),
+        toolResult(at(1, 1), "toolu_02", {
+          toolUseResult: { backgroundTaskId: "b9z8y7x6w", stdout: "", stderr: "" },
+        }),
+      ];
+      const both = `${notice("b1a2b3c4d")}\n${notice("b9z8y7x6w", "failed")}`;
+      expect(fold([...twoJobs, userText(at(5), both)])).toEqual(
+        activity({ lastMovedAt: at(5), lines: 5 }),
+      );
+      const blocks: Line = {
+        ...envelope("user", at(5)),
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: notice("b1a2b3c4d") },
+            { type: "text", text: notice("b9z8y7x6w", "failed") },
+          ],
+        },
+      };
+      expect(fold([...twoJobs, blocks])).toEqual(activity({ lastMovedAt: at(5), lines: 5 }));
+      // The harness writes each queued item as its own block, so a notice beside an envelope is a
+      // teammate's words: the idle envelope still finishes its sender, the notice counts for nothing.
+      const idleReviewer =
+        '<teammate-message teammate_id="reviewer" summary="s">\n{"type":"idle_notification","agent":"reviewer"}\n</teammate-message>';
+      const mixed = fold([
+        ...spawns,
+        ...launch,
+        userText(at(10), `${notice("b1a2b3c4d")}\n${idleReviewer}`),
+      ]);
+      expect(mixed.jobs).toEqual({ b1a2b3c4d: { at: at(0, 1) } });
+      expect(mixed.children[CHILD_C]?.outcome).toBe("finished");
+      expect(mixed.children[CHILD_A]?.outcome).toBe("running");
+      // A notice quoted inside a teammate's message is that teammate's words: the job runs on, and the
+      // message interrupts the pending call like any other.
+      const quoted = `<teammate-message teammate_id="reviewer" summary="example">\nUse this parser fixture: ${notice("b1a2b3c4d")}\n</teammate-message>`;
+      const interrupted = fold([
+        ...launch,
+        toolUse(at(2), "toolu_09", "Read", { file_path: "/home/user/repo/README.md" }),
+        userText(at(3), quoted),
+      ]);
+      expect(interrupted).toEqual(
+        activity({
+          lastMovedAt: at(3),
+          jobs: { b1a2b3c4d: { at: at(0, 1) } },
+          named: ["/home/user/repo/README.md"],
+          lines: 4,
+        }),
+      );
+      // A real notice up front lends nothing to the block: with an envelope in it, neither counts.
+      const quotedB = `<teammate-message teammate_id="reviewer" summary="example">\nUse this parser fixture: ${notice("b9z8y7x6w")}\n</teammate-message>`;
+      expect(fold([...twoJobs, userText(at(5), `${notice("b1a2b3c4d")}\n${quotedB}`)])).toEqual(
+        activity({
+          lastMovedAt: at(5),
+          jobs: { b1a2b3c4d: { at: at(0, 1) }, b9z8y7x6w: { at: at(1, 1) } },
+          lines: 5,
+        }),
+      );
+      // A teammate's envelope that itself quotes an envelope: the inner closing tag once ended the
+      // span the reducer stripped, and the quoted notice after it finished the job it named.
+      const nested = `${notice("b1a2b3c4d")}\n<teammate-message teammate_id="reviewer">\nExamples: <teammate-message teammate_id="example">text</teammate-message> and ${notice("b9z8y7x6w")}\n</teammate-message>`;
+      expect(fold([...twoJobs, userText(at(5), nested)]).jobs).toEqual({
+        b1a2b3c4d: { at: at(0, 1) },
+        b9z8y7x6w: { at: at(1, 1) },
+      });
+      // Written as the harness writes it, each queued item its own block, the real notice counts.
+      const split: Line = {
+        ...envelope("user", at(5)),
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: notice("b1a2b3c4d") },
+            { type: "text", text: nested.slice(notice("b1a2b3c4d").length + 1) },
+          ],
+        },
+      };
+      expect(fold([...twoJobs, split]).jobs).toEqual({ b9z8y7x6w: { at: at(1, 1) } });
+      // Prose around a notice, or a notice cut short, is not a block of notices.
+      const prosed = `Done: ${notice("b1a2b3c4d")}`;
+      expect(fold([...launch, userText(at(5), prosed)]).jobs).toEqual({
+        b1a2b3c4d: { at: at(0, 1) },
+      });
+      const cut = notice("b1a2b3c4d").replace("</task-notification>", "");
+      expect(fold([...launch, userText(at(5), cut)]).jobs).toEqual({ b1a2b3c4d: { at: at(0, 1) } });
+      // Prose or an envelope BETWEEN two notices is as impure as one around them: a pattern over the
+      // whole block once backtracked across the first closing tag and counted both.
+      const between = `${notice("b1a2b3c4d")}\nprose\n${notice("b9z8y7x6w")}`;
+      expect(fold([...twoJobs, userText(at(5), between)]).jobs).toEqual({
+        b1a2b3c4d: { at: at(0, 1) },
+        b9z8y7x6w: { at: at(1, 1) },
+      });
+      // A block of many empty elements and a stray byte is read in one pass, never by backtracking.
+      const many = `${"<task-notification></task-notification>".repeat(5000)}!`;
+      const unclosed = `<task-notification><task-id>x${" ".repeat(200_000)}</task-notification>`;
+      const started = performance.now();
+      expect(fold([...launch, userText(at(5), many)]).jobs).toEqual({
+        b1a2b3c4d: { at: at(0, 1) },
+      });
+      expect(fold([...launch, userText(at(5), unclosed)]).jobs).toEqual({
+        b1a2b3c4d: { at: at(0, 1) },
+      });
+      expect(performance.now() - started).toBeLessThan(1000);
+    },
+  );
+
+  test(
+    "the absolute paths a tool call's input names are kept, resolved and distinct: a path field's value whole, a command's quoted paths whole and its bare paths, " +
+      "a nested or flag value, never a tool result or a user text; a space never cuts a path short, and a command that starts with a program's path is still read for its paths",
+    () => {
+      const named = fold([
+        toolUse(at(0), "toolu_01", "Bash", {
+          command: "git -C /repo/.worktrees/alerts/ status && ls /repo/.worktrees/alerts",
+        }),
+        toolResult(at(1), "toolu_01", {
+          content: [{ type: "text", text: "/repo/.worktrees/other is clean" }],
+        }),
+        toolUse(at(2), "toolu_02", "Agent", {
+          description: "look",
+          prompt: "read /repo/docs/a.md and /repo/docs/b.md, then `/repo/.worktrees/x[1]/file`",
+          nested: { paths: ["/repo/docs/a.md", "--repo=/repo/here"] },
+        }),
+        toolResult(at(3), "toolu_02"),
+        toolUse(at(4), "toolu_03", "Read", { file_path: "/repo/.worktrees/x y/notes.md" }),
+        toolResult(at(5), "toolu_03"),
+        toolUse(at(6), "toolu_04", "Bash", {
+          command: `/usr/bin/git -C "/repo/.worktrees/x y" status; ls '/repo/.worktrees/x z'`,
+        }),
+        toolResult(at(7), "toolu_04"),
+        userText(at(8), "and /tmp/user-text is not a tool call"),
+      ]).named;
+      expect(named).toEqual([
+        "/repo/.worktrees/alerts",
+        "/repo/docs/a.md",
+        "/repo/docs/b.md",
+        "/repo/.worktrees/x[1]/file",
+        "/repo/here",
+        "/repo/.worktrees/x y/notes.md",
+        "/usr/bin/git",
+        "/repo/.worktrees/x y",
+        "/repo/.worktrees/x z",
+      ]);
+    },
+  );
 
   test("a resume keeps the child's spawn time: a send or a TaskStop by name reaches the latest spawn, not the resumed elder, while the elder's idle notification by that name finishes the elder, the running one", () => {
     const reviewer = {
@@ -666,6 +720,7 @@ describe("the transcript reducer", () => {
       state: { ...saved.state, children: { [CHILD_C]: { ...children[CHILD_C], since: at(2, 1) } } },
     });
     expect(kept?.cursor).toEqual({ offset: 4096, ino: null, size: 4096 });
+    expect(kept?.state.named).toEqual([]);
     expect(kept?.state.children).toEqual({
       [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "finished" },
     });
