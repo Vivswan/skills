@@ -3,6 +3,7 @@ import {
   checkDescriptionTriggerForm,
   checkExplicitInvocationPairing,
   checkMarketplacePluginVersionBan,
+  checkReadmeExplicitUpstreams,
   checkReadmeInvocationGrouping,
   checkReadmeMermaidGraph,
   checkReadmeSkillList,
@@ -181,6 +182,63 @@ describe("checkReadmeMermaidGraph", () => {
     // erroring, so without this check the graph passes and does not draw.
     const graph = `${goodGraph}  end["/beta-two"]\n`;
     expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/reserved/);
+  });
+});
+
+describe("checkReadmeExplicitUpstreams", () => {
+  // What drifts: the install commands mark the copies the marketplace flags; the README names them in prose.
+  const upstream = [
+    { name: "alpha-one", repo: "example-org/alpha", path: "skills/alpha-one", explicitOnly: true },
+    { name: "beta-two", repo: "example-org/beta", path: "skills/beta-two", explicitOnly: true },
+    { name: "gamma-three", repo: "example-org/gamma", path: "gamma", explicitOnly: false },
+  ];
+  const page = (roster: string) =>
+    readme(
+      `\n### Upstream skills\n\nInstalled by \`one\` or \`two\`, ${roster} load only when you invoke them.\n`,
+    );
+
+  test("accepts a roster naming exactly the flagged entries, in any order", () => {
+    expect(() =>
+      checkReadmeExplicitUpstreams(page("`beta-two` and `alpha-one`"), upstream),
+    ).not.toThrow();
+    expect(() =>
+      checkReadmeExplicitUpstreams(page("`alpha-one`, and `beta-two`"), upstream),
+    ).not.toThrow();
+  });
+
+  test("accepts a page without the sentence when nothing is flagged", () => {
+    expect(() =>
+      checkReadmeExplicitUpstreams(readme("\n### Upstream skills\n"), [
+        upstream[2] as (typeof upstream)[number],
+      ]),
+    ).not.toThrow();
+  });
+
+  test.each([
+    {
+      id: "a flagged entry missing",
+      roster: "`alpha-one`",
+      pattern: /names \[alpha-one\], the marketplace flags \[alpha-one, beta-two\]/,
+    },
+    {
+      id: "an unflagged entry named",
+      roster: "`alpha-one`, `beta-two`, and `gamma-three`",
+      pattern: /the two must agree/,
+    },
+    {
+      id: "prose that is not a name",
+      roster: "`alpha-one` and **beta-two**",
+      pattern: /cannot parse explicit-invocation-only upstream roster entry '\*\*beta-two\*\*'/,
+    },
+  ])("rejects $id", ({ roster, pattern }) => {
+    expectCheckFailure(() => checkReadmeExplicitUpstreams(page(roster), upstream), pattern);
+  });
+
+  test("rejects a page without the sentence when an entry is flagged", () => {
+    expectCheckFailure(
+      () => checkReadmeExplicitUpstreams(readme("\n### Upstream skills\n"), upstream),
+      /missing the sentence/,
+    );
   });
 });
 
