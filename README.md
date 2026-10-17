@@ -47,16 +47,18 @@ Skills written in other repositories. Nothing of them is copied here: the market
 - [/unslop](https://github.com/cursor/plugins/tree/HEAD/pstack/skills/unslop) - Cut AI tells from any writing (from [cursor/plugins](https://github.com/cursor/plugins))
 - [/frontend-design](https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design) - Distinctive visual design for new or reshaped UI (from [anthropics/skills](https://github.com/anthropics/skills))
 - [/design-taste-frontend](https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill) - Anti-slop frontend for landing pages, portfolios, and redesigns (from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill))
+- [/impeccable](https://github.com/pbakaus/impeccable/tree/HEAD/.agents/skills/impeccable) - Design direction for frontend work: design, critique, audit, polish, or harden an interface, with detector rules against AI-template tells (from [pbakaus/impeccable](https://github.com/pbakaus/impeccable))
 
 | Where you run | How you install them |
 | --- | --- |
-| Claude Code | `/plugin marketplace add Vivswan/skills`, then `/plugin install unslop@vivswan-skills` (same for `frontend-design` and `design-taste-frontend`) |
+| Claude Code | `/plugin marketplace add Vivswan/skills`, then `/plugin install unslop@vivswan-skills` (same for `frontend-design`, `design-taste-frontend`, and `impeccable`) |
 | `npx skills` and Codex | `npx -y github:Vivswan/skills -g` installs them with this catalog ([Installation](#installation)), or each upstream directly, one line each below |
 
 ```bash
 npx skills add cursor/plugins/pstack/skills/unslop -g
 npx skills add anthropics/skills/skills/frontend-design -g
 npx skills add Leonxlnx/taste-skill/skills/taste-skill -g
+npx skills add pbakaus/impeccable/.agents/skills/impeccable -g
 ```
 
 How the skills reference each other (an arrow means "mentions and hands off to, where installed"):
@@ -90,6 +92,7 @@ graph LR
   crp["/claude-remote-peers"]
   fd["/frontend-design"]
   dtf["/design-taste-frontend"]
+  imp["/impeccable"]
 
   cs <--> wt
   cs <--> rdr
@@ -149,11 +152,12 @@ graph LR
   click crp "./skills/claude-remote-peers/SKILL.md"
   click fd "https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design"
   click dtf "https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill"
+  click imp "https://github.com/pbakaus/impeccable/tree/HEAD/.agents/skills/impeccable"
 ```
 
 ## Installation
 
-One command installs this catalog and the three [upstream skills](#upstream-skills) through the skills CLI, every call unattended, so nothing prompts and an installed copy is overwritten. Its flags pass through to each `npx skills add` it runs (`-g` for your user, `-a codex` for one agent, `--skill <name>` for one skill, which runs only the call that ships it), and `--help` prints the commands without running them:
+One command installs this catalog and the four [upstream skills](#upstream-skills) through the skills CLI, every call unattended, so nothing prompts and an installed copy is overwritten. Its flags pass through to each `npx skills add` it runs (`-g` for your user, `-a codex` for one agent, `--skill <name>` for one skill, which runs only the call that ships it), and `--help` prints the commands without running them:
 
 ```bash
 npx -y github:Vivswan/skills -g
@@ -192,7 +196,7 @@ Or install everything as a Claude Code plugin:
 /plugin install vivswan-skills@vivswan-skills
 ```
 
-The three upstream skills install by name from the same marketplace (`/plugin install unslop@vivswan-skills`); the per-upstream `npx skills` lines are under [Upstream skills](#upstream-skills).
+The four upstream skills install by name from the same marketplace (`/plugin install unslop@vivswan-skills`); the per-upstream `npx skills` lines are under [Upstream skills](#upstream-skills).
 
 ## Usage
 

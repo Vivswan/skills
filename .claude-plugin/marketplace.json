@@ -36,6 +36,16 @@
       "skills": ["./"]
     },
     {
+      "name": "impeccable",
+      "description": "Design direction for frontend work: commands to design, critique, audit, polish, or harden a web or native interface, with detector rules against AI-template tells",
+      "source": {
+        "source": "git-subdir",
+        "url": "pbakaus/impeccable",
+        "path": ".agents/skills/impeccable"
+      },
+      "skills": ["./"]
+    },
+    {
       "name": "unslop",
       "description": "Cuts AI tells from any writing",
       "source": { "source": "git-subdir", "url": "cursor/plugins", "path": "pstack/skills/unslop" },

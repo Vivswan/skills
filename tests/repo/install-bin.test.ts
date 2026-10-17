@@ -27,9 +27,10 @@ const commands = (flags: string[]) => [
   ["npx", "-y", "skills", "add", "Vivswan/skills", ...flags],
   ["npx", "-y", "skills", "add", "Leonxlnx/taste-skill/skills/taste-skill", ...flags],
   ["npx", "-y", "skills", "add", "anthropics/skills/skills/frontend-design", ...flags],
+  ["npx", "-y", "skills", "add", "pbakaus/impeccable/.agents/skills/impeccable", ...flags],
   ["npx", "-y", "skills", "add", "cursor/plugins/pstack/skills/unslop", ...flags],
 ];
-/** The calls at these positions of `commands(flags)`: 0 is this repository, 3 the unslop upstream. */
+/** The calls at these positions of `commands(flags)`: 0 is this repository, 4 the unslop upstream. */
 const only = (flags: string[], ...which: number[]) =>
   which.map((index) => commands(flags)[index] as string[]);
 const printed = (argvs: string[][]) => argvs.map((argv) => argv.join(" "));
@@ -158,16 +159,16 @@ describe("bin/install.mjs", () => {
       args: ["-g", "--skill", "unslop"],
       env: {},
       status: 0,
-      calls: only(["-g", "--skill", "unslop", "-y"], 3),
-      stdout: printed(only(["-g", "--skill", "unslop", "-y"], 3)),
+      calls: only(["-g", "--skill", "unslop", "-y"], 4),
+      stdout: printed(only(["-g", "--skill", "unslop", "-y"], 4)),
     },
     {
       name: "-s with several names runs each call that ships one of them, in catalog order",
       args: ["-s", "unslop", "rubber-duck-review", "-g"],
       env: {},
       status: 0,
-      calls: only(["-s", "unslop", "rubber-duck-review", "-g", "-y"], 0, 3),
-      stdout: printed(only(["-s", "unslop", "rubber-duck-review", "-g", "-y"], 0, 3)),
+      calls: only(["-s", "unslop", "rubber-duck-review", "-g", "-y"], 0, 4),
+      stdout: printed(only(["-s", "unslop", "rubber-duck-review", "-g", "-y"], 0, 4)),
     },
     {
       name: "an empty argument ends the CLI's name list, so a name after it selects nothing",
@@ -207,7 +208,7 @@ describe("bin/install.mjs", () => {
       env: {},
       status: 0,
       calls: [],
-      stdout: printed(only(["--skill", "unslop", "-g", "-y"], 3)),
+      stdout: printed(only(["--skill", "unslop", "-g", "-y"], 4)),
     },
   ])("$name", ({ args, env, status, calls, stdout }) => {
     const result = run(args, { env });
