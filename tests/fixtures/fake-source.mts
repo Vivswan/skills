@@ -73,7 +73,10 @@ runEvents<Target>({
   summary(target) {
     const path = join(fixtureDir(), "summary.json");
     if (!existsSync(path)) return [];
-    const lines = JSON.parse(readFileSync(path, "utf-8")) as Record<string, string[]>;
-    return lines[target.name] ?? [];
+    // A Map: a target named `__proto__` must find nothing, not the object prototype.
+    const lines = new Map(
+      Object.entries(JSON.parse(readFileSync(path, "utf-8")) as Record<string, string[]>),
+    );
+    return lines.get(target.name) ?? [];
   },
 });

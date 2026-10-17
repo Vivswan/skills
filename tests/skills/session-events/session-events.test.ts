@@ -753,30 +753,33 @@ describe("session-events.mts", () => {
     // A key is any text the user typed, the one that names an object's prototype included.
     expect(s.run(["watch", "__proto__"], { inbox: box.path }).stdout).toContain("3 target(s)");
     expect(Object.keys(s.state().targets)).toEqual(["t1", "t2", "__proto__"]);
-    expect(s.run(["unwatch", "__proto__"], { inbox: box.path }).code).toBe(0);
     const { socket, log, events } = s.files();
     const status = s.run(["status"], { inbox: box.path }).stdout.split("\n");
-    expect(status.slice(0, 7)).toEqual([
+    expect(status.slice(0, 8)).toEqual([
       `daemon: running (pid ${daemon.pid}) for session ${process.pid}`,
       `socket: ${socket}`,
       `log: ${log}`,
       `events: ${events}`,
-      "targets: 2",
+      "targets: 3",
       "  t1",
       "  t2",
+      "  __proto__",
     ]);
-    expect(status[7]).toMatch(/^last event: #1 at \S+ changed: first line$/);
-    // A source with a summary gets its lines under each target: what stands right now.
+    expect(status[8]).toMatch(/^last event: #1 at \S+ changed: first line$/);
+    // A source with a summary gets its lines under each target: what stands right now. A key
+    // naming a prototype property lists nothing, like any target the summary leaves out.
     s.fixtures({ summary: JSON.stringify({ t1: ["review requested", "2 checks pending"] }) });
     const summarised = s.run(["status"], { inbox: box.path }).stdout.split("\n");
-    expect(summarised.slice(4, 10)).toEqual([
-      "targets: 2",
+    expect(summarised.slice(4, 11)).toEqual([
+      "targets: 3",
       "  t1",
       "    review requested",
       "    2 checks pending",
       "  t2",
-      status[7] as string,
+      "  __proto__",
+      status[8] as string,
     ]);
+    expect(s.run(["unwatch", "__proto__"], { inbox: box.path }).code).toBe(0);
     const one = s.run(["unwatch", "t1"], { inbox: box.path });
     expect(one.code).toBe(0);
     expect(one.stdout).toBe(`unwatched t1 for session ${process.pid}\n`);
