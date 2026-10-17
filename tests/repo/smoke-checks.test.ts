@@ -4,6 +4,7 @@ import {
   checkExplicitInvocationPairing,
   checkMarketplacePluginVersionBan,
   checkReadmeInvocationGrouping,
+  checkReadmeMermaidGraph,
   checkReadmeSkillList,
   checkSkillDependencies,
   checkSkillScripts,
@@ -152,6 +153,37 @@ describe("checkReadmeSkillList", () => {
   });
 });
 
+describe("checkReadmeMermaidGraph", () => {
+  const names: ReadonlySet<string> = new Set(["alpha-one", "beta-two"]);
+  function withGraph(graphBody: string): string {
+    return `# Skills\n\ntext\n\n\`\`\`mermaid\n${graphBody}\`\`\`\n\n## Installation\n`;
+  }
+  const clicks =
+    '  click a "./skills/alpha-one/SKILL.md"\n  click b "./skills/beta-two/SKILL.md"\n';
+  const goodGraph = `graph LR\n  a["/alpha-one"] --> b["/beta-two"]\n${clicks}`;
+
+  test("accepts a consistent graph", () => {
+    expect(() => checkReadmeMermaidGraph(withGraph(goodGraph), names)).not.toThrow();
+  });
+
+  test("accepts a bare alias used before its labeled definition", () => {
+    const graph = `graph LR\n  a["/alpha-one"] --> b\n  b["/beta-two"] --> a\n${clicks}`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
+  });
+
+  test("ignores layout frontmatter and reads both endpoints of a bidirectional edge", () => {
+    const graph = `---\nconfig:\n  layout: elk\n---\ngraph LR\n  a["/alpha-one"] <--> b["/beta-two"]\n${clicks}`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).not.toThrow();
+  });
+
+  test("rejects 'end' as a node alias (reserved flowchart keyword)", () => {
+    // Mermaid silently breaks the rendering on an 'end' node instead of
+    // erroring, so without this check the graph passes and does not draw.
+    const graph = `${goodGraph}  end["/beta-two"]\n`;
+    expect(() => checkReadmeMermaidGraph(withGraph(graph), names)).toThrow(/reserved/);
+  });
+});
+
 describe("checkReadmeInvocationGrouping", () => {
   const area =
     "### Automatic\n\n- [/alpha-one](./skills/alpha-one/) - a\n\n### Invoked by you\n\n- [/beta-two](./skills/beta-two/) - b\n";
@@ -186,7 +218,7 @@ describe("checkReadmeInvocationGrouping", () => {
   });
 
   test("ignores entries inside fenced blocks when grouping", () => {
-    const fenced = `${area}\n\`\`\`bash\n- [/alpha-one](./skills/alpha-one/) - hidden\n\`\`\`\n`;
+    const fenced = `${area}\n\`\`\`mermaid\n- [/alpha-one](./skills/alpha-one/) - hidden\n\`\`\`\n`;
     expect(() =>
       checkReadmeInvocationGrouping(readme(fenced), [{ name: "alpha-one", disabled: false }]),
     ).not.toThrow();

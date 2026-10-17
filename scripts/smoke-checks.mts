@@ -410,7 +410,7 @@ export function ensureBuiltTemplate(docText: string, displayPath = "docs/authori
 }
 
 // Extract a '## <title>' section of the README, with fenced blocks (backtick
-// or tilde, e.g. the install commands) and HTML comments removed so they cannot
+// or tilde, e.g. the mermaid graph) and HTML comments removed so they cannot
 // contribute entries. Stripping runs to a fixpoint: a single pass can
 // reassemble a new `<!--` or fence from the surrounding fragments (CodeQL
 // js/incomplete-multi-character-sanitization), letting crafted content hide
@@ -503,6 +503,106 @@ export function checkReadmeSkillList(
   for (const name of [...skillNames, ...pages.keys()]) {
     if (!listed.has(name)) {
       fail(`README.md: the Available Skills list is missing an entry for '${name}'`);
+    }
+  }
+}
+
+// The README's mermaid skill-reference graph is stripped out of the list
+// checks above (fenced block), so nothing else keeps it honest: a retired
+// skill's node, a dangling edge, or a new skill missing from the graph would
+// render fine and drift silently. This check reads node definitions, edge
+// endpoints, and click targets and holds them to the catalog; whether the
+// block renders is the renderer's verdict, not parsed here.
+export function checkReadmeMermaidGraph(
+  readmeText: string,
+  skillNames: ReadonlySet<string>,
+  upstream: readonly UpstreamSkill[] = [],
+): void {
+  const fence = /```mermaid\n([\s\S]*?)```/.exec(readmeText);
+  if (fence === null) fail("README.md: missing the mermaid skill-reference graph");
+  const body = fence[1] ?? "";
+
+  const aliases = new Map<string, string>();
+  for (const def of body.matchAll(/([A-Za-z0-9_]+)\["\/([^"\]]*)"\]/g)) {
+    const alias = def[1] ?? "";
+    const name = def[2] ?? "";
+    // 'end' is a reserved flowchart keyword: mermaid silently breaks the
+    // rendering instead of erroring, so the graph would pass every check
+    // here and still not draw.
+    if (alias === "end") {
+      fail(
+        "README.md: mermaid node alias 'end' is a reserved flowchart keyword" +
+          " and breaks rendering -- pick another alias",
+      );
+    }
+    const existing = aliases.get(alias);
+    if (existing !== undefined && existing !== name) {
+      fail(
+        `README.md: mermaid node '${alias}' is defined twice with different labels` +
+          ` ('/${existing}' vs '/${name}')`,
+      );
+    }
+    aliases.set(alias, name);
+  }
+
+  const aliasBySkill = new Map<string, string>();
+  for (const [alias, name] of aliases) {
+    if (!skillNames.has(name)) {
+      fail(
+        `README.md: mermaid node '${alias}' labels '/${name}', which has no` +
+          ` skills/${name}/ folder -- remove the stale node or restore the folder`,
+      );
+    }
+    const prior = aliasBySkill.get(name);
+    if (prior !== undefined && prior !== alias) {
+      fail(
+        `README.md: mermaid nodes '${prior}' and '${alias}' both label '/${name}'` +
+          " -- one skill, one node",
+      );
+    }
+    aliasBySkill.set(name, alias);
+  }
+  for (const name of skillNames) {
+    if (!aliasBySkill.has(name)) {
+      fail(`README.md: the mermaid skill-reference graph is missing a node for '${name}'`);
+    }
+  }
+
+  const pages = new Map(upstream.map((skill) => [skill.name, upstreamPage(skill)]));
+  const clicked = new Set<string>();
+  for (const rawLine of body.split("\n")) {
+    const line = rawLine.trim();
+    const click = /^click ([A-Za-z0-9_]+) "([^"]*)"$/.exec(line);
+    if (click !== null) {
+      const alias = click[1] ?? "";
+      const name = aliases.get(alias);
+      if (name === undefined) {
+        fail(`README.md: mermaid click '${line}' references '${alias}', which no node labels`);
+      }
+      const page = pages.get(name) ?? `./skills/${name}/SKILL.md`;
+      if (click[2] !== page) {
+        fail(`README.md: mermaid click for '${alias}' must link to ${page}, found '${click[2]}'`);
+      }
+      if (clicked.has(alias)) fail(`README.md: mermaid node '${alias}' has two click lines`);
+      clicked.add(alias);
+      continue;
+    }
+    if (!line.includes("-->")) continue;
+    // `a <--> b` is the two-way arrow; its endpoints are the same as `a --> b`'s.
+    for (const rawEndpoint of line.replaceAll("<-->", "-->").split("-->")) {
+      // The endpoint is an alias, with or without its inline label; nothing else.
+      const alias = rawEndpoint.trim().replace(/\["\/[^"\]]*"\]$/, "");
+      if (!aliases.has(alias)) {
+        fail(
+          `README.md: mermaid edge '${line}' references '${alias}', which no node` +
+            " definition labels -- a dangling endpoint",
+        );
+      }
+    }
+  }
+  for (const alias of aliases.keys()) {
+    if (!clicked.has(alias)) {
+      fail(`README.md: mermaid node '${alias}' has no click line to its SKILL.md`);
     }
   }
 }

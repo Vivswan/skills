@@ -69,6 +69,98 @@ npx skills add anthropics/skills/skills/frontend-design -g
 npx skills add Leonxlnx/taste-skill/skills/taste-skill -g
 ```
 
+How the skills reference each other (an arrow means "mentions and hands off to, where installed"):
+
+```mermaid
+---
+config:
+  layout: elk
+  elk:
+    nodePlacementStrategy: NETWORK_SIMPLEX
+---
+graph LR
+  wt["/working-text"]
+  cs["/code-standards"]
+  nw["/natural-writing"]
+  om["/orchestrator-mode"]
+  pid["/pr-and-issue-discipline"]
+  rrd["/reply-and-review-discipline"]
+  rdr["/rubber-duck-review"]
+  pld["/pr-landing-discipline"]
+  pnm["/project-naming"]
+  nis["/no-invalid-states"]
+  nt["/never-twice"]
+  vwc["/verify-with-controls"]
+  csm["/craft-skills-and-memories"]
+  wgh["/watch-github"]
+  se["/session-events"]
+  wh["/worktree-hygiene"]
+  us["/unslop"]
+  cbf["/codex-browser-fix"]
+  crp["/claude-remote-peers"]
+  fd["/frontend-design"]
+  dtf["/design-taste-frontend"]
+
+  cs <--> wt
+  cs <--> rdr
+  csm <--> nt
+  nis <--> rdr
+  nt <--> rdr
+  pid <--> pld
+  pid <--> rrd
+  pld <--> wgh
+  rdr <--> rrd
+  rdr <--> vwc
+
+  wt --> rdr
+  wt --> pid
+  nw --> wt
+  om --> rdr
+  om --> wgh
+  om --> se
+  wgh --> se
+  om --> cs
+  om --> pid
+  om --> pld
+  om --> wh
+  rrd --> wt
+  pld --> rdr
+  cs --> nt
+  cs --> nis
+  nt --> nis
+  om --> vwc
+  pnm --> vwc
+  pnm --> om
+  csm --> nw
+  csm --> wt
+  om --> wt
+  wt --> us
+  pid --> us
+  rrd --> us
+
+  click wt "./skills/working-text/SKILL.md"
+  click cs "./skills/code-standards/SKILL.md"
+  click nw "./skills/natural-writing/SKILL.md"
+  click om "./skills/orchestrator-mode/SKILL.md"
+  click pid "./skills/pr-and-issue-discipline/SKILL.md"
+  click rrd "./skills/reply-and-review-discipline/SKILL.md"
+  click rdr "./skills/rubber-duck-review/SKILL.md"
+  click pld "./skills/pr-landing-discipline/SKILL.md"
+  click pnm "./skills/project-naming/SKILL.md"
+  click nis "./skills/no-invalid-states/SKILL.md"
+  click nt "./skills/never-twice/SKILL.md"
+  click vwc "./skills/verify-with-controls/SKILL.md"
+  click csm "./skills/craft-skills-and-memories/SKILL.md"
+  click wgh "./skills/watch-github/SKILL.md"
+  click se "./skills/session-events/SKILL.md"
+  click wh "./skills/worktree-hygiene/SKILL.md"
+  click us "https://github.com/cursor/plugins/tree/HEAD/pstack/skills/unslop"
+  click cbf "./skills/codex-browser-fix/SKILL.md"
+  click crp "./skills/claude-remote-peers/SKILL.md"
+  click fd "https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design"
+  click dtf "https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill"
+```
+
 ## License
 
 Individual and Small Organization License; the version and terms are in [LICENSE.md](./LICENSE.md).
