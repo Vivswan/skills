@@ -1,8 +1,12 @@
 // reaches: bin/install-shared.mjs
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { markExplicitOnly, markExplicitOnlyUpstreams } from "../../bin/install-shared.mjs";
+import {
+  agentSkillDirs,
+  markExplicitOnly,
+  markExplicitOnlyUpstreams,
+} from "../../bin/install-shared.mjs";
 import { tempDirs } from "../helpers/temp-dirs";
 
 const temp = tempDirs();
@@ -140,18 +144,42 @@ describe("markExplicitOnly", () => {
   });
 });
 
+describe("agentSkillDirs", () => {
+  // What drifts: the CLI's layout, `~/.<agent>/skills` beside the canonical `~/.agents/skills`, is an external
+  // contract, and a symlink may reach the canonical directory, or a directory inside it, under another name.
+  test("finds dot-dir skills directories and skips the canonical tree, even behind a symlink", () => {
+    const root = temp.dir("install-shared-discover-");
+    const agentsSkills = join(root, ".agents", "skills");
+    mkdirSync(agentsSkills, { recursive: true });
+    mkdirSync(join(root, ".claude", "skills"), { recursive: true });
+    mkdirSync(join(root, ".empty-agent"));
+    mkdirSync(join(root, "not-hidden", "skills"), { recursive: true });
+    mkdirSync(join(root, ".alias"));
+    symlinkSync(agentsSkills, join(root, ".alias", "skills"), "dir");
+    mkdirSync(join(agentsSkills, "container"));
+    mkdirSync(join(root, ".inner"));
+    symlinkSync(join(agentsSkills, "container"), join(root, ".inner", "skills"), "dir");
+
+    expect(agentSkillDirs(root, agentsSkills)).toEqual([join(root, ".claude", "skills")]);
+  });
+});
+
 describe("markExplicitOnlyUpstreams", () => {
-  test("marks the flagged copies that exist, reports the flagged copies that do not, skips the unflagged", () => {
-    const skills = temp.dir("install-shared-skills-");
-    for (const name of ["alpha-one", "gamma-three"]) {
-      mkdirSync(join(skills, name));
+  function installed(skills: string, names: readonly string[]): void {
+    for (const name of names) {
+      mkdirSync(join(skills, name), { recursive: true });
       writeFileSync(join(skills, name, "SKILL.md"), `---\nname: ${name}\n---\nbody\n`);
     }
-    const upstream = [
-      { name: "alpha-one", target: "example-org/alpha/skills/alpha-one", explicitOnly: true },
-      { name: "beta-two", target: "example-org/beta/skills/beta-two", explicitOnly: true },
-      { name: "gamma-three", target: "example-org/gamma/gamma", explicitOnly: false },
-    ];
+  }
+  const upstream = [
+    { name: "alpha-one", target: "example-org/alpha/skills/alpha-one", explicitOnly: true },
+    { name: "beta-two", target: "example-org/beta/skills/beta-two", explicitOnly: true },
+    { name: "gamma-three", target: "example-org/gamma/gamma", explicitOnly: false },
+  ];
+
+  test("marks the flagged copies that exist, reports the flagged copies that do not, skips the unflagged", () => {
+    const skills = temp.dir("install-shared-skills-");
+    installed(skills, ["alpha-one", "gamma-three"]);
 
     expect(markExplicitOnlyUpstreams(upstream, skills)).toEqual({
       marked: [join(skills, "alpha-one")],
@@ -159,5 +187,30 @@ describe("markExplicitOnlyUpstreams", () => {
     });
     expect(read(skills, "alpha-one/SKILL.md")).toContain("disable-model-invocation: true");
     expect(read(skills, "gamma-three/SKILL.md")).toBe("---\nname: gamma-three\n---\nbody\n");
+  });
+
+  // A per-agent symlink is the canonical copy seen again (marked once, through its own path); a per-agent real
+  // directory is a `--copy` install's own file and is marked too.
+  test("marks a per-agent real directory copy and never follows a per-agent symlink", () => {
+    const home = temp.dir("install-shared-home-");
+    const skills = join(home, ".agents", "skills");
+    installed(skills, ["alpha-one"]);
+    const linked = join(home, ".claude", "skills");
+    mkdirSync(linked, { recursive: true });
+    symlinkSync(join(skills, "alpha-one"), join(linked, "alpha-one"), "dir");
+    const copied = join(home, ".codex", "skills");
+    installed(copied, ["alpha-one"]);
+
+    const result = markExplicitOnlyUpstreams([upstream[0] as (typeof upstream)[number]], skills, [
+      linked,
+      copied,
+    ]);
+
+    expect(result).toEqual({
+      marked: [join(skills, "alpha-one"), join(copied, "alpha-one")],
+      missing: [],
+    });
+    expect(read(copied, "alpha-one/SKILL.md")).toContain("disable-model-invocation: true");
+    expect(existsSync(join(copied, "alpha-one", "agents", "openai.yaml"))).toBe(true);
   });
 });

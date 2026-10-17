@@ -11,9 +11,9 @@
  *   --dry-run  reports every link and prune, changes nothing
  *   --add      runs `npx skills add <upstream> --global -y` per upstream skill of the marketplace,
  *              then `npx skills add . --global -y` (its UI wires the per-agent pointers but
- *              overwrites the canonical symlinks with copies), marks the upstream copies the
- *              marketplace flags explicit-invocation-only, then links; never --copy, so the
- *              per-agent directories keep symlinking into ~/.agents/skills
+ *              overwrites the canonical symlinks with copies), marks the installed copies of the
+ *              upstreams the marketplace flags explicit-invocation-only, then links; never --copy,
+ *              so the per-agent directories keep symlinking into ~/.agents/skills
  * Revert: `npx skills add . --all` overwrites the symlinks with fresh copies.
  */
 
@@ -31,6 +31,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
+  agentSkillDirs,
   CatalogError,
   markExplicitOnlyUpstreams,
   upstreamSkills,
@@ -282,23 +283,6 @@ export function pruneStaleSkills(options: PruneOptions): PruneAction[] {
 }
 
 /**
- * Per-agent skill directories npx skills wires pointers into: every
- * ~/.<agent>/skills directory except the canonical ~/.agents/skills itself.
- */
-export function discoverAgentSkillDirs(home: string, agentsSkillsDir: string): string[] {
-  const agentsForms = pathForms(agentsSkillsDir);
-  const dirs: string[] = [];
-  for (const name of readdirSync(home).sort()) {
-    if (!name.startsWith(".")) continue;
-    const candidate = join(home, name, "skills");
-    if (!safeIsDirectory(candidate)) continue;
-    if (isUnder(canonicalTarget(candidate), agentsForms)) continue;
-    dirs.push(candidate);
-  }
-  return dirs;
-}
-
-/**
  * Read the npx skills lockfile and judge, per installed skill name, whether
  * its recorded source is this repo. Deletion demands unanimity: "ours" only
  * when every recorded identity matches this repo, and any malformed identity
@@ -418,6 +402,7 @@ if (import.meta.main) {
     const sourceByName = repoSkillSources(skillDirs());
 
     const agentsSkillsDir = join(homedir(), ".agents", "skills");
+    const perAgentDirs = agentSkillDirs(homedir(), agentsSkillsDir);
     if (withAdd) {
       const upstream = catalogUpstream();
       for (const [command, ...args] of addCommands(upstream)) {
@@ -428,7 +413,11 @@ if (import.meta.main) {
           fail(`${shown} exited with status ${result.status ?? "unknown"}; not linking`);
         }
       }
-      const { marked, missing } = markExplicitOnlyUpstreams(upstream, agentsSkillsDir);
+      const { marked, missing } = markExplicitOnlyUpstreams(
+        upstream,
+        agentsSkillsDir,
+        perAgentDirs,
+      );
       for (const dir of marked) console.log(`marked explicit-invocation-only: ${dir}`);
       for (const dir of missing) {
         console.log(`notice: no installed copy at ${dir} to mark explicit-invocation-only`);
@@ -464,7 +453,7 @@ if (import.meta.main) {
       repoSkillsDirs: [SKILLS_DIR],
       currentSkills: new Set(sourceByName.keys()),
       agentsSkillsDir,
-      agentSkillDirs: discoverAgentSkillDirs(homedir(), agentsSkillsDir),
+      agentSkillDirs: perAgentDirs,
       lockAttribution: loadLockAttribution(lockfilePath, repoSourceIds(repository)),
       // Report as it happens: a removal stays visible even if a later step throws.
       onAction: (action) => {

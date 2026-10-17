@@ -5,9 +5,18 @@
 // (`bun run add`) both import it, so one edit here changes both. Dependency-free node, since the bin runs before
 // anything is installed.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MANIFEST = new URL("../.claude-plugin/plugin.json", import.meta.url);
@@ -99,6 +108,45 @@ export function installedSkillsDir(flags) {
   return join(global ? homedir() : process.cwd(), ".agents", "skills");
 }
 
+function realpathOrNull(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The per-agent skills directories beside the canonical one: every `.<agent>/skills` directory under `base`
+ * (the home directory for a global install, the project for a local one) that is not the canonical directory
+ * or anything inside it, compared by real path, so a symlink into the canonical tree is not swept as an agent's.
+ * The CLI fills each with symlinks at the canonical copies, except under `--copy`, where each entry is its own
+ * copy.
+ * @param {string} base
+ * @param {string} canonical
+ * @returns {string[]}
+ */
+export function agentSkillDirs(base, canonical) {
+  const canonicalReal = realpathOrNull(canonical) ?? canonical;
+  const insideCanonical = (path) => path === canonicalReal || path.startsWith(canonicalReal + sep);
+  const dirs = [];
+  for (const name of readdirSync(base).sort()) {
+    if (!name.startsWith(".")) continue;
+    const candidate = join(base, name, "skills");
+    let isDirectory = false;
+    try {
+      isDirectory = statSync(candidate, { throwIfNoEntry: false })?.isDirectory() ?? false;
+    } catch {
+      continue;
+    }
+    if (!isDirectory) continue;
+    if (insideCanonical(candidate) || insideCanonical(realpathOrNull(candidate) ?? candidate))
+      continue;
+    dirs.push(candidate);
+  }
+  return dirs;
+}
+
 const EXPLICIT_KEY = "disable-model-invocation";
 const POLICY_LINE = "  allow_implicit_invocation: false";
 
@@ -162,18 +210,26 @@ export function markExplicitOnly(dir) {
 }
 
 /**
- * Mark every explicit-only upstream's installed copy under `skillsDir`.
+ * Mark every explicit-only upstream's installed copies: the canonical one under `skillsDir`, and under each
+ * per-agent directory the entry that is a real directory (a `--copy` install's own copy). A symlink there is the
+ * canonical copy seen again and is never followed, and nothing outside those roots is touched.
  * @param {readonly UpstreamSkill[]} upstream
  * @param {string} skillsDir
- * @returns {{ marked: string[], missing: string[] }} the directories marked, and those with no copy to mark
+ * @param {readonly string[]} agentDirs
+ * @returns {{ marked: string[], missing: string[] }} the directories marked, and the canonical ones with no copy
  */
-export function markExplicitOnlyUpstreams(upstream, skillsDir) {
+export function markExplicitOnlyUpstreams(upstream, skillsDir, agentDirs = []) {
   const marked = [];
   const missing = [];
   for (const { name, explicitOnly } of upstream) {
     if (!explicitOnly) continue;
-    const dir = join(skillsDir, name);
-    (markExplicitOnly(dir) ? marked : missing).push(dir);
+    const canonical = join(skillsDir, name);
+    (markExplicitOnly(canonical) ? marked : missing).push(canonical);
+    for (const agentDir of agentDirs) {
+      const copy = join(agentDir, name);
+      if (!lstatSync(copy, { throwIfNoEntry: false })?.isDirectory()) continue;
+      if (markExplicitOnly(copy)) marked.push(copy);
+    }
   }
   return { marked, missing };
 }

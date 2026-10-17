@@ -7,9 +7,10 @@
 // unless the flags already say yes), so nothing prompts and an installed copy is overwritten. A `--skill`
 // selection also narrows the calls to the sources that ship a selected name (targets, below), since the CLI
 // exits 1 against a source that ships none of them. Each command prints before it runs, and the first nonzero
-// exit ends the run with that code. After an upstream call, the copy of an upstream the marketplace marks
-// `disable-model-invocation` is marked explicit-invocation-only (install-shared.mjs); a copy not where the CLI
-// keeps it for these flags is reported on stderr and the run goes on. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
+// exit ends the run with that code. After the calls, the copies of an upstream the marketplace marks
+// `disable-model-invocation` are marked explicit-invocation-only (install-shared.mjs): the canonical one, and a
+// per-agent one that is its own directory; a canonical copy not where the CLI keeps it for these flags is
+// reported on stderr and the run goes on. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
 // started inherits npm_execpath (npm-cli.js, with npx-cli.js beside it) and npm_node_execpath. Started by hand,
 // the bin runs `npx` from PATH instead.
 
@@ -17,6 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  agentSkillDirs,
   CatalogError,
   installedSkillsDir,
   markExplicitOnlyUpstreams,
@@ -70,7 +72,9 @@ function targets(selected) {
 /** Mark the upstream copies the completed calls installed, one stdout line per mark, one stderr line per miss. */
 function markInstalled(ranTargets, flags) {
   const installed = upstreamSkills().filter(({ target }) => ranTargets.includes(target));
-  const { marked, missing } = markExplicitOnlyUpstreams(installed, installedSkillsDir(flags));
+  const skillsDir = installedSkillsDir(flags);
+  const perAgent = agentSkillDirs(dirname(dirname(skillsDir)), skillsDir);
+  const { marked, missing } = markExplicitOnlyUpstreams(installed, skillsDir, perAgent);
   for (const dir of marked) console.log(`marked explicit-invocation-only: ${dir}`);
   for (const dir of missing) {
     console.error(`install: no installed copy at ${dir} to mark explicit-invocation-only`);

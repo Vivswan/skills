@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -72,6 +73,7 @@ function run(
 ): Run {
   const dir = temp.dir("install-bin-");
   const log = join(dir, "argv.log");
+  mkdirSync(join(dir, "home"));
   if (npxOnPath) {
     writeFileSync(join(dir, "npx"), FAKE_NPX);
     chmodSync(join(dir, "npx"), 0o755);
@@ -223,8 +225,9 @@ describe("bin/install.mjs", () => {
   });
 
   // After the calls, the copies of the upstreams the marketplace flags are marked explicit-invocation-only where
-  // the CLI keeps them for these flags (`-g`: under HOME), the unflagged upstream's copy is left alone, and a
-  // flagged copy that is not there is one stderr line, not a failure.
+  // the CLI keeps them for these flags (`-g`: under HOME): the canonical copy, and a per-agent entry that is its
+  // own directory (a `--copy` install), never a per-agent symlink; the unflagged upstream's copy is left alone,
+  // and a flagged canonical copy that is not there is one stderr line, not a failure.
   test("-g marks the flagged upstream copies under HOME and reports a flagged copy that is missing", () => {
     const home = temp.dir("install-bin-home-");
     const skills = join(home, ".agents", "skills");
@@ -232,6 +235,12 @@ describe("bin/install.mjs", () => {
       mkdirSync(join(skills, name), { recursive: true });
       writeFileSync(join(skills, name, "SKILL.md"), `---\nname: ${name}\n---\nbody\n`);
     }
+    const linked = join(home, ".claude", "skills");
+    mkdirSync(linked, { recursive: true });
+    symlinkSync(join(skills, "frontend-design"), join(linked, "frontend-design"), "dir");
+    const copied = join(home, ".codex", "skills", "frontend-design");
+    mkdirSync(copied, { recursive: true });
+    writeFileSync(join(copied, "SKILL.md"), "---\nname: frontend-design\n---\nbody\n");
 
     const result = run(["-g"], { env: { HOME: home } });
 
@@ -239,6 +248,7 @@ describe("bin/install.mjs", () => {
     expect(result.stdout).toEqual([
       ...printed(commands(["-g", "-y"])),
       `marked explicit-invocation-only: ${join(skills, "frontend-design")}`,
+      `marked explicit-invocation-only: ${copied}`,
     ]);
     expect(result.stderr.trimEnd().split("\n")).toEqual([
       `install: no installed copy at ${join(skills, "design-taste-frontend")} to mark explicit-invocation-only`,
@@ -249,6 +259,9 @@ describe("bin/install.mjs", () => {
     );
     expect(readFileSync(join(skills, "frontend-design", "agents", "openai.yaml"), "utf8")).toBe(
       "policy:\n  allow_implicit_invocation: false\n",
+    );
+    expect(readFileSync(join(copied, "SKILL.md"), "utf8")).toBe(
+      "---\nname: frontend-design\ndisable-model-invocation: true\n---\nbody\n",
     );
     expect(readFileSync(join(skills, "unslop", "SKILL.md"), "utf8")).toBe(
       "---\nname: unslop\n---\nbody\n",

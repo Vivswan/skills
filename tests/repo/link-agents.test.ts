@@ -13,7 +13,6 @@ import { join, relative } from "node:path";
 import { CheckFailure } from "../../scripts/lib.mts";
 import {
   addCommands,
-  discoverAgentSkillDirs,
   linkSkills,
   loadLockAttribution,
   type PruneAction,
@@ -545,19 +544,6 @@ describe("pruneStaleSkills", () => {
     ]);
     expect(entryExists(staleCanonical)).toBe(false);
     expect(entryExists(pointer)).toBe(false);
-  });
-});
-
-describe("discoverAgentSkillDirs", () => {
-  test("finds dot-dir skills directories and skips the canonical one", () => {
-    const root = temp.dir("skills-discover-test-");
-    const agentsSkills = join(root, ".agents", "skills");
-    mkdirSync(agentsSkills, { recursive: true });
-    mkdirSync(join(root, ".claude", "skills"), { recursive: true });
-    mkdirSync(join(root, ".empty-agent"));
-    mkdirSync(join(root, "not-hidden", "skills"), { recursive: true });
-
-    expect(discoverAgentSkillDirs(root, agentsSkills)).toEqual([join(root, ".claude", "skills")]);
   });
 });
 
