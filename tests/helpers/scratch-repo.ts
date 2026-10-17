@@ -1,6 +1,7 @@
 // A scratch git repository for the worktree readings: the hermetic git runner, a six-file
-// repository with its worktrees on canonical paths, and a process parked in a directory. Without
-// it each suite carries its own copy, and a fixture fix lands in one and drifts from the other.
+// repository with its worktrees on canonical paths, a process parked in a directory, and an lsof
+// with a chosen exit status. Without it each suite carries its own copy, and a fixture fix lands
+// in one and drifts from the other.
 
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -76,4 +77,22 @@ export function scratchRepo<Name extends string>(
 /** A process parked in `cwd` for lsof to attribute to that directory; the caller kills it. */
 export function park(cwd: string): ReturnType<typeof Bun.spawn> {
   return Bun.spawn(["sleep", "60"], { cwd, stdout: "ignore" });
+}
+
+/**
+ * Writes `<dir>/lsof` for a PATH ahead of the machine's and returns `dir`: with `rows`, the
+ * machine's lsof with its exit status replaced by `exit` and its stderr dropped; without, no output
+ * and that exit. lsof exits 1 whenever one process it scanned could not be read and still prints
+ * every other, so rows with exit 1 is its answer beside another user's sandbox, and no rows with
+ * exit 2 is a broken one.
+ */
+export function fakeLsof(dir: string, shape: { exit: number; rows: boolean }): string {
+  const machine = Bun.which("lsof");
+  if (machine === null) throw new Error("lsof is not installed");
+  const body = shape.rows
+    ? `"${machine}" "$@" 2>/dev/null\nexit ${shape.exit}\n`
+    : `exit ${shape.exit}\n`;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "lsof"), `#!/bin/sh\n${body}`, { mode: 0o755 });
+  return dir;
 }

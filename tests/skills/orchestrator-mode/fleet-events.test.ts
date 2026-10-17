@@ -11,7 +11,7 @@ import {
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ROOT } from "../../../scripts/lib.mts";
-import { git, park, scratchRepo } from "../../helpers/scratch-repo";
+import { fakeLsof, git, park, scratchRepo } from "../../helpers/scratch-repo";
 import {
   digest,
   type Program,
@@ -1509,7 +1509,8 @@ describe("fleet-events.mts", () => {
         repo,
         worktrees: { "wt-a": wtA },
       } = scratchRepo(s.fixtureDir, TRACKS);
-      // A stand-in lsof the test can take down (exit 1, no output) or degrade (real output, exit 1).
+      // A stand-in lsof the test can take down (exit 2, no output) or degrade (exit 1, no output:
+      // it answered for no process).
       const realLsof = Bun.which("lsof");
       if (realLsof === null) throw new Error("lsof is not installed");
       const bin = join(s.fixtureDir, "bin");
@@ -1518,7 +1519,7 @@ describe("fleet-events.mts", () => {
       mkdirSync(bin);
       writeFileSync(
         join(bin, "lsof"),
-        `#!/bin/sh\n[ -e "${down}" ] && exit 1\nif [ -e "${degraded}" ]; then "${realLsof}" "$@"; exit 1; fi\nexec "${realLsof}" "$@"\n`,
+        `#!/bin/sh\n[ -e "${down}" ] && exit 2\n[ -e "${degraded}" ] && exit 1\nexec "${realLsof}" "$@"\n`,
         { mode: 0o755 },
       );
       const parked = park(repo);
@@ -1552,6 +1553,42 @@ describe("fleet-events.mts", () => {
         ]);
         expect(rows(s)[2]?.[2]).toBe(fileUrl(wtA));
         expect(await delivered(box, 3)).toHaveLength(3);
+      } finally {
+        worker?.kill();
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
+    "an lsof that exits 1 after printing its rows answered for every process it printed: the idle count runs as under a clean lsof and no trouble line is said " +
+      "(the restack scenario once saw a degraded alert beside its head note under a parallel hook run, while another builder's sandbox held a cwd lsof could not read)",
+    async () => {
+      const s = new Scenario(PROGRAM, "partial");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      const bin = fakeLsof(join(s.fixtureDir, "bin"), { exit: 1, rows: true });
+      const parked = park(repo);
+      let worker: ReturnType<typeof park> | null = null;
+      try {
+        await s.start({ inbox: box.path, env: { PATH: `${bin}:${process.env.PATH ?? ""}` } });
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        worker = park(wtA);
+        expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
+        worker = null;
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+        expect(rows(s)).toEqual([
+          ["alert", "worktree track-a: idle 2 polls after work", fileUrl(wtA)],
+        ]);
       } finally {
         worker?.kill();
         parked.kill();
@@ -1756,9 +1793,7 @@ describe("fleet-events.mts", () => {
         repo,
         worktrees: { "wt-a": wtA, "wt-b": wtB },
       } = scratchRepo(s.fixtureDir, TRACKS);
-      const bin = join(s.fixtureDir, "bin");
-      mkdirSync(bin);
-      writeFileSync(join(bin, "lsof"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const bin = fakeLsof(join(s.fixtureDir, "bin"), { exit: 2, rows: false });
       const claim = (agentId: string, name: string, worktreePath: string) =>
         writeAgent(
           session,
