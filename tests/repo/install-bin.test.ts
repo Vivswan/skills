@@ -27,6 +27,10 @@ const commands = (flags: string[]) => [
   ["npx", "-y", "skills", "add", "anthropics/skills/skills/frontend-design", ...flags],
   ["npx", "-y", "skills", "add", "cursor/plugins/pstack/skills/unslop", ...flags],
 ];
+/** The calls at these positions of `commands(flags)`: 0 is this repository, 3 the unslop upstream. */
+const only = (flags: string[], ...which: number[]) =>
+  which.map((index) => commands(flags)[index] as string[]);
+const printed = (argvs: string[][]) => argvs.map((argv) => argv.join(" "));
 
 // The stubs log their own name and argv, one call per line with a unit separator between arguments so the
 // boundaries survive, and exit 0, or 3 on the call STUB_FAIL_AT names. One is an `npx` on PATH, the other npm's
@@ -137,6 +141,65 @@ describe("bin/install.mjs", () => {
       stdout: commands(["-g"])
         .slice(0, 2)
         .map((argv) => argv.join(" ")),
+    },
+    // `--skill` (or `-s`, each followed by one or more names; `--all` and `*` mean every skill) selects by
+    // name, and the CLI exits 1 with "No matching skills found" against a source that ships none of the names,
+    // which would end the run there. So only the calls that ship a named skill run, the flags still verbatim.
+    {
+      name: "--skill naming a skill of this catalog runs this repository's call alone, the flag passed through",
+      args: ["-g", "--skill", "rubber-duck-review"],
+      env: {},
+      status: 0,
+      calls: only(["-g", "--skill", "rubber-duck-review"], 0),
+      stdout: printed(only(["-g", "--skill", "rubber-duck-review"], 0)),
+    },
+    {
+      name: "--skill naming an upstream skill runs that upstream's call alone",
+      args: ["-g", "--skill", "unslop"],
+      env: {},
+      status: 0,
+      calls: only(["-g", "--skill", "unslop"], 3),
+      stdout: printed(only(["-g", "--skill", "unslop"], 3)),
+    },
+    {
+      name: "-s with several names runs each call that ships one of them, in catalog order",
+      args: ["-s", "unslop", "rubber-duck-review", "-g"],
+      env: {},
+      status: 0,
+      calls: only(["-s", "unslop", "rubber-duck-review", "-g"], 0, 3),
+      stdout: printed(only(["-s", "unslop", "rubber-duck-review", "-g"], 0, 3)),
+    },
+    {
+      name: "an empty argument ends the CLI's name list, so a name after it selects nothing",
+      args: ["-g", "--skill", "rubber-duck-review", "", "unslop"],
+      env: {},
+      status: 0,
+      calls: only(["-g", "--skill", "rubber-duck-review", "", "unslop"], 0),
+      stdout: printed(only(["-g", "--skill", "rubber-duck-review", "", "unslop"], 0)),
+    },
+    {
+      name: "--skill '*' runs every call, as no --skill does",
+      args: ["--skill", "*", "-g"],
+      env: {},
+      status: 0,
+      calls: commands(["--skill", "*", "-g"]),
+      stdout: printed(commands(["--skill", "*", "-g"])),
+    },
+    {
+      name: "--all runs every call",
+      args: ["--all"],
+      env: {},
+      status: 0,
+      calls: commands(["--all"]),
+      stdout: printed(commands(["--all"])),
+    },
+    {
+      name: "--help with --skill prints the one command that would run",
+      args: ["--help", "--skill", "unslop", "-g"],
+      env: {},
+      status: 0,
+      calls: [],
+      stdout: printed(only(["--skill", "unslop", "-g"], 3)),
     },
   ])("$name", ({ args, env, status, calls, stdout }) => {
     const result = run(args, { env });

@@ -3,10 +3,12 @@
 //   npx -y github:Vivswan/skills [flags]    runs `npx -y skills add <target> [flags]` for this repository, then
 //                                           once per upstream skill of .claude-plugin/marketplace.json
 //   npx -y github:Vivswan/skills --help     prints those commands and runs nothing
-// The flags pass through unchanged (-g, -a <agents>, -y). Each command prints before it runs, and the first
-// nonzero exit ends the run with that code. The CLI runs through npm's own npx-cli.js under node, with no shell
-// on any platform: a bin that npx started inherits npm_execpath (npm-cli.js, with npx-cli.js beside it) and
-// npm_node_execpath. Started by hand, the bin runs `npx` from PATH instead.
+// The flags pass through unchanged (-g, -a <agents>, -y, --skill <names>); a `--skill` selection also narrows
+// the calls to the sources that ship a selected name (targets, below), since the CLI exits 1 against a source
+// that ships none of them. Each command prints before it runs, and the first nonzero exit ends the run with that
+// code. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
+// started inherits npm_execpath (npm-cli.js, with npx-cli.js beside it) and npm_node_execpath. Started by hand,
+// the bin runs `npx` from PATH instead.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -47,8 +49,31 @@ function repoCoordinate() {
   return new URL(repository).pathname.replace(/^\/|\.git$/g, "");
 }
 
-/** The `skills add` targets: this repository, then each upstream skill's folder as <owner/repo>/<path>. */
-function targets() {
+/**
+ * The skill names the flags select, lowercased as the CLI compares them. The CLI's grammar: `-s` or `--skill`
+ * takes every following argument up to the next flag or an empty argument, and may repeat; `*` or `--all` means
+ * every skill. Undefined when nothing is selected or every skill is, so the caller runs every call.
+ */
+function selectedSkills(flags) {
+  const names = new Set();
+  let every = flags.includes("--all");
+  for (let i = 0; i < flags.length; i++) {
+    if (flags[i] !== "-s" && flags[i] !== "--skill") continue;
+    while (i + 1 < flags.length && flags[i + 1] !== "" && !flags[i + 1].startsWith("-")) {
+      i++;
+      if (flags[i] === "*") every = true;
+      else names.add(flags[i].toLowerCase());
+    }
+  }
+  return every || names.size === 0 ? undefined : names;
+}
+
+/**
+ * The `skills add` targets: this repository, then each upstream skill's folder as <owner/repo>/<path>. With a
+ * selection, only the sources that ship a selected name: an upstream when its entry name is selected, this
+ * repository when any other name is.
+ */
+function targets(selected) {
   const path = fileURLToPath(MARKETPLACE);
   const { plugins } = loadObject(MARKETPLACE);
   if (!Array.isArray(plugins)) fail(`${path}: plugins must be an array`);
@@ -58,9 +83,14 @@ function targets() {
       if (typeof source.url !== "string" || typeof source.path !== "string") {
         fail(`${path}: plugin '${name}' git-subdir source needs url and path strings`);
       }
-      return `${source.url}/${source.path}`;
+      return { name: String(name).toLowerCase(), target: `${source.url}/${source.path}` };
     });
-  return [repoCoordinate(), ...upstream];
+  if (selected === undefined) return [repoCoordinate(), ...upstream.map(({ target }) => target)];
+
+  const upstreamNames = new Set(upstream.map(({ name }) => name));
+  const wanted = upstream.filter(({ name }) => selected.has(name)).map(({ target }) => target);
+  const ownNamed = [...selected].some((name) => !upstreamNames.has(name));
+  return ownNamed ? [repoCoordinate(), ...wanted] : wanted;
 }
 
 /**
@@ -80,7 +110,7 @@ const argv = process.argv.slice(2);
 const help = argv.includes("--help");
 const flags = argv.filter((flag) => flag !== "--help");
 const [file, ...launcherArgs] = npxLauncher();
-for (const target of targets()) {
+for (const target of targets(selectedSkills(flags))) {
   const command = ["-y", "skills", "add", target, ...flags];
   console.log(["npx", ...command].join(" "));
   if (help) continue;
