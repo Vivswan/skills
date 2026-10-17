@@ -26,6 +26,7 @@ import {
   appendEvents,
   type Event,
   type Files,
+  type Level,
   loadState,
   noTargets,
   type Owner,
@@ -36,7 +37,7 @@ import {
   saveState,
 } from "./state.mts";
 
-export type { Event } from "./state.mts";
+export type { Event, Level } from "./state.mts";
 
 // --- the source contract -------------------------------------------------------
 
@@ -46,9 +47,13 @@ export class UsageError extends Error {}
 /**
  * What a source hands the daemon for one event; the daemon numbers and stamps it. The text is the
  * source's own words about the polled system (identifiers, counts, states, URLs), never text
- * quoted from it: a message is user-role text in the owner's session, with no data channel.
+ * quoted from it: a message is user-role text in the owner's session, with no data channel. The
+ * level, `alert` unless the source says `note`, decides whether the event is delivered (`Level`).
  */
-export type EventInput = { kind: string; text: string; url: string } & Record<string, unknown>;
+export type EventInput = { kind: string; text: string; url: string; level?: Level } & Record<
+  string,
+  unknown
+>;
 
 export interface Io {
   /** A line in the daemon's log, the first place to read when something is off. */
@@ -648,7 +653,8 @@ async function runDaemon<Target extends object>(
       `poll: ${events.length} event(s), ${result.busy ? "busy" : "quiet"}; next in ${nextInterval} s`,
     );
     commit(events);
-    await deliverDigest(events);
+    // A note is in the log for `wait` and `status`; the owner's inbox hears only the alerts.
+    await deliverDigest(events.filter((event) => event.level !== "note"));
     return events.length;
   };
 

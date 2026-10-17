@@ -17,11 +17,22 @@ import {
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+/**
+ * What the daemon does with an event: an `alert`, the default, is delivered as a message; a `note`
+ * is numbered, logged, counted, and read by `wait` and `status`, never delivered. A source says
+ * what is wrong as alerts and keeps the rest readable as notes.
+ */
+export type Level = "alert" | "note";
+
 /** One line of the events log: `id` and `at` first, then the source's fields in its order. */
-export type Event = { id: number; at: string; kind: string; text: string; url: string } & Record<
-  string,
-  unknown
->;
+export type Event = {
+  id: number;
+  at: string;
+  kind: string;
+  text: string;
+  url: string;
+  level?: Level;
+} & Record<string, unknown>;
 
 /** Everything the daemon keeps between polls: the targets, each carrying its source's cursor, and the counter. */
 export interface State<Target> {

@@ -92,6 +92,8 @@ The daemon keeps `targets`, a map from the text the user typed to the object `pa
 
 An event is `{ kind, text, url }` plus any field the source adds; the daemon prepends `id` and `at`. The log line is `{"id":17,"at":"2026-10-12T14:03:20Z","kind":"changed","text":"/var/log/build.log: 0 to 1097 bytes","url":"file:///var/log/build.log"}`.
 
+One added field the daemon reads: `level`, either `alert` (the default: delivered as a message) or `note` (numbered, logged, counted, shown by `wait` and `status`, never delivered), so a source says what is wrong as alerts and keeps the rest readable as notes.
+
 Rules a poll keeps:
 
 - **It returns, it does not stream.** The events come back in one array; the daemon numbers and stamps them, appends them to the log, saves the state, then delivers.

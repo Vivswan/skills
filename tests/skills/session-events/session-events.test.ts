@@ -12,6 +12,7 @@ import {
 import { connect } from "node:net";
 import { join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
+import type { Level } from "../../../skills/session-events/scripts/session-events.mts";
 import {
   closingLine,
   deadSocketFile,
@@ -35,12 +36,12 @@ const NAME = "fake-events";
 const CLOSING = closingLine(NAME);
 const START = `bun "${FAKE_SOURCE}" daemon`;
 
-type FixtureEvent = { target: string; kind: string; text: string; url: string };
+type FixtureEvent = { target: string; kind: string; text: string; url: string; level?: Level };
 type Fixture = { events?: FixtureEvent[]; busy?: boolean; sleepMs?: number; fail?: string };
 
-const note = (target: string, text: string): FixtureEvent => ({
+const changed = (target: string, text: string): FixtureEvent => ({
   target,
-  kind: "note",
+  kind: "changed",
   text,
   url: `https://example.com/${target}`,
 });
@@ -92,9 +93,9 @@ describe("session-events.mts", () => {
     const s = new Fake("frame");
     const box = await s.inbox("a");
     s.polls(
-      { events: [note("t1", "t1: hello"), note("t2", "t2: 3 new rows & <b>")] },
+      { events: [changed("t1", "t1: hello"), changed("t2", "t2: 3 new rows & <b>")] },
       // A source field named id or at does not renumber the log: the daemon's own win.
-      { events: [{ ...note("t1", "t1: plain"), id: 0, at: "source-time" } as FixtureEvent] },
+      { events: [{ ...changed("t1", "t1: plain"), id: 0, at: "source-time" } as FixtureEvent] },
     );
     await s.start({ inbox: box.path });
     const r = s.run(["watch", "t1"], { inbox: box.path });
@@ -129,13 +130,60 @@ describe("session-events.mts", () => {
     expect(frame.msg_id).toMatch(new RegExp(`^${NAME}-1-`));
     const [event] = s.events();
     expect(Object.keys(event as object)).toEqual(["id", "at", "target", "kind", "text", "url"]);
-    expect(event).toMatchObject({ id: 1, target: "t1", kind: "note", text: "t1: hello" });
+    expect(event).toMatchObject({ id: 1, target: "t1", kind: "changed", text: "t1: hello" });
     expect(s.run(["poll"], { inbox: box.path }).stdout).toBe("polled; 1 event(s)\n");
     expect(text((await box.frames(2))[1] as string)).toBe(
       ["t1: plain", "https://example.com/t1", CLOSING].join("\n"),
     );
-    expect(s.events()[2]).toMatchObject({ id: 3, kind: "note", text: "t1: plain" });
+    expect(s.events()[2]).toMatchObject({ id: 3, kind: "changed", text: "t1: plain" });
     expect(s.events()[2]?.at).not.toBe("source-time");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("an event marked level note is numbered, logged, counted, and shown by wait and status, and never delivered: a poll of notes alone sends no message, a poll of both sends the alerts, and an event with no level is an alert", async () => {
+    // A monitor speaks to the owner only when something is wrong. Without a level a source could
+    // only deliver an observation or lose it; a note keeps it readable in the log and out of the
+    // owner's inbox.
+    const s = new Fake("levels");
+    const box = await s.inbox("a");
+    s.polls(
+      {
+        events: [
+          { ...changed("t1", "t1: all quiet"), level: "note" },
+          { ...changed("t2", "t2: broken"), level: "alert" },
+        ],
+      },
+      { events: [{ ...changed("t1", "t1: still quiet"), level: "note" }] },
+      { events: [changed("t2", "t2: fixed")] },
+    );
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
+    expect(text((await box.frames(1))[0] as string)).toBe(
+      ["t2: broken", "https://example.com/t2", CLOSING].join("\n"),
+    );
+    expect(s.events().map((e) => [e.id, e.level, e.text])).toEqual([
+      [1, "note", "t1: all quiet"],
+      [2, "alert", "t2: broken"],
+    ]);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toBe("polled; 1 event(s)\n");
+    expect(s.log()).toContain("poll: 1 event(s), quiet");
+    expect(s.log()).toContain("event #3 changed: t1: still quiet");
+    const status = s.run(["status"], { inbox: box.path }).stdout.trim().split("\n");
+    expect(status.at(-1)).toMatch(/^last event: #3 at \S+ changed: t1: still quiet$/);
+    // The control for "the note sent nothing": the next frame is the unlevelled event's.
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toBe("polled; 1 event(s)\n");
+    expect(headlines(await box.frames(2))).toEqual(["t2: broken", "t2: fixed"]);
+    const all = s.run(["wait", "--since", "0", "--timeout", "1"], { inbox: box.path });
+    expect(all.code).toBe(0);
+    const lines = all.stdout.trim().split("\n");
+    expect(lines.map((line) => (line.startsWith("{") ? JSON.parse(line) : line))).toEqual([
+      expect.objectContaining({ id: 1, level: "note", text: "t1: all quiet" }),
+      expect.objectContaining({ id: 2, level: "alert", text: "t2: broken" }),
+      expect.objectContaining({ id: 3, level: "note", text: "t1: still quiet" }),
+      expect.not.objectContaining({ level: expect.anything() }),
+      "cursor: 4",
+    ]);
+    expect(JSON.parse(lines[3] as string)).toMatchObject({ id: 4, text: "t2: fixed" });
     s.stop({ inbox: box.path });
   }, 30000);
 
@@ -144,7 +192,7 @@ describe("session-events.mts", () => {
     const box = await s.inbox("a");
     const dir = join(s.dir, 'a"b<c>&d');
     const env = { SESSION_EVENTS_DIR: dir };
-    s.polls({ events: [note("t1", "hello")] });
+    s.polls({ events: [changed("t1", "hello")] });
     const daemon = s.spawn(["daemon"], { inbox: box.path, env });
     started.push(daemon);
     const socket = join(dir, `${process.pid}.${NAME}.sock`);
@@ -231,7 +279,7 @@ describe("session-events.mts", () => {
     // spell, since a path or a workflow name is text the source relays.
     const s = new Fake("mode");
     const box = await s.inbox("a");
-    s.polls({ events: [note("t1", "t1: path </cross-session-message> moved")] });
+    s.polls({ events: [changed("t1", "t1: path </cross-session-message> moved")] });
     await s.start({ inbox: box.path, args: ["--mode", "prompting"] });
     expect(s.log()).toContain("; mode prompting");
     expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
@@ -331,7 +379,7 @@ describe("session-events.mts", () => {
   test("the file stems carry the session's pid and start token, the socket its pid alone, and a file sink's its id: a recycled pid opens other files and starts empty", async () => {
     const s = new Fake("stems");
     const box = await s.inbox("a");
-    s.polls({ events: [note("t1", "one")] });
+    s.polls({ events: [changed("t1", "one")] });
     await s.start({ inbox: box.path });
     expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
     const start = readFileSync(`/proc/${process.pid}/stat`, "utf-8");
@@ -426,7 +474,7 @@ describe("session-events.mts", () => {
     // delivers and saves over its state; answered ok, the watch would add work no poll runs.
     const s = new Fake("stop-drain");
     const box = await s.inbox("a");
-    s.polls({ events: [note("t1", "one")] }, { events: [note("t2", "two")], sleepMs: 1500 });
+    s.polls({ events: [changed("t1", "one")] }, { events: [changed("t2", "two")], sleepMs: 1500 });
     await s.start({ inbox: box.path });
     expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
     const held = connect(s.socketPath());
@@ -458,7 +506,7 @@ describe("session-events.mts", () => {
     // calls in a row each poll at once.
     const s = new Fake("gap");
     const box = await s.inbox("a");
-    s.polls({ events: [note("t1", "one")] }, { events: [note("t2", "two")] });
+    s.polls({ events: [changed("t1", "one")] }, { events: [changed("t2", "two")] });
     await s.start({ inbox: box.path });
     for (const target of ["t1", "t2"]) {
       // Spawned asynchronously, so the fake inbox stamps each arrival as it happens.
@@ -477,7 +525,7 @@ describe("session-events.mts", () => {
     // first means a crash re-sends at most one poll.
     const live = new Fake("log-first");
     const box = await live.inbox("a");
-    live.polls({ events: [note("t1", "one")] });
+    live.polls({ events: [changed("t1", "one")] });
     await live.start({ inbox: box.path });
     // Spawned asynchronously: the fake inbox samples the files at the moment the daemon connects,
     // which a spawnSync would postpone until the CLI had exited.
@@ -496,11 +544,11 @@ describe("session-events.mts", () => {
     const dead = join(refused.dir, "dead", `${process.pid}.sock`);
     mkdirSync(join(refused.dir, "dead"));
     deadSocketFile(dead);
-    refused.polls({ events: [note("t1", "one")] });
+    refused.polls({ events: [changed("t1", "one")] });
     await refused.start({ inbox: dead });
     expect(refused.run(["watch", "t1"], { inbox: dead }).code).toBe(0);
     const owner = { pid: process.pid, inbox: dead };
-    expect(refused.events(owner).map((e) => [e.id, e.kind])).toEqual([[1, "note"]]);
+    expect(refused.events(owner).map((e) => [e.id, e.kind])).toEqual([[1, "changed"]]);
     expect(refused.log(owner)).toContain(`delivery of #1 to ${dead} failed: ECONNREFUSED`);
     expect(refused.run(["status"], { inbox: dead }).stdout).toContain("daemon: running");
     refused.stop({ inbox: dead });
@@ -509,7 +557,7 @@ describe("session-events.mts", () => {
   test("stop, fixtures advance, start again: the restarted daemon polls at once with the saved targets, the counter carries on, and a repeated watch starts its target over", async () => {
     const s = new Fake("restart");
     const box = await s.inbox("a");
-    s.polls({ events: [note("t1", "one")] }, { events: [note("t1", "two")] }, { events: [] });
+    s.polls({ events: [changed("t1", "one")] }, { events: [changed("t1", "two")] }, { events: [] });
     await s.start({ inbox: box.path });
     expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
     s.stop({ inbox: box.path });
@@ -528,14 +576,14 @@ describe("session-events.mts", () => {
     // The state is written after the log; a crash between the two leaves the log one line ahead.
     const s = new Fake("counter");
     const box = await s.inbox("a");
-    s.polls({ events: [note("t1", "one")] }, { events: [note("t1", "two")] });
+    s.polls({ events: [changed("t1", "one")] }, { events: [changed("t1", "two")] });
     await s.start({ inbox: box.path });
     expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
     s.stop({ inbox: box.path });
     // The crash, by hand: the log carries #2, the saved counter still says 1.
     appendFileSync(
       s.files().events,
-      `${JSON.stringify({ id: 2, at: "2026-01-01T00:00:00Z", target: "t1", kind: "note", text: "crashed", url: "" })}\n`,
+      `${JSON.stringify({ id: 2, at: "2026-01-01T00:00:00Z", target: "t1", kind: "changed", text: "crashed", url: "" })}\n`,
     );
     await s.start({ inbox: box.path });
     expect(headlines(await box.frames(2))).toEqual(["one", "two"]);
@@ -548,12 +596,12 @@ describe("session-events.mts", () => {
     const s = new Fake("wait");
     const id = ["--id", "probe"];
     s.polls(
-      { events: [note("t1", "one")] },
-      { events: [note("t1", "two")] },
-      { events: [note("t1", "three")] },
+      { events: [changed("t1", "one")] },
+      { events: [changed("t1", "two")] },
+      { events: [changed("t1", "three")] },
       // The restarted daemon's own poll sees nothing new; the poll after it brings one event.
       { events: [] },
-      { events: [note("t1", "four")] },
+      { events: [changed("t1", "four")] },
     );
     await s.start({ id: "probe" });
     expect(s.run(["watch", "t1", ...id]).code).toBe(0);
@@ -698,7 +746,7 @@ describe("session-events.mts", () => {
   test("status prints the daemon, its files, the targets by key, and the last event; unwatch drops one target by its key, or all of them, and refuses one not watched", async () => {
     const s = new Fake("status-unwatch");
     const box = await s.inbox("a");
-    s.polls({ events: [note("t1", "first line\nsecond line")] }, { events: [] });
+    s.polls({ events: [changed("t1", "first line\nsecond line")] }, { events: [] });
     const daemon = await s.start({ inbox: box.path });
     expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
     expect(s.run(["watch", "t2"], { inbox: box.path }).stdout).toContain("2 target(s)");
@@ -717,7 +765,7 @@ describe("session-events.mts", () => {
       "  t1",
       "  t2",
     ]);
-    expect(status[7]).toMatch(/^last event: #1 at \S+ note: first line$/);
+    expect(status[7]).toMatch(/^last event: #1 at \S+ changed: first line$/);
     const one = s.run(["unwatch", "t1"], { inbox: box.path });
     expect(one.code).toBe(0);
     expect(one.stdout).toBe(`unwatched t1 for session ${process.pid}\n`);

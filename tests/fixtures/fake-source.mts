@@ -4,7 +4,7 @@
 // it. `FAKE_SOURCE_DIR/poll-<n>.json` serves poll n; when it is missing, the highest-numbered
 // fixture below n repeats. A fixture:
 //
-//   { "events": [{ "target": "t1", "kind": "note", "text": "hello", "url": "https://example.com/t1" }],
+//   { "events": [{ "target": "t1", "kind": "changed", "text": "hello", "url": "https://example.com/t1" }],
 //     "busy": true,
 //     "sleepMs": 2000,
 //     "fail": "boom" }
