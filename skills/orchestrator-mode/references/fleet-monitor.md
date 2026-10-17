@@ -63,6 +63,8 @@ A state is said once on entering and once on leaving. A stuck or idle alert is r
 | note | `agent` | `agent <name>: started` | nothing yet |
 | note | `agent` | `agent <name>: stopped by the lead` | the stop landed |
 | note | `agent` | `agent <name>: fine again` | the alert on it is void |
+| note | `agent` | `agent <name>: ended 5760 min ago, long before this watch` | a turn that had ended more than a day before the daemon first judged it (the first poll of a watch over an old session, a transcript first seen): history, said once, never an alert; nothing to do |
+| note | `agent` | `agent <name>: still 5760 min, long before this watch` | a stuck call, a still child, or a stall already a day old when first judged: the same history. One that crosses the day under the watch was judged fresh and stays an alert; a history agent that moves again is judged fresh from then on |
 | alert | `idle` | `worktree <branch>: idle 2 polls after work` | a worktree no agent claims by sidecar or by its own commands, with no worker process and no dirty-tree change, after a worker or a change was seen there earlier in this watch; one where nothing ever worked never says it. The liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
 | alert | `wipe` | `worktree <branch>: 130 files at HEAD -> 3` | a commit on top of deleting the repo reads normal on every other reading; the tree is read before the track lands |
 | note | `head` | `worktree <branch>: head moved to <sha12>` | the `sha` field is the new head; content claims about the track are re-verified on it at its report |
