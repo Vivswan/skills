@@ -1,22 +1,131 @@
 # Fleet Monitor
 
-One subagent whose only job is watching the rest of the fleet. It starts a periodic check (a cron or scheduled wakeup where the harness offers one, a sleep loop otherwise) and messages the lead when any agent stalls or dies.
+The fleet monitor is one role with two instruments (One Role, Two Instruments below). The default is `scripts/fleet-events.mts`, this skill's source for the `/session-events` skill's daemon: the lead's session starts it once as a background task and subscribes itself, and from then on every alert in the fleet arrives as a message, and every note lands in the daemon's events log.
 
-Sweep every 5-10 minutes. Each sweep is a single script invocation built to the Probe Cost budget below, so the bound is noise, not load. Reviewers sometimes idle without delivering: tell them explicitly to report back, and nudge if only an idle notification arrives.
+This page owns the role: what the daemon says and what it cannot see, the monitor subagent's brief, and the judgment and instruments that stay the lead's. The `/session-events` skill's page owns the envelope, the files, and the two-hour cap.
 
-The measurement mechanism lives in this skill's `scripts/` now. Runtime: bun. `baseline.mts` needs it, since on first run it bundles its one dependency, `diff`, into the skill's `.build` folder; the other scripts also run on Node 24.3+.
+```bash
+bun "<skill-dir>/scripts/fleet-events.mts" daemon                       # once per session, as a BACKGROUND task
+bun "<skill-dir>/scripts/fleet-events.mts" watch session --repo <root>  # this session's subagents, plus the worktree reading
+```
+
+The lead goes back to work. Some polls later, unasked:
+
+```text
+<cross-session-message from="uds:/run/user/1000/session-events/4242.fleet-events.sock" from-name="fleet-events" from-mode="bypass">
+agent builder-a: stuck 32 min on Bash
+file:///home/user/.claude/projects/-repo/0f3c7e2a-5b1d-4c8e-9a2f-6d7e8f9a0b1c/subagents/agent-0a1b2c3d4e5f6a7b8.jsonl
+
+worktree feat/parser: idle 4 polls after work
+file:///repo/.claude/worktrees/feat-parser
+automated notice from fleet-events; no reply needed
+</cross-session-message>
+```
+
+Under the daemon no turn is spent on "nothing changed yet", and no subagent sweeps. A message carries only what needs the lead's judgment; a start, a head move, a retraction is a note in the events log, read with `wait`, and `status` lists the alerts standing under each target. The daemon is per session: a new wave needs no new monitor, and it exits with the session.
+
+| Argument | Means |
+| --- | --- |
+| `session` | this session's transcript and subagents directory, found by `CLAUDE_CODE_SESSION_ID` under `~/.claude/projects` (the cwd's project tried first) |
+| `/abs/<sessionId>` | an absolute session directory, for another session's fleet |
+| `--repo <root>` | adds the worktree reading of that repository for every worktree no agent claims, by sidecar or by its own commands: what `sweep.mts` prints, every poll |
+| `--quiet-after <minutes>` | how long an open turn with nothing pending stands before it is stuck (default 10) |
+
+The transcript reading is incremental: each poll reads what an `agent-*.jsonl` gained since the last. The interval is 60 s while something moves, backing off to 300 s. The command contract (`--help`) is quoted under The Daemon at the end of this page.
+
+## One Role, Two Instruments
+
+The fleet monitor is a role: watch the fleet, and report each transition with how long the state behind it has held. It judges nothing, so every call and every action stays the lead's.
+
+| Instrument | Reads | Harness | The pick |
+| --- | --- | --- | --- |
+| the `fleet-events` daemon | a session's agent transcripts, plus the worktrees with `--repo` | a Claude Code lead. File-sink mode (`--id <name>`, The Daemon below) changes only the delivery: every poll still reads a session transcript | the default wherever there is a session to read |
+| the monitor subagent | the sweep's worktree rows, plus the ledger | any harness, any worker: Codex, Copilot, a human | the fallback wherever there is no session to read. For workers without a Claude transcript its rows are the whole reading |
+
+Both say what moved and for how long, and the rest of this page reads the same rows either way. The daemon's events are What Arrives, and the subagent's brief is The Monitor Subagent.
+
+## What Arrives
+
+Each event is one line and its `file://` URL. An alert is a message, inside the `/session-events` skill's envelope; never reply to one. A note is a line in the events log alone, read with `wait`; `status` lists the alerts in force under each target.
+
+Every text is names, tool names, counts, durations, shas, and paths, and nothing an agent wrote or read is in a message: the URL is where to read it.
+
+A state is said once on entering and once on leaving. A stuck or idle alert is repeated as its duration doubles (10, 20, 40, 80 minutes; 2, 4, 8, 16 polls), three times at most, then held in silence until it clears; `fine again` and `active again` are the retractions, and they are notes.
+
+| Level | Kind | The line says | What the lead judges |
+| --- | --- | --- | --- |
+| alert | `agent` | `agent <name>: stuck 32 min on Bash` | a pending call older than its own `timeout` plus ten minutes, or than thirty with no timeout of its own: a long command, or a permission prompt; the transcript shows the two the same |
+| alert | `agent` | `agent <name>: stuck on agent <child>, <child> last moved 31 min ago` | a child, foreground or background, whose own transcript has been still for thirty minutes; a moving child is never stuck, however long the parent waits |
+| alert | `agent` | `agent <name>: stranded, job <id> ended with no notice` | the job's output file under the harness's tasks directory ends with its exit line while the transcript carries no notice for it; said at once. A job whose own last line spells that footer reads as ended too: open the file |
+| alert | `agent` | `agent <name>: stuck 12 min mid-turn, nothing pending` | past `--quiet-after`: a stall, or a worker composing a large edit; Priors at the Quiet Seams carries the base rates |
+| alert | `agent` | `agent <name>: ended 7 min ago, no signal reached the lead` | past a five-minute grace, the agent is still running in the child map of whoever spawned it (the lead's for the lead's own children), or nobody the fleet read spawned it: a report never sent, or a wait on a message the lead owes |
+| note | `agent` | `agent <name>: ended 7 min ago, report received` | the idle notification or the task notice arrived; nothing to do |
+| note | `agent` | `agent <name>: started` | nothing yet |
+| note | `agent` | `agent <name>: stopped by the lead` | the stop landed |
+| note | `agent` | `agent <name>: fine again` | the alert on it is void |
+| alert | `idle` | `worktree <branch>: idle 2 polls after work` | a worktree no agent claims by sidecar or by its own commands, with no worker process and no dirty-tree change, after a worker or a change was seen there earlier in this watch; one where nothing ever worked never says it. The liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
+| alert | `wipe` | `worktree <branch>: 130 files at HEAD -> 3` | a commit on top of deleting the repo reads normal on every other reading; the tree is read before the track lands |
+| note | `head` | `worktree <branch>: head moved to <sha12>` | the `sha` field is the new head; content claims about the track are re-verified on it at its report |
+| note | `active` | `worktree <branch>: active again` | the idle ended: a worker is in the tree or the dirty tree changed |
+| note | `gone` | `worktree <branch>: gone` | discovery no longer lists it: a landed track swept, or a removed worktree; the `sha` field is its last head |
+| alert | `trouble` | `fleet: <reason>` | the daemon could not take a reading: tooling trouble, never a quiet fleet; the `/session-events` skill's line after three failed polls is the same kind |
+| note | `restored` | `fleet: reading restored` | the reading that failed is back; an empty process list is verified inactivity once more |
+
+A worktree an agent claims is not read at all: the transcript says everything the tree could, so its commits, idleness, and removal produce no line. A claim is a sidecar naming the worktree, or a tool call of the agent's naming its path in the input (never a result), or the lead's, for 30 minutes after its last command there; the main checkout is never claimed by command.
+
+What stays the lead's, by hand: content claims through `probe.mts`, standing state in `ledger.mts`, the PII grep at each builder report and at each landing gate, `baseline.mts` at landings, and every nudge and directive. Codex and Copilot workers write no Claude transcript, so for them the daemon has only the worktree reading, the same rows a monitor subagent sweeps.
+
+The instruments live in this skill's `scripts/`; `fleet/git.mts` and `fleet/processes.mts` are the worktree readings the daemon and `sweep.mts` share. Runtime: bun. `baseline.mts` needs it, since on first run it bundles its one dependency, `diff`, into the skill's `.build` folder; `sweep.mts`, `probe.mts`, and `ledger.mts` also run on Node 24.3+.
 
 Every mechanical trap those scripts retire is deliberately absent from this file: self-matching greps, zsh word-splitting and glob aborts, the missing `timeout` binary on macOS, fragile hand-grepped token checks, counts standing in for the sets they approximate. A trap folded into a tested script cannot re-fire. Keeping its prose recipe around only invites hand-rolling the probe again.
 
-What remains is the judgment layer: what the readings mean, when to flag, and how to report. Every rule below comes from a false conclusion caught in production. Do not simplify them away, and do not hand-roll shell probes around the scripts: when a reading is missing, extend the script.
+What remains is the judgment layer: what the readings mean, when to act, and what the daemon cannot see. Every rule below comes from a false conclusion caught in production. Do not simplify them away, and do not hand-roll shell probes around the scripts: when a reading is missing, extend the script.
 
 The measurement rules that are not monitor-specific live in the `/verify-with-controls` skill: evidence-or-error probes, positive and negative controls, suspecting the instrument, postconditions over logs, the look-then-send re-measure. This file keeps their monitor-specific instantiations and wiring.
 
 Each script prints its contract with `--help`. This page quotes those blocks, and a test upstream keeps every quote equal to its script, so the script is the source where the prose around it disagrees.
 
+## The Monitor Subagent
+
+The fallback instrument is one subagent whose only job is watching the rest of the fleet. It wakes on a timer, runs the sweep, reads the ledger, and reports to the lead. One report, with the worktree names and shas as examples:
+
+```text
+sweep 14:20, ledger re-read, needles grep run on every moved head
+
+| worktree    | head         | transition                                  | held since |
+| ----------- | ------------ | ------------------------------------------- | ---------- |
+| feat/parser | 1a2b3c4d5e6f | head moved, PII grep exit 1                 | 14:19      |
+| feat/docs   | 9f8e7d6c5b4a | no worker process, tree still, 2 sweeps     | 14:10      |
+| fix/ci      | 0f1e2d3c4b5a | parked by design per the ledger, no event   |            |
+
+ack: directive 14:12 "hold feat/docs silent" is flag 3f9a in the ledger
+```
+
+Transitions only, two observations before any flag (Reading a Sweep), nothing an agent wrote quoted, and every lead directive acknowledged. A sweep with no transition to report and no directive to acknowledge sends nothing.
+
+What the brief names, so the monitor never hand-rolls a probe:
+
+- **`scripts/sweep.mts <repo-root>`**: the periodic sweep, one invocation per wake, read per Reading a Sweep.
+- **`scripts/probe.mts`**: every content claim, never a raw grep (Content Claims).
+- **`scripts/ledger.mts <file>`**: the standing state, re-read every sweep before any flag (Standing States).
+- **`scripts/baseline.mts`**: pinned copies at landings (Pinned Copies).
+- **`/tmp/fleet-<sessionId>/pii-needles.txt`**: the grep on every sweep where a row's `headSha` moved. The subagent has no builder report to hook on, so for it the moved head stays the trigger (PII at Every Report and Landing).
+- **The cadence**: every 5 to 10 minutes, a scheduled wakeup where the harness offers one (Claude Code's cron tool), a sleep loop otherwise. Each sweep is one script invocation built to the Probe Cost budget, so the bound is noise, not load.
+
+The reporting rules that are the monitor's:
+
+- **Report at the seam where agents strand.** The brief states the report as the deliverable first and requires it in every branch, per `references/spawn-briefs.md`, Report-First for Watchers and Reviewers. The monitor is named because the lead addresses it mid-run.
+- **An unacknowledged directive is undelivered**, so the monitor acknowledges every lead directive in its next report. The brief's line is `references/spawn-briefs.md`, item 11, and the lead's half, re-send or write it to the ledger, is Reporting Discipline's.
+- **A flag is a question, never a verdict**: "no tree activity since 14:10; you will know whether its signal arrived". The lead holds whether the turn is open and whether a message landed (Priors at the Quiet Seams), and a worker's claim is forwarded with its read-back or as a claim (Reporting Discipline).
+- **When messages cross, answer "already sent at 14:20"** rather than staying silent. Silence reads as an unmet obligation (seven crossings in one shift).
+- **The stand-down is the one directive the lead does not wait on.** An idle monitor reads its inbox only when it next runs (in Claude Code, at its next tool round), so a stand-down can sit unread for 20+ minutes while the lead waits for an acknowledgement that cannot come. Once the fleet is landed, the lead sends it for the record and stops the monitor directly (Claude Code's TaskStop).
+- Reporting Discipline's narration and retraction rules bind the monitor's reports too.
+
+The boundary: the monitor reads worktrees, never transcripts. A Claude Code worker's stuck calls, stalls, and ended turns live in its transcript, so for those workers the daemon's agent lines are the better instrument, and a lead who can run both runs the daemon.
+
 ## The Sweep
 
-The periodic check is one command, `bun <skill-dir>/scripts/sweep.mts <repo-root>` (`<skill-dir>` is this skill's root):
+The one-shot reading is one command, `bun <skill-dir>/scripts/sweep.mts <repo-root>` (`<skill-dir>` is this skill's root). It prints, once, what the daemon reads from the worktrees on every poll with `--repo`:
 
 ```text usage=skills/orchestrator-mode/scripts/sweep.mts
 usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]
@@ -36,13 +145,13 @@ prints: one JSON line each, in this order, each only when its condition holds
 exits: 0 the sweep ran (ok:false rows included); 1 control failure; 2 usage error
 ```
 
-It prints one JSON line per worktree of `<repo-root>` (a real captured row, wrapped here for width):
+It prints one JSON line per worktree of `<repo-root>` (one row, example values, wrapped here for width):
 
 ```json
-{"worktree":"/repo/.claude/worktrees/agent-a0e0514bb44bad3e8","branch":"worktree-agent-a0e0514bb44bad3e8",
- "ok":true,"headSha":"05387480f58e11df4f74776bb29b3a7e3f0871e0","aheadBehind":{"ahead":0,"behind":0},
- "treeFileCount":130,"dirtyCount":1,"untrackedCount":0,"newestDirtyMtime":"2026-08-26T07:41:36.177Z",
- "statusHash":"405808942a362a72","processes":[{"pid":5835,"command":"bun","state":"S+"}]}
+{"worktree":"/repo/.claude/worktrees/agent-a1b2c3d4e5f60718","branch":"worktree-agent-a1b2c3d4e5f60718",
+ "ok":true,"headSha":"0123abcd0123abcd0123abcd0123abcd0123abcd","aheadBehind":{"ahead":0,"behind":0},
+ "treeFileCount":130,"dirtyCount":1,"untrackedCount":0,"newestDirtyMtime":"2026-01-01T00:00:00.000Z",
+ "statusHash":"0123456789abcdef","processes":[{"pid":4242,"command":"bun","state":"S+"}]}
 ```
 
 How to read the row:
@@ -76,15 +185,17 @@ A broken probe is loud, never zero:
 
 The row is data. These rules are what it means:
 
-- **Two observations before any flag.** For "did anything happen": require ALL THREE of `newestDirtyMtime`, `headSha`, and `statusHash` stable across two sweeps before flagging inactivity. Deletions are invisible to mtime, so the hash is load-bearing.
+- **Two observations before any flag.** For "did anything happen" in a sweep: ALL THREE of `newestDirtyMtime`, `headSha`, and `statusHash` stable across two readings mean no commit landed and no file moved. Deletions are invisible to mtime, so the hash is load-bearing. The daemon's `idle` reads the first and third alone, two polls after work was seen. A commit that landed is the `head` note, never the idle.
 
   For "is anything happening now": judge the `processes` list by its command names and state codes across two sweeps. The sweep emits exactly `pid`, `command`, and `state` per process, nothing more.
-- **Presence is not work.** A `processes` list that is a single shell row (one `zsh`/`bash` entry) parked on the worktree cwd reads as "alive" under a presence test and silently voids idle counts that should keep running. A working agent shows WORKER rows: every process whose cwd is inside the worktree is its own row, so bun/node/test-host children appear alongside the shell.
+- **Presence is not work.** A `processes` list that is a single shell row (one `zsh`/`bash` entry) parked on the worktree cwd reads as "alive" under a presence test and silently voids idle counts that should keep running. The daemon reads a lone shell row as presence, so its idle count keeps running.
+
+  A working agent shows WORKER rows: every process whose cwd is inside the worktree is its own row, so bun/node/test-host children appear alongside the shell.
 
   The sweep row cannot answer "is this lone shell childless and idle" (it carries no child list and no CPU). That is an escalation pair, run only when a suspicious row set warrants it: `pgrep -P <shell-pid>` for children, plus `ps -o pcpu=,stat= -p <pid>` for CPU and state.
 
   For `pgrep -P`, empty output with exit 1 means none, and ps's ppid column names the shell's PARENT, so it can never establish childlessness. Even then judge by children and state, never a single CPU sample. An I/O-bound test host reads near-zero CPU while fully busy.
-- **A sleeping shell counts as alive.** A worker sleep-polling shows up in the sweep as a `sleep` row beside its shell's row on the same worktree: a discipline problem for the lead, never a corpse for the monitor.
+- **A sleeping shell counts as alive.** A worker sleep-polling shows up as a `sleep` row beside its shell's row on the same worktree, and the daemon counts it alive: a discipline problem for the lead, never a corpse.
 - **A zero `treeFileCount` on the main-checkout row makes the sweep report `control: FAILED` and exit 1.** It is never a wipe call and never a baseline for worktree rows, so the script refuses it. A zero that still appears means the main checkout's HEAD really is an empty tree. A zero on a WORKTREE row stays the wipe signal.
 
   The one instrument fault that produced it is fixed. Launched from inside a nested worktree, git read the cwd as a pathspec prefix and the row's `ls-tree` listed only paths under it, so sweep.mts read 0 on a healthy repo. Every row's git calls now run from the worktree itself and `ls-tree` carries `--full-tree`, so the reading no longer depends on the launch cwd.
@@ -143,13 +254,15 @@ The judgment that stays with the operator:
 - **Every narrowed variant of a working probe is a NEW probe** and needs its own positive control before its empty is trusted. The rule and its worked example live in `/verify-with-controls`.
 - **Resolve spreads and follow moved definitions by searching, never by pinned path.** A path-pinned check counts 0 and passes silently after the definition moves.
 
-## PII on Every HEAD Move
+## PII at Every Report and Landing
 
-The lead writes the session's needle file once at session start, outside the repository, and the monitor's brief names its path. The file never enters a worktree or a commit.
+The lead writes the session's needle file once at session start, outside the repository. The file never enters a worktree or a commit.
 
 One fixed string per line: the real identifiers of the user and of anyone whose machine or accounts the session touches, the provenance phrases a real-data fixture carries (`measured from`, `real logs`), and, when a track replaces a fixture measured from real data, every full-precision ratio and 4+ digit integer of the old file. The `/pr-landing-discipline` skill's READY check shows the extraction.
 
-On every sweep where a row's `headSha` differs from the previous sweep's (every commit, amend, and rebase), the monitor greps every commit the track added since its branch point. It reads each commit's message and each commit's own added lines, never the net diff, because a fixture added in one commit and deleted in the next is still published by the first.
+At each builder report and at each landing gate (a head move is a note in the daemon's log, never the trigger), the lead greps every commit the track added since its branch point. It reads each commit's message and its own added lines, never the net diff: a fixture added in one commit and deleted in the next is still published by the first.
+
+The holder is the lead at a report or a gate, and the monitor subagent on its sweep, which flags a hit to the lead.
 
 ```bash
 needles=/tmp/fleet-<sessionId>/pii-needles.txt; wt=<worktree>
@@ -163,7 +276,7 @@ test -s "$needles" &&
 rm -f "$out" "$patches"
 ```
 
-- The base is the track's branch point on the session's mainline (the same base-to-HEAD span the sizing rule above uses), pinned by `merge-base` at read time. The sweep row does not carry it.
+- The base is the track's branch point on the session's mainline (the same base-to-HEAD span the sizing rule above uses), pinned by `merge-base` at read time. Neither the `head` note nor the sweep row carries it.
 - `--no-color` because the `+` filter reads the first byte of each line: under `color.ui=always` an escape code comes first and the filter selects nothing, a silent empty.
 
   `--diff-merges=first-parent` makes a merge commit show what it added against its first parent. `git log -p` shows no patch for a merge by default, so a needle typed in while resolving a conflict would otherwise never be read.
@@ -172,9 +285,12 @@ rm -f "$out" "$patches"
 - `grep exit 1` is clean for this HEAD, and `grep exit 0` is a flag to the lead carrying the hit lines. No `grep exit` line means the needle file is empty or a git read failed, and the reading says nothing: the `&&` chain stops before the grep, so a broken probe cannot print a clean verdict.
 - Only added lines are read: a track that redacts PII carries the PII in its removed lines by definition.
 - The hit is read before it is flagged, like every other count in this file. A 4+ digit needle coinciding with a year or a sha fragment is named as such, and a hit on a provenance phrase is flagged against the fixture it describes.
-- A commit pushed between two sweeps is caught at the next sweep, not before the push. The check that runs before anything merges is the landing gate's. The PR-side text (title, body, comments) is also the landing gate's read, and the monitor covers what leaves a worktree as commits.
+- **The commit's builder is the ledger grant whose globs cover its paths** (`ledger.mts show`). Two workers granted `docs/guide.md`, one worded "Intro only", the other "Examples only": both globs cover an Intro-only commit, so when more than one grant covers a path the lead reads the commit's hunks against the grants' wording in the `show` output. A hunk no wording covers is a territory breach to flag, never a guess.
 
-The landing gate in direct mode runs the same read over the frozen branch, with two additions the monitor does not need: the whole replacement fixture (a retained old figure sits on an unchanged line, which no patch shows) and, for a patch still uncommitted, the index in place of `base..HEAD`, since HEAD has not moved.
+  Never a trailer in the message: commit messages carry content only, per the `/code-standards` skill, so an `Agent: <name>` trailer is a finding. One invented for attribution was stripped from 350 commits by a history rewrite once the standards were read.
+- A commit pushed between two reports is caught at the next one, not before the push. The check that runs before anything merges is the landing gate's. The PR-side text (title, body, comments) is also the landing gate's read, and this read covers what leaves a worktree as commits.
+
+The landing gate in direct mode runs the same read over the frozen branch, with two additions the head-move read does not need: the whole replacement fixture (a retained old figure sits on an unchanged line, which no patch shows) and, for a patch still uncommitted, the index in place of `base..HEAD`, since HEAD has not moved.
 
 Each variant is one `&&` chain into the same `$out`. With no replaced fixture, the `show` line becomes `: > "$out"`.
 
@@ -200,7 +316,7 @@ test -s "$needles" &&
 
 ## Standing States: ledger.mts
 
-Per-worker standing state lives in a ledger file the LEAD creates at session start, so it survives agent context loss and monitor handovers. The monitor checks every would-be flag against it before reporting. `bun <skill-dir>/scripts/ledger.mts <file> <command>`:
+Per-worker standing state lives in a ledger file the LEAD creates at session start, so it survives the lead's context loss, a monitor handover, and a session handover. The lead reads every daemon event against it before acting, and a monitor subagent checks every would-be flag against it before reporting: an `idle` on a parked worker is expected, a head move on one is not. `bun <skill-dir>/scripts/ledger.mts <file> <command>`:
 
 ```text usage=skills/orchestrator-mode/scripts/ledger.mts
 usage: ledger.mts <file> <command> [args...]
@@ -225,9 +341,9 @@ bun <skill-dir>/scripts/ledger.mts <file> grant <worker> "<wording>" "<glob>"...
 
 Saves are temp-plus-rename atomic. `init` is an atomic create-if-absent (it never clobbers an existing ledger). The mutating commands (`state`, `flag`, `retract`, `grant`) run under a lockfile, and a mutation never proceeds unlocked.
 
-So duplicate flags are refused globally even under concurrent writers, dormancy is a lookup, and grants keep their exact wording for later literal-vs-intent re-reads. Without this, a lead's "do not flag X, it is parked on purpose" instruction evaporates two rounds later and the same false suspicion re-fires each sweep.
+So duplicate flags are refused globally even under concurrent writers, dormancy is a lookup, and grants keep their exact wording for later literal-vs-intent re-reads. Without this, a lead's "X is parked on purpose" decision evaporates at the next context compaction and the same false suspicion re-fires on each `idle` event or sweep.
 
-What a parked worker may still report:
+What still counts as an event on a parked worker:
 
 - A `dormant-by-design` worker's only reportable events: its worktree vanishing, its HEAD moving (new commits appearing OR an amend/rebase, where the commits-ahead count may not change), or new dirty or untracked files appearing while parked.
 - A `landing-gate` worker's branch may legitimately gain a fix commit or disappear entirely (verified landing).
@@ -241,50 +357,47 @@ Two disaster-shaped non-disasters:
 
 ## Priors at the Quiet Seams
 
-- **The signal seam:** a committed-clean-quiescent worker is MORE OFTEN mid-review or composing its signal than stranded. In one long-running deployment, 27 quiescences across the lineage's shifts produced zero confirmed strands. Raise the flag anyway (the one real strand is the one that matters), but frame it as a QUESTION with the benign explanations beside it, never an assertion: "no tree activity since X; you will know whether its signal arrived".
+- **The signal seam:** a committed-clean-quiescent worker (an `idle` on its worktree, or `ended, no signal reached the lead`) is MORE OFTEN mid-review or composing its signal than stranded. In one long-running deployment, 27 quiescences across the lineage's shifts produced zero confirmed strands. Read the line anyway (the one real strand is the one that matters), as a QUESTION with the benign explanations beside it, never as a verdict.
 
-  The lead holds the half the monitor cannot see (whether the agent's turn is open, whether a message landed). 26 of the 27 resolved by the worker visibly returning, and exactly ONE resolved only by lead escalation. That flag was load-bearing precisely because the monitor could not settle it alone.
+  The daemon reads whether the turn is open, a monitor subagent reads neither the turn nor the inbox, and whether a message landed is the lead's half either way. 26 of the 27 resolved by the worker visibly returning (today's `fine again`), and exactly ONE resolved only by lead escalation. That flag was load-bearing precisely because the instrument could not settle it alone.
 
-  Name the state before measuring it. UNCOMMITTED-AND-STATIC (never committed, owes no message, and in that deployment ~14 minutes of stillness was normal) and the seam proper (committed, owes one) have different normals, and the wrong baseline measures against the wrong number. Calibrate the stillness baseline against the fleet's own observed normals.
-- **The read-first prior:** a builder whose brief says read-the-landed-code-first is silent with nothing written for its first one or two sweeps, then produces substantial output in one go. Reading leaves no trace in trees or processes. Its silence is not evidence of anything, the same blind spot as composing a message.
-- **The output-composition twin:** the read-first prior's symmetric blind class. A worker composing a large edit batch or prompt shows no tree trace, no process trace, and no message trace: FIFTY minutes of total silence measured mid-generation on a healthy worker, identical to a corpse from the monitor's side.
+  Name the state before measuring it. UNCOMMITTED-AND-STATIC (never committed, owes no message, and in that deployment ~14 minutes of stillness was normal) and the seam proper (committed, owes one) have different normals, and the wrong baseline measures against the wrong number. Calibrate the stillness baseline against the fleet's own observed normals: `--quiet-after` is that number.
+- **The read-first prior:** a builder whose brief says read-the-landed-code-first is silent with nothing written for its first ten to twenty minutes, then produces substantial output in one go. Reading leaves no trace in trees or processes, only in the transcript, so for a Claude worker the daemon has at most a stuck call to say, and for a Codex or Copilot worker a worktree `idle`. Neither is evidence of anything.
+- **The output-composition twin:** the read-first prior's symmetric blind class. A worker composing a large edit batch or prompt shows no tree trace, no process trace, no transcript trace, and no message trace: the daemon says `stuck <N> min mid-turn, nothing pending`. FIFTY minutes of total silence was measured mid-generation on a healthy worker, identical to a corpse from the instrument's side.
 
-  The bigger the batch, the longer the blind window, with no upper bound measurable from trees. Only the lead's half (an open turn, no idle notification) resolves it. Reading and writing are equally invisible, and only the delivery is visible, arriving all at once.
+  The bigger the batch, the longer the blind window, with no upper bound measurable from trees. Only the lead's half resolves it: no idle notification has arrived, and the brief asked for something that size. Only the delivery is visible, arriving all at once.
 - **The meta-lesson:** a known-bad probe can re-enter through someone else's wording of a flag condition. Memory is no defence. Measuring again immediately before firing is.
 
-  A near-miss stays a near-miss only because the monitor re-checked instead of trusting its own earlier authorization. The general bar (two observations decide whether to LOOK, a fresh re-measure immediately before sending decides whether to SEND) is `/verify-with-controls` rule 5.
+  A near-miss stayed a near-miss only because the monitor of the day re-checked instead of trusting its own earlier authorization. The general bar (two observations decide whether to LOOK, a fresh re-measure immediately before sending decides whether to SEND) is `/verify-with-controls` rule 5.
 
 ## Reporting Discipline
 
-- **Standing state lives in the ledger, not in messages.** A send that reports success proves QUEUING, not delivery: a monitor mid-turn drains its inbox only at its next tool round. One production session, sketched:
+The daemon says each state once on entering and once on leaving, and repeats a stuck or idle alert only as its duration doubles, so it never narrates an unchanged call and always retracts one that went void. A monitor subagent reports the same way (The Monitor Subagent). The rules below are the lead's: for its own record, and for what it tells the user and the workers.
 
-  ```text
-  lead    -> ~10 directives over 6h (adjudications, state corrections,
-             a hold-silent order); every send reported success
-  monitor -> inbox drains hours later in ONE batch; meanwhile it re-raises
-             closed items, quotes a superseded base rate, and sends a
-             mistaken stand-down: hours of reasoning on stale premises
-  ```
+**Standing state lives in the ledger, not in messages.** A message is a one-shot exchange, never a standing order, and the lead's own context compacts. Anything that must hold across polls goes into the ledger in the shape it represents, and every daemon event is read against it:
 
-  Anything the monitor must honor across sweeps goes into the ledger in the shape it represents, and the monitor re-reads it every sweep. A message is a one-shot exchange, never a standing order.
+| The decision | Its ledger shape |
+| --- | --- |
+| "parked on purpose" | a `state` transition |
+| a scope adjudication | a `grant` with its exact wording |
+| a closed finding | a `retract` |
+| an order with no dedicated shape (a hold-silent order, say) | a standing `flag` on the target worker (`flag` takes arbitrary text), retracted when lifted |
 
-  - "Parked on purpose" is a `state` transition.
-  - A scope adjudication is a `grant` with its exact wording.
-  - A closed finding is a `retract`.
-  - An order with no dedicated shape (the hold-silent order above, say) is recorded as a standing `flag` on the target worker (`flag` takes arbitrary text) and retracted when lifted.
+Production, from a monitor subagent whose standing state lived in messages: ten directives sent over six hours drained from its inbox in one batch, hours later, and meanwhile it re-raised closed items, quoted a superseded base rate, and sent a mistaken stand-down. So no standing state ever lives only in message history.
 
-  So no standing state ever lives only in message history.
-- **An unacknowledged directive is undelivered.** A directive sent as a message is in force only once acknowledged. Until then the sender treats it as not delivered and re-sends it (or writes it to the ledger, where the next sweep must read it). The monitor's half: acknowledge every lead directive in its next report.
+The rest:
 
-  Re-send only after confirming the directive is still current. A still-current re-send is safe because every directive is written to be idempotent, per `references/spawn-briefs.md`, Directives and Steps Are Idempotent, while re-sending a superseded directive restores stale intent.
-- **A worker's claim without its read-back is a question to the lead, never a fact.** A signal saying "resolved", "subscribed", or "pushed" with nothing read back beside it (the API's `isResolved`, the daemon's `status` line, `git ls-remote origin refs/heads/<branch>`) is forwarded as "the worker claims X; no read-back shown; you hold whether it happened", and never enters the ledger as state.
+- **A worker's claim without its read-back is a question, never a fact.** A signal saying "resolved", "subscribed", or "pushed" with nothing read back beside it (the API's `isResolved`, the daemon's `status` line, `git ls-remote origin refs/heads/<branch>`) is read as "the worker claims X; no read-back shown", and never enters the ledger as state.
 
   Production: a relay acknowledged two `watch` subscriptions the daemon's `status` never listed, so a merge went unseen. The brief side (the read-back named per claim) is `references/spawn-briefs.md`, Read-back reporting.
-- **The stand-down is the one directive the lead does not wait on.** An idle teammate's inbox drains only at its next tool round, so a stand-down message can sit unread for 20+ minutes while the lead waits for an acknowledgement that cannot come. Once the fleet is landed, the lead sends the stand-down for the record and then TaskStops the monitor directly.
-- Never re-send an unchanged strict call or an unchanged flag: it is narration, and it trains the lead to skim the next one.
-- Retract the moment a call goes void (**a standing flag that is void is worse than no flag**). Re-measure immediately before sending a call or its retraction alike, because both are equally perishable (a dirty state once lasted under 43 seconds, spanning the two commands of a single sweep).
-- When messages cross, answer "already sent at HH:MM" rather than staying silent. Silence reads as an unmet obligation (seven crossings in one shift).
-- **Literal-vs-intent territory grants:** when a grant's wording and its evident intent diverge (a "one-line" note that measured +5/-4, or a `docs/**` grant that plainly meant the README's locale twins too), report the numbers and name BOTH readings. The lead adjudicates. Never resolve the divergence silently in either direction. The ledger's `grant` command records the exact wording for exactly this re-read.
+- **A send proves queuing, not delivery.** A worker mid-turn reads its inbox when it next runs (in Claude Code, at its next tool round), so a directive sent while a builder is mid-commit can cross that commit unread, and it is in force only once acknowledged.
+
+  After the builder's next signal, one the signal does not acknowledge is re-sent as a concise item list ending "if already done, name the test", so the reply is a read-back, not a restatement. What must hold across polls is in the ledger regardless.
+
+  Re-send only a directive that is still current: every directive is idempotent per `references/spawn-briefs.md`, Directives and Steps Are Idempotent, and a superseded one re-sent restores stale intent. Production: in one fleet, directives sent mid-turn were acknowledged only after the re-send. The monitor subagent's half, the acknowledgement in its next report, is The Monitor Subagent's.
+- **Never re-send an unchanged call or flag**, to the user or to a worker: it is narration, and it trains the reader to skim the next one.
+- **Retract the moment a call goes void** (a standing flag that is void is worse than no flag). Re-measure immediately before sending a call, a nudge, or a retraction alike, because all are equally perishable (a dirty state once lasted under 43 seconds, spanning the two commands of a single sweep).
+- **Literal-vs-intent territory grants:** when a grant's wording and its evident intent diverge (a "one-line" note that measured +5/-4, or a `docs/**` grant that plainly meant the README's locale twins too), read the numbers against BOTH readings before deciding, and record the decision as a new `grant` with its wording. Never resolve the divergence silently in either direction. The ledger's `grant` command keeps the exact wording for exactly this re-read.
 - **Never widen scope from an inferred rule. Only an explicit grant widens scope.** Pre-approving a file class because a repo rule seems to imply it fails OPEN and SILENTLY: the wrongly pre-approved class gets waved through at exactly the moment the independent check mattered. That is strictly worse than the one-message cost of asking.
 
   Production: a migrations/ script marked "expected" for a rename whose rendered path never actually changed. The rule's trigger condition did not hold.
@@ -293,7 +406,7 @@ Two disaster-shaped non-disasters:
 
 ## Probe Cost
 
-Routine sweeps must be O(cheap), and the sweep script is built to that budget: status hash, dirty-file mtimes, HEAD sha, ahead/behind. Never a whole-tree filesystem walk, which collapses under wave-start I/O (parallel installs can kill consecutive sweeps at the command cap).
+Every poll's or sweep's worktree reading must be O(cheap), and `fleet/git.mts`, which the daemon and `sweep.mts` share, is built to that budget: status hash, dirty-file mtimes, HEAD sha, ahead/behind. Never a whole-tree filesystem walk, which collapses under wave-start I/O (parallel installs can kill consecutive sweeps at the command cap).
 
 The row's one size-scaling reading is `treeFileCount`, backed by a per-worktree `git ls-tree -r` at HEAD, the sweep's heaviest git call. It reads the object store rather than walking the filesystem, but its cost still grows with tree size. Expensive walks belong at flag-time, against one worktree only.
 
@@ -334,3 +447,30 @@ exits: 0 clean; 1 drift found or ok:false; 2 usage error
   The flip is INVALID for a dependent (stacked) successor. Its branch already contains the sibling's tokens before the restack, so the pre-restack probe correctly passes and the rule would report a false failure. Verify dependent successors by stack ancestry and the per-site postconditions in `references/landing.md` instead.
 - **A disjointness claim is bound to when it was measured.** A track measured disjoint at spawn can grow into a real collision with a sibling that is already strict-ready. Re-verify with `probe set <worktree> <base>` whenever a track's file set grows, never once.
 - **Executable landing baselines, negative-controlled.** For a wave where each landing ships whole files, keep one runnable per-landing check: file presence, a minimum size, and a structural count (exported symbols, section headings: something a mangled merge cannot preserve by accident). Then negative-control the CHECKER itself, in addition to its tokens, against a ref that lacks the files (the pre-landing mainline), per `/verify-with-controls` rule 6.
+
+## The Daemon
+
+The same readings run as a session-events source, `bun <skill-dir>/scripts/fleet-events.mts`, which the lead's session starts once as a background task and which delivers each agent's stuck calls, stranded jobs, and stalls as alerts, and records the rest as notes (its `--help`):
+
+```text usage=skills/orchestrator-mode/scripts/fleet-events.mts
+usage: fleet-events.mts <command> [options]
+  daemon [--interval <s>] [--mode bypass|prompting] [--id <name> [--pid <pid>]]
+  watch <target> [the source's flags] [--id <name>]
+  unwatch <target> | --all [--id <name>]
+  wait [--since <id>] [--timeout <s>] [--id <name>]
+  poll | status | stop [--id <name>]
+the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET and exits with it;
+--id <name> names a file-sink daemon for a non-Claude agent instead, --pid <pid> ends it with that process;
+--mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;
+--interval is 60 s by default, 1 to 86400
+targets: session (this session's transcript and subagents dir, found by CLAUDE_CODE_SESSION_ID under ~/.claude/projects), or an absolute path to a session directory
+--repo <root>            add the worktree reading for every worktree of this repository that no agent claims (absolute path)
+--quiet-after <minutes>  an open turn with nothing pending is stuck after this long (default 10)
+the session-events skill must be installed beside this one; without it every command exits 2 naming the install: npx skills add Vivswan/skills -g --skill session-events
+files: <dir>/<pid>-<start>.fleet-events.{state.json,events.jsonl,log} and <dir>/<pid>.fleet-events.sock for a session; <id>.fleet-events.* for a file sink;
+  <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
+prints: one message per poll with alerts, wrapped in <cross-session-message from="uds:<socket>" from-name="fleet-events" from-mode="<mode>"> and ending "automated notice from fleet-events; no reply needed";
+  wait prints the new events as JSON lines, then cursor: <id>
+exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too); 2 usage, a state file that is not JSON, or no runtime directory;
+       3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line
+```

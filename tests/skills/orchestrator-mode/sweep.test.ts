@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
+import { cleanEnv, git, park, scratchRepo } from "../../helpers/scratch-repo";
 import { tempDirs } from "../../helpers/temp-dirs";
 
 const temp = tempDirs();
@@ -32,58 +33,17 @@ const SWEEP_TIMEOUT = 60_000;
 
 const fixtureRoot = temp.dir("sweep-test-");
 
-// Hooks (the pre-commit check runs this suite) export GIT_DIR/GIT_INDEX_FILE
-// pointed at the outer repo; they would hijack every fixture git call.
-function cleanEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("GIT_")) delete env[key];
-  }
-  return env;
-}
-
-function git(cwd: string, ...args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], {
-    cwd,
-    timeout: 30_000, // module-top-level fixture calls must never hang the suite
-    env: {
-      ...cleanEnv(),
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_AUTHOR_NAME: "fixture",
-      GIT_AUTHOR_EMAIL: "fixture@example.com",
-      GIT_COMMITTER_NAME: "fixture",
-      GIT_COMMITTER_EMAIL: "fixture@example.com",
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
-  }
-  return result.stdout.toString();
-}
-
 // Fixture: repo (6 tracked files) with an origin so aheadBehind is
 // computable, a live worktree one commit ahead with dirty and untracked
 // files (one nested), a wipe worktree whose commit deletes lib/, and a
 // registered worktree whose directory is deleted afterwards.
-const repo = join(fixtureRoot, "repo");
-mkdirSync(repo);
-git(repo, "init", "-b", "main");
-writeFileSync(join(repo, "tracked.txt"), "v1\n");
-mkdirSync(join(repo, "lib"));
-for (const name of ["a", "b", "c", "d", "e"]) {
-  writeFileSync(join(repo, "lib", `${name}.txt`), `${name}\n`);
-}
-git(repo, "add", ".");
-git(repo, "commit", "-m", "initial");
+const { base, repo } = scratchRepo(fixtureRoot, {});
 git(fixtureRoot, "clone", "--bare", repo, "origin.git");
 git(repo, "remote", "add", "origin", join(fixtureRoot, "origin.git"));
 git(repo, "fetch", "origin");
 git(repo, "remote", "set-head", "origin", "main");
 
-const wtLive = join(fixtureRoot, "wt-live");
+const wtLive = join(base, "wt-live");
 git(repo, "worktree", "add", wtLive, "-b", "track-live");
 writeFileSync(join(wtLive, "built.txt"), "output\n");
 git(wtLive, "add", "built.txt");
@@ -96,12 +56,12 @@ writeFileSync(untrackedFile, "notes\n");
 mkdirSync(join(wtLive, "newdir"));
 writeFileSync(nestedUntrackedFile, "nested\n");
 
-const wtWipe = join(fixtureRoot, "wt-wipe");
+const wtWipe = join(base, "wt-wipe");
 git(repo, "worktree", "add", wtWipe, "-b", "track-wipe");
 git(wtWipe, "rm", "-r", "lib");
 git(wtWipe, "commit", "-m", "initial");
 
-const wtGone = join(fixtureRoot, "wt-gone");
+const wtGone = join(base, "wt-gone");
 git(repo, "worktree", "add", wtGone, "-b", "track-gone");
 const wtGoneReal = realpathSync(wtGone);
 rmSync(wtGone, { recursive: true, force: true });
@@ -111,7 +71,7 @@ rmSync(wtGone, { recursive: true, force: true });
 // counts against origin/main in BOTH directions for wt-live (ahead by its own
 // commit, behind by the develop-only commit). The temporary worktree is
 // removed so the sweep's row set stays at four.
-const wtDev = join(fixtureRoot, "wt-dev");
+const wtDev = join(base, "wt-dev");
 git(repo, "worktree", "add", wtDev, "-b", "develop");
 writeFileSync(join(wtDev, "dev-only.txt"), "develop\n");
 git(wtDev, "add", "dev-only.txt");
@@ -186,7 +146,7 @@ describe("sweep.mts worktree rows", () => {
     () => {
       // A real process parked on wt-live's cwd must show up in that row: the
       // lsof attribution path, not just its error path.
-      const parked = Bun.spawn(["sleep", "60"], { cwd: wtLive, stdout: "ignore" });
+      const parked = park(wtLive);
       try {
         const rows = sweep();
         expect(rows.some((r) => r.control === "FAILED")).toBe(false);

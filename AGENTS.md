@@ -41,6 +41,7 @@ Installable skills for coding agents. Consumers run `npx skills add Vivswan/skil
 - A skill is example-led: worked commands and copy-paste blocks a cold agent can follow, never abstract prose.
 - The frontmatter `description` is a trigger ("Use when ..."), never a summary.
 - Every skill has exactly one firing moment, disjoint from the others; fewer skills beats more.
+- A skill is harness-agnostic: it names the role and the judgment, a harness-specific mechanism (a Claude Code session socket, a Codex sandbox) is one instrument for the role, and the page gives a fallback any harness can run.
 - No backwards compatibility: renaming or retiring a skill is a normal change, done fully in one PR.
 - Skill behavior and agent-facing text are product: `fix:`, not `docs:`.
 

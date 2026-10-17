@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../../../scripts/lib.mts";
 import type { Activity } from "../../../skills/watch-github/scripts/github/pr-activity.mts";
 import { parseBranchTarget } from "../../../skills/watch-github/scripts/targets/branch.mts";
 import {
@@ -33,6 +32,7 @@ import {
   suiteNodes,
   text,
 } from "../../helpers/github-events-scenario";
+import { sideBySide } from "../../helpers/skill-layout";
 
 // Contract tests for the GitHub source through the daemon: the two target forms, the one request
 // per repository, what each event says and does not say, the CI rules, and the budget. The stub
@@ -918,21 +918,10 @@ describe("a head nothing runs on, and a target whose own reads keep failing", ()
 
 describe("the two skills side by side", () => {
   test("installed as sibling folders, copied or symlinked, the GitHub source finds the library; with the base removed it exits 2 naming the install command", () => {
-    // `npx skills add --skill <name>` copies one skill folder into a canonical directory and
-    // symlinks the agent's skills directory to it, so the two skills stay siblings in both.
-    const root = temp.dir("github-events-layout-");
-    const canon = join(root, "canonical");
-    mkdirSync(canon);
-    for (const skill of ["session-events", "watch-github"]) {
-      cpSync(join(ROOT, "skills", skill), join(canon, skill), { recursive: true });
-    }
-    const agent = join(root, "agent");
-    mkdirSync(agent);
-    for (const skill of ["session-events", "watch-github"]) {
-      symlinkSync(join(canon, skill), join(agent, skill));
-    }
-    const runtime = join(root, "runtime");
-    mkdirSync(runtime);
+    const layout = sideBySide(temp.dir("github-events-layout-"), [
+      "session-events",
+      "watch-github",
+    ]);
     const run = (skillsDir: string) => {
       const result = Bun.spawnSync(
         [
@@ -943,7 +932,7 @@ describe("the two skills side by side", () => {
           "layout",
         ],
         {
-          env: { ...process.env, PATH: emptyBinDir, SESSION_EVENTS_DIR: runtime },
+          env: { ...process.env, PATH: emptyBinDir, SESSION_EVENTS_DIR: layout.runtime },
           stdout: "pipe",
           stderr: "pipe",
         },
@@ -951,15 +940,15 @@ describe("the two skills side by side", () => {
       return { code: result.exitCode, stderr: result.stderr.toString() };
     };
     // bun names the script by its real path, so the symlinked layout prints the canonical one.
-    for (const skillsDir of [canon, agent]) {
+    for (const skillsDir of [layout.canon, layout.agent]) {
       const r = run(skillsDir);
       expect(r.code).toBe(3);
       expect(r.stderr).toContain(
-        `bun "${join(canon, "watch-github", "scripts", "github-events.mts")}" daemon --id layout`,
+        `bun "${join(layout.canon, "watch-github", "scripts", "github-events.mts")}" daemon --id layout`,
       );
     }
-    rmSync(join(canon, "session-events"), { recursive: true });
-    for (const skillsDir of [canon, agent]) {
+    layout.remove("session-events");
+    for (const skillsDir of [layout.canon, layout.agent]) {
       const r = run(skillsDir);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain(

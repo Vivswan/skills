@@ -33,6 +33,7 @@ Every brief includes:
     - A typecheck where the language has one, then only the tests the change and its proof touch: the changed files' tests, the named census or proof target, one e2e slice when a scenario is the target. Never the full suite, the repository's aggregate check command, or a lint-plus-build sweep: CI runs those. A wider local run states its reason (an unknown target) and happens at most once per PR.
     - The brief says whether CI minutes are metered or scarce (for example a private repository on a metered plan). Where they are, the full check runs locally once before the push instead. A brief that does not say is a question back to the lead, and a lead who is not sure asks the user.
     - Only as many gates run at once as the machine and the reviewer backend handle without stalling (about three is a safe start), every long run carries an explicit timeout, and a process is killed by the PID the agent spawned, never by pattern.
+    - Every wait is a short foreground call repeated, never one long call: each wait is its own foreground tool call, never a shell loop, which is one long call again, since a call that outlives the harness's foreground limit is moved to the background and never wakes an idle subagent (The Stop-and-Wait Ban, below; the review block is the `/rubber-duck-review` skill's step 5).
     - The install comes first. A fresh worktree has no installed dependencies. Hooks may fail without them, and some runners resolve the parent checkout's binaries and pass anyway, so the brief's first command after item 14's worktree preflight is the repository's own install (for example `npm ci`, `bun install --frozen-lockfile`, `uv sync`).
 
       After a lead directive, the builder's re-review prompt states what changed since the last round. When the directive changed the diff's shape, the builder rewrites the amended commit's body to match (the directive can say so explicitly): `--amend --no-edit` left stale bodies twice in one wave.
@@ -51,7 +52,7 @@ Every brief includes:
 8. **The out-of-territory rule:** anything broken or wrong found outside the agent's file whitelist is reported in the completion signal, never fixed silently. A silent out-of-territory edit collides with another agent's territory, and a silently dropped finding is lost.
 9. **The inbox-reconciliation rule** (below): the final signal enumerates every lead message received, with one line of evidence per directive.
 10. **The idempotency rule** (below): every directive and every briefed step is safe to arrive twice, late, or after the fact. A late arrival is also checked for supersession before acting, and genuinely non-idempotent operations are named in the brief.
-11. **For long-running service agents (the fleet monitor, long-horizon watchers): the standing-state channel.** The brief names the session ledger as where standing state arrives (re-read it every sweep) and requires every lead directive received as a message to be acknowledged in the agent's NEXT report. The delivery rule and its lead side live in `references/fleet-monitor.md`, Reporting Discipline.
+11. **For a long-running service agent (the monitor subagent of `references/fleet-monitor.md`, The Monitor Subagent, or a watcher over something no daemon polls): the standing-state channel.** The brief names the session ledger as where standing state arrives, re-read every sweep or check, and requires every lead directive received as a message to be acknowledged in the NEXT report, the per-report form of rule 9. The lead's side is `references/fleet-monitor.md`, Reporting Discipline.
 12. **Scratch files go to /tmp, never the worktree, at a unique per-agent path.** A review prompt or helper script written into the worktree blocks the clean-tree landing criterion and is one `git add -A` away from riding into the commit.
 
     The /tmp path is a `mktemp -d` taken once or an agent-named directory, never a fixed name like `/tmp/commit-msg.txt`. Three builders in one session wrote their commit messages to that same path, and one track's commit carried another track's message (content unaffected).
@@ -127,13 +128,19 @@ If your harness has different notification semantics, verify them before relying
 
 Every brief therefore states:
 
-- Run gates, hooks, and reviews FOREGROUND.
+- Run gates, hooks, and reviews FOREGROUND, and every wait as a short foreground call repeated, never one long call (the long-call trap below).
 - After fanning out sub-editors, the next action on wake is to read their output, never to wait again.
 - No idle stop is permitted before the final signal.
 
 When a stranded agent must be nudged anyway, the nudge states the mechanism ("this notification fires only with zero live children, so your child is done; read its output"). A bare "continue" lets it re-strand at the next seam.
 
 One nuance from production: a notification can occasionally fire while an untracked grandchild (e.g. a git hook's process tree) is still alive. An agent acting on a "finished" child should verify the outcome it reads is settled, not trust the notification alone.
+
+**The long-call trap (Claude Code):** a tool call that runs past the harness's foreground limit (about two minutes, or the explicit timeout the call carries, ten minutes at most) is moved to the background, and the turn continues without it. Its completion never wakes a subagent that has gone idle. Three builders idled after a single long `--wait` and were resumed by hand; the bounded form is below.
+
+So every wait inside a subagent is a short foreground call repeated, never one long call: each wait is its own foreground tool call, never a shell loop, which is one long call again.
+
+For a review verdict the call is the `/rubber-duck-review` skill's step 5 subagent block; for a gate queue, a slot check with five-second polls. Each call carries an explicit timeout that outlasts it, and a review launched foreground under one is such a call.
 
 **The named-spawn trap (Claude Code):** an Agent-tool spawn WITH a `name` detaches and runs in the background even when the brief said `run_in_background: false`. Only unnamed spawns honor the synchronous flag. This single fact produced five strands across three builders in one production session, and each builder believed its reviewer was synchronous.
 
@@ -177,7 +184,7 @@ Two rules follow:
 
 ## Final Signals Reconcile the Full Inbox
 
-A directive sent to a worker mid-turn queues invisibly and delivers only at its next tool round. The worker cannot see it while its long turn runs.
+A directive sent to a worker mid-turn lands inside the running turn, at its next tool round, and can go unseen there while the planned round runs on.
 
 The dominant coordination failure this produces: the worker finishes its planned round, signals "done", and the queued directive silently drops. In one production session this cost a full extra round on four different builders, each of which sincerely reported completion while a lead message sat unread in its inbox.
 
@@ -185,7 +192,7 @@ The rule every brief carries: a FINAL SIGNAL must re-read the full inbox first a
 
 A signal that omits a pending directive is not a final signal. The lead bounces it, and the bounce costs more than the enumeration ever does.
 
-The lead's side of the same rule: verify a signal against the directives actually sent, by probe, not by trusting the enumeration.
+The lead's side of the same rule: verify a signal against the directives actually sent, by probe, not by trusting the enumeration; the re-send of one the signal did not acknowledge is `references/fleet-monitor.md`, Reporting Discipline.
 
 ## Directives and Steps Are Idempotent
 
@@ -224,5 +231,5 @@ Environment (substitute the repository's own install, typecheck, and test comman
 Gates: CI minutes are not metered here, so run TARGETED checks FOREGROUND until green: `bun run --cwd /repo/.claude/worktrees/wt-rate-limit typecheck`, then the repo's test launcher on the files your change and its proof touch (`bun run --cwd /repo/.claude/worktrees/wt-rate-limit test tests/gateway/`) with an explicit timeout. Never the whole suite or the repository's aggregate check command; CI runs those on the push or the PR. Stop a process by the PID you spawned, never by pattern. Then run your own review loop and fix findings before signaling. Red-then-green for behavior changes only; a deletion with no behavior of its own is proved by a census in the PR body (the landing report with no PR), not a test. Every new test names what would drift silently without it; one that restates the source it reads is deleted. In Claude Code spawn reviewers UNNAMED (named spawns detach there); write scratch/prompt files under your own `mktemp -d` in /tmp with the harness's file-writing tool, never here, never a fixed name like /tmp/commit-msg.txt, and never via a heredoc where the sandbox refuses heredocs and compound commands that mention git.
 Handoff: commit finished work to wt/rate-limit (do not push). Your final act is one SendMessage to the lead (in Claude Code a named agent's final text reaches nobody) with the branch name, commit subjects, any escalations, and one line per lead message you received. Every claim in it quotes what you READ BACK after acting (the commit: `git -C /repo/.claude/worktrees/wt-rate-limit log -1 --format=%H`; a clean tree: `git -C /repo/.claude/worktrees/wt-rate-limit status --porcelain=v1 --untracked-files=all` printing nothing; a green gate: the launcher's summary line and exit code), never what you ran. Re-read your FULL inbox first: a signal that omits a pending directive is not a final signal.
 Library check: searched npm and the repo's own tools; `rate-limiter-flexible` covers the fixed-window counters and the per-key limits, use it; the `/code-standards` skill's "prefer a library over hand-rolling" rule holds over every instruction above.
-Rules: no TODO/FIXME markers; do the work or escalate it. Comments only for what code cannot show. No PII in anything you publish: nothing that tells a reader who the owner is, how they work, or how their machine is set up. The `/pr-and-issue-discipline` skill's `references/redaction.md` owns the definition, the one substitute per kind, and what stays. Read it before your first commit. Directives and your own steps must be safe to arrive or run twice or late: check current state first, report an already-applied one as a no-op, and report one superseded by a newer directive as stale instead of applying it. Never stop to "wait" for background children: after fanning out, your next action on wake is reading their output. The only permitted stop is your final signal.
+Rules: no TODO/FIXME markers; do the work or escalate it. Comments only for what code cannot show. No PII in anything you publish: nothing that tells a reader who the owner is, how they work, or how their machine is set up. The `/pr-and-issue-discipline` skill's `references/redaction.md` owns the definition, the one substitute per kind, and what stays. Read it before your first commit. Directives and your own steps must be safe to arrive or run twice or late: check current state first, report an already-applied one as a no-op, and report one superseded by a newer directive as stale instead of applying it. Every wait is a short foreground call repeated (a review verdict by the `/rubber-duck-review` skill's step 5 subagent block, each wait its own tool call), never one long call: a call past the foreground limit is backgrounded and never wakes you once idle. Never stop to "wait" for background children: after fanning out, your next action on wake is reading their output. The only permitted stop is your final signal.
 ```

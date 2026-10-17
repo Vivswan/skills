@@ -2,7 +2,7 @@
 
 `/session-events` is the daemon behind event delivery to a Claude Code session: one per session and source, started by the session as a background task, polling a system for the targets the session watches. Each poll's alerts arrive as one message in the peer envelope, and its notes stay in the log. Every event is a line there, which a non-Claude agent reads with `wait`.
 
-What is polled is a source: a script of a few lines that imports `runEvents` and says what a target is, how it is read, and what its events say. The `/watch-github` skill is the GitHub source; `scripts/examples/log-source.mts` watches a file and is the worked example for writing one.
+What is polled is a source: a script of a few lines that imports `runEvents` and says what a target is, how it is read, and what its events say. The `/watch-github` skill is the GitHub source and the `/orchestrator-mode` skill's `fleet-events` the fleet source; `scripts/examples/log-source.mts` watches a file and is the worked example for writing one.
 
 ## Install
 
