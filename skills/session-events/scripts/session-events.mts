@@ -1,8 +1,9 @@
 // One daemon per Claude Code session, started by that session as a background task, polls a
-// source for the targets the session watches and delivers each poll's events as one message. A
-// source script imports `runEvents` and calls it at top level; this module is the whole CLI and
-// the daemon for that source: the control socket, the delivery, the events log, the saved state,
-// and the schedule. What a target is, how it is read, and what its events say is the source's.
+// source for the targets the session watches, delivers each poll's alerts as one message, and
+// keeps its notes in the events log. A source script imports `runEvents` and calls it at top
+// level; this module is the whole CLI and the daemon for that source: the control socket, the
+// delivery, the events log, the saved state, and the schedule. What a target is, how it is read,
+// and what its events say is the source's.
 //
 // A child of the session is rendered as plain text; a detached process is a cross-session sender
 // whose frames the session holds, which is why the CLI never starts the daemon.
@@ -528,9 +529,9 @@ function closingLine(name: string): string {
 }
 
 /**
- * One poll's events as one message: the receiver drops a second frame from the same sender within
- * the same second, so a poll never sends two. Each event is its text and its URL; a blank line
- * separates events, and the closing line comes once.
+ * One poll's alerts as one message: the receiver drops a second frame from the same sender within
+ * the same second, so a poll never sends two. Each alert is its text and its URL; a blank line
+ * separates alerts, and the closing line comes once.
  */
 function digest(name: string, events: Event[]): string {
   return `${events.map((event) => `${event.text}\n${event.url}`).join("\n\n")}\n${closingLine(name)}`;

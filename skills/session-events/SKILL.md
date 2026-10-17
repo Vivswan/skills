@@ -8,7 +8,7 @@ metadata:
 
 # Session Events
 
-One daemon per Claude Code session, started by the session as a background task, polls a system for the targets that session watches and delivers what changed as messages, one per poll, and as lines in a log any agent can read. What it polls is a source: a script of a few lines that says what a target is, how it is read, and what its events say.
+One daemon per Claude Code session, started by the session as a background task, polls a system for the targets that session watches, delivers each poll's alerts as one message, and logs every event as a line any agent can read. What it polls is a source: a script of a few lines that says what a target is, how it is read, and what its events say.
 
 Two sources ship in this catalog: the `/watch-github` skill polls GitHub for PRs and branch tips, and `scripts/examples/log-source.mts` watches a file's size. A session writes its own source for anything else that must be polled.
 
