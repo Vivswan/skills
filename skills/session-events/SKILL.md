@@ -1,6 +1,6 @@
 ---
 name: session-events
-description: Use when a session needs events from any polled system delivered as messages instead of polls, or when writing the source that polls it, so one daemon the session owns carries every event in the peer envelope with no text quoted from the polled system.
+description: Use when a session needs events from any polled system delivered as messages instead of polls, or when writing the source that polls it, so one daemon the session owns carries each poll's alerts in the peer envelope, keeps its notes in the log, and quotes nothing from the polled system.
 license: SEE LICENSE IN LICENSE.md
 metadata:
   author: Vivswan
@@ -145,7 +145,7 @@ A frame to a session's inbox is user-role text: the same channel the owner types
 
 The daemon is the session's own child, so its frames are delivered with no permission hold, and it exits on its own when the session does. Started detached (`nohup`, `setsid`, `disown`, a shell that exits), it is a cross-session sender and every message is held (Gotchas below).
 
-One poll is one message, at least 1.1 s after the one before, since the receiver drops a second frame from one sender within a second. Events are separated by a blank line, each its text and its URL, and the message ends `automated notice from <name>; no reply needed`.
+One poll's alerts are one message, at least 1.1 s after the one before, since the receiver drops a second frame from one sender within a second, and its notes stay in the log. The alerts are separated by a blank line, each its text and its URL, and the message ends `automated notice from <name>; no reply needed`.
 
 ## Lifecycle
 
