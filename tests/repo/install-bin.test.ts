@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readFileSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -38,13 +39,40 @@ const printed = (argvs: string[][]) => argvs.map((argv) => argv.join(" "));
 
 // The stubs log their own name and argv, one call per line with a unit separator between arguments so the
 // boundaries survive, and exit 0, or 3 on the call STUB_FAIL_AT names. One is an `npx` on PATH, the other npm's
-// own `npx-cli.js`, which the bin runs through node when npx started it.
+// own `npx-cli.js`, which the bin runs through node when npx started it. The PATH stub also plays the CLI's
+// install for the target's skill (the target-to-name map comes from STUB_INSTALL_NAMES): a listing writes
+// nothing; `--copy -a claude-code` creates or rewrites Claude's own copy under HOME/.claude/skills; otherwise
+// the canonical copy under HOME/.agents/skills is rewritten (touched) when it is a real directory, never through
+// a symlink.
 const SEPARATOR = String.fromCharCode(0x1f);
 const FAKE_NPX = `#!/usr/bin/env bash
 { printf '%s' "$(basename "$0")"; printf '\\x1f%s' "$@"; printf '\\n'; } >> "\${STUB_ARGS_LOG}"
 if [ -n "\${STUB_FAIL_AT}" ] && [ "$(wc -l < "\${STUB_ARGS_LOG}")" -eq "\${STUB_FAIL_AT}" ]; then exit 3; fi
+case " $* " in *" -l "*|*" --list "*) exit 0;; esac
+name=""
+IFS=';' read -ra pairs <<< "\${STUB_INSTALL_NAMES}"
+for pair in "\${pairs[@]}"; do [ "\${pair%%=*}" = "$4" ] && name="\${pair#*=}"; done
+[ -n "$name" ] || exit 0
+copy=""; claude=""
+case " $* " in *" --copy "*) copy=1;; esac
+case " $* " in *" -a claude-code "*) claude=1;; esac
+if [ -n "$copy" ] && [ -n "$claude" ]; then
+  dir="$HOME/.claude/skills/$name"; mkdir -p "$dir"
+  [ -f "$dir/SKILL.md" ] || printf -- '---\\nname: %s\\n---\\nbody\\n' "$name" > "$dir/SKILL.md"
+  touch "$dir/SKILL.md"
+else
+  dir="$HOME/.agents/skills/$name"
+  [ -L "$dir" ] && exit 0
+  [ -f "$dir/SKILL.md" ] && touch "$dir/SKILL.md"
+fi
 exit 0
 `;
+const INSTALL_NAMES = [
+  "Leonxlnx/taste-skill/skills/taste-skill=design-taste-frontend",
+  "anthropics/skills/skills/frontend-design=frontend-design",
+  "pbakaus/impeccable/.agents/skills/impeccable=impeccable",
+  "cursor/plugins/pstack/skills/unslop=unslop",
+].join(";");
 const FAKE_NPX_CLI = `const { appendFileSync } = require("node:fs");
 appendFileSync(process.env.STUB_ARGS_LOG, ["npx-cli.js", ...process.argv.slice(2)].join("\\x1f") + "\\n");
 `;
@@ -100,6 +128,7 @@ function run(
       HOME: join(dir, "home"),
       PATH: npxOnPath ? `${dir}:${process.env.PATH}` : dir,
       STUB_ARGS_LOG: log,
+      STUB_INSTALL_NAMES: INSTALL_NAMES,
       ...npm,
       ...env,
     },
@@ -224,48 +253,134 @@ describe("bin/install.mjs", () => {
     expect(result.stdout).toEqual(stdout);
   });
 
-  // After the calls, the copies of the upstreams the marketplace flags are marked explicit-invocation-only where
-  // the CLI keeps them for these flags (`-g`: under HOME): the canonical copy, and a per-agent entry that is its
-  // own directory (a `--copy` install), never a per-agent symlink; the unflagged upstream's copy is left alone,
-  // and a flagged canonical copy that is not there is one stderr line, not a failure.
-  test("-g marks the flagged upstream copies under HOME and reports a flagged copy that is missing", () => {
+  // An installed copy from an earlier run: its SKILL.md is a minute old, so the stub's rewrite shows as a newer
+  // mtime, as the CLI's does.
+  const PAST = new Date(Date.now() - 60_000);
+  function installedCopy(dir: string, name: string): string {
+    const copy = join(dir, name);
+    mkdirSync(copy, { recursive: true });
+    writeFileSync(join(copy, "SKILL.md"), `---\nname: ${name}\n---\nbody\n`);
+    utimesSync(join(copy, "SKILL.md"), PAST, PAST);
+    return copy;
+  }
+  const UNMARKED = (name: string) => `---\nname: ${name}\n---\nbody\n`;
+  const MARKED = (name: string) =>
+    `---\nname: ${name}\ndisable-model-invocation: true\n---\nbody\n`;
+
+  // Right after a flagged upstream's call rewrote its canonical copy under HOME (with `-g`), that copy is
+  // marked, once, though an agent's symlink also reaches it; the unflagged upstream's copy is left alone, and a
+  // flagged upstream whose call wrote no copy is one stderr line, not a failure.
+  test("-g marks the copy each flagged call wrote, right after that call", () => {
     const home = temp.dir("install-bin-home-");
     const skills = join(home, ".agents", "skills");
-    for (const name of ["frontend-design", "unslop"]) {
-      mkdirSync(join(skills, name), { recursive: true });
-      writeFileSync(join(skills, name, "SKILL.md"), `---\nname: ${name}\n---\nbody\n`);
-    }
+    installedCopy(skills, "frontend-design");
+    installedCopy(skills, "unslop");
     const linked = join(home, ".claude", "skills");
     mkdirSync(linked, { recursive: true });
     symlinkSync(join(skills, "frontend-design"), join(linked, "frontend-design"), "dir");
-    const copied = join(home, ".codex", "skills", "frontend-design");
-    mkdirSync(copied, { recursive: true });
-    writeFileSync(join(copied, "SKILL.md"), "---\nname: frontend-design\n---\nbody\n");
 
     const result = run(["-g"], { env: { HOME: home } });
 
     expect(result.status).toBe(0);
+    const [catalog, taste, frontend, impeccable, unslop] = printed(commands(["-g", "-y"])) as [
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
     expect(result.stdout).toEqual([
-      ...printed(commands(["-g", "-y"])),
+      catalog,
+      taste,
+      frontend,
       `marked explicit-invocation-only: ${join(skills, "frontend-design")}`,
-      `marked explicit-invocation-only: ${copied}`,
+      impeccable,
+      unslop,
     ]);
     expect(result.stderr.trimEnd().split("\n")).toEqual([
-      `install: no installed copy at ${join(skills, "design-taste-frontend")} to mark explicit-invocation-only`,
-      `install: no installed copy at ${join(skills, "impeccable")} to mark explicit-invocation-only`,
+      `install: no fresh copy at ${join(skills, "design-taste-frontend")} to mark explicit-invocation-only`,
+      `install: no fresh copy at ${join(skills, "impeccable")} to mark explicit-invocation-only`,
     ]);
     expect(readFileSync(join(skills, "frontend-design", "SKILL.md"), "utf8")).toBe(
-      "---\nname: frontend-design\ndisable-model-invocation: true\n---\nbody\n",
+      MARKED("frontend-design"),
     );
     expect(readFileSync(join(skills, "frontend-design", "agents", "openai.yaml"), "utf8")).toBe(
       "policy:\n  allow_implicit_invocation: false\n",
     );
-    expect(readFileSync(join(copied, "SKILL.md"), "utf8")).toBe(
-      "---\nname: frontend-design\ndisable-model-invocation: true\n---\nbody\n",
+    expect(readFileSync(join(linked, "frontend-design", "SKILL.md"), "utf8")).toBe(
+      MARKED("frontend-design"),
     );
-    expect(readFileSync(join(skills, "unslop", "SKILL.md"), "utf8")).toBe(
-      "---\nname: unslop\n---\nbody\n",
+    expect(readFileSync(join(skills, "unslop", "SKILL.md"), "utf8")).toBe(UNMARKED("unslop"));
+  });
+
+  // The mark follows each call, so a failure later in the run leaves the earlier copies marked and the run
+  // still ends with that failure.
+  test("a failing later call leaves the earlier upstream's fresh copy marked and exits with the failure", () => {
+    const home = temp.dir("install-bin-home-");
+    const skills = join(home, ".agents", "skills");
+    installedCopy(skills, "design-taste-frontend");
+    installedCopy(skills, "frontend-design");
+
+    const result = run(["-g"], { env: { HOME: home, STUB_FAIL_AT: "3" } });
+
+    expect(result.status).toBe(3);
+    const [catalog, taste, frontend] = printed(commands(["-g", "-y"])) as [string, string, string];
+    expect(result.stdout).toEqual([
+      catalog,
+      taste,
+      `marked explicit-invocation-only: ${join(skills, "design-taste-frontend")}`,
+      frontend,
+    ]);
+    expect(result.stderr).toBe("");
+    expect(readFileSync(join(skills, "frontend-design", "SKILL.md"), "utf8")).toBe(
+      UNMARKED("frontend-design"),
     );
+  });
+
+  // `--list` makes every call list and install nothing, so an installed copy is left byte-identical.
+  test("--list marks nothing", () => {
+    const home = temp.dir("install-bin-home-");
+    const skills = join(home, ".agents", "skills");
+    installedCopy(skills, "frontend-design");
+
+    const result = run(["-g", "--list"], { env: { HOME: home } });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toEqual(printed(commands(["-g", "--list", "-y"])));
+    expect(result.stderr).toBe("");
+    expect(readFileSync(join(skills, "frontend-design", "SKILL.md"), "utf8")).toBe(
+      UNMARKED("frontend-design"),
+    );
+    expect(existsSync(join(skills, "frontend-design", "agents"))).toBe(false);
+  });
+
+  // A symlinked canonical entry is someone else's wiring (the repository's own `bun run link` makes such links):
+  // a `--copy` install for one agent leaves it alone and writes that agent's copy, creating the agent's skills
+  // directory when it is missing, and that copy is what gets marked.
+  test("never writes through a symlinked canonical entry; marks a --copy install's real per-agent copy", () => {
+    const home = temp.dir("install-bin-home-");
+    const skills = join(home, ".agents", "skills");
+    mkdirSync(skills, { recursive: true });
+    const foreign = installedCopy(join(home, "foreign"), "frontend-design");
+    symlinkSync(foreign, join(skills, "frontend-design"), "dir");
+    const copied = join(home, ".claude", "skills", "frontend-design");
+
+    const result = run(["-g", "--skill", "frontend-design", "--copy", "-a", "claude-code"], {
+      env: { HOME: home },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toEqual([
+      ...printed(
+        only(["-g", "--skill", "frontend-design", "--copy", "-a", "claude-code", "-y"], 2),
+      ),
+      `marked explicit-invocation-only: ${copied}`,
+    ]);
+    expect(result.stderr.trimEnd()).toBe(
+      `install: ${join(skills, "frontend-design")} is a symlink, left alone`,
+    );
+    expect(readFileSync(join(foreign, "SKILL.md"), "utf8")).toBe(UNMARKED("frontend-design"));
+    expect(readFileSync(join(copied, "SKILL.md"), "utf8")).toBe(MARKED("frontend-design"));
   });
 
   // A bin that npx started inherits npm_execpath (npm-cli.js) and npm_node_execpath, and npx-cli.js sits beside

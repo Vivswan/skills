@@ -7,10 +7,10 @@
 // unless the flags already say yes), so nothing prompts and an installed copy is overwritten. A `--skill`
 // selection also narrows the calls to the sources that ship a selected name (targets, below), since the CLI
 // exits 1 against a source that ships none of them. Each command prints before it runs, and the first nonzero
-// exit ends the run with that code. After the calls, the copies of an upstream the marketplace marks
-// `disable-model-invocation` are marked explicit-invocation-only (install-shared.mjs): the canonical one, and a
-// per-agent one that is its own directory; a canonical copy not where the CLI keeps it for these flags is
-// reported on stderr and the run goes on. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
+// exit ends the run with that code. Right after an upstream call that installed, the copies it wrote of an
+// upstream the marketplace marks `disable-model-invocation` are marked explicit-invocation-only
+// (install-shared.mjs); `-l`/`--list` installs nothing, so nothing is marked; a symlinked canonical entry, or a
+// call that wrote no copy to mark, is a stderr line and the run goes on. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
 // started inherits npm_execpath (npm-cli.js, with npx-cli.js beside it) and npm_node_execpath. Started by hand,
 // the bin runs `npx` from PATH instead.
 
@@ -18,10 +18,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  agentSkillDirs,
   CatalogError,
+  copiesBefore,
   installedSkillsDir,
-  markExplicitOnlyUpstreams,
+  markWrittenCopies,
   repoCoordinate,
   upstreamSkills,
   withYes,
@@ -59,25 +59,22 @@ function selectedSkills(flags) {
  * selection, only the sources that ship a selected name: an upstream when its entry name is selected, this
  * repository when any other name is.
  */
-function targets(selected) {
-  const upstream = upstreamSkills();
-  if (selected === undefined) return [repoCoordinate(), ...upstream.map(({ target }) => target)];
+function targets(selected, coordinate, upstream) {
+  if (selected === undefined) return [coordinate, ...upstream.map(({ target }) => target)];
 
   const upstreamNames = new Set(upstream.map(({ name }) => name));
   const wanted = upstream.filter(({ name }) => selected.has(name)).map(({ target }) => target);
   const ownNamed = [...selected].some((name) => !upstreamNames.has(name));
-  return ownNamed ? [repoCoordinate(), ...wanted] : wanted;
+  return ownNamed ? [coordinate, ...wanted] : wanted;
 }
 
-/** Mark the upstream copies the completed calls installed, one stdout line per mark, one stderr line per miss. */
-function markInstalled(ranTargets, flags) {
-  const installed = upstreamSkills().filter(({ target }) => ranTargets.includes(target));
-  const skillsDir = installedSkillsDir(flags);
-  const perAgent = agentSkillDirs(dirname(dirname(skillsDir)), skillsDir);
-  const { marked, missing } = markExplicitOnlyUpstreams(installed, skillsDir, perAgent);
-  for (const dir of marked) console.log(`marked explicit-invocation-only: ${dir}`);
-  for (const dir of missing) {
-    console.error(`install: no installed copy at ${dir} to mark explicit-invocation-only`);
+/** The catalog, or the catalog failure as the one stderr line. */
+function catalogOrFail() {
+  try {
+    return { coordinate: repoCoordinate(), upstream: upstreamSkills() };
+  } catch (error) {
+    if (error instanceof CatalogError) fail(error.message);
+    throw error;
   }
 }
 
@@ -94,29 +91,28 @@ function npxLauncher() {
   return ["npx"];
 }
 
-/** The targets, or the catalog failure as the one stderr line. */
-function targetsOrFail(selected) {
-  try {
-    return targets(selected);
-  } catch (error) {
-    if (error instanceof CatalogError) fail(error.message);
-    throw error;
-  }
-}
-
 const argv = process.argv.slice(2);
 const help = argv.includes("--help");
 const flags = argv.filter((flag) => flag !== "--help");
+const installing = !help && !flags.includes("-l") && !flags.includes("--list");
+const { coordinate, upstream } = catalogOrFail();
+const skillsDir = installedSkillsDir(flags);
 const [file, ...launcherArgs] = npxLauncher();
-const ran = [];
-for (const target of targetsOrFail(selectedSkills(flags))) {
+for (const target of targets(selectedSkills(flags), coordinate, upstream)) {
   const command = ["-y", "skills", "add", target, ...withYes(flags)];
   console.log(["npx", ...command].join(" "));
   if (help) continue;
+  const skill = upstream.find((candidate) => candidate.target === target);
+  const before =
+    installing && skill?.explicitOnly
+      ? copiesBefore(skill.name, skillsDir, dirname(dirname(skillsDir)))
+      : undefined;
   const result = spawnSync(file, [...launcherArgs, ...command], { stdio: "inherit" });
   if (result.error?.code === "ENOENT") fail(BY_HAND);
   if (result.error) fail(result.error.message);
   if (result.status !== 0) process.exit(result.status ?? 1);
-  ran.push(target);
+  if (before === undefined) continue;
+  const { marked, notices } = markWrittenCopies(before);
+  for (const path of marked) console.log(`marked explicit-invocation-only: ${path}`);
+  for (const notice of notices) console.error(`install: ${notice}`);
 }
-if (!help) markInstalled(ran, flags);

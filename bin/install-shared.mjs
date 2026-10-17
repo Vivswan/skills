@@ -1,7 +1,7 @@
 // What the two install commands share: the catalog as they read it (this repository's coordinate from the plugin
 // manifest, the upstream skills from the marketplace, each a git-subdir entry whose fetched folder is the skill
-// itself), the flags every `skills add` call carries, and the explicit-invocation-only mark an upstream copy gets
-// after install. bin/install.mjs (the consumer's `npx -y github:Vivswan/skills`) and scripts/link-agents.mts
+// itself), the flags every `skills add` call carries, and the explicit-invocation-only mark the copies an upstream
+// `skills add` wrote get right after it. bin/install.mjs (the consumer's `npx -y github:Vivswan/skills`) and scripts/link-agents.mts
 // (`bun run add`) both import it, so one edit here changes both. Dependency-free node, since the bin runs before
 // anything is installed.
 
@@ -209,27 +209,57 @@ export function markExplicitOnly(dir) {
   return true;
 }
 
+/** The mtime of a copy's SKILL.md, null where there is none. */
+function skillMdMtime(dir) {
+  return statSync(join(dir, "SKILL.md"), { throwIfNoEntry: false })?.mtimeMs ?? null;
+}
+
+/** The copies an install of `name` may write as they stand now: the canonical one, then one per per-agent directory. */
+function copyPaths(name, skillsDir, base) {
+  return [join(skillsDir, name), ...agentSkillDirs(base, skillsDir).map((dir) => join(dir, name))];
+}
+
 /**
- * Mark every explicit-only upstream's installed copies: the canonical one under `skillsDir`, and under each
- * per-agent directory the entry that is a real directory (a `--copy` install's own copy). A symlink there is the
- * canonical copy seen again and is never followed, and nothing outside those roots is touched.
- * @param {readonly UpstreamSkill[]} upstream
- * @param {string} skillsDir
- * @param {readonly string[]} agentDirs
- * @returns {{ marked: string[], missing: string[] }} the directories marked, and the canonical ones with no copy
+ * The copies an install of `name` may write, by SKILL.md mtime before the call (null where absent), so the
+ * call's own writes can be told from copies that were already there. A per-agent directory the call itself
+ * creates is not here yet; `markWrittenCopies` discovers it afterwards and treats its copy as new.
+ * @param {string} name
+ * @param {string} skillsDir the canonical skills directory
+ * @param {string} base the directory holding the `.agents` and per-agent dot directories: HOME or the project
+ * @returns {{ name: string, skillsDir: string, base: string, mtimes: Map<string, number | null> }}
  */
-export function markExplicitOnlyUpstreams(upstream, skillsDir, agentDirs = []) {
+export function copiesBefore(name, skillsDir, base) {
+  const mtimes = new Map(
+    copyPaths(name, skillsDir, base).map((path) => [path, skillMdMtime(path)]),
+  );
+  return { name, skillsDir, base, mtimes };
+}
+
+/**
+ * Mark the copies the call just wrote: a real directory whose SKILL.md appeared or changed since `before`. A
+ * canonical entry that is a symlink is someone else's wiring: a notice and no write through it. A per-agent
+ * symlink is the canonical copy seen again and is skipped. When nothing was marked, one notice names the
+ * canonical path, since a `--copy` install writes the per-agent copies instead.
+ * @param {ReturnType<typeof copiesBefore>} before
+ * @returns {{ marked: string[], notices: string[] }}
+ */
+export function markWrittenCopies(before) {
+  const { name, skillsDir, base, mtimes } = before;
+  const canonical = join(skillsDir, name);
   const marked = [];
-  const missing = [];
-  for (const { name, explicitOnly } of upstream) {
-    if (!explicitOnly) continue;
-    const canonical = join(skillsDir, name);
-    (markExplicitOnly(canonical) ? marked : missing).push(canonical);
-    for (const agentDir of agentDirs) {
-      const copy = join(agentDir, name);
-      if (!lstatSync(copy, { throwIfNoEntry: false })?.isDirectory()) continue;
-      if (markExplicitOnly(copy)) marked.push(copy);
+  const notices = [];
+  for (const path of copyPaths(name, skillsDir, base)) {
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+    if (entry?.isSymbolicLink()) {
+      if (path === canonical) notices.push(`${path} is a symlink, left alone`);
+      continue;
     }
+    const now = skillMdMtime(path);
+    if (!entry?.isDirectory() || now === null || now === (mtimes.get(path) ?? null)) continue;
+    if (markExplicitOnly(path)) marked.push(path);
   }
-  return { marked, missing };
+  if (marked.length === 0 && notices.length === 0) {
+    notices.push(`no fresh copy at ${canonical} to mark explicit-invocation-only`);
+  }
+  return { marked, notices };
 }

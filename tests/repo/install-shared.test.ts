@@ -1,11 +1,19 @@
 // reaches: bin/install-shared.mjs
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   agentSkillDirs,
+  copiesBefore,
   markExplicitOnly,
-  markExplicitOnlyUpstreams,
+  markWrittenCopies,
 } from "../../bin/install-shared.mjs";
 import { tempDirs } from "../helpers/temp-dirs";
 
@@ -164,53 +172,80 @@ describe("agentSkillDirs", () => {
   });
 });
 
-describe("markExplicitOnlyUpstreams", () => {
-  function installed(skills: string, names: readonly string[]): void {
-    for (const name of names) {
-      mkdirSync(join(skills, name), { recursive: true });
-      writeFileSync(join(skills, name, "SKILL.md"), `---\nname: ${name}\n---\nbody\n`);
-    }
+describe("copiesBefore and markWrittenCopies", () => {
+  // What drifts: which copies a `skills add` call wrote is the CLI's behavior (the canonical copy, or under
+  // `--copy` the per-agent ones), told apart from copies that were already there by their SKILL.md mtime; a
+  // canonical entry that is a symlink is another tool's wiring and must never be written through.
+  const PAST = new Date(Date.now() - 60_000);
+  function copyAt(dir: string, name: string): string {
+    const copy = join(dir, name);
+    mkdirSync(copy, { recursive: true });
+    writeFileSync(join(copy, "SKILL.md"), `---\nname: ${name}\n---\nbody\n`);
+    utimesSync(join(copy, "SKILL.md"), PAST, PAST);
+    return copy;
   }
-  const upstream = [
-    { name: "alpha-one", target: "example-org/alpha/skills/alpha-one", explicitOnly: true },
-    { name: "beta-two", target: "example-org/beta/skills/beta-two", explicitOnly: true },
-    { name: "gamma-three", target: "example-org/gamma/gamma", explicitOnly: false },
-  ];
+  const rewrite = (copy: string) => utimesSync(join(copy, "SKILL.md"), new Date(), new Date());
 
-  test("marks the flagged copies that exist, reports the flagged copies that do not, skips the unflagged", () => {
+  test("marks the real copy the call wrote and leaves one it did not; nothing written is one notice", () => {
     const skills = temp.dir("install-shared-skills-");
-    installed(skills, ["alpha-one", "gamma-three"]);
+    const alpha = copyAt(skills, "alpha-one");
+    const before = copiesBefore("alpha-one", skills, dirname(dirname(skills)));
+    rewrite(alpha);
 
-    expect(markExplicitOnlyUpstreams(upstream, skills)).toEqual({
-      marked: [join(skills, "alpha-one")],
-      missing: [join(skills, "beta-two")],
+    expect(markWrittenCopies(before)).toEqual({ marked: [alpha], notices: [] });
+    expect(read(alpha, "SKILL.md")).toContain("disable-model-invocation: true");
+
+    const untouched = copiesBefore("alpha-one", skills, dirname(dirname(skills)));
+    expect(markWrittenCopies(untouched)).toEqual({
+      marked: [],
+      notices: [`no fresh copy at ${alpha} to mark explicit-invocation-only`],
     });
-    expect(read(skills, "alpha-one/SKILL.md")).toContain("disable-model-invocation: true");
-    expect(read(skills, "gamma-three/SKILL.md")).toBe("---\nname: gamma-three\n---\nbody\n");
   });
 
-  // A per-agent symlink is the canonical copy seen again (marked once, through its own path); a per-agent real
-  // directory is a `--copy` install's own file and is marked too.
-  test("marks a per-agent real directory copy and never follows a per-agent symlink", () => {
+  test("never writes through a symlinked canonical entry, and marks a per-agent real copy the call wrote", () => {
     const home = temp.dir("install-shared-home-");
     const skills = join(home, ".agents", "skills");
-    installed(skills, ["alpha-one"]);
-    const linked = join(home, ".claude", "skills");
-    mkdirSync(linked, { recursive: true });
-    symlinkSync(join(skills, "alpha-one"), join(linked, "alpha-one"), "dir");
-    const copied = join(home, ".codex", "skills");
-    installed(copied, ["alpha-one"]);
+    mkdirSync(skills, { recursive: true });
+    const foreign = copyAt(join(home, "foreign"), "alpha-one");
+    symlinkSync(foreign, join(skills, "alpha-one"), "dir");
+    const copied = copyAt(join(home, ".claude", "skills"), "alpha-one");
+    const before = copiesBefore("alpha-one", skills, home);
+    rewrite(foreign);
+    rewrite(copied);
 
-    const result = markExplicitOnlyUpstreams([upstream[0] as (typeof upstream)[number]], skills, [
-      linked,
-      copied,
-    ]);
-
-    expect(result).toEqual({
-      marked: [join(skills, "alpha-one"), join(copied, "alpha-one")],
-      missing: [],
+    expect(markWrittenCopies(before)).toEqual({
+      marked: [copied],
+      notices: [`${join(skills, "alpha-one")} is a symlink, left alone`],
     });
-    expect(read(copied, "alpha-one/SKILL.md")).toContain("disable-model-invocation: true");
-    expect(existsSync(join(copied, "alpha-one", "agents", "openai.yaml"))).toBe(true);
+    expect(read(foreign, "SKILL.md")).toBe("---\nname: alpha-one\n---\nbody\n");
+    expect(read(copied, "SKILL.md")).toContain("disable-model-invocation: true");
+  });
+
+  test("skips a per-agent symlink without a notice, and marks a copy that appeared during the call", () => {
+    const home = temp.dir("install-shared-home-");
+    const skills = join(home, ".agents", "skills");
+    const linked = join(home, ".claude", "skills");
+    mkdirSync(skills, { recursive: true });
+    mkdirSync(linked, { recursive: true });
+    const before = copiesBefore("alpha-one", skills, home);
+    const alpha = copyAt(skills, "alpha-one");
+    symlinkSync(alpha, join(linked, "alpha-one"), "dir");
+
+    expect(markWrittenCopies(before)).toEqual({ marked: [alpha], notices: [] });
+    expect(read(linked, "alpha-one/SKILL.md")).toContain("disable-model-invocation: true");
+  });
+
+  // A `--copy` install for an agent that had no skills directory yet creates it during the call.
+  test("marks a copy in a per-agent directory the call itself created", () => {
+    const home = temp.dir("install-shared-home-");
+    const skills = join(home, ".agents", "skills");
+    mkdirSync(skills, { recursive: true });
+    const before = copiesBefore("alpha-one", skills, home);
+    const copied = copyAt(join(home, ".claude", "skills"), "alpha-one");
+
+    expect(markWrittenCopies(before)).toEqual({
+      marked: [copied],
+      notices: [],
+    });
   });
 });

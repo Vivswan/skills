@@ -11,9 +11,9 @@
  *   --dry-run  reports every link and prune, changes nothing
  *   --add      runs `npx skills add <upstream> --global -y` per upstream skill of the marketplace,
  *              then `npx skills add . --global -y` (its UI wires the per-agent pointers but
- *              overwrites the canonical symlinks with copies), marks the installed copies of the
- *              upstreams the marketplace flags explicit-invocation-only, then links; never --copy,
- *              so the per-agent directories keep symlinking into ~/.agents/skills
+ *              overwrites the canonical symlinks with copies), marking the copies each flagged
+ *              upstream's call wrote explicit-invocation-only right after it, then links; never
+ *              --copy, so the per-agent directories keep symlinking into ~/.agents/skills
  * Revert: `npx skills add . --all` overwrites the symlinks with fresh copies.
  */
 
@@ -33,7 +33,8 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   agentSkillDirs,
   CatalogError,
-  markExplicitOnlyUpstreams,
+  copiesBefore,
+  markWrittenCopies,
   upstreamSkills,
   withYes,
 } from "../bin/install-shared.mjs";
@@ -90,6 +91,42 @@ export interface PruneOptions {
 export function addCommands(upstream: readonly { readonly target: string }[]): string[][] {
   const targets = [...upstream.map(({ target }) => target), "."];
   return targets.map((target) => ["npx", "skills", "add", target, ...withYes(["--global"])]);
+}
+
+/** What a `skills add` call returned: the spawn's status, or the error that kept it from running. */
+export interface AddRun {
+  readonly status: number | null;
+  readonly error?: Error;
+}
+
+/**
+ * Run `--add`'s installs in order, marking a flagged upstream's freshly written copies right after its own
+ * call, so a later failure leaves the earlier copies marked; the failure then ends the run, named, and nothing
+ * is linked. `run` is the spawn (injected by the tests), `log` takes the mark and notice lines.
+ */
+export function installForAdd(
+  upstream: ReturnType<typeof upstreamSkills>,
+  agentsSkillsDir: string,
+  home: string,
+  run: (argv: readonly string[]) => AddRun,
+  log: (line: string) => void,
+): void {
+  for (const argv of addCommands(upstream)) {
+    const shown = argv.join(" ");
+    const skill = upstream.find((candidate) => candidate.target === argv[3]);
+    const before = skill?.explicitOnly
+      ? copiesBefore(skill.name, agentsSkillsDir, home)
+      : undefined;
+    const result = run(argv);
+    if (result.error) fail(`${shown}: ${result.error.message}`);
+    if (result.status !== 0) {
+      fail(`${shown} exited with status ${result.status ?? "unknown"}; not linking`);
+    }
+    if (before === undefined) continue;
+    const { marked, notices } = markWrittenCopies(before);
+    for (const path of marked) log(`marked explicit-invocation-only: ${path}`);
+    for (const notice of notices) log(`notice: ${notice}`);
+  }
 }
 
 /** The marketplace's upstream skills, a malformed catalog file failing like any other check. */
@@ -402,26 +439,17 @@ if (import.meta.main) {
     const sourceByName = repoSkillSources(skillDirs());
 
     const agentsSkillsDir = join(homedir(), ".agents", "skills");
-    const perAgentDirs = agentSkillDirs(homedir(), agentsSkillsDir);
     if (withAdd) {
-      const upstream = catalogUpstream();
-      for (const [command, ...args] of addCommands(upstream)) {
-        const shown = [command, ...args].join(" ");
-        const result = spawnSync(command as string, args, { cwd: ROOT, stdio: "inherit" });
-        if (result.error) fail(`${shown}: ${result.error.message}`);
-        if (result.status !== 0) {
-          fail(`${shown} exited with status ${result.status ?? "unknown"}; not linking`);
-        }
-      }
-      const { marked, missing } = markExplicitOnlyUpstreams(
-        upstream,
+      installForAdd(
+        catalogUpstream(),
         agentsSkillsDir,
-        perAgentDirs,
+        homedir(),
+        ([command, ...args]) => {
+          const result = spawnSync(command as string, args, { cwd: ROOT, stdio: "inherit" });
+          return { status: result.status, error: result.error };
+        },
+        console.log,
       );
-      for (const dir of marked) console.log(`marked explicit-invocation-only: ${dir}`);
-      for (const dir of missing) {
-        console.log(`notice: no installed copy at ${dir} to mark explicit-invocation-only`);
-      }
     }
 
     const actions = linkSkills([...sourceByName.values()], agentsSkillsDir, dryRun);
@@ -453,7 +481,7 @@ if (import.meta.main) {
       repoSkillsDirs: [SKILLS_DIR],
       currentSkills: new Set(sourceByName.keys()),
       agentsSkillsDir,
-      agentSkillDirs: perAgentDirs,
+      agentSkillDirs: agentSkillDirs(homedir(), agentsSkillsDir),
       lockAttribution: loadLockAttribution(lockfilePath, repoSourceIds(repository)),
       // Report as it happens: a removal stays visible even if a later step throws.
       onAction: (action) => {
