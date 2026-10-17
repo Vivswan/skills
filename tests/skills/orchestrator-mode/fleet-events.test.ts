@@ -8,7 +8,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ROOT } from "../../../scripts/lib.mts";
 import { git, park, scratchRepo } from "../../helpers/scratch-repo";
@@ -23,7 +23,8 @@ import { sideBySide } from "../../helpers/skill-layout";
 // Contract tests for the fleet source through the daemon: a session directory laid out the way
 // Claude Code writes one, hand-written transcript lines with timestamps in the past so a wait ages
 // without sleeping, a scratch git repository with two worktrees for the tree readings, and the
-// daemon driven by `watch` and `poll`. Every event is a transition against what was said before.
+// daemon driven by `watch` and `poll`. An alert reaches the inbox as a message; a note reaches the
+// events log alone, where `wait` and the rows below read it.
 
 const { temp } = sessionEventsHarness();
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "fleet-events.mts");
@@ -38,6 +39,8 @@ const E = "e5f6071829304152";
 const MARKER = "MARKER-sunflower-9c1d";
 const GIT_TIMEOUT = 60_000;
 const TRACKS = { "wt-a": "track-a", "wt-b": "track-b" };
+const TWO_MINUTES_MS = 120_000;
+const HOUR_MS = 3_600_000;
 
 type Line = Record<string, unknown>;
 
@@ -124,12 +127,24 @@ function notice(taskId: string, status = "completed"): string {
   return `<task-notification>\n<task-id>${taskId}</task-id>\n<status>${status}</status>\n<summary>the task finished</summary>\n</task-notification>`;
 }
 
+/** A teammate's idle notification as the lead's transcript carries it. */
+function idle(name: string): string {
+  return `<teammate-message teammate_id="${name}" summary="idle">\n{"type":"idle_notification","agent":"${name}"}\n</teammate-message>`;
+}
+
 /** A finished exchange: a Bash call and its result, both at `timestamp`. */
 function exchange(timestamp: string, id: string, agentId: string = A): Line[] {
   return [
     toolUse(timestamp, id, "Bash", { command: "bun test" }, agentId),
     toolResult(timestamp, id, { agentId }),
   ];
+}
+
+/** A Bash call still pending since `timestamp`, with the call's own timeout when given. */
+function pendingBash(timestamp: string, id: string, agentId: string, timeout?: number): Line {
+  const input: Line = { command: "bun run check" };
+  if (timeout !== undefined) input.timeout = timeout;
+  return toolUse(timestamp, id, "Bash", input, agentId);
 }
 
 interface SessionDir {
@@ -168,29 +183,46 @@ function fileUrl(path: string): string {
 }
 
 /** The lead's transcript lines spawning a named teammate whose result carries the agent id. */
-function spawnLines(id: string, name: string, agentId: string): Line[] {
+function spawnLines(id: string, name: string, agentId: string, timestamp = ago(30)): Line[] {
   return [
     toolUse(
-      ago(30),
+      timestamp,
       id,
       "Agent",
       { name, description: "build", subagent_type: "general-purpose", prompt: "build" },
       null,
     ),
-    toolResult(ago(30), id, {
+    toolResult(timestamp, id, {
       toolUseResult: { status: "teammate_spawned", agentId, name },
       agentId: null,
     }),
   ];
 }
 
+/** The harness's temp root the watch is told about, and the tasks directory it lays out under it for this session. */
+function claudeTmp(s: Scenario): { root: string; tasks: string } {
+  const root = join(s.fixtureDir, "claude-tmp");
+  return { root, tasks: join(root, basename(s.fixtureDir), SESSION, "tasks") };
+}
+
+/** `watch` of the session directory with the harness temp root set, so a job's output file is found under the fixture. */
+function watch(s: Scenario, inbox: string, session: SessionDir, ...flags: string[]): void {
+  const result = s.run(["watch", session.dir, ...flags], {
+    inbox,
+    env: { CLAUDE_CODE_TMPDIR: claudeTmp(s).root },
+  });
+  expect(result.code).toBe(0);
+}
+
 /** The saved target as JSON holds it: the maps a test rewrites into an older version's shape. */
 interface PersistedTarget {
   polls: number;
   subagentsListed?: boolean;
+  tasksDir?: string;
   lead: { cursor: Record<string, unknown>; state: Record<string, unknown> };
-  agents: Record<string, { state: Record<string, unknown> }>;
+  agents: Record<string, Record<string, unknown> & { state: Record<string, unknown> }>;
   worktrees: Record<string, Record<string, unknown>>;
+  trouble: Record<string, unknown>;
 }
 
 function persistedTarget(s: Scenario): PersistedTarget {
@@ -213,12 +245,32 @@ function polled(s: Scenario, inbox: string): number {
   return Number(/polled; (\d+) event\(s\)/.exec(result.stdout)?.[1]);
 }
 
+/** Every event as the log holds it: its level, its text, and its URL. */
 function rows(s: Scenario): Array<[string, string, string]> {
-  return s.events().map((event) => [event.kind, event.text, event.url as string]);
+  return s.events().map((event) => [event.level as string, event.text, event.url as string]);
+}
+
+/** The texts the inbox received, one array per frame. */
+async function delivered(box: { frames: (n: number) => Promise<string[]> }, n: number) {
+  const frames = await box.frames(n);
+  return frames.map((frame) =>
+    digest(frame, SOURCE)
+      .split("\n")
+      .filter(
+        (line) =>
+          line.startsWith("agent ") || line.startsWith("worktree ") || line.startsWith("fleet: "),
+      ),
+  );
+}
+
+/** The `summary` lines `status` prints under the one target. */
+function standing(s: Scenario, inbox: string): string[] {
+  const out = s.run(["status"], { inbox }).stdout.split("\n");
+  return out.filter((line) => line.startsWith("    ")).map((line) => line.slice(4));
 }
 
 describe("fleet-events.mts", () => {
-  test("the baseline poll says nothing, a transcript first seen later is started at once while its wait needs a second observation, and a usage mistake exits 2 before any poll", async () => {
+  test("a usage mistake (a relative or missing target, an unknown flag, --base, a bad --quiet-after, a bad --repo) exits 2 before any poll; the first poll says nothing for an agent within every bound; an agent first seen later with a call past the bound is started and stuck in one poll, the message carries the alert alone, wait shows both, and status lists the alert", async () => {
     const s = new Scenario(PROGRAM, "base");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
@@ -233,6 +285,8 @@ describe("fleet-events.mts", () => {
       [["watch", "relative/dir"], "target must be session or an absolute path"],
       [["watch", join(s.fixtureDir, "missing")], "not a directory"],
       [["watch", session.dir, "--follow"], "unknown option: --follow"],
+      [["watch", session.dir, "--base", "main"], "unknown option: --base"],
+      [["watch", session.dir, "--notes"], "unknown option: --notes"],
       [
         ["watch", session.dir, "--quiet-after", "0"],
         "--quiet-after must be a positive whole number",
@@ -250,32 +304,35 @@ describe("fleet-events.mts", () => {
     }
     expect(s.events()).toEqual([]);
 
-    const watch = s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path });
-    expect(watch.code).toBe(0);
-    expect(watch.stdout).toContain(`watching ${session.dir} for session`);
+    const watched = s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path });
+    expect(watched.code).toBe(0);
+    expect(watched.stdout).toContain(`watching ${session.dir} for session`);
     expect(polled(s, box.path)).toBe(0);
     expect(s.events()).toEqual([]);
 
-    // The new agent arrives already waiting: its first poll says started and observes the wait,
-    // the second says the wait, the third nothing.
+    // The new agent arrives already stuck: one poll says it started (a note) and that it is stuck
+    // (an alert); the next says nothing, since the alert holds and its duration has not doubled.
     const pathB = writeAgent(
       session,
       B,
       { description: "review the source", agentType: "Explore" },
-      [toolUse(ago(5), "toolu_02", "Bash", { command: "bun test" }, B)],
+      [pendingBash(ago(35), "toolu_02", B)],
     );
-    expect(polled(s, box.path)).toBe(1);
-    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(2);
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
-      ["agent", "agent review the source: started", fileUrl(pathB)],
-      ["agent", "agent review the source: waiting on Bash for 5 min", fileUrl(pathB)],
+      ["note", "agent review the source: started", fileUrl(pathB)],
+      ["alert", "agent review the source: stuck 35 min on Bash", fileUrl(pathB)],
     ]);
-    expect(s.events().map((event) => event.agentId)).toEqual([B, B]);
-    const [frame] = await box.frames(1);
-    expect(digest(frame as string, SOURCE)).toBe(
-      `agent review the source: started\n${fileUrl(pathB)}\nautomated notice from ${SOURCE}; no reply needed`,
-    );
+    expect(s.events().map((event) => [event.kind, event.agentId])).toEqual([
+      ["agent", B],
+      ["agent", B],
+    ]);
+    expect(await delivered(box, 1)).toEqual([["agent review the source: stuck 35 min on Bash"]]);
+    const all = s.run(["wait", "--since", "0", "--timeout", "1"], { inbox: box.path });
+    expect(all.code).toBe(0);
+    expect(all.stdout.trim().split("\n")).toHaveLength(3);
+    expect(standing(s, box.path)).toEqual(["agent review the source: stuck 35 min on Bash"]);
     expect(s.run(["--help"], { inbox: box.path })).toMatchObject({
       code: 0,
       stdout: expect.stringMatching(/^usage: fleet-events\.mts/),
@@ -283,44 +340,62 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a pending Bash past the window is one waiting event once two polls agree, silent while it holds, and moving again when its result lands", async () => {
-    const s = new Scenario(PROGRAM, "wait");
+  test("a pending call is stuck past its own timeout plus ten minutes, and past thirty with no timeout of its own; the result landing is fine again, a note that sends no message", async () => {
+    const s = new Scenario(PROGRAM, "stuck");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const quietSince = ago(9);
-    const path = writeAgent(
-      session,
-      A,
-      { name: "builder-a", description: "build it" },
-      exchange(quietSince, "toolu_01"),
-    );
-    await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    // The baseline records the agent as quiet mid-turn; the pending call that follows is the change.
-    appendLines(path, [toolUse(ago(5), "toolu_02", "Bash", { command: "bun run check" })]);
-    expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(1);
-    expect(polled(s, box.path)).toBe(0);
-
-    appendLines(path, [toolResult(ago(0), "toolu_02")]);
-    expect(polled(s, box.path)).toBe(1);
-    expect(rows(s)).toEqual([
-      ["agent", "agent builder-a: waiting on Bash for 5 min", fileUrl(path)],
-      ["agent", "agent builder-a: moving again", fileUrl(path)],
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      ...exchange(ago(20), "toolu_a0"),
+      pendingBash(ago(13), "toolu_a1", A, TWO_MINUTES_MS),
     ]);
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      ...exchange(ago(20), "toolu_b0", B),
+      pendingBash(ago(13), "toolu_b1", B),
+    ]);
+    const pathC = writeAgent(session, C, { name: "builder-c", description: "build" }, [
+      ...exchange(ago(40), "toolu_c0", C),
+      pendingBash(ago(31), "toolu_c1", C),
+    ]);
+    const pathD = writeAgent(session, D, { name: "builder-d", description: "build" }, [
+      ...exchange(ago(20), "toolu_d0", D),
+      pendingBash(ago(11), "toolu_d1", D, TWO_MINUTES_MS),
+    ]);
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["alert", "agent builder-a: stuck 13 min on Bash", fileUrl(pathA)],
+      ["alert", "agent builder-c: stuck 31 min on Bash", fileUrl(pathC)],
+    ]);
+    expect(await delivered(box, 1)).toEqual([
+      ["agent builder-a: stuck 13 min on Bash", "agent builder-c: stuck 31 min on Bash"],
+    ]);
+
+    appendLines(pathA, [toolResult(ago(0), "toolu_a1")]);
+    appendLines(pathB, [toolResult(ago(0), "toolu_b1", { agentId: B })]);
+    appendLines(pathD, [toolResult(ago(0), "toolu_d1", { agentId: D })]);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(2)).toEqual([["note", "agent builder-a: fine again", fileUrl(pathA)]]);
+    // The control: the next frame is still the first; the note sent nothing.
+    expect(await delivered(box, 2)).toHaveLength(1);
     expect(s.state().targets[session.dir]).toMatchObject({
       form: "dir",
-      quietAfterMinutes: 1,
-      polls: 5,
-      agents: { [A]: { said: "moving", observed: "moving", baseline: null } },
+      quietAfterMinutes: 10,
+      polls: 3,
+      agents: {
+        [A]: { said: null },
+        [C]: { said: { level: "alert", key: "tool:toolu_c1", duration: 31, repeats: 0 } },
+      },
     });
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a background launch past the window is a wait on its job; the notice clears it as a user string in one agent and as a queued_command attachment in another", async () => {
+  test("a background job is a wait while it runs; one whose output file ends with the harness's exit line and has no notice in the transcript is stranded, at once; the notice is fine again, as a user string in one agent and as a queued_command attachment in another", async () => {
     const s = new Scenario(PROGRAM, "jobs");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
+    const { tasks } = claudeTmp(s);
+    mkdirSync(tasks, { recursive: true });
     const launched = (agentId: string, taskId: string): Line[] => [
       toolUse(
         ago(6),
@@ -332,26 +407,33 @@ describe("fleet-events.mts", () => {
       toolResult(ago(6), "toolu_bg", { toolUseResult: { backgroundTaskId: taskId }, agentId }),
       said(ago(6), "end_turn", agentId),
     ];
-    const pathA = writeAgent(
-      session,
-      A,
-      { name: "builder-a", description: "build" },
-      exchange(ago(9), "toolu_a0", A),
-    );
-    const pathB = writeAgent(
-      session,
-      B,
-      { name: "builder-b", description: "build" },
-      exchange(ago(9), "toolu_b0", B),
-    );
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      ...exchange(ago(9), "toolu_a0", A),
+      ...launched(A, "b1a2b3c4d"),
+    ]);
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      ...exchange(ago(9), "toolu_b0", B),
+      ...launched(B, "b9z8y7x6w"),
+    ]);
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    appendLines(pathA, launched(A, "b1a2b3c4d"));
-    appendLines(pathB, launched(B, "b9z8y7x6w"));
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(2);
+    expect(persistedTarget(s).tasksDir).toBe(tasks);
+
+    // A's output ended; B's is still being written (no exit line yet).
+    writeFileSync(
+      join(tasks, "b1a2b3c4d.output"),
+      "checking...\nall green\n[exited with code 0]\n",
+    );
+    writeFileSync(join(tasks, "b9z8y7x6w.output"), "checking...\n");
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["alert", "agent builder-a: stranded, job b1a2b3c4d ended with no notice", fileUrl(pathA)],
+    ]);
 
     appendLines(pathA, [userText(ago(0), notice("b1a2b3c4d"))]);
+    writeFileSync(join(tasks, "b9z8y7x6w.output"), "checking...\n[exited with code 1]\n");
     appendLines(pathB, [
       attachment(
         ago(0),
@@ -363,34 +445,27 @@ describe("fleet-events.mts", () => {
         B,
       ),
     ]);
-    expect(polled(s, box.path)).toBe(2);
-    expect(rows(s)).toEqual([
-      ["agent", "agent builder-a: waiting on 1 background job for 6 min", fileUrl(pathA)],
-      ["agent", "agent builder-b: waiting on 1 background job for 6 min", fileUrl(pathB)],
-      ["agent", "agent builder-a: moving again", fileUrl(pathA)],
-      ["agent", "agent builder-b: moving again", fileUrl(pathB)],
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(1)).toEqual([["note", "agent builder-a: fine again", fileUrl(pathA)]]);
+    expect(await delivered(box, 1)).toEqual([
+      ["agent builder-a: stranded, job b1a2b3c4d ended with no notice"],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a wait on a child names the child and its last move: a foreground Agent call joined through the child's sidecar toolUseId, and a background spawn through its agentId", async () => {
+  test("a child still for thirty minutes is stuck on agent, a foreground one joined through its sidecar toolUseId and a background one through its agentId, naming the child and its last move; a moving child is never stuck, a child whose read failed this poll holds the parent's judgment, and the child moving again is fine again", async () => {
     const s = new Scenario(PROGRAM, "kids");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const pathA = writeAgent(
-      session,
-      A,
-      { name: "builder-a", description: "build" },
-      exchange(ago(9), "toolu_a0", A),
-    );
-    const callA = [
-      toolUse(ago(6), "toolu_fg", "Agent", {
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      ...exchange(ago(50), "toolu_a0", A),
+      toolUse(ago(45), "toolu_fg", "Agent", {
         description: "scout the repo",
         subagent_type: "Explore",
         prompt: "look",
       }),
-    ];
-    writeAgent(
+    ]);
+    const pathC = writeAgent(
       session,
       C,
       {
@@ -399,17 +474,12 @@ describe("fleet-events.mts", () => {
         toolUseId: "toolu_fg",
         parentAgentId: A,
       },
-      [...exchange(ago(0), "toolu_c1", C)],
+      [pendingBash(ago(35), "toolu_c1", C, HOUR_MS)],
     );
-    const pathB = writeAgent(
-      session,
-      B,
-      { name: "builder-b", description: "build" },
-      exchange(ago(9), "toolu_b0", B),
-    );
-    const callB = [
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      ...exchange(ago(50), "toolu_b0", B),
       toolUse(
-        ago(4),
+        ago(45),
         "toolu_bg",
         "Agent",
         {
@@ -421,12 +491,12 @@ describe("fleet-events.mts", () => {
         },
         B,
       ),
-      toolResult(ago(4), "toolu_bg", {
+      toolResult(ago(45), "toolu_bg", {
         toolUseResult: { status: "async_launched", agentId: D },
         agentId: B,
       }),
-      said(ago(4), "end_turn", B),
-    ];
+      said(ago(45), "end_turn", B),
+    ]);
     writeAgent(
       session,
       D,
@@ -434,79 +504,195 @@ describe("fleet-events.mts", () => {
       exchange(ago(0), "toolu_d1", D),
     );
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    appendLines(pathA, callA);
-    appendLines(pathB, callB);
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(2);
     expect(rows(s)).toEqual([
       [
-        "agent",
-        "agent builder-a: waiting on agent scout the repo for 6 min; scout the repo last moved 0 min ago",
+        "alert",
+        "agent builder-a: stuck on agent scout the repo, scout the repo last moved 35 min ago",
         fileUrl(pathA),
       ],
+    ]);
+
+    // D goes still, C moves: B is stuck on its runner, A is fine again.
+    const stillD = join(session.subagents, `agent-${D}.jsonl`);
+    writeFileSync(stillD, "");
+    appendLines(stillD, [pendingBash(ago(40), "toolu_d0", D, HOUR_MS)]);
+    appendLines(pathC, [toolResult(ago(0), "toolu_c1", { agentId: C })]);
+    expect(polled(s, box.path)).toBe(2);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s).slice(1)).toEqual([
+      ["note", "agent builder-a: fine again", fileUrl(pathA)],
       [
-        "agent",
-        "agent builder-b: waiting on agent runner for 4 min; runner last moved 0 min ago",
+        "alert",
+        "agent builder-b: stuck on agent runner, runner last moved 40 min ago",
         fileUrl(pathB),
       ],
     ]);
-    expect(polled(s, box.path)).toBe(0);
+
+    // D moves while its sidecar is unreadable: that read failed, so B is judged from nothing this
+    // poll, neither retracted nor repeated; the next readable poll sees D moving and retracts.
+    const sidecarD = join(session.subagents, `agent-${D}.meta.json`);
+    writeFileSync(sidecarD, "{");
+    appendLines(stillD, [toolResult(ago(0), "toolu_d0", { agentId: D })]);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).at(-1)).toEqual([
+      "alert",
+      `fleet: cannot read agent-${D}.meta.json: ${sidecarD} is not a JSON object`,
+      fileUrl(sidecarD),
+    ]);
+    expect(s.state().targets[session.dir]).toMatchObject({
+      agents: { [B]: { said: { level: "alert", key: expect.stringMatching(/^child:/) } } },
+    });
+    writeFileSync(
+      sidecarD,
+      JSON.stringify({ name: "runner", description: "run it", parentAgentId: B }),
+    );
+    expect(polled(s, box.path)).toBe(2);
+    expect(rows(s).slice(4)).toEqual([
+      ["note", "fleet: reading restored", fileUrl(sidecarD)],
+      ["note", "agent builder-b: fine again", fileUrl(pathB)],
+    ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("an end_turn with nothing outstanding is turn ended, once; a TaskStop in the session file on a quiet agent is stopped, never a stall, while a quiet agent nobody stopped is a stall; each said only as a change after the baseline", async () => {
+  test("an ended turn past the grace is a note when the one waiting on the agent has its signal (a teammate's idle notification, a one-shot child's notice) and an alert when it does not, or when nobody the fleet read spawned it; a stop is a note; a stall past --quiet-after is an alert; each note once, and status lists the alerts", async () => {
     const s = new Scenario(PROGRAM, "ends");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
-      toolUse(ago(9), "toolu_01", "Bash", { command: "bun test" }),
-    ]);
+    const ended = (agentId: string): Line[] => [
+      ...exchange(ago(20), `toolu_${agentId.slice(0, 4)}`, agentId),
+      said(ago(7), "end_turn", agentId),
+    ];
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, ended(A));
     const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
-      toolUse(ago(9), "toolu_02", "Bash", { command: "bun test" }, B),
+      ...exchange(ago(20), "toolu_b0", B),
+      said(ago(5), null, B),
     ]);
     const pathC = writeAgent(session, C, { name: "builder-c", description: "build" }, [
-      toolUse(ago(9), "toolu_03", "Bash", { command: "bun test" }, C),
+      ...exchange(ago(20), "toolu_c0", C),
+      said(ago(5), null, C),
     ]);
-    await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-
-    appendLines(pathA, [toolResult(ago(3), "toolu_01"), said(ago(3), "end_turn")]);
-    appendLines(pathB, [toolResult(ago(5), "toolu_02", { agentId: B }), said(ago(5), null, B)]);
-    appendLines(pathC, [toolResult(ago(5), "toolu_03", { agentId: C }), said(ago(5), null, C)]);
-    // The lead's own file: the spawn that named builder-b, then the stop by that name.
+    const pathD = writeAgent(
+      session,
+      D,
+      { description: "run it", parentAgentId: SESSION },
+      ended(D),
+    );
+    const pathE = writeAgent(
+      session,
+      E,
+      { description: "review it", parentAgentId: "0000000000000000" },
+      ended(E),
+    );
+    // The lead's own file: builder-a spawned and idle, builder-b spawned and stopped, D launched
+    // in the background with no notice yet.
     appendLines(session.sessionFile, [
+      ...spawnLines("toolu_spawn_a", "builder-a", A),
+      ...spawnLines("toolu_spawn_b", "builder-b", B),
       toolUse(
-        ago(8),
-        "toolu_spawn",
+        ago(30),
+        "toolu_spawn_d",
         "Agent",
         {
-          name: "builder-b",
-          description: "build",
+          description: "run it",
           subagent_type: "general-purpose",
-          prompt: "build",
+          prompt: "run",
+          run_in_background: true,
         },
         null,
       ),
-      toolResult(ago(8), "toolu_spawn", {
-        toolUseResult: { status: "teammate_spawned", agentId: B, name: "builder-b" },
+      toolResult(ago(30), "toolu_spawn_d", {
+        toolUseResult: { status: "async_launched", agentId: D },
         agentId: null,
       }),
+      userText(ago(6), idle("builder-a"), null),
       toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-b" }, null),
       toolResult(ago(2), "toolu_stop", { agentId: null }),
     ]);
-    expect(polled(s, box.path)).toBe(1);
-    expect(polled(s, box.path)).toBe(2);
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
-      ["agent", "agent builder-b: stopped by the lead", fileUrl(pathB)],
-      ["agent", "agent builder-a: turn ended 3 min ago, nothing outstanding", fileUrl(pathA)],
-      ["agent", "agent builder-c: quiet for 5 min mid-turn, nothing pending", fileUrl(pathC)],
+      ["note", "agent builder-a: ended 7 min ago, report received", fileUrl(pathA)],
+      ["note", "agent builder-b: stopped by the lead", fileUrl(pathB)],
+      ["alert", "agent builder-c: stuck 5 min mid-turn, nothing pending", fileUrl(pathC)],
+      ["alert", "agent run it: ended 7 min ago, no signal reached the lead", fileUrl(pathD)],
+      ["alert", "agent review it: ended 7 min ago, no signal reached the lead", fileUrl(pathE)],
+    ]);
+    expect(await delivered(box, 1)).toEqual([
+      [
+        "agent builder-c: stuck 5 min mid-turn, nothing pending",
+        "agent run it: ended 7 min ago, no signal reached the lead",
+        "agent review it: ended 7 min ago, no signal reached the lead",
+      ],
+    ]);
+    expect(standing(s, box.path)).toEqual([
+      "agent builder-c: stuck 5 min mid-turn, nothing pending",
+      "agent run it: ended 7 min ago, no signal reached the lead",
+      "agent review it: ended 7 min ago, no signal reached the lead",
+    ]);
+    // D's notice reaches the lead: fine again is not said for an ended turn, the note is.
+    appendLines(session.sessionFile, [userText(ago(0), notice(D), null)]);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(5)).toEqual([
+      ["note", "agent run it: ended 7 min ago, report received", fileUrl(pathD)],
+    ]);
+    expect(polled(s, box.path)).toBe(0);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a foreground child's signal is its result closing the parent's call: ended past the grace with the call answered is a note, with the call still pending an alert; the parent whose idle notification the lead holds is a note", async () => {
+    const s = new Scenario(PROGRAM, "foreground");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const spawnCall = (id: string, agentId: string): Line =>
+      toolUse(
+        ago(20),
+        id,
+        "Agent",
+        { description: "scout", subagent_type: "Explore", prompt: "look" },
+        agentId,
+      );
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      ...exchange(ago(30), "toolu_a0", A),
+      spawnCall("toolu_fg1", A),
+      toolResult(ago(6), "toolu_fg1", { agentId: A }),
+      said(ago(6), "end_turn", A),
+    ]);
+    const pathC = writeAgent(
+      session,
+      C,
+      { description: "scout one", agentType: "Explore", toolUseId: "toolu_fg1", parentAgentId: A },
+      [...exchange(ago(20), "toolu_c0", C), said(ago(7), "end_turn", C)],
+    );
+    writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      ...exchange(ago(30), "toolu_b0", B),
+      spawnCall("toolu_fg2", B),
+    ]);
+    const pathD = writeAgent(
+      session,
+      D,
+      { description: "scout two", agentType: "Explore", toolUseId: "toolu_fg2", parentAgentId: B },
+      [...exchange(ago(20), "toolu_d0", D), said(ago(7), "end_turn", D)],
+    );
+    appendLines(session.sessionFile, [
+      ...spawnLines("toolu_spawn_a", "builder-a", A),
+      ...spawnLines("toolu_spawn_b", "builder-b", B),
+      userText(ago(5), idle("builder-a"), null),
+    ]);
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session, "--quiet-after", "1");
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["note", "agent builder-a: ended 6 min ago, report received", fileUrl(pathA)],
+      ["note", "agent scout one: ended 7 min ago, report received", fileUrl(pathC)],
+      ["alert", "agent scout two: ended 7 min ago, no signal reached the lead", fileUrl(pathD)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("the baseline records each agent's current situation: a turn that ended hours before the watch is never said, a fresh line after it is not moving again, and only a change that ages past the window after the watch is said", async () => {
+  test("the first poll says what stands, however old: a turn ended long before the watch is a note or an alert by whether its signal arrived, said once; an agent that moves after it says nothing more", async () => {
     const s = new Scenario(PROGRAM, "old");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
@@ -517,118 +703,105 @@ describe("fleet-events.mts", () => {
     ];
     const pathA = writeAgent(session, A, { name: "scout-a", description: "explore" }, finished(A));
     const pathB = writeAgent(session, B, { name: "scout-b", description: "explore" }, finished(B));
+    appendLines(session.sessionFile, [
+      ...spawnLines("toolu_spawn_a", "scout-a", A, ago(1300)),
+      ...spawnLines("toolu_spawn_b", "scout-b", B, ago(1300)),
+      userText(ago(1220), idle("scout-a"), null),
+    ]);
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    expect(polled(s, box.path)).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
+    expect(rows(s)).toEqual([
+      ["note", "agent scout-a: ended 1222 min ago, report received", fileUrl(pathA)],
+      ["alert", "agent scout-b: ended 1222 min ago, no signal reached the lead", fileUrl(pathB)],
+    ]);
     expect(polled(s, box.path)).toBe(0);
     expect(s.state().targets[session.dir]).toMatchObject({
       agents: {
-        [A]: { baseline: `ended:${endedAt}`, said: null },
-        [B]: { baseline: `ended:${endedAt}`, said: null },
+        [A]: { said: { level: "note", key: `ended:${endedAt}` } },
+        [B]: { said: { level: "alert", key: `ended:${endedAt}`, duration: null, repeats: 0 } },
       },
     });
 
     appendLines(pathA, exchange(ago(0), "toolu_a9", A));
-    appendLines(pathB, [toolUse(ago(5), "toolu_b9", "Bash", { command: "bun test" }, B)]);
     expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(1);
-    expect(rows(s)).toEqual([
-      ["agent", "agent scout-b: waiting on Bash for 5 min", fileUrl(pathB)],
-    ]);
     expect(s.state().targets[session.dir]).toMatchObject({
-      agents: {
-        [A]: { baseline: null, said: null, observed: "moving" },
-        [B]: { baseline: null, said: "tool:toolu_b9", observed: "tool:toolu_b9" },
-      },
+      agents: { [A]: { said: null } },
     });
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("the baseline yields after the first change: an agent that began the watch waiting on a child, then waited on Bash, then returned to the child is said again, since the baseline key no longer holds", async () => {
+  test("an alert that changes kind is said anew without a retraction between: a stuck call, then once its result lands a child still past the bound, then fine again once the child's notice arrives", async () => {
     const s = new Scenario(PROGRAM, "again");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const spawnedAt = ago(30);
     const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
-      toolUse(spawnedAt, "toolu_bg", "Agent", {
+      toolUse(ago(50), "toolu_bg", "Agent", {
         name: "runner",
         description: "run it",
         subagent_type: "general-purpose",
         prompt: "run",
         run_in_background: true,
       }),
-      toolResult(spawnedAt, "toolu_bg", {
+      toolResult(ago(50), "toolu_bg", {
         toolUseResult: { status: "async_launched", agentId: C },
       }),
-      said(spawnedAt, "end_turn"),
+      pendingBash(ago(14), "toolu_b", A, TWO_MINUTES_MS),
     ]);
-    writeAgent(
-      session,
-      C,
-      { name: "runner", description: "run it", parentAgentId: A },
-      exchange(ago(0), "toolu_c1", C),
-    );
+    writeAgent(session, C, { name: "runner", description: "run it", parentAgentId: A }, [
+      pendingBash(ago(35), "toolu_c1", C, HOUR_MS),
+    ]);
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-
-    appendLines(pathA, [toolUse(ago(14), "toolu_b", "Bash", { command: "bun test" })]);
-    expect(polled(s, box.path)).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
+    appendLines(pathA, [toolResult(ago(0), "toolu_b")]);
     expect(polled(s, box.path)).toBe(1);
-    appendLines(pathA, [toolResult(ago(12), "toolu_b"), said(ago(12), "end_turn")]);
-    expect(polled(s, box.path)).toBe(0);
+    appendLines(pathA, [userText(ago(0), notice(C))]);
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
-      ["agent", "agent builder-a: waiting on Bash for 14 min", fileUrl(pathA)],
+      ["alert", "agent builder-a: stuck 14 min on Bash", fileUrl(pathA)],
       [
-        "agent",
-        "agent builder-a: waiting on agent runner for 30 min; runner last moved 0 min ago",
+        "alert",
+        "agent builder-a: stuck on agent runner, runner last moved 35 min ago",
         fileUrl(pathA),
       ],
+      ["note", "agent builder-a: fine again", fileUrl(pathA)],
     ]);
     expect(s.state().targets[session.dir]).toMatchObject({
-      agents: {
-        [A]: {
-          baseline: null,
-          said: `child:${C}:${spawnedAt}`,
-          observed: `child:${C}:${spawnedAt}`,
-        },
-      },
+      agents: { [A]: { said: null } },
     });
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a subagents directory that does not exist yet is an empty fleet: the baseline happens with no agents, the first transcript is started and its aged wait is said, and once listed a directory that vanishes is a fleet-wide failure", async () => {
+  test("a subagents directory that does not exist yet is an empty fleet: the first poll happens with no agents, the first transcript is started and stuck in one poll, and once listed a directory that vanishes is a fleet-wide trouble alert", async () => {
     const s = new Scenario(PROGRAM, "none");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
     rmSync(session.subagents, { recursive: true });
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(s.events()).toEqual([]);
     expect(polled(s, box.path)).toBe(0);
 
     mkdirSync(session.subagents);
     const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
-      toolUse(ago(5), "toolu_01", "Bash", { command: "bun test" }),
+      pendingBash(ago(35), "toolu_01", A),
     ]);
-    expect(polled(s, box.path)).toBe(1);
-    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(2);
     expect(polled(s, box.path)).toBe(0);
 
     rmSync(session.subagents, { recursive: true });
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
-      ["agent", "agent builder-a: started", fileUrl(pathA)],
-      ["agent", "agent builder-a: waiting on Bash for 5 min", fileUrl(pathA)],
-      ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
+      ["note", "agent builder-a: started", fileUrl(pathA)],
+      ["alert", "agent builder-a: stuck 35 min on Bash", fileUrl(pathA)],
+      ["alert", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
   test(
-    "the instrument excludes itself: a daemon started from inside a worktree does not count as that worktree's worker, so an idle unclaimed worktree it sits in still goes quiet",
+    "an unclaimed worktree goes idle only after work was seen in it: a worker that came and went makes it idle two polls later, a worktree where nothing ever worked never does, and the instrument excludes itself from the worktree it was started in",
     async () => {
       const s = new Scenario(PROGRAM, "own");
       const box = await s.inbox("a");
@@ -647,19 +820,30 @@ describe("fleet-events.mts", () => {
         } finally {
           process.chdir(cwd);
         }
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
         expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(2);
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+
+        const worker = park(wtA);
+        expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
         expect(rows(s)).toEqual([
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
-          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
+          ["alert", "worktree track-a: idle 2 polls after work", fileUrl(wtA)],
         ]);
         expect(s.state().targets[session.dir]).toMatchObject({
-          worktrees: { [wtB]: { processes: { workers: 0, shells: 0 } } },
+          worktrees: {
+            [wtA]: {
+              workSeen: true,
+              idlePolls: 3,
+              said: { level: "alert", key: "idle", duration: 2, repeats: 0 },
+            },
+            [wtB]: { workSeen: false, processes: { workers: 0, shells: 0 }, said: null },
+          },
         });
       } finally {
         parked.kill();
@@ -670,171 +854,48 @@ describe("fleet-events.mts", () => {
   );
 
   test(
-    "the listing is the truth for claims: a listed agent whose sidecar read fails keeps its last good claim, and an agent gone from a successful listing loses its sidecar, so its worktree becomes unclaimed and quiets after two polls",
+    "an idle alert repeats as its count doubles, three times, then holds in silence; a worker arriving is active again, a note, and the next idle starts the count afresh",
     async () => {
-      const s = new Scenario(PROGRAM, "gone");
+      const s = new Scenario(PROGRAM, "repeat");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
       const {
         repo,
-        worktrees: { "wt-a": wtA, "wt-b": wtB },
-      } = scratchRepo(s.fixtureDir, TRACKS);
-      const pathA = writeAgent(
-        session,
-        A,
-        { name: "builder-a", description: "build", worktreePath: wtA, worktreeBranch: "track-a" },
-        exchange(ago(0), "toolu_01"),
-      );
-      const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
-      const parked = park(repo);
-      try {
-        await s.start({ inbox: box.path });
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
-        expect(polled(s, box.path)).toBe(0);
-
-        // Still listed, sidecar unreadable: that agent's trouble, its last good claim kept.
-        rmSync(sidecarA);
-        mkdirSync(sidecarA);
-        expect(polled(s, box.path)).toBe(2);
-        expect(polled(s, box.path)).toBe(0);
-        expect(s.state().targets[session.dir]).toMatchObject({
-          worktrees: { [wtA]: { quietPolls: 0 } },
-        });
-
-        // Gone from the listing: the claim goes with it.
-        rmSync(sidecarA, { recursive: true });
-        rmSync(pathA);
-        expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(1);
-        expect(rows(s)).toEqual([
-          [
-            "trouble",
-            `fleet: cannot read agent-${A}.meta.json: ${sidecarA} is not a regular file`,
-            fileUrl(sidecarA),
-          ],
-          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
-        ]);
-      } finally {
-        parked.kill();
-      }
-      s.stop({ inbox: box.path });
-    },
-    GIT_TIMEOUT,
-  );
-
-  test(
-    "a failed per-agent read is no observation for that agent: its sidecar removed and its transcript unreadable in one poll keep the last good claim, while a removed sidecar beside a readable transcript drops it",
-    async () => {
-      const s = new Scenario(PROGRAM, "held");
-      const box = await s.inbox("a");
-      const session = sessionDir(s.fixtureDir);
-      const {
-        repo,
-        worktrees: { "wt-a": wtA, "wt-b": wtB },
-      } = scratchRepo(s.fixtureDir, TRACKS);
-      const pathA = writeAgent(
-        session,
-        A,
-        { name: "builder-a", description: "build", worktreePath: wtA, worktreeBranch: "track-a" },
-        exchange(ago(0), "toolu_01"),
-      );
-      const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
-      const parked = park(repo);
-      try {
-        await s.start({ inbox: box.path });
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
-        expect(polled(s, box.path)).toBe(0);
-
-        // Sidecar gone AND transcript unreadable: the agent's poll failed as a whole, its claim holds.
-        rmSync(sidecarA);
-        rmSync(pathA);
-        mkdirSync(pathA);
-        expect(polled(s, box.path)).toBe(2);
-        expect(polled(s, box.path)).toBe(0);
-        expect(s.state().targets[session.dir]).toMatchObject({
-          worktrees: { [wtA]: { quietPolls: 0 } },
-        });
-
-        // Control: the transcript readable again with no sidecar, so the claim is gone.
-        rmSync(pathA, { recursive: true });
-        writeFileSync(pathA, "");
-        appendLines(pathA, exchange(ago(0), "toolu_02"));
-        expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(1);
-        expect(rows(s)).toEqual([
-          [
-            "trouble",
-            `fleet: cannot read agent-${A}.jsonl: ${pathA} is not a regular file`,
-            fileUrl(pathA),
-          ],
-          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
-        ]);
-      } finally {
-        parked.kill();
-      }
-      s.stop({ inbox: box.path });
-    },
-    GIT_TIMEOUT,
-  );
-
-  test(
-    "a bare head move keeps a quiet worktree quiet: a commit from outside with a clean tree and no process is a head event and no second quiet line, while a head move with a worker in the tree is active again and quiet re-fires once the worker leaves",
-    async () => {
-      const s = new Scenario(PROGRAM, "rest");
-      const box = await s.inbox("a");
-      const session = sessionDir(s.fixtureDir);
-      const {
-        repo,
-        worktrees: { "wt-a": wtA, "wt-b": wtB },
+        worktrees: { "wt-a": wtA },
       } = scratchRepo(s.fixtureDir, TRACKS);
       const parked = park(repo);
-      let worker: ReturnType<typeof Bun.spawn> | null = null;
+      let worker: ReturnType<typeof park> | null = null;
       try {
         await s.start({ inbox: box.path });
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
-        expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(2);
-
-        // The lead restacks from outside: the tree is clean before and after, nobody is in it.
-        git(wtA, "commit", "--allow-empty", "-m", "restack");
-        const restacked = git(wtA, "rev-parse", "HEAD").trim();
-        expect(polled(s, box.path)).toBe(1);
-        expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(0);
-
-        // A worker in the tree while the head moves: the count resets, and quiet re-fires once it leaves.
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
         worker = park(wtA);
-        git(wtA, "commit", "--allow-empty", "-m", "worked");
-        const worked = git(wtA, "rev-parse", "HEAD").trim();
-        expect(polled(s, box.path)).toBe(2);
         expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
+        worker = null;
+        const counts: number[] = [];
+        for (let i = 0; i < 33; i += 1) counts.push(polled(s, box.path));
+        const saidAt = counts.flatMap((count, i) => (count === 1 ? [i + 1] : []));
+        expect(saidAt).toEqual([2, 4, 8, 16]);
+        expect(counts.filter((count) => count > 1)).toEqual([]);
+        expect(rows(s).map((row) => [row[0], row[1]])).toEqual([
+          ["alert", "worktree track-a: idle 2 polls after work"],
+          ["alert", "worktree track-a: idle 4 polls after work"],
+          ["alert", "worktree track-a: idle 8 polls after work"],
+          ["alert", "worktree track-a: idle 16 polls after work"],
+        ]);
+        expect(standing(s, box.path)).toEqual(["worktree track-a: idle 16 polls after work"]);
+
+        worker = park(wtA);
+        expect(polled(s, box.path)).toBe(1);
         worker.kill();
         await worker.exited;
         worker = null;
         expect(polled(s, box.path)).toBe(0);
         expect(polled(s, box.path)).toBe(1);
-        expect(rows(s)).toEqual([
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
-          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
-          ["head", `worktree track-a: head moved to ${restacked.slice(0, 12)}`, fileUrl(wtA)],
-          ["head", `worktree track-a: head moved to ${worked.slice(0, 12)}`, fileUrl(wtA)],
-          ["active", "worktree track-a: active again", fileUrl(wtA)],
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
+        expect(rows(s).slice(4)).toEqual([
+          ["note", "worktree track-a: active again", fileUrl(wtA)],
+          ["alert", "worktree track-a: idle 2 polls after work", fileUrl(wtA)],
         ]);
       } finally {
         worker?.kill();
@@ -846,7 +907,182 @@ describe("fleet-events.mts", () => {
   );
 
   test(
-    "a worktree whose quiet line was said is active again once when a worker arrives or a dirty file lands, and never when its quiet was not said; quiet is said again once it is still",
+    "a worktree an agent's sidecar claims is not read: a commit there is no event while the claim holds, a listed agent whose sidecar read fails keeps its claim, and an agent gone from a successful listing loses it, so the next commit there is a head note",
+    async () => {
+      const s = new Scenario(PROGRAM, "claim");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      const pathA = writeAgent(
+        session,
+        A,
+        { name: "builder-a", description: "build", worktreePath: wtA, worktreeBranch: "track-a" },
+        exchange(ago(0), "toolu_01"),
+      );
+      const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
+      const parked = park(repo);
+      try {
+        await s.start({ inbox: box.path });
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        expect(polled(s, box.path)).toBe(0);
+        git(wtA, "commit", "--allow-empty", "-m", "claimed work");
+        expect(polled(s, box.path)).toBe(0);
+        expect(s.state().targets[session.dir]).not.toMatchObject({ worktrees: { [wtA]: {} } });
+
+        // Still listed, sidecar unreadable: that agent's trouble, its claim kept.
+        rmSync(sidecarA);
+        mkdirSync(sidecarA);
+        git(wtA, "commit", "--allow-empty", "-m", "still claimed");
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+
+        // Gone from the listing: the claim goes with it, and the worktree enters the reading fresh.
+        rmSync(sidecarA, { recursive: true });
+        rmSync(pathA);
+        expect(polled(s, box.path)).toBe(1);
+        git(wtA, "commit", "--allow-empty", "-m", "unclaimed");
+        const head = git(wtA, "rev-parse", "HEAD").trim();
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        expect(rows(s)).toEqual([
+          [
+            "alert",
+            `fleet: cannot read agent-${A}.meta.json: ${sidecarA} is not a regular file`,
+            fileUrl(sidecarA),
+          ],
+          ["note", "fleet: reading restored", fileUrl(sidecarA)],
+          ["note", `worktree track-a: head moved to ${head.slice(0, 12)}`, fileUrl(wtA)],
+        ]);
+      } finally {
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
+    "a failed per-agent read is no observation for that agent: its sidecar removed and its transcript unreadable in one poll keep the claim, while a removed sidecar beside a readable transcript drops it",
+    async () => {
+      const s = new Scenario(PROGRAM, "held");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      const pathA = writeAgent(
+        session,
+        A,
+        { name: "builder-a", description: "build", worktreePath: wtA, worktreeBranch: "track-a" },
+        exchange(ago(0), "toolu_01"),
+      );
+      const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
+      const parked = park(repo);
+      try {
+        await s.start({ inbox: box.path });
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        expect(polled(s, box.path)).toBe(0);
+
+        // Sidecar gone AND transcript unreadable: the agent's poll failed as a whole, its claim holds.
+        rmSync(sidecarA);
+        rmSync(pathA);
+        mkdirSync(pathA);
+        git(wtA, "commit", "--allow-empty", "-m", "claimed work");
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+
+        // Control: the transcript readable again with no sidecar, so the claim is gone and the
+        // worktree is read; the next commit is a head note.
+        rmSync(pathA, { recursive: true });
+        writeFileSync(pathA, "");
+        appendLines(pathA, exchange(ago(0), "toolu_02"));
+        expect(polled(s, box.path)).toBe(1);
+        git(wtA, "commit", "--allow-empty", "-m", "unclaimed");
+        const head = git(wtA, "rev-parse", "HEAD").trim();
+        expect(polled(s, box.path)).toBe(1);
+        expect(rows(s)).toEqual([
+          [
+            "alert",
+            `fleet: cannot read agent-${A}.jsonl: ${pathA} is not a regular file`,
+            fileUrl(pathA),
+          ],
+          ["note", "fleet: reading restored", fileUrl(pathA)],
+          ["note", `worktree track-a: head moved to ${head.slice(0, 12)}`, fileUrl(wtA)],
+        ]);
+      } finally {
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
+    "a bare head move keeps an idle worktree idle: a commit from outside with a clean tree and no process is a head note and no retraction, while a head move with a worker in the tree is active again and idle re-fires once the worker leaves",
+    async () => {
+      const s = new Scenario(PROGRAM, "rest");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      const parked = park(repo);
+      let worker: ReturnType<typeof Bun.spawn> | null = null;
+      try {
+        await s.start({ inbox: box.path });
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        worker = park(wtA);
+        expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
+        worker = null;
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+
+        // The lead restacks from outside: the tree is clean before and after, nobody is in it.
+        git(wtA, "commit", "--allow-empty", "-m", "restack");
+        const restacked = git(wtA, "rev-parse", "HEAD").trim();
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+
+        // A worker in the tree while the head moves: active again, and idle re-fires once it leaves.
+        worker = park(wtA);
+        git(wtA, "commit", "--allow-empty", "-m", "worked");
+        const worked = git(wtA, "rev-parse", "HEAD").trim();
+        expect(polled(s, box.path)).toBe(2);
+        expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
+        worker = null;
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+        expect(rows(s)).toEqual([
+          ["alert", "worktree track-a: idle 2 polls after work", fileUrl(wtA)],
+          ["note", `worktree track-a: head moved to ${restacked.slice(0, 12)}`, fileUrl(wtA)],
+          ["alert", "worktree track-a: idle 4 polls after work", fileUrl(wtA)],
+          ["note", `worktree track-a: head moved to ${worked.slice(0, 12)}`, fileUrl(wtA)],
+          ["note", "worktree track-a: active again", fileUrl(wtA)],
+          ["alert", "worktree track-a: idle 2 polls after work", fileUrl(wtA)],
+        ]);
+        expect(s.events()[1]).toMatchObject({ kind: "head", worktree: wtA, sha: restacked });
+        expect(s.events()[1]).not.toHaveProperty("ahead");
+      } finally {
+        worker?.kill();
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
+    "a dirty file landing in an idle worktree is active again by the tree reading alone, and a worktree whose worker never left never goes idle",
     async () => {
       const s = new Scenario(PROGRAM, "wake");
       const box = await s.inbox("a");
@@ -859,36 +1095,21 @@ describe("fleet-events.mts", () => {
       const workers: Array<ReturnType<typeof Bun.spawn>> = [];
       try {
         await s.start({ inbox: box.path });
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        workers.push(park(wtA), park(wtB));
         expect(polled(s, box.path)).toBe(0);
-
-        // wt-b gains a worker before its quiet is said: nothing to retract; wt-a's quiet is said.
-        workers.push(park(wtB));
-        expect(polled(s, box.path)).toBe(1);
-        // wt-a gains a worker after its quiet was said: active again, once.
-        workers.push(park(wtA));
+        const [leaving] = workers.splice(0, 1);
+        leaving?.kill();
+        await leaving?.exited;
+        expect(polled(s, box.path)).toBe(0);
         expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
-        for (const worker of workers.splice(0)) {
-          worker.kill();
-          await worker.exited;
-        }
-        expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(2);
-        // A dirty file in wt-b, head unchanged: active again by the tree reading.
-        writeFileSync(join(wtB, "scratch.txt"), "notes\n");
+        writeFileSync(join(wtA, "scratch.txt"), "notes\n");
         expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
         expect(rows(s)).toEqual([
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
-          ["active", "worktree track-a: active again", fileUrl(wtA)],
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
-          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
-          ["active", "worktree track-b: active again", fileUrl(wtB)],
+          ["alert", "worktree track-a: idle 2 polls after work", fileUrl(wtA)],
+          ["note", "worktree track-a: active again", fileUrl(wtA)],
         ]);
       } finally {
         for (const worker of workers) worker.kill();
@@ -900,9 +1121,9 @@ describe("fleet-events.mts", () => {
   );
 
   test(
-    "a worktree a successful discovery no longer lists is gone, once, with its last head as a field, and its row is dropped so no quiet line follows",
+    "a worktree a successful discovery no longer lists is gone, a note once with its last head as a field, and its row is dropped; one claimed since its last reading and removed is its agent's, no note",
     async () => {
-      const s = new Scenario(PROGRAM, "gone2");
+      const s = new Scenario(PROGRAM, "gone");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
       const {
@@ -913,22 +1134,25 @@ describe("fleet-events.mts", () => {
       const parked = park(repo);
       try {
         await s.start({ inbox: box.path });
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        // wt-a was read unclaimed; before the next poll an agent claims it and it is removed.
+        const pathA = writeAgent(
+          session,
+          A,
+          { name: "builder-a", description: "build", worktreePath: wtA, worktreeBranch: "track-a" },
+          exchange(ago(0), "toolu_01"),
+        );
+        git(repo, "worktree", "remove", "--force", wtA);
+        expect(polled(s, box.path)).toBe(1);
+        expect(rows(s)).toEqual([["note", "agent builder-a: started", fileUrl(pathA)]]);
         git(repo, "worktree", "remove", "--force", wtB);
         expect(polled(s, box.path)).toBe(1);
-        expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
-        expect(rows(s)).toEqual([
-          ["gone", "worktree track-b: gone", fileUrl(wtB)],
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls", fileUrl(wtA)],
-        ]);
-        expect(s.events()[0]).toMatchObject({ worktree: wtB, sha: headB });
+        expect(rows(s).slice(1)).toEqual([["note", "worktree track-b: gone", fileUrl(wtB)]]);
+        expect(s.events()[1]).toMatchObject({ kind: "gone", worktree: wtB, sha: headB });
+        expect(await delivered(box, 1)).toEqual([]);
         const target = s.state().targets[session.dir] as { worktrees: Record<string, unknown> };
-        expect(Object.keys(target.worktrees).sort()).toEqual([repo, wtA].sort());
+        expect(Object.keys(target.worktrees)).toEqual([repo]);
       } finally {
         parked.kill();
       }
@@ -938,14 +1162,14 @@ describe("fleet-events.mts", () => {
   );
 
   test(
-    "process attribution down, then degraded, is one trouble line each, and each is followed by one restored line when attribution works again",
+    "process attribution down, then degraded, is one trouble alert each, and each is followed by one reading-restored note when attribution works again; the idle count holds at zero while attribution is off",
     async () => {
       const s = new Scenario(PROGRAM, "lsof");
       const box = await s.inbox("a");
       const session = sessionDir(s.fixtureDir);
       const {
         repo,
-        worktrees: { "wt-a": wtA, "wt-b": wtB },
+        worktrees: { "wt-a": wtA },
       } = scratchRepo(s.fixtureDir, TRACKS);
       // A stand-in lsof the test can take down (exit 1, no output) or degrade (real output, exit 1).
       const realLsof = Bun.which("lsof");
@@ -959,20 +1183,22 @@ describe("fleet-events.mts", () => {
         `#!/bin/sh\n[ -e "${down}" ] && exit 1\nif [ -e "${degraded}" ]; then "${realLsof}" "$@"; exit 1; fi\nexec "${realLsof}" "$@"\n`,
         { mode: 0o755 },
       );
-      writeFileSync(down, "");
       const parked = park(repo);
+      let worker: ReturnType<typeof park> | null = null;
       try {
         await s.start({ inbox: box.path, env: { PATH: `${bin}:${process.env.PATH ?? ""}` } });
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        worker = park(wtA);
+        expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
+        worker = null;
+        writeFileSync(down, "");
+        expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
         rmSync(down);
         expect(polled(s, box.path)).toBe(1);
-        expect(polled(s, box.path)).toBe(2);
-        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
         writeFileSync(degraded, "");
         expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
@@ -980,16 +1206,16 @@ describe("fleet-events.mts", () => {
         expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
         expect(rows(s).map((row) => [row[0], row[1]])).toEqual([
-          ["trouble", expect.stringMatching(/^fleet: process attribution is down: /)],
-          ["restored", "fleet: process attribution restored"],
-          ["quiet", "worktree track-a: no worker process and no change for 2 polls"],
-          ["quiet", "worktree track-b: no worker process and no change for 2 polls"],
-          ["trouble", expect.stringMatching(/^fleet: process attribution degraded: /)],
-          ["restored", "fleet: process attribution restored"],
+          ["alert", expect.stringMatching(/^fleet: process attribution is down: /)],
+          ["note", "fleet: reading restored"],
+          ["alert", "worktree track-a: idle 2 polls after work"],
+          ["alert", expect.stringMatching(/^fleet: process attribution degraded: /)],
+          ["note", "fleet: reading restored"],
         ]);
         expect(rows(s)[2]?.[2]).toBe(fileUrl(wtA));
-        expect(rows(s)[3]?.[2]).toBe(fileUrl(wtB));
+        expect(await delivered(box, 3)).toHaveLength(3);
       } finally {
+        worker?.kill();
         parked.kill();
       }
       s.stop({ inbox: box.path });
@@ -997,7 +1223,7 @@ describe("fleet-events.mts", () => {
     GIT_TIMEOUT,
   );
 
-  test("a state file from before `stops` and `since` loads: the poll takes the defaults, says the stop it then reads, and saves the current shape", async () => {
+  test("a state file from before `stops`, `since`, and the standing alert loads: the poll takes the defaults, says the stop it then reads as a note, and saves the current shape", async () => {
     const s = new Scenario(PROGRAM, "older");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
@@ -1009,11 +1235,12 @@ describe("fleet-events.mts", () => {
       exchange(ago(0), "toolu_a1"),
     );
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(polled(s, box.path)).toBe(0);
     s.stop({ inbox: box.path });
 
-    // What the version before `stops` wrote: activities without it, children without `since`.
+    // What the version before `stops` wrote: activities without it, children without `since`,
+    // agents with the three situation keys, a trouble ledger of texts, and no tasks directory.
     rewriteState(s, (target) => {
       const older = (activity: Record<string, unknown>) => {
         delete activity.stops;
@@ -1023,34 +1250,42 @@ describe("fleet-events.mts", () => {
           delete child.since;
       };
       older(target.lead.state);
-      for (const entry of Object.values(target.agents)) older(entry.state);
+      for (const entry of Object.values(target.agents)) {
+        older(entry.state);
+        delete entry.said;
+        entry.observed = "moving";
+        entry.baseline = null;
+        entry.said = "moving";
+      }
+      target.trouble = { lsof: "fleet: process attribution is down: no lsof" };
+      delete target.tasksDir;
     });
     // The lead stopped A while the daemon was down; the restart polls at once and says it.
     appendLines(session.sessionFile, [
       toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
       toolResult(ago(2), "toolu_stop", { agentId: null }),
     ]);
-    await s.start({ inbox: box.path });
+    await s.start({ inbox: box.path, env: { CLAUDE_CODE_TMPDIR: claudeTmp(s).root } });
     expect(polled(s, box.path)).toBe(0);
-    expect(rows(s)).toEqual([["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)]]);
+    expect(rows(s)).toEqual([
+      ["note", "fleet: reading restored", ""],
+      ["note", "agent builder-a: stopped by the lead", fileUrl(pathA)],
+    ]);
     const saved = persistedTarget(s);
     expect(saved.lead.state.stops).toEqual({});
     const child = (saved.lead.state.children as Record<string, Record<string, unknown>>)[A];
     expect(child?.since).toBe(child?.at);
+    expect(saved.agents[A]).toMatchObject({ said: { level: "note", key: "stopped" } });
+    expect(saved.agents[A]).not.toHaveProperty("observed");
+    expect(saved.tasksDir).toBe(claudeTmp(s).tasks);
     expect(s.log()).not.toContain("poll failed");
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("worktree rows saved before `tree` and `said` load: the quiet count and the said quiet carry over, so a worker arriving is active again", async () => {
+  test("worktree rows saved before `workSeen` and the standing alert load: the idle count carries over with no work seen and nothing standing, so a worker arriving is no retraction", async () => {
     const s = new Scenario(PROGRAM, "olderwt");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    writeAgent(
-      session,
-      A,
-      { name: "builder-a", description: "build" },
-      exchange(ago(0), "toolu_a1"),
-    );
     const {
       repo,
       worktrees: { "wt-a": wtA },
@@ -1059,29 +1294,29 @@ describe("fleet-events.mts", () => {
     let worker: ReturnType<typeof park> | null = null;
     try {
       await s.start({ inbox: box.path });
-      expect(
-        s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-          inbox: box.path,
-        }).code,
-      ).toBe(0);
+      watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
       expect(polled(s, box.path)).toBe(0);
-      expect(polled(s, box.path)).toBe(2);
+      expect(polled(s, box.path)).toBe(0);
       s.stop({ inbox: box.path });
 
-      // What the version before `tree` and `said` wrote: rows with a fingerprint and a quiet count only.
+      // What the version before wrote: rows with a quiet count and a said quiet, no workSeen.
       rewriteState(s, (target) => {
         for (const row of Object.values(target.worktrees)) {
-          delete row.tree;
-          delete row.said;
+          row.quietPolls = row.idlePolls;
+          delete row.idlePolls;
+          delete row.workSeen;
+          row.said = "quiet";
         }
       });
       await s.start({ inbox: box.path });
       expect(polled(s, box.path)).toBe(0);
+      expect(s.state().targets[session.dir]).toMatchObject({
+        worktrees: { [wtA]: { idlePolls: 4, workSeen: false, said: null } },
+      });
       worker = park(wtA);
-      expect(polled(s, box.path)).toBe(1);
-      expect(rows(s).slice(2)).toEqual([
-        ["active", "worktree track-a: active again", fileUrl(wtA)],
-      ]);
+      expect(polled(s, box.path)).toBe(0);
+      expect(s.events()).toEqual([]);
+      expect(s.log()).not.toContain("poll failed");
       s.stop({ inbox: box.path });
     } finally {
       parked.kill();
@@ -1089,7 +1324,7 @@ describe("fleet-events.mts", () => {
     }
   }, 30000);
 
-  test("a saved map that is not an object starts the target over at its baseline instead of failing every poll", async () => {
+  test("a saved map that is not an object starts the target over instead of failing every poll", async () => {
     const s = new Scenario(PROGRAM, "reshape");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
@@ -1101,7 +1336,7 @@ describe("fleet-events.mts", () => {
       exchange(ago(0), "toolu_a1"),
     );
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(polled(s, box.path)).toBe(0);
     expect(persistedTarget(s).polls).toBe(2);
     s.stop({ inbox: box.path });
@@ -1109,18 +1344,18 @@ describe("fleet-events.mts", () => {
     rewriteState(s, (target) => {
       target.lead.state.children = 5;
     });
-    // The restart's own poll is the new baseline; this one is the second.
+    // The restart's own poll is the first again; this one is the second.
     await s.start({ inbox: box.path });
     expect(polled(s, box.path)).toBe(0);
     expect(persistedTarget(s).polls).toBe(2);
-    expect(s.log()).toContain("starts over at its baseline");
+    expect(s.log()).toContain("the target starts over");
     expect(s.log()).not.toContain("poll failed");
     appendLines(session.sessionFile, [
       toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
       toolResult(ago(2), "toolu_stop", { agentId: null }),
     ]);
     expect(polled(s, box.path)).toBe(1);
-    expect(rows(s)).toEqual([["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)]]);
+    expect(rows(s)).toEqual([["note", "agent builder-a: stopped by the lead", fileUrl(pathA)]]);
     s.stop({ inbox: box.path });
   }, 30000);
 
@@ -1129,7 +1364,7 @@ describe("fleet-events.mts", () => {
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
     s.stop({ inbox: box.path });
 
     rewriteState(s, (target) => {
@@ -1139,26 +1374,19 @@ describe("fleet-events.mts", () => {
     await s.start({ inbox: box.path });
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
-      ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
+      ["alert", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a resumed child's wait is a new situation: after the parent's wait on it was said, a finish and a resume between two polls make the next wait news again", async () => {
+  test("a child finished and resumed between two polls is a new wait: stuck on it is said anew, with the run in its key, and the child moving at last is fine again", async () => {
     const s = new Scenario(PROGRAM, "rerun");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const pathB = writeAgent(
-      session,
-      B,
-      { name: "builder-b", description: "build" },
-      exchange(ago(40), "toolu_b0", B),
-    );
-    await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    appendLines(pathB, [
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      ...exchange(ago(60), "toolu_b0", B),
       toolUse(
-        ago(10),
+        ago(50),
         "toolu_spawn",
         "Agent",
         {
@@ -1170,25 +1398,42 @@ describe("fleet-events.mts", () => {
         },
         B,
       ),
-      toolResult(ago(10), "toolu_spawn", {
+      toolResult(ago(50), "toolu_spawn", {
         toolUseResult: { status: "async_launched", agentId: C },
         agentId: B,
       }),
     ]);
+    const pathC = writeAgent(
+      session,
+      C,
+      { name: "reviewer", description: "review", parentAgentId: B },
+      [pendingBash(ago(45), "toolu_c1", C, HOUR_MS)],
+    );
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(1);
     // Between two polls the reviewer finishes and the parent's message resumes it: a new run.
     appendLines(pathB, [
-      userText(ago(6), notice(C), B),
-      toolUse(ago(5), "toolu_msg", "SendMessage", { to: C, message: "once more", summary: "s" }, B),
-      toolResult(ago(5), "toolu_msg", { agentId: B }),
+      userText(ago(0), notice(C), B),
+      toolUse(ago(0), "toolu_msg", "SendMessage", { to: C, message: "once more", summary: "s" }, B),
+      toolResult(ago(0), "toolu_msg", { agentId: B }),
     ]);
-    expect(polled(s, box.path)).toBe(0);
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
+    appendLines(pathC, [toolResult(ago(0), "toolu_c1", { agentId: C })]);
+    expect(polled(s, box.path)).toBe(1);
     expect(rows(s)).toEqual([
-      ["agent", "agent builder-b: waiting on agent reviewer for 10 min", fileUrl(pathB)],
-      ["agent", "agent builder-b: waiting on agent reviewer for 5 min", fileUrl(pathB)],
+      [
+        "alert",
+        "agent builder-b: stuck on agent reviewer, reviewer last moved 45 min ago",
+        fileUrl(pathB),
+      ],
+      [
+        "alert",
+        "agent builder-b: stuck on agent reviewer, reviewer last moved 45 min ago",
+        fileUrl(pathB),
+      ],
+      ["note", "agent builder-b: fine again", fileUrl(pathB)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
@@ -1205,7 +1450,7 @@ describe("fleet-events.mts", () => {
       exchange(ago(0), "toolu_a1"),
     );
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
     s.stop({ inbox: box.path });
 
     rewriteState(s, (target) => {
@@ -1218,6 +1463,7 @@ describe("fleet-events.mts", () => {
       };
       older(target.lead.state);
       for (const entry of Object.values(target.agents)) older(entry.state);
+      target.trouble = { lsof: "fleet: process attribution is down: no lsof" };
     });
     const before = persistedTarget(s);
     const offset = (before.lead.cursor as { offset: number }).offset;
@@ -1228,23 +1474,32 @@ describe("fleet-events.mts", () => {
     mkdirSync(session.sessionFile);
     await s.start({ inbox: box.path });
     expect(polled(s, box.path)).toBe(0);
-    expect(rows(s).map((row) => row[0])).toEqual(["trouble"]);
+    expect(rows(s).map((row) => row[0])).toEqual(["alert"]);
     expect(rows(s)[0]?.[1]).toContain("cannot read the session transcript");
+    // The saved shape is older than this daemon and the read failed, so nothing normalized it yet;
+    // status still lists the legacy condition by its text.
+    expect(standing(s, box.path)).toEqual([
+      "fleet: process attribution is down: no lsof",
+      expect.stringContaining("cannot read the session transcript"),
+    ]);
     const after = persistedTarget(s);
     expect((after.lead.cursor as { offset: number }).offset).toBe(offset);
     expect(after.lead.state.stops).toBeUndefined();
     expect(Object.keys(after.lead.state.children as Record<string, unknown>)).toEqual([A]);
 
-    // Readable again, with a stop appended: this poll normalizes, replays, and says the stop.
+    // Readable again, with a stop appended: this poll normalizes, replays, retracts the trouble,
+    // and says the stop.
     rmSync(session.sessionFile, { recursive: true });
     renameSync(parked, session.sessionFile);
     appendLines(session.sessionFile, [
       toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
       toolResult(ago(2), "toolu_stop", { agentId: null }),
     ]);
-    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(3);
     expect(rows(s).slice(1)).toEqual([
-      ["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)],
+      ["note", "fleet: reading restored", ""],
+      ["note", "fleet: reading restored", fileUrl(session.sessionFile)],
+      ["note", "agent builder-a: stopped by the lead", fileUrl(pathA)],
     ]);
     const normalized = persistedTarget(s);
     expect(normalized.lead.state.stops).toEqual({});
@@ -1252,20 +1507,10 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a parent's child wait is its oldest current run: a finished elder resumed by message counts from the message, so the child spawned meanwhile is the wait named", async () => {
+  test("with two children still past the bound, the one named is the oldest current run: a finished elder resumed by message counts from the message, so the child spawned meanwhile is named", async () => {
     const s = new Scenario(PROGRAM, "elder");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const pathB = writeAgent(
-      session,
-      B,
-      { name: "builder-b", description: "build" },
-      exchange(ago(40), "toolu_b0", B),
-    );
-    await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    expect(polled(s, box.path)).toBe(0);
-
     const spawn = (id: string, name: string, agentId: string, timestamp: string): Line[] => [
       toolUse(
         timestamp,
@@ -1285,42 +1530,40 @@ describe("fleet-events.mts", () => {
         agentId: B,
       }),
     ];
-    appendLines(pathB, [
-      ...spawn("toolu_elder", "elder", D, ago(29)),
-      userText(ago(25), notice(D), B),
-      ...spawn("toolu_ongoing", "ongoing", E, ago(20)),
-      toolUse(ago(10), "toolu_msg", "SendMessage", { to: D, message: "carry on", summary: "s" }, B),
-      toolResult(ago(10), "toolu_msg", { agentId: B }),
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      ...exchange(ago(70), "toolu_b0", B),
+      ...spawn("toolu_elder", "elder", D, ago(69)),
+      userText(ago(65), notice(D), B),
+      ...spawn("toolu_ongoing", "ongoing", E, ago(60)),
+      toolUse(ago(50), "toolu_msg", "SendMessage", { to: D, message: "carry on", summary: "s" }, B),
+      toolResult(ago(50), "toolu_msg", { agentId: B }),
     ]);
-    expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(1);
+    writeAgent(session, D, { name: "elder", description: "run", parentAgentId: B }, [
+      pendingBash(ago(40), "toolu_d1", D, HOUR_MS),
+    ]);
+    writeAgent(session, E, { name: "ongoing", description: "run", parentAgentId: B }, [
+      pendingBash(ago(40), "toolu_e1", E, HOUR_MS),
+    ]);
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
-      ["agent", "agent builder-b: waiting on agent ongoing for 20 min", fileUrl(pathB)],
+      [
+        "alert",
+        "agent builder-b: stuck on agent ongoing, ongoing last moved 40 min ago",
+        fileUrl(pathB),
+      ],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a TaskStop by exact id stops a nested worker the lead never spawned, said once with nothing further from it, while a stop by name still reaches the lead's own child", async () => {
+  test("a TaskStop by exact id stops a nested worker the lead never spawned, a note once with nothing further from it, its stuck call included; a stop by name reaches the lead's own child the same way", async () => {
     const s = new Scenario(PROGRAM, "exact");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const spawn = (id: string, name: string, agentId: string): Line[] => [
-      toolUse(
-        ago(30),
-        id,
-        "Agent",
-        { name, description: "build", subagent_type: "general-purpose", prompt: "build" },
-        null,
-      ),
-      toolResult(ago(30), id, {
-        toolUseResult: { status: "teammate_spawned", agentId, name },
-        agentId: null,
-      }),
-    ];
     appendLines(session.sessionFile, [
-      ...spawn("toolu_spawn_a", "builder-a", A),
-      ...spawn("toolu_spawn_b", "builder-b", B),
+      ...spawnLines("toolu_spawn_a", "builder-a", A),
+      ...spawnLines("toolu_spawn_b", "builder-b", B),
     ]);
     const pathA = writeAgent(
       session,
@@ -1338,14 +1581,17 @@ describe("fleet-events.mts", () => {
       session,
       C,
       { name: "reviewer", description: "review B's patch", parentAgentId: B },
-      exchange(ago(10), "toolu_c1", C),
+      [...exchange(ago(45), "toolu_c0", C), pendingBash(ago(45), "toolu_c1", C, HOUR_MS)],
     );
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
     expect(polled(s, box.path)).toBe(0);
 
-    // C begins a wait the daemon would say after two observations; the lead stops C by its id and A by its name.
-    appendLines(pathC, [toolUse(ago(5), "toolu_c2", "Bash", { command: "bun test" }, C)]);
+    // C's long command returns and a call past the plain bound stands; the lead stops C by its id and A by its name.
+    appendLines(pathC, [
+      toolResult(ago(40), "toolu_c1", { agentId: C }),
+      pendingBash(ago(40), "toolu_c2", C),
+    ]);
     appendLines(session.sessionFile, [
       toolUse(ago(2), "toolu_stop_c", "TaskStop", { task_id: C }, null),
       toolResult(ago(2), "toolu_stop_c", { agentId: null }),
@@ -1354,40 +1600,25 @@ describe("fleet-events.mts", () => {
     ]);
     expect(polled(s, box.path)).toBe(2);
     expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
-      ["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)],
-      ["agent", "agent reviewer: stopped by the lead", fileUrl(pathC)],
+      ["note", "agent builder-a: stopped by the lead", fileUrl(pathA)],
+      ["note", "agent reviewer: stopped by the lead", fileUrl(pathC)],
     ]);
+    expect(await delivered(box, 1)).toEqual([]);
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("the lead's stop by name reaches only its own children: a nested agent under a name the lead once stopped keeps reporting its start and its wait, whether its parent is a fleet agent or one the fleet never read", async () => {
+  test("the lead's stop by name reaches only its own children: a nested agent under a name the lead once stopped is started and its stuck call alerted, whether its parent is a fleet agent or one the fleet never read", async () => {
     const s = new Scenario(PROGRAM, "nest");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
     // The lead spawned A as "reviewer" and stopped it; B is a builder that will spawn its own reviewer.
     appendLines(session.sessionFile, [
-      toolUse(
-        ago(30),
-        "toolu_spawn_a",
-        "Agent",
-        {
-          name: "reviewer",
-          description: "review",
-          subagent_type: "general-purpose",
-          prompt: "review",
-        },
-        null,
-      ),
-      toolResult(ago(30), "toolu_spawn_a", {
-        toolUseResult: { status: "teammate_spawned", agentId: A, name: "reviewer" },
-        agentId: null,
-      }),
+      ...spawnLines("toolu_spawn_a", "reviewer", A),
       toolUse(ago(20), "toolu_stop_a", "TaskStop", { task_id: "reviewer" }, null),
       toolResult(ago(20), "toolu_stop_a", { agentId: null }),
     ]);
-    writeAgent(
+    const pathA = writeAgent(
       session,
       A,
       { name: "reviewer", description: "review" },
@@ -1400,36 +1631,36 @@ describe("fleet-events.mts", () => {
       exchange(ago(0), "toolu_b1", B),
     );
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
+    expect(rows(s)).toEqual([["note", "agent reviewer: stopped by the lead", fileUrl(pathA)]]);
     expect(polled(s, box.path)).toBe(0);
 
     const pathC = writeAgent(
       session,
       C,
       { name: "reviewer", description: "review B's patch", parentAgentId: B },
-      [toolUse(ago(5), "toolu_c1", "Bash", { command: "bun test" }, C)],
+      [pendingBash(ago(35), "toolu_c1", C)],
     );
     // E's parent D has no entry: never listed, or its first read failed. Not the lead's child either way.
     const pathE = writeAgent(
       session,
       E,
       { name: "reviewer", description: "review D's patch", parentAgentId: D },
-      [toolUse(ago(5), "toolu_e1", "Bash", { command: "bun test" }, E)],
+      [pendingBash(ago(35), "toolu_e1", E)],
     );
-    expect(polled(s, box.path)).toBe(2);
-    expect(polled(s, box.path)).toBe(2);
+    expect(polled(s, box.path)).toBe(4);
     expect(polled(s, box.path)).toBe(0);
-    expect(rows(s)).toEqual([
-      ["agent", "agent reviewer: started", fileUrl(pathC)],
-      ["agent", "agent reviewer: started", fileUrl(pathE)],
-      ["agent", "agent reviewer: waiting on Bash for 5 min", fileUrl(pathC)],
-      ["agent", "agent reviewer: waiting on Bash for 5 min", fileUrl(pathE)],
+    expect(rows(s).slice(1)).toEqual([
+      ["note", "agent reviewer: started", fileUrl(pathC)],
+      ["note", "agent reviewer: started", fileUrl(pathE)],
+      ["alert", "agent reviewer: stuck 35 min on Bash", fileUrl(pathC)],
+      ["alert", "agent reviewer: stuck 35 min on Bash", fileUrl(pathE)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
   test(
-    "with --repo, a head move is head (with ahead and behind against --base), a tree collapse is wipe, an unclaimed idle worktree is quiet after two polls, a claimed one or one holding a sleep is not, and a claim ending starts the count at zero",
+    "with --repo, a head move is a note and a tree collapse an alert, both only for a worktree no agent claims; a claimed worktree's commits say nothing, a sidecar malformed for a poll keeps the claim, and the claim ending starts the reading afresh",
     async () => {
       const s = new Scenario(PROGRAM, "tree");
       const box = await s.inbox("a");
@@ -1447,65 +1678,54 @@ describe("fleet-events.mts", () => {
       const parked = park(repo);
       try {
         await s.start({ inbox: box.path });
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
         expect(s.events()).toEqual([]);
 
         writeFileSync(join(wtA, "built.txt"), "output\n");
         git(wtA, "add", "built.txt");
         git(wtA, "commit", "-m", "track work");
-        const headA = git(wtA, "rev-parse", "HEAD").trim();
-        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
 
         git(wtB, "rm", "-r", "-q", "lib");
         git(wtB, "commit", "-m", "wipe");
         const headB = git(wtB, "rev-parse", "HEAD").trim();
-        // The wipe commit moved the head with a clean tree before and after, so wt-b's quiet count
-        // runs on through it and quiet lands in the same poll as the head and wipe events.
-        expect(polled(s, box.path)).toBe(3);
-        expect(polled(s, box.path)).toBe(0);
-        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(2);
         expect(polled(s, box.path)).toBe(0);
         expect(rows(s)).toEqual([
-          ["head", `worktree track-a: head moved to ${headA.slice(0, 12)}`, fileUrl(wtA)],
-          ["head", `worktree track-b: head moved to ${headB.slice(0, 12)}`, fileUrl(wtB)],
-          ["wipe", "worktree track-b: 6 files at HEAD -> 1", fileUrl(wtB)],
-          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
+          ["note", `worktree track-b: head moved to ${headB.slice(0, 12)}`, fileUrl(wtB)],
+          ["alert", "worktree track-b: 6 files at HEAD -> 1", fileUrl(wtB)],
         ]);
-        expect(s.events()[0]).toMatchObject({ worktree: wtA, sha: headA, ahead: 1, behind: 0 });
+        expect(await delivered(box, 1)).toEqual([["worktree track-b: 6 files at HEAD -> 1"]]);
         expect(s.state().targets[session.dir]).toMatchObject({
           worktrees: {
-            [repo]: { branch: "main", processes: { workers: 1, shells: 0 }, quietPolls: 0 },
-            [wtA]: { branch: "track-a", headSha: headA, treeFileCount: 7, quietPolls: 0 },
-            [wtB]: { branch: "track-b", headSha: headB, treeFileCount: 1, quietPolls: 5 },
+            [repo]: { branch: "main", processes: { workers: 1, shells: 0 }, idlePolls: 0 },
+            [wtB]: { branch: "track-b", headSha: headB, treeFileCount: 1, workSeen: false },
           },
         });
+        expect(
+          Object.keys((s.state().targets[session.dir] as { worktrees: object }).worktrees).sort(),
+        ).toEqual([repo, wtB].sort());
         // A sidecar malformed for a poll is that agent's trouble; its last good reading keeps the claim.
         const sidecarA = join(session.subagents, `agent-${A}.meta.json`);
         writeFileSync(sidecarA, "{");
+        git(wtA, "commit", "--allow-empty", "-m", "still claimed");
         expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
         expect(rows(s).at(-1)).toEqual([
-          "trouble",
+          "alert",
           `fleet: cannot read agent-${A}.meta.json: ${sidecarA} is not a JSON object`,
           fileUrl(sidecarA),
         ]);
-        expect(s.state().targets[session.dir]).toMatchObject({
-          worktrees: { [wtA]: { quietPolls: 0 } },
-        });
-        // The claim ends: the count starts from zero, so two unchanged unclaimed polls say quiet.
-        writeFileSync(
-          join(session.subagents, `agent-${A}.meta.json`),
-          JSON.stringify({ name: "builder-a", description: "build" }),
-        );
-        expect(polled(s, box.path)).toBe(0);
+        // The claim ends: the worktree is read from this poll, so the next commit is a head note.
+        writeFileSync(sidecarA, JSON.stringify({ name: "builder-a", description: "build" }));
+        expect(polled(s, box.path)).toBe(1);
+        expect(rows(s).at(-1)).toEqual(["note", "fleet: reading restored", fileUrl(sidecarA)]);
+        git(wtA, "commit", "--allow-empty", "-m", "unclaimed");
+        const headA = git(wtA, "rev-parse", "HEAD").trim();
         expect(polled(s, box.path)).toBe(1);
         expect(rows(s).at(-1)).toEqual([
-          "quiet",
-          "worktree track-a: no worker process and no change for 2 polls",
+          "note",
+          `worktree track-a: head moved to ${headA.slice(0, 12)}`,
           fileUrl(wtA),
         ]);
       } finally {
@@ -1516,15 +1736,12 @@ describe("fleet-events.mts", () => {
     GIT_TIMEOUT,
   );
 
-  test("a FIFO transcript, a directory or FIFO sidecar, and a vanished subagents dir are trouble, said once; a per-agent failure leaves the others' transitions flowing, a fleet-wide failure is a non-observation that keeps every continuity", async () => {
+  test("a FIFO transcript, a directory or FIFO sidecar, and a vanished subagents dir are trouble alerts, said once and restored once; a per-agent failure leaves the others' transitions flowing, a fleet-wide failure is a non-observation that keeps every continuity", async () => {
     const s = new Scenario(PROGRAM, "fifo");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const waiting = (agentId: string): Line[] => [
-      toolUse(ago(5), `toolu_${agentId.slice(0, 4)}`, "Bash", { command: "bun test" }, agentId),
-    ];
     const metaA = { name: "builder-a", description: "build" };
-    const baseA = exchange(ago(9), "toolu_a0", A);
+    const baseA = [...exchange(ago(40), "toolu_a0", A), pendingBash(ago(35), "toolu_a1", A)];
     const pathA = writeAgent(session, A, metaA, baseA);
     const fifo = join(session.subagents, `agent-${B}.jsonl`);
     expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
@@ -1547,60 +1764,65 @@ describe("fleet-events.mts", () => {
     rmSync(sidecarD);
     expect(Bun.spawnSync(["mkfifo", sidecarD]).exitCode).toBe(0);
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    // The three failures hold while agent A's wait is said: a per-agent failure is that agent's alone.
-    appendLines(pathA, waiting(A));
+    watch(s, box.path, session, "--quiet-after", "1");
+    // The three failures are said beside agent A's stuck call: a per-agent failure is that agent's alone.
     expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(1);
 
     const metaE = { name: "builder-e", description: "build" };
-    const pathE = writeAgent(session, E, metaE, waiting(E));
-    expect(polled(s, box.path)).toBe(1);
-    // The listing fails: a non-observation, so E's wait keeps the one reading it has and is said on the next.
+    const pathE = writeAgent(session, E, metaE, [pendingBash(ago(35), "toolu_e1", E)]);
+    expect(polled(s, box.path)).toBe(2);
+    // The listing fails: a non-observation, said once; the fleet comes back with the same failures.
     rmSync(session.subagents, { recursive: true });
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
     mkdirSync(session.subagents);
-    writeAgent(session, A, metaA, [...baseA, ...waiting(A)]);
-    writeAgent(session, E, metaE, waiting(E));
-    expect(polled(s, box.path)).toBe(1);
+    writeAgent(session, A, metaA, baseA);
+    writeAgent(session, E, metaE, [pendingBash(ago(35), "toolu_e1", E)]);
+    expect(polled(s, box.path)).toBe(4);
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
       [
-        "trouble",
+        "alert",
         `fleet: cannot read agent-${B}.jsonl: ${fifo} is not a regular file`,
         fileUrl(fifo),
       ],
       [
-        "trouble",
+        "alert",
         `fleet: cannot read agent-${C}.meta.json: ${sidecarC} is not a regular file`,
         fileUrl(sidecarC),
       ],
       [
-        "trouble",
+        "alert",
         `fleet: cannot read agent-${D}.meta.json: ${sidecarD} is not a regular file`,
         fileUrl(sidecarD),
       ],
-      ["agent", "agent builder-a: waiting on Bash for 5 min", fileUrl(pathA)],
-      ["agent", "agent builder-e: started", fileUrl(pathE)],
-      ["trouble", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
-      ["agent", "agent builder-e: waiting on Bash for 5 min", fileUrl(pathE)],
+      ["alert", "agent builder-a: stuck 35 min on Bash", fileUrl(pathA)],
+      ["note", "agent builder-e: started", fileUrl(pathE)],
+      ["alert", "agent builder-e: stuck 35 min on Bash", fileUrl(pathE)],
+      ["alert", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
+      ["note", "fleet: reading restored", fileUrl(fifo)],
+      ["note", "fleet: reading restored", fileUrl(sidecarC)],
+      ["note", "fleet: reading restored", fileUrl(sidecarD)],
+      ["note", "fleet: reading restored", fileUrl(session.subagents)],
     ]);
     expect(s.log()).toContain(`${B}: ${fifo} is not a regular file`);
+    expect(standing(s, box.path)).toEqual([
+      "agent builder-a: stuck 35 min on Bash",
+      "agent builder-e: stuck 35 min on Bash",
+    ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a session transcript that cannot be read makes the whole poll a non-observation: one trouble event, no transition from the stale lead state; the next readable poll says the stop alone", async () => {
+  test("a session transcript that cannot be read makes the whole poll a non-observation: one trouble alert, no transition from the stale lead state; the next readable poll restores the reading and says the stop", async () => {
     const s = new Scenario(PROGRAM, "lead");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
     const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
-      toolUse(ago(9), "toolu_01", "Bash", { command: "bun test" }),
+      pendingBash(ago(9), "toolu_01", A),
     ]);
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
+    watch(s, box.path, session, "--quiet-after", "1");
     appendLines(pathA, [toolResult(ago(5), "toolu_01"), said(ago(5), null)]);
-    expect(polled(s, box.path)).toBe(0);
 
     // The lead's file becomes unreadable on the poll that would have said the stall.
     rmSync(session.sessionFile);
@@ -1611,40 +1833,26 @@ describe("fleet-events.mts", () => {
     rmSync(session.sessionFile, { recursive: true });
     writeFileSync(session.sessionFile, "");
     appendLines(session.sessionFile, [
-      toolUse(
-        ago(8),
-        "toolu_spawn",
-        "Agent",
-        {
-          name: "builder-a",
-          description: "build",
-          subagent_type: "general-purpose",
-          prompt: "build",
-        },
-        null,
-      ),
-      toolResult(ago(8), "toolu_spawn", {
-        toolUseResult: { status: "teammate_spawned", agentId: A, name: "builder-a" },
-        agentId: null,
-      }),
+      ...spawnLines("toolu_spawn", "builder-a", A, ago(8)),
       toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
       toolResult(ago(2), "toolu_stop", { agentId: null }),
     ]);
-    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(2);
     expect(polled(s, box.path)).toBe(0);
     expect(rows(s)).toEqual([
       [
-        "trouble",
+        "alert",
         `fleet: cannot read the session transcript: ${session.sessionFile} is not a regular file`,
         fileUrl(session.sessionFile),
       ],
-      ["agent", "agent builder-a: stopped by the lead", fileUrl(pathA)],
+      ["note", "fleet: reading restored", fileUrl(session.sessionFile)],
+      ["note", "agent builder-a: stopped by the lead", fileUrl(pathA)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
   test(
-    "a subagents listing that fails under --repo is a non-observation for the worktrees too: no quiet count advances and nothing is said; the next readable poll honours the claim the unread sidecar carried",
+    "a subagents listing that fails under --repo is a non-observation for the worktrees too: no idle count advances and nothing is said; the next readable poll honours the claim the unread sidecar carried",
     async () => {
       const s = new Scenario(PROGRAM, "wide");
       const box = await s.inbox("a");
@@ -1662,11 +1870,11 @@ describe("fleet-events.mts", () => {
       const parked = park(repo);
       try {
         await s.start({ inbox: box.path });
-        expect(
-          s.run(["watch", session.dir, "--repo", repo, "--base", "main", "--quiet-after", "1"], {
-            inbox: box.path,
-          }).code,
-        ).toBe(0);
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        const worker = park(wtB);
+        expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
         expect(polled(s, box.path)).toBe(0);
 
         const pathB = writeAgent(
@@ -1679,25 +1887,21 @@ describe("fleet-events.mts", () => {
         writeFileSync(session.subagents, "");
         expect(polled(s, box.path)).toBe(1);
         expect(s.state().targets[session.dir]).toMatchObject({
-          worktrees: { [wtA]: { quietPolls: 1 }, [wtB]: { quietPolls: 1 } },
+          worktrees: { [wtB]: { idlePolls: 1 } },
         });
 
         rmSync(session.subagents);
         renameSync(`${session.subagents}.aside`, session.subagents);
-        expect(polled(s, box.path)).toBe(2);
+        expect(polled(s, box.path)).toBe(3);
         expect(polled(s, box.path)).toBe(0);
         expect(rows(s)).toEqual([
-          [
-            "trouble",
-            `fleet: cannot list ${session.subagents}: ENOTDIR`,
-            fileUrl(session.subagents),
-          ],
-          ["agent", "agent builder-b: started", fileUrl(pathB)],
-          ["quiet", "worktree track-b: no worker process and no change for 2 polls", fileUrl(wtB)],
+          ["alert", `fleet: cannot list ${session.subagents}: ENOTDIR`, fileUrl(session.subagents)],
+          ["note", "fleet: reading restored", fileUrl(session.subagents)],
+          ["note", "agent builder-b: started", fileUrl(pathB)],
+          ["alert", "worktree track-b: idle 2 polls after work", fileUrl(wtB)],
         ]);
-        expect(s.state().targets[session.dir]).toMatchObject({
-          worktrees: { [wtA]: { quietPolls: 0 }, [wtB]: { quietPolls: 3 } },
-        });
+        const target = s.state().targets[session.dir] as { worktrees: Record<string, unknown> };
+        expect(Object.keys(target.worktrees).sort()).toEqual([repo, wtB].sort());
       } finally {
         parked.kill();
       }
@@ -1710,22 +1914,20 @@ describe("fleet-events.mts", () => {
     const s = new Scenario(PROGRAM, "mark");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    const path = writeAgent(session, A, { name: "builder-a", description: "build" }, [
-      toolUse(ago(7), "toolu_01", "Bash", { command: `echo ${MARKER}` }),
-      toolResult(ago(7), "toolu_01", {
+    writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      toolUse(ago(20), "toolu_01", "Bash", { command: `echo ${MARKER}` }),
+      toolResult(ago(20), "toolu_01", {
         content: [{ type: "text", text: MARKER }],
         toolUseResult: { stdout: MARKER, stderr: "" },
       }),
-      attachment(ago(7), { type: "prompt_snapshot", prompt: `${MARKER} ${notice("b1a2b3c4d")}` }),
+      attachment(ago(20), { type: "prompt_snapshot", prompt: `${MARKER} ${notice("b1a2b3c4d")}` }),
+      toolUse(ago(15), "toolu_02", "Bash", { command: `grep ${MARKER}`, timeout: TWO_MINUTES_MS }),
     ]);
     await s.start({ inbox: box.path });
-    expect(s.run(["watch", session.dir, "--quiet-after", "1"], { inbox: box.path }).code).toBe(0);
-    appendLines(path, [toolUse(ago(6), "toolu_02", "Bash", { command: `grep ${MARKER}` })]);
-    expect(polled(s, box.path)).toBe(0);
-    expect(polled(s, box.path)).toBe(1);
+    watch(s, box.path, session, "--quiet-after", "1");
     const frames = await box.frames(1);
     expect(frames).toHaveLength(1);
-    expect(rows(s).map((row) => row[1])).toEqual(["agent builder-a: waiting on Bash for 6 min"]);
+    expect(rows(s).map((row) => row[1])).toEqual(["agent builder-a: stuck 15 min on Bash"]);
     for (const text of [
       frames.join("\n"),
       s.log(),
@@ -1737,13 +1939,17 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("watch session finds the session directory by CLAUDE_CODE_SESSION_ID under HOME in the CLI process, under a project directory that is not the cwd's slug; without the variable, or with an id no project holds, it exits 2 naming it", async () => {
+  test("watch session finds the session directory by CLAUDE_CODE_SESSION_ID under HOME in the CLI process, under a project directory that is not the cwd's slug, and lays the tasks directory out under the harness temp root by that slug; without the variable, or with an id no project holds, it exits 2 naming it", async () => {
     const s = new Scenario(PROGRAM, "self");
     const box = await s.inbox("a");
     const home = join(s.fixtureDir, "home");
     // The project directory is the session's launch cwd, which the CLI's cwd no longer matches.
     const session = sessionDir(join(home, ".claude", "projects", "-home-user-repo"));
-    const env = { CLAUDE_CODE_SESSION_ID: SESSION, HOME: home };
+    const env = {
+      CLAUDE_CODE_SESSION_ID: SESSION,
+      HOME: home,
+      CLAUDE_CODE_TMPDIR: claudeTmp(s).root,
+    };
     await s.start({ inbox: box.path });
     const unset = s.run(["watch", "session"], {
       inbox: box.path,
@@ -1761,13 +1967,14 @@ describe("fleet-events.mts", () => {
       `no transcript ${lost}.jsonl under ${join(home, ".claude", "projects")}`,
     );
 
-    const watch = s.run(["watch", "session", "--quiet-after", "1"], { inbox: box.path, env });
-    expect(watch.code).toBe(0);
-    expect(watch.stdout).toContain("watching session for session");
+    const watched = s.run(["watch", "session", "--quiet-after", "1"], { inbox: box.path, env });
+    expect(watched.code).toBe(0);
+    expect(watched.stdout).toContain("watching session for session");
     expect(s.state().targets.session).toMatchObject({
       form: "session",
       sessionFile: session.sessionFile,
       subagentsDir: session.subagents,
+      tasksDir: join(claudeTmp(s).root, "-home-user-repo", SESSION, "tasks"),
     });
     const path = writeAgent(
       session,
@@ -1776,7 +1983,17 @@ describe("fleet-events.mts", () => {
       exchange(ago(0), "toolu_01"),
     );
     expect(polled(s, box.path)).toBe(1);
-    expect(rows(s)).toEqual([["agent", "agent builder-a: started", fileUrl(path)]]);
+    expect(rows(s)).toEqual([["note", "agent builder-a: started", fileUrl(path)]]);
+    // A note alone: the log has it, wait prints it with its level, and no message went out.
+    const all = s.run(["wait", "--since", "0", "--timeout", "1"], { inbox: box.path });
+    expect(all.code).toBe(0);
+    expect(JSON.parse(all.stdout.trim().split("\n")[0] as string)).toMatchObject({
+      id: 1,
+      kind: "agent",
+      level: "note",
+      text: "agent builder-a: started",
+    });
+    expect(await delivered(box, 1)).toEqual([]);
     s.stop({ inbox: box.path });
   }, 30000);
 });

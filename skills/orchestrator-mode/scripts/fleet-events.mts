@@ -1,25 +1,27 @@
 #!/usr/bin/env bun
-// The fleet source: what each agent of a Claude Code session waits on, read from its transcript,
-// and what landed in each worktree, delivered as transitions by the session-events daemon
-// installed beside this skill. Transcript first, worktree second; judgment stays the lead's.
+// The fleet source: what each agent of a Claude Code session is stuck on, read from its transcript,
+// and what moved in each worktree no agent claims, delivered by the session-events daemon installed
+// beside this skill. An alert is a message to the lead; a note is a line in the events log, read
+// with `wait`, and `status` lists the alerts in force. The daemon says what holds and for how long;
+// judgment stays the lead's.
 //
 //   bun "<skill-dir>/scripts/fleet-events.mts" daemon                              # once per session, as a BACKGROUND task
 //   bun "<skill-dir>/scripts/fleet-events.mts" watch session --repo /abs/repo
 //   bun "<skill-dir>/scripts/fleet-events.mts" watch /abs/session-dir --quiet-after 5
 
-import { readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { closeSync, constants, fstatSync, openSync, readdirSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { EventInput, Io, PollResult } from "../../session-events/scripts/session-events.mts";
-import {
-  discoverWorktrees,
-  resolveBaseRef,
-  resolveDefaultRef,
-  type WorktreeRow,
-  worktreeRow,
-} from "./fleet/git.mts";
+import type {
+  EventInput,
+  Io,
+  Level,
+  PollResult,
+} from "../../session-events/scripts/session-events.mts";
+import { discoverWorktrees, type WorktreeRow, worktreeRow } from "./fleet/git.mts";
 import { attributeProcesses, type ProcessRow } from "./fleet/processes.mts";
+import { readTail } from "./fleet/transcript-tail.mts";
 import {
   type Activity,
   displayName,
@@ -41,72 +43,105 @@ import {
 
 const INSTALL = "npx skills add Vivswan/skills -g --skill session-events";
 const DEFAULT_QUIET_AFTER_MINUTES = 10;
-// A worktree nobody claims is quiet after this many polls with no worker process and no change.
-const QUIET_POLLS = 2;
+// An unclaimed worktree that worked is idle after this many polls with no worker and no change.
+const IDLE_POLLS = 2;
+// A pending call is stuck past its own timeout plus the grace, or past the plain bound when it names none.
+const TOOL_GRACE_MINUTES = 10;
+const TOOL_STUCK_MINUTES = 30;
+// A child whose own transcript has not moved for this long is stuck; a moving child never is.
+const CHILD_STILL_MINUTES = 30;
+// An ended turn is said once this old: its signal takes a moment to reach the one waiting on it.
+const ENDED_GRACE_MINUTES = 5;
+// A stuck or idle alert is repeated as its duration doubles, this many times, then held in silence.
+const MAX_REPEATS = 3;
+// The harness closes a background job's output file with this line.
+const EXIT_LINE = /^\[exited with code \d+\]$/;
+const OUTPUT_TAIL_BYTES = 256;
 // A lone shell parked on a worktree is presence, not work; anything else beside it (a sleep too) is alive.
 const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh"]);
 const TRANSCRIPT_NAME = /^agent-([^/]+)\.jsonl$/;
 const SHORT_SHA = 12;
 const MINUTE_MS = 60_000;
 
-/** One agent as the daemon remembers it: the transcript cursor and state, the sidecar, and what was seen and said. */
+/** An alert in force: what was said, when it began, the duration said (null for one said once), and how many repeats went out. */
+interface Standing {
+  level: "alert";
+  key: string;
+  text: string;
+  since: string;
+  duration: number | null;
+  repeats: number;
+}
+
+/** A note said about a state that holds (a stop, an ended turn whose signal arrived), so it is said once. */
+interface Noted {
+  level: "note";
+  key: string;
+}
+
+/** One agent as the daemon remembers it: the transcript cursor and state, the sidecar, and what stands said. */
 interface AgentEntry extends Transcript {
   path: string;
   sidecar: Sidecar | null;
-  /** The situation key the last poll observed; a stillness is announced only once it is seen twice. */
-  observed: string | null;
-  /** The situation key last announced; null before anything was said. */
-  said: string | null;
-  /** The situation key the baseline poll found, never news while it holds; null once the situation first differs, and for an agent first seen later. */
-  baseline: string | null;
+  /** What stands said about this agent, null while nothing does. */
+  said: Standing | Noted | null;
 }
 
-/** One worktree's last reading: the head, the tree size, the activity fingerprint, the dirty-tree reading, and how long it has sat idle. */
+/** One worktree's last reading: the head, the tree size, the activity fingerprint, the dirty-tree reading, and the idle count. */
 interface WorktreeEntry {
   branch: string | null;
   headSha: string | null;
   treeFileCount: number | null;
   fingerprint: string | null;
-  /** The dirty-tree reading alone (newest dirty mtime and status hash): what the quiet count watches. */
+  /** The dirty-tree reading alone (newest dirty mtime and status hash): what the idle count watches. */
   tree: string | null;
   processes: { workers: number; shells: number };
-  /** Polls in a row with no worker process and an unchanged dirty tree; the quiet event fires when it reaches QUIET_POLLS. */
-  quietPolls: number;
-  /** The worktree state last announced: quiet until a worker or a dirty-tree change retracts it, else null. */
-  said: "quiet" | null;
+  /** Polls in a row with no worker process and an unchanged dirty tree. */
+  idlePolls: number;
+  /** Whether a worker process or a dirty-tree change was ever seen here in this watch; a worktree that never worked never goes idle. */
+  workSeen: boolean;
+  /** The idle alert in force, null while none is. */
+  said: Standing | null;
+}
+
+interface Trouble {
+  text: string;
+  url: string;
+}
+
+/** A trouble condition in force, with when it was first said; null for one saved before the time was kept. */
+interface StandingTrouble extends Trouble {
+  since: string | null;
 }
 
 interface Target {
   form: "session" | "dir";
   sessionFile: string;
   subagentsDir: string;
+  /** Where the harness writes this session's background job output: `<tmp root>/<project slug>/<session id>/tasks`. */
+  tasksDir: string;
   repo: string | null;
-  base: string | null;
   quietAfterMinutes: number;
-  /** Polls done so far; the first is the baseline and announces nothing. */
+  /** Polls done so far; an agent present at the first is not started. */
   polls: number;
   agents: Record<string, AgentEntry>;
   lead: Transcript;
   worktrees: Record<string, WorktreeEntry>;
-  /** The trouble conditions in force, by key, each with the text said when it began. */
-  trouble: Record<string, string>;
+  /** The trouble conditions in force, by key. */
+  trouble: Record<string, StandingTrouble>;
   /** Whether the subagents directory has ever been listed; before the first worker is spawned it does not exist, and that is an empty fleet. */
   subagentsListed: boolean;
 }
 
 type Situation =
-  | { kind: "moving" }
+  | { kind: "fine" }
+  | { kind: "unread" }
   | { kind: "stopped" }
   | { kind: "tool"; id: string; tool: string; since: string }
-  | { kind: "child"; id: string; name: string; since: string }
-  | { kind: "jobs"; ids: string; count: number; since: string }
+  | { kind: "child"; id: string; name: string; moved: string; since: string }
+  | { kind: "stranded"; job: string }
   | { kind: "stall"; since: string }
-  | { kind: "ended"; since: string };
-
-interface Trouble {
-  text: string;
-  url: string;
-}
+  | { kind: "ended"; since: string; signalled: boolean };
 
 /** A read the whole poll depends on failed, so nothing this poll saw can be judged; `key` names the condition in the trouble ledger. */
 class FleetReadError extends Error {
@@ -142,20 +177,20 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** A comparator by the time `since` reads off an entry, oldest first. */
+function byTime<T>(since: (entry: T) => string): (a: T, b: T) => number {
+  return (a, b) => Date.parse(since(a)) - Date.parse(since(b));
+}
+
 // --- the target -------------------------------------------------------------------
 
-function parseFlags(flags: string[]): {
-  repo: string | null;
-  base: string | null;
-  quietAfterMinutes: number;
-} {
+function parseFlags(flags: string[]): { repo: string | null; quietAfterMinutes: number } {
   let repo: string | null = null;
-  let ref: string | null = null;
   let quietAfterMinutes = DEFAULT_QUIET_AFTER_MINUTES;
   for (let i = 0; i < flags.length; i += 2) {
     const flag = flags[i] as string;
     const value = flags[i + 1];
-    if (flag !== "--repo" && flag !== "--base" && flag !== "--quiet-after") {
+    if (flag !== "--repo" && flag !== "--quiet-after") {
       throw new UsageError(`unknown option: ${flag}`);
     }
     if (value === undefined || value.startsWith("--"))
@@ -165,8 +200,6 @@ function parseFlags(flags: string[]): {
       if (!isAbsolute(value))
         throw new UsageError(`--repo must be an absolute path, got: ${value}`);
       repo = resolve(value);
-    } else if (flag === "--base") {
-      ref = value;
     } else {
       if (!/^\d+$/.test(value) || Number(value) <= 0) {
         throw new UsageError(
@@ -176,7 +209,13 @@ function parseFlags(flags: string[]): {
       quietAfterMinutes = Number(value);
     }
   }
-  return { repo, base: ref, quietAfterMinutes };
+  return { repo, quietAfterMinutes };
+}
+
+/** The harness's tasks directory for a session: its own temp root (or `<os tmpdir>/claude-<uid>`), the project slug, the session id, `tasks`. */
+function tasksDirOf(sessionDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  const root = env.CLAUDE_CODE_TMPDIR || join(tmpdir(), `claude-${process.getuid?.() ?? 0}`);
+  return join(root, basename(dirname(sessionDir)), basename(sessionDir), "tasks");
 }
 
 /** `session` resolves here, in the CLI process, by the session id under the user's home; a path must be an existing absolute directory. */
@@ -220,6 +259,7 @@ function parseTarget(args: string[]): Target {
   return {
     form,
     ...paths,
+    tasksDir: tasksDirOf(dirname(paths.subagentsDir)),
     ...options,
     polls: 0,
     agents: {},
@@ -236,18 +276,6 @@ function agentName(agentId: string, entry: AgentEntry | undefined): string {
   return oneLine(displayName(agentId, entry?.sidecar ?? null));
 }
 
-function oldest<T>(
-  entries: Record<string, T>,
-  since: (entry: T) => string,
-): [string, T] | undefined {
-  let found: [string, T] | undefined;
-  for (const pair of Object.entries(entries)) {
-    if (found === undefined || Date.parse(since(pair[1])) < Date.parse(since(found[1])))
-      found = pair;
-  }
-  return found;
-}
-
 /** The fleet agent a pending Agent call spawned, joined through the child's sidecar `toolUseId`. */
 function childOfCall(target: Target, toolUseId: string): string | undefined {
   return Object.keys(target.agents).find(
@@ -256,64 +284,150 @@ function childOfCall(target: Target, toolUseId: string): string | undefined {
 }
 
 /**
- * Whether the lead's stop by name may reach this agent. The lead names only its own children: a
- * sidecar naming no parent, or the lead's session, is one. Any other parent, a fleet agent or one
- * the fleet never read, makes the shared name a coincidence, and only a stop by exact id counts.
+ * The activity of whoever spawned this agent and waits on its signal: the lead's for a sidecar
+ * naming no parent or the lead's session, else the fleet agent named, undefined when the fleet
+ * never read it.
  */
-function stoppableByName(target: Target, entry: AgentEntry): boolean {
+function parentState(target: Target, entry: AgentEntry): Activity | undefined {
   const parent = entry.sidecar?.parentAgentId ?? null;
-  return parent === null || parent === basename(target.sessionFile, ".jsonl");
+  if (parent === null || parent === basename(target.sessionFile, ".jsonl")) {
+    return target.lead.state;
+  }
+  return target.agents[parent]?.state;
 }
 
-function situationOf(target: Target, agentId: string, entry: AgentEntry, nowMs: number): Situation {
-  const state: Activity = entry.state;
-  const name = stoppableByName(target, entry) ? (entry.sidecar?.name ?? null) : null;
-  if (isStopped(target.lead.state, agentId, name)) return { kind: "stopped" };
+/**
+ * When a child last moved, if its transcript has been still past the bound; null for a moving
+ * child or one the fleet has no reading of. A child whose read failed this poll is `unread`: its
+ * cached activity is stale, so the parent is not judged from it.
+ */
+function stillChild(
+  target: Target,
+  childId: string,
+  nowMs: number,
+  failed: ReadonlySet<string>,
+): string | null | "unread" {
+  if (failed.has(childId)) return "unread";
+  const moved = target.agents[childId]?.state.lastMovedAt ?? null;
+  if (moved === null || nowMs - Date.parse(moved) < CHILD_STILL_MINUTES * MINUTE_MS) return null;
+  return moved;
+}
 
-  const quietMs = target.quietAfterMinutes * MINUTE_MS;
-  if (state.lastMovedAt === null || nowMs - Date.parse(state.lastMovedAt) < quietMs) {
-    return { kind: "moving" };
-  }
-
-  const call = oldest(state.pending, (pending) => pending.at);
-  if (call !== undefined) {
-    const [id, pending] = call;
-    const childId = pending.tool === "Agent" ? childOfCall(target, id) : undefined;
-    if (childId !== undefined) {
-      return {
-        kind: "child",
-        id: childId,
-        name: agentName(childId, target.agents[childId]),
-        since: pending.at,
-      };
+/**
+ * Whether the harness has closed the job's output file: its last line is the exit line. A file
+ * not there yet is a job still running; one that cannot be read is logged and read as running. A
+ * job whose own last line spells that footer reads as ended too: the bytes alone say who wrote them.
+ */
+function jobEnded(path: string, io: Io): boolean {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      io.log(`${path}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    return { kind: "tool", id, tool: pending.tool, since: pending.at };
+    return false;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return false;
+    const last = readTail(fd, stat.size, OUTPUT_TAIL_BYTES).trimEnd().split("\n").at(-1) ?? "";
+    return EXIT_LINE.test(last);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Whether the agent's finish reached the one waiting on it: a spawned child is finished in its
+ * parent's child map (an idle notification, a task notice); a foreground child's result closed the
+ * parent's call that spawned it. Nothing read of the parent is no signal.
+ */
+function signalReached(target: Target, agentId: string, entry: AgentEntry): boolean {
+  const waiting = parentState(target, entry);
+  if (waiting === undefined) return false;
+  const child = waiting.children[agentId];
+  if (child !== undefined) return child.outcome === "finished";
+  const call = entry.sidecar?.toolUseId ?? null;
+  return call !== null && !Object.hasOwn(waiting.pending, call);
+}
+
+/**
+ * What stands for one agent now, read off its transcript against the bounds: a stop, a stuck call
+ * (past its own timeout plus the grace, or the plain bound), a child still past the bound, a job
+ * whose output ended with no notice, a stall past `--quiet-after`, an ended turn past the grace;
+ * else fine, which is moving or waiting within bounds.
+ */
+function situationOf(
+  target: Target,
+  agentId: string,
+  entry: AgentEntry,
+  nowMs: number,
+  io: Io,
+  failed: ReadonlySet<string>,
+): Situation {
+  const state = entry.state;
+  const ownChild = parentState(target, entry) === target.lead.state;
+  if (isStopped(target.lead.state, agentId, ownChild ? (entry.sidecar?.name ?? null) : null)) {
+    return { kind: "stopped" };
   }
 
-  const running = Object.fromEntries(
-    Object.entries(state.children).filter(([, child]) => child.outcome === "running"),
-  );
-  const child = oldest(running, (spawned) => spawned.since);
-  if (child !== undefined) {
-    const [id, spawned] = child;
-    const name =
-      target.agents[id] === undefined ? (spawned.name ?? id) : agentName(id, target.agents[id]);
-    return { kind: "child", id, name: oneLine(name), since: spawned.since };
+  const pending = Object.entries(state.pending).sort(byTime(([, call]) => call.at));
+  for (const [id, call] of pending) {
+    const childId = call.tool === "Agent" ? childOfCall(target, id) : undefined;
+    if (childId !== undefined) {
+      const moved = stillChild(target, childId, nowMs, failed);
+      if (moved === "unread") return { kind: "unread" };
+      if (moved !== null) {
+        const name = agentName(childId, target.agents[childId]);
+        return { kind: "child", id: childId, name, moved, since: call.at };
+      }
+      continue;
+    }
+    const boundMs =
+      call.timeoutMs === null
+        ? TOOL_STUCK_MINUTES * MINUTE_MS
+        : call.timeoutMs + TOOL_GRACE_MINUTES * MINUTE_MS;
+    if (nowMs - Date.parse(call.at) >= boundMs) {
+      return { kind: "tool", id, tool: call.tool, since: call.at };
+    }
   }
+  if (pending.length > 0) return { kind: "fine" };
 
-  const job = oldest(state.jobs, (started) => started.at);
-  if (job !== undefined) {
-    const ids = Object.keys(state.jobs).sort().join(",");
-    return { kind: "jobs", ids, count: Object.keys(state.jobs).length, since: job[1].at };
+  const running = Object.entries(state.children)
+    .filter(([, child]) => child.outcome === "running")
+    .sort(byTime(([, child]) => child.since));
+  for (const [id, child] of running) {
+    const moved = stillChild(target, id, nowMs, failed);
+    if (moved === "unread") return { kind: "unread" };
+    if (moved === null) continue;
+    return { kind: "child", id, name: agentName(id, target.agents[id]), moved, since: child.since };
   }
+  if (running.length > 0) return { kind: "fine" };
 
-  if (state.turn === "open") return { kind: "stall", since: state.lastMovedAt };
-  return { kind: "ended", since: state.lastMovedAt };
+  const jobs = Object.entries(state.jobs).sort(byTime(([, job]) => job.at));
+  for (const [job] of jobs) {
+    if (jobEnded(join(target.tasksDir, `${job}.output`), io)) return { kind: "stranded", job };
+  }
+  if (jobs.length > 0 || state.lastMovedAt === null) return { kind: "fine" };
+
+  const stillMs = nowMs - Date.parse(state.lastMovedAt);
+  if (state.turn === "open") {
+    if (stillMs < target.quietAfterMinutes * MINUTE_MS) return { kind: "fine" };
+    return { kind: "stall", since: state.lastMovedAt };
+  }
+  if (stillMs < ENDED_GRACE_MINUTES * MINUTE_MS) return { kind: "fine" };
+  return {
+    kind: "ended",
+    since: state.lastMovedAt,
+    signalled: signalReached(target, agentId, entry),
+  };
 }
 
 function situationKey(situation: Situation): string {
   switch (situation.kind) {
-    case "moving":
+    case "fine":
+    case "unread":
     case "stopped":
       return situation.kind;
     case "tool":
@@ -321,96 +435,140 @@ function situationKey(situation: Situation): string {
     case "child":
       // The run too: a child finished and resumed between two polls is a new wait, not the old one.
       return `child:${situation.id}:${situation.since}`;
-    case "jobs":
-      return `jobs:${situation.ids}`;
+    case "stranded":
+      return `stranded:${situation.job}`;
     case "stall":
     case "ended":
       return `${situation.kind}:${situation.since}`;
   }
 }
 
-function situationText(target: Target, name: string, situation: Situation, nowMs: number): string {
+function situationText(name: string, situation: Situation, nowMs: number): string {
   switch (situation.kind) {
-    case "moving":
-      return `agent ${name}: moving again`;
+    case "fine":
+      return `agent ${name}: fine again`;
+    case "unread":
+      return `agent ${name}: a child's read failed`;
     case "stopped":
       return `agent ${name}: stopped by the lead`;
     case "tool":
-      return `agent ${name}: waiting on ${situation.tool} for ${minutesBetween(nowMs, situation.since)} min`;
-    case "child": {
-      const head = `agent ${name}: waiting on agent ${situation.name} for ${minutesBetween(nowMs, situation.since)} min`;
-      const moved = target.agents[situation.id]?.state.lastMovedAt ?? null;
-      if (moved === null) return head;
-      return `${head}; ${situation.name} last moved ${minutesBetween(nowMs, moved)} min ago`;
-    }
-    case "jobs": {
-      const jobs =
-        situation.count === 1 ? "1 background job" : `${situation.count} background jobs`;
-      return `agent ${name}: waiting on ${jobs} for ${minutesBetween(nowMs, situation.since)} min`;
-    }
+      return `agent ${name}: stuck ${minutesBetween(nowMs, situation.since)} min on ${situation.tool}`;
+    case "child":
+      return `agent ${name}: stuck on agent ${situation.name}, ${situation.name} last moved ${minutesBetween(nowMs, situation.moved)} min ago`;
+    case "stranded":
+      return `agent ${name}: stranded, job ${situation.job} ended with no notice`;
     case "stall":
-      return `agent ${name}: quiet for ${minutesBetween(nowMs, situation.since)} min mid-turn, nothing pending`;
-    case "ended":
-      return `agent ${name}: turn ended ${minutesBetween(nowMs, situation.since)} min ago, nothing outstanding`;
+      return `agent ${name}: stuck ${minutesBetween(nowMs, situation.since)} min mid-turn, nothing pending`;
+    case "ended": {
+      const head = `agent ${name}: ended ${minutesBetween(nowMs, situation.since)} min ago`;
+      return situation.signalled
+        ? `${head}, report received`
+        : `${head}, no signal reached the lead`;
+    }
   }
 }
 
-function isStillness(key: string | null): boolean {
-  return key !== null && key !== "moving" && key !== "stopped";
+/** The minutes a stuck situation has held, the duration its repeats double on; null for an alert said once. */
+function stuckMinutes(situation: Situation, nowMs: number): number | null {
+  switch (situation.kind) {
+    case "tool":
+    case "stall":
+      return minutesBetween(nowMs, situation.since);
+    case "child":
+      return minutesBetween(nowMs, situation.moved);
+    default:
+      return null;
+  }
 }
 
 /**
- * The transition to announce for one agent, or null. The baseline poll records the situation and
- * says nothing. After it, a stop and a return to movement are facts said at once; a wait, a stall,
- * or an ended turn is said once the same reading was seen on the poll before (two observations
- * before a flag), and once only while it holds.
+ * The standing alert after this reading: a new one when the key changed, the same one with a
+ * repeat when its duration doubled (at most MAX_REPEATS times; never for an alert with no
+ * duration), else unchanged. `announce` is whether the alert goes out this poll.
+ */
+function restate(
+  said: Standing | null,
+  key: string,
+  text: string,
+  duration: number | null,
+  nowMs: number,
+): { said: Standing; announce: boolean } {
+  if (said === null || said.key !== key) {
+    const since = new Date(nowMs).toISOString();
+    return { said: { level: "alert", key, text, since, duration, repeats: 0 }, announce: true };
+  }
+  const doubled =
+    duration !== null &&
+    said.duration !== null &&
+    said.repeats < MAX_REPEATS &&
+    duration >= 2 * said.duration;
+  if (!doubled) return { said, announce: false };
+  return { said: { ...said, text, duration, repeats: said.repeats + 1 }, announce: true };
+}
+
+/**
+ * The event for one agent this poll, or null. A stop and an ended turn whose signal arrived are
+ * notes, said once while they hold; a return to fine retracts a standing alert with a note; an
+ * alert is said on entering and repeated as its duration doubles. A judgment that rests on a
+ * child whose read failed this poll is held: nothing said, nothing changed.
  */
 function agentTransition(
   target: Target,
   agentId: string,
   entry: AgentEntry,
   nowMs: number,
+  io: Io,
+  failed: ReadonlySet<string>,
 ): EventInput | null {
-  const situation = situationOf(target, agentId, entry, nowMs);
-  const key = situationKey(situation);
-  const seenBefore = entry.observed === key;
-  entry.observed = key;
-  if (target.polls === 0) {
-    entry.baseline = key;
-    return null;
-  }
-  // The state the watch began in is not a change; the first reading that differs retires it, and
-  // every later entry into a stillness is news.
-  if (key === entry.baseline) return null;
-  entry.baseline = null;
-
-  let announce = false;
-  if (situation.kind === "stopped") announce = entry.said !== "stopped";
-  else if (situation.kind === "moving") announce = isStillness(entry.said);
-  else announce = seenBefore && entry.said !== key;
-  if (!announce) return null;
-
-  entry.said = key;
-  return {
+  const situation = situationOf(target, agentId, entry, nowMs, io, failed);
+  if (situation.kind === "unread") return null;
+  const text = situationText(agentName(agentId, entry), situation, nowMs);
+  const event = (level: Level): EventInput => ({
     kind: "agent",
-    text: situationText(target, agentName(agentId, entry), situation, nowMs),
+    level,
+    text,
     url: fileUrl(entry.path),
     agentId,
-  };
+  });
+
+  if (situation.kind === "stopped" || (situation.kind === "ended" && situation.signalled)) {
+    const key = situationKey(situation);
+    if (entry.said?.level === "note" && entry.said.key === key) return null;
+    entry.said = { level: "note", key };
+    return event("note");
+  }
+
+  if (situation.kind === "fine") {
+    const retract = entry.said?.level === "alert";
+    entry.said = null;
+    return retract ? event("note") : null;
+  }
+
+  const standing = entry.said?.level === "alert" ? entry.said : null;
+  const next = restate(
+    standing,
+    situationKey(situation),
+    text,
+    stuckMinutes(situation, nowMs),
+    nowMs,
+  );
+  entry.said = next.said;
+  return next.announce ? event("alert") : null;
 }
 
 /**
  * Reads every transcript under the subagents dir into `target.agents` and returns the ids read
- * this poll. A read that failed is no observation: its entry's continuity is broken, so no wait
- * or stall is announced from a reading nobody refreshed.
+ * this poll. A read that failed is no observation: that agent is not judged from a reading nobody
+ * refreshed.
  */
 function readAgents(
   target: Target,
   trouble: Map<string, Trouble>,
   io: Io,
-): { events: EventInput[]; busy: boolean; refreshed: string[] } {
+): { events: EventInput[]; busy: boolean; refreshed: string[]; failed: Set<string> } {
   const events: EventInput[] = [];
   const refreshed: string[] = [];
+  const failed = new Set<string>();
   let busy = false;
 
   let names: string[];
@@ -418,9 +576,9 @@ function readAgents(
     names = readdirSync(target.subagentsDir);
   } catch (error) {
     // The lead may watch before spawning anyone: a directory that has never existed is an empty
-    // fleet, so the baseline happens with no agents. Once listed, its absence is a failed read.
+    // fleet, so the first poll happens with no agents. Once listed, its absence is a failed read.
     if ((error as NodeJS.ErrnoException).code === "ENOENT" && !target.subagentsListed) {
-      return { events, busy, refreshed };
+      return { events, busy, refreshed, failed };
     }
     throw new FleetReadError(
       "subagents",
@@ -442,38 +600,31 @@ function readAgents(
     // for a removed one) before the transcript read failed must not reach the known entry.
     const entry: AgentEntry =
       known === undefined
-        ? {
-            ...initialTranscript(),
-            path,
-            sidecar: null,
-            observed: null,
-            said: null,
-            baseline: null,
-          }
+        ? { ...initialTranscript(), path, sidecar: null, said: null }
         : structuredClone(known);
     const sidecarName = `agent-${agentId}.meta.json`;
     // A read that fails is this one agent's trouble, never the poll's: the rest of the fleet is still read.
-    const failed = (file: string, error: unknown): void => {
+    const fail = (file: string, error: unknown): void => {
       const reason = error instanceof Error ? error.message : String(error);
       io.log(`${agentId}: ${reason}`);
+      failed.add(agentId);
       trouble.set(`agent:${agentId}`, {
         text: `fleet: cannot read ${file}: ${reason}`,
         url: fileUrl(join(target.subagentsDir, file)),
       });
-      if (known !== undefined) known.observed = null;
     };
 
     try {
       entry.sidecar = readSidecar(join(target.subagentsDir, sidecarName));
     } catch (error) {
-      failed(sidecarName, error);
+      fail(sidecarName, error);
       continue;
     }
 
     try {
       if (readTranscript(entry, path)) busy = true;
     } catch (error) {
-      failed(name, error);
+      fail(name, error);
       continue;
     }
 
@@ -483,6 +634,7 @@ function readAgents(
     if (known === undefined && target.polls > 0) {
       events.push({
         kind: "agent",
+        level: "note",
         text: `agent ${agentName(agentId, entry)}: started`,
         url: fileUrl(path),
         agentId,
@@ -490,14 +642,15 @@ function readAgents(
     }
   }
 
-  // The listing is the truth: an agent it no longer shows is gone, and its worktree claim with it;
-  // one it still shows whose read failed keeps its last good sidecar (the per-agent trouble above).
+  // The listing is the truth: an agent it no longer shows is gone, with its worktree claim and
+  // its standing alert; one it still shows whose read failed keeps its last good sidecar (the
+  // per-agent trouble above).
   for (const [agentId, entry] of Object.entries(target.agents)) {
     if (listed.has(agentId)) continue;
-    entry.observed = null;
     entry.sidecar = null;
+    entry.said = null;
   }
-  return { events, busy, refreshed };
+  return { events, busy, refreshed, failed };
 }
 
 // --- the worktrees ----------------------------------------------------------------
@@ -522,6 +675,7 @@ function countProcesses(processes: ProcessRow[]): { workers: number; shells: num
   return { workers, shells };
 }
 
+/** The worktrees an agent's sidecar claims: the transcript says everything their trees could, so they are not read. */
 function claimedWorktrees(target: Target): Set<string> {
   const claimed = new Set<string>();
   for (const entry of Object.values(target.agents)) {
@@ -530,12 +684,12 @@ function claimedWorktrees(target: Target): Set<string> {
   return claimed;
 }
 
-/** The head, wipe, and quiet transitions of one worktree against its last reading; the first reading is its baseline. */
+/** The head, wipe, idle, and active transitions of one worktree against its last reading; the first reading says nothing. */
 function worktreeTransitions(
   target: Target,
   row: WorktreeRow & { ok: true },
   attributionOk: boolean,
-  claimed: Set<string>,
+  nowMs: number,
 ): { events: EventInput[]; moved: boolean } {
   const events: EventInput[] = [];
   const label = `worktree ${row.branch ?? row.headSha.slice(0, SHORT_SHA)}`;
@@ -549,17 +703,17 @@ function worktreeTransitions(
   if (previous?.headSha != null && previous.headSha !== row.headSha) {
     events.push({
       kind: "head",
+      level: "note",
       text: `${label}: head moved to ${row.headSha.slice(0, SHORT_SHA)}`,
       url,
       worktree: row.worktree,
       sha: row.headSha,
-      ahead: row.aheadBehind?.ahead ?? null,
-      behind: row.aheadBehind?.behind ?? null,
     });
   }
   if (previous?.treeFileCount != null && row.treeFileCount < previous.treeFileCount / 2) {
     events.push({
       kind: "wipe",
+      level: "alert",
       text: `${label}: ${previous.treeFileCount} files at HEAD -> ${row.treeFileCount}`,
       url,
       worktree: row.worktree,
@@ -567,32 +721,36 @@ function worktreeTransitions(
     });
   }
 
-  // Under a downed or degraded lsof an empty process list is not verified inactivity, and a
-  // worktree an agent's sidecar claims is judged by that transcript, so its count holds at zero
-  // until the claim ends. A bare head move with a clean tree and no process (the lead restacking
-  // from outside) is not work: the count resets on a worker in the row or a dirty-tree change.
-  const idle =
-    attributionOk &&
-    processes.workers === 0 &&
-    previous !== undefined &&
-    previous.tree === tree &&
-    !claimed.has(resolve(row.worktree));
-  const quietPolls = idle ? previous.quietPolls + 1 : 0;
-  // Said once on entering quiet and once on leaving it: a quiet never said has nothing to retract,
-  // and a count that restarts after an attribution gap or a claim does not say it again.
+  // Work is a worker in the row or a dirty-tree change; a bare head move with a clean tree and no
+  // process (the lead restacking from outside) is not. Under a downed or degraded lsof an empty
+  // process list is not verified inactivity, so the idle count holds at zero.
+  const working = processes.workers > 0 || (previous !== undefined && previous.tree !== tree);
+  const workSeen = (previous?.workSeen ?? false) || working;
+  const idle = attributionOk && !working && previous !== undefined;
+  const idlePolls = idle ? previous.idlePolls + 1 : 0;
   let said = previous?.said ?? null;
-  if (said === "quiet" && (processes.workers > 0 || previous?.tree !== tree)) {
-    events.push({ kind: "active", text: `${label}: active again`, url, worktree: row.worktree });
-    said = null;
-  }
-  if (quietPolls === QUIET_POLLS && said !== "quiet") {
+  if (said !== null && working) {
     events.push({
-      kind: "quiet",
-      text: `${label}: no worker process and no change for ${QUIET_POLLS} polls`,
+      kind: "active",
+      level: "note",
+      text: `${label}: active again`,
       url,
       worktree: row.worktree,
     });
-    said = "quiet";
+    said = null;
+  }
+  if (idle && workSeen && (said !== null || idlePolls >= IDLE_POLLS)) {
+    const next = restate(
+      said,
+      "idle",
+      `${label}: idle ${idlePolls} polls after work`,
+      idlePolls,
+      nowMs,
+    );
+    said = next.said;
+    if (next.announce) {
+      events.push({ kind: "idle", level: "alert", text: said.text, url, worktree: row.worktree });
+    }
   }
 
   target.worktrees[row.worktree] = {
@@ -602,7 +760,8 @@ function worktreeTransitions(
     fingerprint,
     tree,
     processes,
-    quietPolls,
+    idlePolls,
+    workSeen,
     said,
   };
   return { events, moved };
@@ -612,6 +771,7 @@ async function readWorktrees(
   target: Target,
   repo: string,
   trouble: Map<string, Trouble>,
+  nowMs: number,
 ): Promise<{ events: EventInput[]; busy: boolean }> {
   const events: EventInput[] = [];
   let busy = false;
@@ -636,39 +796,27 @@ async function readWorktrees(
       url: fileUrl(repo),
     });
   }
-  // The ledger on the draft is the one committed by the last poll: a said attribution trouble
-  // that no longer holds is retracted once.
-  if (attributionOk && Object.hasOwn(target.trouble, "lsof")) {
-    events.push({
-      kind: "restored",
-      text: "fleet: process attribution restored",
-      url: fileUrl(repo),
-    });
-  }
-
-  const ref =
-    target.base === null ? await resolveDefaultRef(repo) : await resolveBaseRef(repo, target.base);
-  if (ref.ref === null) trouble.set("base", { text: `fleet: ${ref.error}`, url: fileUrl(repo) });
 
   const claimed = claimedWorktrees(target);
   const seen = new Set<string>();
   for (const path of discovered.paths) {
+    // A claimed worktree is its agent's: no reading while the claim holds, and a fresh one after.
+    if (claimed.has(resolve(path))) {
+      delete target.worktrees[path];
+      continue;
+    }
     seen.add(path);
-    const row = await worktreeRow(
-      path,
-      ref.ref === null ? null : ref.sha,
-      processesByWorktree.get(path) ?? [],
-    );
+    const row = await worktreeRow(path, null, processesByWorktree.get(path) ?? []);
     if (!row.ok) {
       trouble.set(`worktree:${path}`, {
         text: `fleet: worktree ${path}: ${row.error}`,
         url: fileUrl(path),
       });
       const known = target.worktrees[path];
-      if (known !== undefined) known.quietPolls = 0;
+      if (known !== undefined) known.idlePolls = 0;
       continue;
     }
-    const outcome = worktreeTransitions(target, row, attributionOk, claimed);
+    const outcome = worktreeTransitions(target, row, attributionOk, nowMs);
     events.push(...outcome.events);
     busy ||= outcome.moved;
   }
@@ -676,27 +824,42 @@ async function readWorktrees(
   // its last head so the lead can find the branch; a failed discovery threw above and says nothing.
   for (const [path, entry] of Object.entries(target.worktrees)) {
     if (seen.has(path)) continue;
+    delete target.worktrees[path];
+    // One claimed since its last reading is its agent's, gone or not.
+    if (claimed.has(resolve(path))) continue;
     events.push({
       kind: "gone",
+      level: "note",
       text: `worktree ${entry.branch ?? path}: gone`,
       url: fileUrl(path),
       worktree: path,
       sha: entry.headSha,
     });
-    delete target.worktrees[path];
   }
   return { events, busy };
 }
 
 // --- the poll ----------------------------------------------------------------------
 
-/** The trouble events: each condition once when it begins, nothing while it holds, and silence when it is gone. */
-function troubleTransitions(target: Target, trouble: Map<string, Trouble>): EventInput[] {
+/** The trouble events: each condition is an alert once when it begins, and a restored note once when it is gone. */
+function troubleTransitions(
+  target: Target,
+  trouble: Map<string, Trouble>,
+  nowMs: number,
+): EventInput[] {
   const events: EventInput[] = [];
+  const since = new Date(nowMs).toISOString();
+  const ledger: Record<string, StandingTrouble> = {};
   for (const [key, { text, url }] of trouble) {
-    if (!Object.hasOwn(target.trouble, key)) events.push({ kind: "trouble", text, url });
+    const known = target.trouble[key];
+    if (known === undefined) events.push({ kind: "trouble", level: "alert", text, url });
+    ledger[key] = { text, url, since: known?.since ?? since };
   }
-  target.trouble = Object.fromEntries([...trouble].map(([key, { text }]) => [key, text]));
+  for (const [key, { url }] of Object.entries(target.trouble)) {
+    if (trouble.has(key)) continue;
+    events.push({ kind: "restored", level: "note", text: "fleet: reading restored", url });
+  }
+  target.trouble = ledger;
   return events;
 }
 
@@ -726,12 +889,13 @@ async function readFleet(
   const worktrees =
     draft.repo === null
       ? { events: [], busy: false }
-      : await readWorktrees(draft, draft.repo, trouble);
+      : await readWorktrees(draft, draft.repo, trouble, nowMs);
   busy ||= worktrees.busy;
 
   const transitions: EventInput[] = [];
   for (const agentId of agents.refreshed) {
-    const event = agentTransition(draft, agentId, draft.agents[agentId] as AgentEntry, nowMs);
+    const entry = draft.agents[agentId] as AgentEntry;
+    const event = agentTransition(draft, agentId, entry, nowMs, io, agents.failed);
     if (event !== null) transitions.push(event);
   }
 
@@ -739,13 +903,17 @@ async function readFleet(
   return { events: [...agents.events, ...transitions, ...worktrees.events], busy, trouble };
 }
 
-/** The one trouble event of a failed fleet-wide read, said on entering; the conditions already in force stay recorded. */
-function troubleOnly(target: Target, failure: FleetReadError): PollResult {
+/** The one trouble alert of a failed fleet-wide read, said on entering; the conditions already in force stay recorded. */
+function troubleOnly(target: Target, failure: FleetReadError, nowMs: number): PollResult {
   const events: EventInput[] = [];
   if (!Object.hasOwn(target.trouble, failure.key)) {
-    events.push({ kind: "trouble", text: failure.message, url: failure.url });
+    events.push({ kind: "trouble", level: "alert", text: failure.message, url: failure.url });
+    target.trouble[failure.key] = {
+      text: failure.message,
+      url: failure.url,
+      since: new Date(nowMs).toISOString(),
+    };
   }
-  target.trouble[failure.key] = failure.message;
   return { events, busy: false };
 }
 
@@ -766,25 +934,51 @@ async function pollTarget(target: Target, key: string, nowMs: number, io: Io): P
   } catch (error) {
     if (!(error instanceof FleetReadError)) throw error;
     io.log(error.message);
-    return troubleOnly(target, error);
+    return troubleOnly(target, error, nowMs);
   }
 
+  // A field a former version saved and this one dropped goes with the assign.
+  for (const field of Object.keys(target)) {
+    if (!Object.hasOwn(draft, field)) delete (target as unknown as Record<string, unknown>)[field];
+  }
   Object.assign(target, draft);
   return {
-    events: [...troubleTransitions(target, outcome.trouble), ...outcome.events],
+    events: [...troubleTransitions(target, outcome.trouble, nowMs), ...outcome.events],
     busy: outcome.busy,
   };
 }
 
-/** A saved worktree row: `tree` and `said` came later and are read off the fingerprint and the quiet count; a shape no version wrote is null. */
+/** What a saved entry had said: an alert or a note by its level; a shape no version wrote (an older version's situation key, say) is nothing said. */
+function normalizeSaid(value: unknown): Standing | Noted | null {
+  const saved = record(value);
+  const key = str(saved?.key);
+  if (saved === null || key === null) return null;
+  if (saved.level === "note") return { level: "note", key };
+  const text = str(saved.text);
+  const since = str(saved.since);
+  if (saved.level !== "alert" || text === null || since === null) return null;
+  return {
+    level: "alert",
+    key,
+    text,
+    since,
+    duration: num(saved.duration),
+    repeats: num(saved.repeats) ?? 0,
+  };
+}
+
+/** A saved alert in force, for an entry that says alerts alone. */
+function normalizeStanding(value: unknown): Standing | null {
+  const said = normalizeSaid(value);
+  return said?.level === "alert" ? said : null;
+}
+
+/** A saved worktree row: `workSeen` and the standing idle came later and take their defaults; a shape no version wrote is null. */
 function normalizeWorktree(value: unknown): WorktreeEntry | null {
   const saved = record(value);
   if (saved === null) return null;
   const fingerprint = str(saved.fingerprint);
   const processes = record(saved.processes);
-  const quietPolls = num(saved.quietPolls) ?? 0;
-  const saidQuiet =
-    saved.said === "quiet" || (saved.said === undefined && quietPolls >= QUIET_POLLS);
   return {
     branch: str(saved.branch),
     headSha: str(saved.headSha),
@@ -794,12 +988,13 @@ function normalizeWorktree(value: unknown): WorktreeEntry | null {
       str(saved.tree) ??
       (fingerprint === null ? null : fingerprint.slice(fingerprint.indexOf(" ") + 1)),
     processes: { workers: num(processes?.workers) ?? 0, shells: num(processes?.shells) ?? 0 },
-    quietPolls,
-    said: saidQuiet ? "quiet" : null,
+    idlePolls: num(saved.idlePolls) ?? num(saved.quietPolls) ?? 0,
+    workSeen: saved.workSeen === true,
+    said: normalizeStanding(saved.said),
   };
 }
 
-/** A saved agent entry: its transcript, path, sidecar, and the three situation keys; a shape no version wrote is null. */
+/** A saved agent entry: its transcript, path, sidecar, and what stands said; a shape no version wrote is null. */
 function normalizeAgent(value: unknown): AgentEntry | null {
   const saved = record(value);
   const transcript = normalizeTranscript(value);
@@ -812,20 +1007,35 @@ function normalizeAgent(value: unknown): AgentEntry | null {
     if (meta === null || spawnedAt === null) return null;
     sidecar = sidecarOf(meta, spawnedAt);
   }
-  return {
-    ...transcript,
-    path,
-    sidecar,
-    observed: str(saved.observed),
-    said: str(saved.said),
-    baseline: str(saved.baseline),
-  };
+  return { ...transcript, path, sidecar, said: normalizeSaid(saved.said) };
+}
+
+/** A saved trouble condition: the text alone before the url and the time were kept. */
+function normalizeTrouble(value: unknown): StandingTrouble | null {
+  const text = str(value);
+  if (text !== null) return { text, url: "", since: null };
+  const saved = record(value);
+  const kept = str(saved?.text);
+  if (saved === null || kept === null) return null;
+  return { text: kept, url: str(saved.url) ?? "", since: str(saved.since) };
+}
+
+/** The four maps of a saved target, each read in the shape its version used; null when any is in no shape a version wrote. */
+function normalizeMaps(
+  raw: Record<string, unknown>,
+): Pick<Target, "lead" | "agents" | "worktrees" | "trouble"> | null {
+  const lead = normalizeTranscript(raw.lead);
+  const agents = normalizeMap(raw.agents, normalizeAgent);
+  const worktrees = normalizeMap(raw.worktrees, normalizeWorktree);
+  const trouble = normalizeMap(raw.trouble, normalizeTrouble);
+  if (lead === null || agents === null || worktrees === null || trouble === null) return null;
+  return { lead, agents, worktrees, trouble };
 }
 
 /**
  * The target as the last poll saved it, read back in the shape that version used: maps and fields
- * added since take their defaults. A shape no version wrote starts the target over at its baseline,
- * with its configuration kept, and the log says so.
+ * added since take their defaults. A shape no version wrote starts the target over, with its
+ * configuration kept, and the log says so.
  */
 function normalizeTarget(saved: Target, key: string, io: Io): Target {
   const raw = saved as unknown as Record<string, unknown>;
@@ -833,18 +1043,13 @@ function normalizeTarget(saved: Target, key: string, io: Io): Target {
     form: saved.form,
     sessionFile: saved.sessionFile,
     subagentsDir: saved.subagentsDir,
+    tasksDir: str(raw.tasksDir) ?? tasksDirOf(dirname(saved.subagentsDir)),
     repo: saved.repo,
-    base: saved.base,
     quietAfterMinutes: saved.quietAfterMinutes,
   };
-  const lead = normalizeTranscript(raw.lead);
-  const agents = normalizeMap(raw.agents, normalizeAgent);
-  const worktrees = normalizeMap(raw.worktrees, normalizeWorktree);
-  const trouble = normalizeMap(raw.trouble, str);
-  if (lead === null || agents === null || worktrees === null || trouble === null) {
-    io.log(
-      `${key}: the saved state is in no shape this daemon writes; the target starts over at its baseline`,
-    );
+  const maps = normalizeMaps(raw);
+  if (maps === null) {
+    io.log(`${key}: the saved state is in no shape this daemon writes; the target starts over`);
     return {
       ...config,
       polls: 0,
@@ -858,11 +1063,8 @@ function normalizeTarget(saved: Target, key: string, io: Io): Target {
   const polls = num(raw.polls) ?? 0;
   return {
     ...config,
+    ...maps,
     polls,
-    agents,
-    lead,
-    worktrees,
-    trouble,
     // Before the flag existed a poll advanced only past a listing, so a polled target had one.
     subagentsListed: raw.subagentsListed === undefined ? polls > 0 : raw.subagentsListed === true,
   };
@@ -880,17 +1082,35 @@ async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult
   return { events, busy };
 }
 
+/** The alerts in force for a target, oldest first: who needs the lead now. */
+function summary(target: Target): string[] {
+  // The saved shape may predate this daemon while a restart's first read keeps failing: read it as a poll would.
+  const maps = normalizeMaps(target as unknown as Record<string, unknown>);
+  if (maps === null) return [];
+  const standing: Array<{ since: string | null; text: string }> = [];
+  for (const entry of Object.values(maps.agents)) {
+    if (entry.said?.level === "alert") standing.push(entry.said);
+  }
+  for (const entry of Object.values(maps.worktrees)) {
+    if (entry.said !== null) standing.push(entry.said);
+  }
+  standing.push(...Object.values(maps.trouble));
+  const at = (since: string | null) =>
+    since === null ? Number.NEGATIVE_INFINITY : Date.parse(since);
+  return standing.sort((a, b) => at(a.since) - at(b.since)).map((entry) => entry.text);
+}
+
 runEvents<Target>({
   name: "fleet-events",
   interval: 60,
   idleInterval: 300,
   usage: [
     "targets: session (this session's transcript and subagents dir, found by CLAUDE_CODE_SESSION_ID under ~/.claude/projects), or an absolute path to a session directory",
-    "--repo <root>            add the worktree reading for every worktree of this repository (absolute path)",
-    "--base <ref>             aheadBehind against this committish (default: origin's default branch)",
-    `--quiet-after <minutes>  a wait or a stall is this long before it is said (default ${DEFAULT_QUIET_AFTER_MINUTES})`,
+    "--repo <root>            add the worktree reading for every worktree of this repository that no agent claims (absolute path)",
+    `--quiet-after <minutes>  an open turn with nothing pending is stuck after this long (default ${DEFAULT_QUIET_AFTER_MINUTES})`,
     `the session-events skill must be installed beside this one; without it every command exits 2 naming the install: ${INSTALL}`,
   ],
   parseTarget,
   poll,
+  summary,
 });

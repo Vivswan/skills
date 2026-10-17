@@ -184,7 +184,7 @@ const spawns = [
 ];
 
 describe("the transcript reducer", () => {
-  test("a tool_use with no tool_result is pending under its id with the tool's name and start time; the result clears it and the turn stays open", () => {
+  test("a tool_use with no tool_result is pending under its id with the tool's name, start time, and its own timeout when it names one; the result clears it and the turn stays open", () => {
     const lines = [
       toolUse(at(0), "toolu_01", "Bash", { command: "bun test" }),
       toolResult(at(5), "toolu_01"),
@@ -192,11 +192,15 @@ describe("the transcript reducer", () => {
     expect(fold(lines.slice(0, 1))).toEqual(
       activity({
         lastMovedAt: at(0),
-        pending: { toolu_01: { tool: "Bash", at: at(0), taskId: null } },
+        pending: { toolu_01: { tool: "Bash", at: at(0), taskId: null, timeoutMs: null } },
         lines: 1,
       }),
     );
     expect(fold(lines)).toEqual(activity({ lastMovedAt: at(5), lines: 2 }));
+    const timed = toolUse(at(0), "toolu_02", "Bash", { command: "bun test", timeout: 120000 });
+    expect(fold([timed]).pending).toEqual({
+      toolu_02: { tool: "Bash", at: at(0), taskId: null, timeoutMs: 120000 },
+    });
   });
 
   test("a string user line arriving with calls pending abandons every one of them: the interruption reached the agent before any result did", () => {
@@ -234,7 +238,7 @@ describe("the transcript reducer", () => {
     expect(fold([...pending, mixed])).toEqual(
       activity({
         lastMovedAt: at(2),
-        pending: { toolu_02: { tool: "Read", at: at(0, 1), taskId: null } },
+        pending: { toolu_02: { tool: "Read", at: at(0, 1), taskId: null, timeoutMs: null } },
         lines: 3,
       }),
     );
@@ -349,7 +353,9 @@ describe("the transcript reducer", () => {
     expect(fold(stopping)).toEqual(
       activity({
         lastMovedAt: at(12),
-        pending: { toolu_04: { tool: "TaskStop", at: at(12), taskId: "reviewer" } },
+        pending: {
+          toolu_04: { tool: "TaskStop", at: at(12), taskId: "reviewer", timeoutMs: null },
+        },
         children: {
           [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "finished" },
           [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "finished" },
@@ -478,7 +484,7 @@ describe("the transcript reducer", () => {
     expect(interrupted.pending).toEqual({});
   });
 
-  test("every notice in one injected text counts: two in one string clear both jobs, two text blocks clear both, a notice beside an idle envelope clears the job and finishes the child, and a notice quoted inside a teammate's message is not one", () => {
+  test("a notice block is pure or counts nothing: every notice in a block of notices alone counts, in one string or in two text blocks, while a block carrying a teammate envelope or prose counts no notice, quoted ones included, and an idle envelope beside a notice still finishes its sender", () => {
     const twoJobs = [
       ...launch,
       toolUse(at(1), "toolu_02", "Bash", { command: "bun run lint", run_in_background: true }),
@@ -501,6 +507,8 @@ describe("the transcript reducer", () => {
       },
     };
     expect(fold([...twoJobs, blocks])).toEqual(activity({ lastMovedAt: at(5), lines: 5 }));
+    // The harness writes each queued item as its own block, so a notice beside an envelope is a
+    // teammate's words: the idle envelope still finishes its sender, the notice counts for nothing.
     const idleReviewer =
       '<teammate-message teammate_id="reviewer" summary="s">\n{"type":"idle_notification","agent":"reviewer"}\n</teammate-message>';
     const mixed = fold([
@@ -508,7 +516,7 @@ describe("the transcript reducer", () => {
       ...launch,
       userText(at(10), `${notice("b1a2b3c4d")}\n${idleReviewer}`),
     ]);
-    expect(mixed.jobs).toEqual({});
+    expect(mixed.jobs).toEqual({ b1a2b3c4d: { at: at(0, 1) } });
     expect(mixed.children[CHILD_C]?.outcome).toBe("finished");
     expect(mixed.children[CHILD_A]?.outcome).toBe("running");
     // A notice quoted inside a teammate's message is that teammate's words: the job runs on, and the
@@ -522,11 +530,57 @@ describe("the transcript reducer", () => {
     expect(interrupted).toEqual(
       activity({ lastMovedAt: at(3), jobs: { b1a2b3c4d: { at: at(0, 1) } }, lines: 4 }),
     );
-    // A real notice up front does not lend its standing to a notice quoted further down.
+    // A real notice up front lends nothing to the block: with an envelope in it, neither counts.
     const quotedB = `<teammate-message teammate_id="reviewer" summary="example">\nUse this parser fixture: ${notice("b9z8y7x6w")}\n</teammate-message>`;
     expect(fold([...twoJobs, userText(at(5), `${notice("b1a2b3c4d")}\n${quotedB}`)])).toEqual(
-      activity({ lastMovedAt: at(5), jobs: { b9z8y7x6w: { at: at(1, 1) } }, lines: 5 }),
+      activity({
+        lastMovedAt: at(5),
+        jobs: { b1a2b3c4d: { at: at(0, 1) }, b9z8y7x6w: { at: at(1, 1) } },
+        lines: 5,
+      }),
     );
+    // A teammate's envelope that itself quotes an envelope: the inner closing tag once ended the
+    // span the reducer stripped, and the quoted notice after it finished the job it named.
+    const nested = `${notice("b1a2b3c4d")}\n<teammate-message teammate_id="reviewer">\nExamples: <teammate-message teammate_id="example">text</teammate-message> and ${notice("b9z8y7x6w")}\n</teammate-message>`;
+    expect(fold([...twoJobs, userText(at(5), nested)]).jobs).toEqual({
+      b1a2b3c4d: { at: at(0, 1) },
+      b9z8y7x6w: { at: at(1, 1) },
+    });
+    // Written as the harness writes it, each queued item its own block, the real notice counts.
+    const split: Line = {
+      ...envelope("user", at(5)),
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: notice("b1a2b3c4d") },
+          { type: "text", text: nested.slice(notice("b1a2b3c4d").length + 1) },
+        ],
+      },
+    };
+    expect(fold([...twoJobs, split]).jobs).toEqual({ b9z8y7x6w: { at: at(1, 1) } });
+    // Prose around a notice, or a notice cut short, is not a block of notices.
+    const prosed = `Done: ${notice("b1a2b3c4d")}`;
+    expect(fold([...launch, userText(at(5), prosed)]).jobs).toEqual({
+      b1a2b3c4d: { at: at(0, 1) },
+    });
+    const cut = notice("b1a2b3c4d").replace("</task-notification>", "");
+    expect(fold([...launch, userText(at(5), cut)]).jobs).toEqual({ b1a2b3c4d: { at: at(0, 1) } });
+    // Prose or an envelope BETWEEN two notices is as impure as one around them: a pattern over the
+    // whole block once backtracked across the first closing tag and counted both.
+    const between = `${notice("b1a2b3c4d")}\nprose\n${notice("b9z8y7x6w")}`;
+    expect(fold([...twoJobs, userText(at(5), between)]).jobs).toEqual({
+      b1a2b3c4d: { at: at(0, 1) },
+      b9z8y7x6w: { at: at(1, 1) },
+    });
+    // A block of many empty elements and a stray byte is read in one pass, never by backtracking.
+    const many = `${"<task-notification></task-notification>".repeat(5000)}!`;
+    const unclosed = `<task-notification><task-id>x${" ".repeat(200_000)}</task-notification>`;
+    const started = performance.now();
+    expect(fold([...launch, userText(at(5), many)]).jobs).toEqual({ b1a2b3c4d: { at: at(0, 1) } });
+    expect(fold([...launch, userText(at(5), unclosed)]).jobs).toEqual({
+      b1a2b3c4d: { at: at(0, 1) },
+    });
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 
   test("a resume keeps the child's spawn time: a send or a TaskStop by name reaches the latest spawn, not the resumed elder, while the elder's idle notification by that name finishes the elder, the running one", () => {
@@ -600,6 +654,12 @@ describe("the transcript reducer", () => {
     };
     const { stops: _stops, ...withoutStops } = saved.state;
     expect(normalizeTranscript({ ...saved, state: withoutStops })).toEqual(initialTranscript());
+    // A pending call saved before `timeoutMs` would be judged by the plain bound: replayed too.
+    const withoutTimeout = {
+      ...saved.state,
+      pending: { toolu_01: { tool: "Bash", at: at(3), taskId: null } },
+    };
+    expect(normalizeTranscript({ ...saved, state: withoutTimeout })).toEqual(initialTranscript());
 
     const kept = normalizeTranscript({
       cursor: { offset: 4096 },
@@ -716,7 +776,7 @@ describe("the incremental reader", () => {
     expect(readTranscript(transcript, file)).toBe(true);
     const pending = activity({
       lastMovedAt: at(0, 30),
-      pending: { toolu_01: { tool: "Bash", at: at(0), taskId: null } },
+      pending: { toolu_01: { tool: "Bash", at: at(0), taskId: null, timeoutMs: null } },
       lines: 1,
     });
     expect(transcript).toEqual({ cursor: cursor(Buffer.byteLength(first) + 1), state: pending });
@@ -763,7 +823,7 @@ describe("the incremental reader", () => {
       cursor: cursor(Buffer.byteLength(swapped) + 1),
       state: activity({
         lastMovedAt: at(50),
-        pending: { toolu_09: { tool: "Bash", at: at(50), taskId: null } },
+        pending: { toolu_09: { tool: "Bash", at: at(50), taskId: null, timeoutMs: null } },
         lines: 1,
       }),
     });
@@ -784,7 +844,7 @@ describe("the incremental reader", () => {
       cursor: cursor(Buffer.byteLength(other) + 1),
       state: activity({
         lastMovedAt: at(59),
-        pending: { toolu_12: { tool: "Bash", at: at(59), taskId: null } },
+        pending: { toolu_12: { tool: "Bash", at: at(59), taskId: null, timeoutMs: null } },
         lines: 1,
       }),
     });

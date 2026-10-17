@@ -17,23 +17,27 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-// One injected text can carry several notices: two jobs finishing in one turn arrive as two blocks.
-const TASK_NOTIFICATION = /<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/g;
-const TASK_ID = /<task-id>\s*([^<\s][^<]*?)\s*<\/task-id>/;
+// The harness writes each queued notice as its own block, so a block that is nothing but
+// `<task-notification>` elements is notices, every one of them; a block carrying anything else (a
+// teammate's envelope, prose) is a teammate's words, and a notice quoted inside it is not one. The
+// envelope text escapes nothing, so a span rule could never tell a quoted envelope from a real one.
+const NOTICE_OPEN = "<task-notification>";
+const NOTICE_CLOSE = "</task-notification>";
+const TASK_ID_OPEN = "<task-id>";
+const TASK_ID_CLOSE = "</task-id>";
 // Each teammate envelope with its body: the regex locates, the parsed body decides. A body with a
 // tag inside is text, never a notice, so it is not captured.
 const TEAMMATE_ENVELOPE =
   /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>([^<]*)<\\?\/teammate-message>/g;
-// Whatever a teammate's message quotes, a notice included, is that teammate's words.
-const TEAMMATE_SPAN = /<\\?teammate-message\s[^>]*>[\s\S]*?<\\?\/teammate-message>/g;
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
 const NEWLINE = 0x0a;
 
-/** A tool call with no result yet: mid-call, or killed with the agent. `taskId` is the name an Agent call gives its child (what a TaskStop later takes), a TaskStop's own task_id, or a SendMessage's `to`; null for every other tool. */
+/** A tool call with no result yet: mid-call, or killed with the agent. `taskId` is the name an Agent call gives its child (what a TaskStop later takes), a TaskStop's own task_id, or a SendMessage's `to`; null for every other tool. `timeoutMs` is the call's own `timeout` input, when it carries one. */
 export interface PendingCall {
   tool: string;
   at: string;
   taskId: string | null;
+  timeoutMs: number | null;
 }
 
 /** A background job this agent launched, keyed by its task id, until its notice arrives. */
@@ -159,12 +163,32 @@ function initialActivity(): Activity {
   };
 }
 
-/** The task ids of every `<task-notification>` block in `text`, in order. */
-function taskIdsOf(text: string): string[] {
+/** The task id a notice's body names, trimmed; undefined without a closed `<task-id>` holding one word of text. */
+function taskIdOf(body: string): string | undefined {
+  const open = body.indexOf(TASK_ID_OPEN);
+  if (open < 0) return undefined;
+  const close = body.indexOf(TASK_ID_CLOSE, open);
+  if (close < 0) return undefined;
+  const id = body.slice(open + TASK_ID_OPEN.length, close).trim();
+  return id === "" || id.includes("<") ? undefined : id;
+}
+
+/**
+ * The task ids of the notices in `text`, in order, when the block is nothing but notices with
+ * whitespace between; none otherwise. Read element by element, never by a pattern over the whole
+ * block: a wildcard would backtrack across a closing tag, and the text can be megabytes.
+ */
+function noticeIdsOf(text: string): string[] {
   const ids: string[] = [];
-  for (const block of text.matchAll(TASK_NOTIFICATION)) {
-    const id = TASK_ID.exec(block[1] as string)?.[1];
+  let rest = text.trim();
+  while (rest !== "") {
+    const close = rest.indexOf(NOTICE_CLOSE);
+    if (!rest.startsWith(NOTICE_OPEN) || close < 0) return [];
+    const body = rest.slice(NOTICE_OPEN.length, close);
+    if (body.includes(NOTICE_OPEN)) return [];
+    const id = taskIdOf(body);
     if (id !== undefined) ids.push(id);
+    rest = rest.slice(close + NOTICE_CLOSE.length).trimStart();
   }
   return ids;
 }
@@ -262,19 +286,17 @@ function reduceAssistant(state: Activity, line: Record<string, unknown>, at: str
     if (tool === "Agent") taskId = str(input?.name);
     if (tool === "TaskStop") taskId = str(input?.task_id);
     if (tool === "SendMessage") taskId = str(input?.to);
-    state.pending[id] = { tool, at, taskId };
+    state.pending[id] = { tool, at, taskId, timeoutMs: num(input?.timeout) };
   }
 }
 
 // A text arriving while a call is pending reached the agent before any result could: the call was
-// abandoned. Notices are not interruptions: they are queued and delivered between turns, one per
-// text, and every one counts. A notice is a text that IS one, from its first character; a notice
-// quoted inside a teammate's message is that teammate's words.
+// abandoned. Notices are not interruptions: they are queued and delivered between turns, one block
+// per text, and every one in a pure notice block counts (noticeIdsOf above).
 function reduceInjected(state: Activity, texts: string[]): void {
   let notices = 0;
   for (const text of texts) {
-    const notice = text.trimStart().startsWith("<task-notification>");
-    const tasks = notice ? taskIdsOf(text.replace(TEAMMATE_SPAN, "")) : [];
+    const tasks = noticeIdsOf(text);
     const idle = idleTeammatesOf(text);
     for (const taskId of tasks) finishTask(state, taskId);
     for (const name of idle) finishChild(state, name);
@@ -355,7 +377,7 @@ function reduceAttachment(state: Activity, line: Record<string, unknown>): void 
 
   // A notice is the turn's input in this form as in the user-line form: the turn it lands in is open.
   state.turn = "open";
-  for (const taskId of taskIdsOf(str(attachment.prompt) ?? "")) finishTask(state, taskId);
+  for (const taskId of noticeIdsOf(str(attachment.prompt) ?? "")) finishTask(state, taskId);
 }
 
 /**
@@ -490,7 +512,7 @@ function normalizePending(value: unknown): PendingCall | null {
   const tool = str(call?.tool);
   const at = str(call?.at);
   if (call === null || tool === null || at === null) return null;
-  return { tool, at, taskId: str(call.taskId) };
+  return { tool, at, taskId: str(call.taskId), timeoutMs: num(call.timeoutMs) };
 }
 
 function normalizeJob(value: unknown): Job | null {
@@ -536,8 +558,16 @@ export function normalizeTranscript(value: unknown): Transcript | null {
   const state = normalizeActivity(saved?.state);
   if (cursor === null || offset === null || state === null) return null;
   // The version that added `stops` also stopped moving a resumed child's `at` to the message, so
-  // an older activity's `at` values are not the spawn times the name lookup needs: replay the file.
-  if (record(saved?.state)?.stops === undefined) return initialTranscript();
+  // an older activity's `at` values are not the spawn times the name lookup needs; the one that
+  // added a pending call's `timeoutMs` reads it off the call. Either older shape replays the file.
+  const activity = record(saved?.state);
+  const calls = Object.values(record(activity?.pending) ?? {});
+  if (
+    activity?.stops === undefined ||
+    calls.some((call) => record(call)?.timeoutMs === undefined)
+  ) {
+    return initialTranscript();
+  }
   // A cursor saved without `size` has read `offset` bytes: a file smaller than that restarts.
   return { cursor: { offset, ino: num(cursor.ino), size: num(cursor.size) ?? offset }, state };
 }
