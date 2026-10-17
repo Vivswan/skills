@@ -621,13 +621,16 @@ describe("the transcript reducer", () => {
           command: `/usr/bin/git -C "/repo/.worktrees/x y" status; ls '/repo/.worktrees/x z'`,
         }),
         toolResult(at(7), "toolu_04"),
-        userText(at(8), "and /tmp/user-text is not a tool call"),
+        toolUse(at(8), "toolu_05", "Bash", { command: "git -C C:/repo/.worktrees/x status" }),
+        toolResult(at(9), "toolu_05"),
+        userText(at(10), "and /tmp/user-text is not a tool call"),
       ]).named;
+      // Least recently named first: a.md, named in the prompt and again in the nested list, sits after b.md.
       expect(named).toEqual([
         "/repo/.worktrees/alerts",
-        "/repo/docs/a.md",
         "/repo/docs/b.md",
         "/repo/.worktrees/x[1]/file",
+        "/repo/docs/a.md",
         "/repo/here",
         "/repo/.worktrees/x y/notes.md",
         "/usr/bin/git",
@@ -636,6 +639,21 @@ describe("the transcript reducer", () => {
       ]);
     },
   );
+
+  test("a path named again moves to the newest position, so a worktree a builder names in every command never lapses from the thousand-path bound, while a path named once early is the one evicted", () => {
+    const lines: Line[] = [toolUse(at(0), "toolu_once", "Read", { file_path: "/once/early" })];
+    for (let n = 0; n < 1000; n += 1) {
+      lines.push(
+        toolUse(at(1, n % 60), `toolu_${n}`, "Bash", {
+          command: `cd /repo/.worktrees/x && cat /other/file-${n}`,
+        }),
+      );
+    }
+    const named = fold(lines).named;
+    expect(named).toHaveLength(1000);
+    expect(named.slice(-2)).toEqual(["/repo/.worktrees/x", "/other/file-999"]);
+    expect(named).not.toContain("/once/early");
+  });
 
   test("a resume keeps the child's spawn time: a send or a TaskStop by name reaches the latest spawn, not the resumed elder, while the elder's idle notification by that name finishes the elder, the running one", () => {
     const reviewer = {

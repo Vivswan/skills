@@ -26,11 +26,14 @@ const NOTICE_CLOSE = "</task-notification>";
 const TASK_ID_OPEN = "<task-id>";
 const TASK_ID_CLOSE = "</task-id>";
 // An absolute path inside a command or a prompt: quoted whole (a space inside stays), or bare
-// after a separator. A path-valued field (`file_path`, `path`, `cwd`) is taken whole instead, so a
-// space never cuts a path into a sibling worktree's root.
-const ABSOLUTE_PATH = /"(\/[^"]+)"|'(\/[^']+)'|`(\/[^`]+)`|(?<![^\s=(,:])\/[^\s"'`;|&<>()]+/g;
+// after a separator; a drive letter and colon before the slash (`C:/x`) is no POSIX path. A
+// path-valued field (`file_path`, `path`, `cwd`) is taken whole instead, so a space never cuts a
+// path into a sibling worktree's root.
+const ABSOLUTE_PATH =
+  /"(\/[^"]+)"|'(\/[^']+)'|`(\/[^`]+)`|(?<![^\s=(,:]|\b[A-Za-z]:)\/[^\s"'`;|&<>()]+/g;
 const PATH_FIELD = /path|dir|cwd/i;
-// Distinct paths an agent named, oldest dropped past this: bounded state for a long transcript.
+// Distinct paths an agent named, the least recently named dropped past this: bounded state for a
+// long transcript, and a path in current use never lapses.
 const MAX_NAMED_PATHS = 1000;
 // Each teammate envelope with its body: the regex locates, the parsed body decides. A body with a
 // tag inside is text, never a notice, so it is not captured.
@@ -73,7 +76,7 @@ export interface Activity {
   children: Record<string, Child>;
   /** Successful TaskStops on a task id that is no job and no child here, by that exact id: a nested agent another agent spawned, stopped by the lead. */
   stops: Record<string, string>;
-  /** Absolute paths named in this agent's tool-call inputs (never a result or a user text), resolved, distinct, oldest first: the worktrees it works in by its own commands. */
+  /** Absolute paths named in this agent's tool-call inputs (never a result or a user text), resolved, distinct, least recently named first: the worktrees it works in by its own commands. */
   named: string[];
   lines: number;
   /** Lines that were not a JSON object with a timestamp: counted, never fatal. */
@@ -190,7 +193,8 @@ function namePaths(state: Activity, input: unknown, field = ""): void {
   if (typeof input === "string") {
     for (const named of namedPathsIn(input, field)) {
       const path = resolve(named);
-      if (state.named.includes(path)) continue;
+      const at = state.named.indexOf(path);
+      if (at >= 0) state.named.splice(at, 1);
       state.named.push(path);
       if (state.named.length > MAX_NAMED_PATHS) state.named.shift();
     }
