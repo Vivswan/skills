@@ -1,8 +1,8 @@
-// The catalog as the two install commands read it: this repository's coordinate from the plugin manifest, and
-// the upstream skills from the marketplace, each a git-subdir entry whose fetched folder is the skill itself.
-// bin/install.mjs (the consumer's `npx -y github:Vivswan/skills`) and scripts/link-agents.mts (`bun run add`)
-// both import it, so one marketplace edit changes both. Dependency-free node, since the bin runs before anything
-// is installed.
+// What the two install commands share: the catalog as they read it (this repository's coordinate from the plugin
+// manifest, the upstream skills from the marketplace, each a git-subdir entry whose fetched folder is the skill
+// itself) and the flags every `skills add` call carries. bin/install.mjs (the consumer's
+// `npx -y github:Vivswan/skills`) and scripts/link-agents.mts (`bun run add`) both import it, so one edit here
+// changes both. Dependency-free node, since the bin runs before anything is installed.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,17 @@ function loadObject(url) {
     throw new CatalogError(`${path}: the root must be an object`);
   }
   return data;
+}
+
+/**
+ * The flags with `-y` appended unless they already say yes (`-y`, `--yes`, `--all`): the skills CLI otherwise
+ * asks "Proceed with installation?" before it overwrites an installed copy, and both commands run unattended.
+ * @param {readonly string[]} flags
+ * @returns {string[]}
+ */
+export function withYes(flags) {
+  const yes = flags.some((flag) => flag === "-y" || flag === "--yes" || flag === "--all");
+  return yes ? [...flags] : [...flags, "-y"];
 }
 
 /** This catalog as GitHub owner/repo, read from the plugin manifest's repository URL. */

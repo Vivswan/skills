@@ -1,4 +1,4 @@
-// reaches: bin/catalog.mjs
+// reaches: bin/install-shared.mjs
 import { describe, expect, test } from "bun:test";
 import {
   lstatSync,
@@ -182,18 +182,18 @@ function entryExists(path: string): boolean {
 }
 
 describe("addCommands", () => {
-  // What drifts: the skills CLI's grammar is an external contract, and the order is behavior (an upstream
-  // failure must leave this repository's skills as they were).
-  test("installs each upstream folder, then this working tree, every call global", () => {
+  // What drifts: the skills CLI's grammar is an external contract (`-y` is what skips its overwrite prompt), and
+  // the order is behavior (an upstream failure must leave this repository's skills as they were).
+  test("installs each upstream folder, then this working tree, every call global and unattended", () => {
     expect(
       addCommands([
         { target: "example-org/monorepo/tools/alpha" },
         { target: "example-org/beta/skills/beta" },
       ]),
     ).toEqual([
-      ["npx", "skills", "add", "example-org/monorepo/tools/alpha", "--global"],
-      ["npx", "skills", "add", "example-org/beta/skills/beta", "--global"],
-      ["npx", "skills", "add", ".", "--global"],
+      ["npx", "skills", "add", "example-org/monorepo/tools/alpha", "--global", "-y"],
+      ["npx", "skills", "add", "example-org/beta/skills/beta", "--global", "-y"],
+      ["npx", "skills", "add", ".", "--global", "-y"],
     ]);
   });
 });

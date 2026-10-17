@@ -153,7 +153,7 @@ graph LR
 
 ## Installation
 
-One command installs this catalog and the three [upstream skills](#upstream-skills) through the skills CLI. Its flags pass through to each `npx skills add` it runs (`-g` for your user, `-a codex` for one agent, `--skill <name>` for one skill, which runs only the call that ships it), and `--help` prints the commands without running them:
+One command installs this catalog and the three [upstream skills](#upstream-skills) through the skills CLI, every call unattended, so nothing prompts and an installed copy is overwritten. Its flags pass through to each `npx skills add` it runs (`-g` for your user, `-a codex` for one agent, `--skill <name>` for one skill, which runs only the call that ships it), and `--help` prints the commands without running them:
 
 ```bash
 npx -y github:Vivswan/skills -g

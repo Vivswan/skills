@@ -1,4 +1,4 @@
-// reaches: bin/install.mjs bin/catalog.mjs .claude-plugin/marketplace.json .claude-plugin/plugin.json
+// reaches: bin/install.mjs bin/install-shared.mjs .claude-plugin/marketplace.json .claude-plugin/plugin.json
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -20,7 +20,9 @@ const NODE = Bun.which("node") ?? "node";
 
 // What would drift silently: the skills CLI's grammar, `skills add <owner/repo>[/<path>] [flags]`, is an external
 // contract nothing here enforces, and the marketplace file is the roster the bin reads. These are the argv lists a
-// user's `npx -y github:Vivswan/skills <flags>` runs for the files as committed, this repository first.
+// user's `npx -y github:Vivswan/skills <flags>` runs for the files as committed, this repository first. Every
+// call carries `-y` (the CLI's overwrite prompt would otherwise stop an unattended run) unless the user's flags
+// already say yes, so each row states the flags it expects after the target.
 const commands = (flags: string[]) => [
   ["npx", "-y", "skills", "add", "Vivswan/skills", ...flags],
   ["npx", "-y", "skills", "add", "Leonxlnx/taste-skill/skills/taste-skill", ...flags],
@@ -121,8 +123,8 @@ describe("bin/install.mjs", () => {
       args: ["-g", "-a", "codex"],
       env: {},
       status: 0,
-      calls: commands(["-g", "-a", "codex"]),
-      stdout: commands(["-g", "-a", "codex"]).map((argv) => argv.join(" ")),
+      calls: commands(["-g", "-a", "codex", "-y"]),
+      stdout: printed(commands(["-g", "-a", "codex", "-y"])),
     },
     {
       name: "--help prints the commands and runs none of them",
@@ -130,17 +132,15 @@ describe("bin/install.mjs", () => {
       env: {},
       status: 0,
       calls: [],
-      stdout: commands(["-g"]).map((argv) => argv.join(" ")),
+      stdout: printed(commands(["-g", "-y"])),
     },
     {
       name: "stops at the first failing command and exits with its code",
       args: ["-g"],
       env: { STUB_FAIL_AT: "2" },
       status: 3,
-      calls: commands(["-g"]).slice(0, 2),
-      stdout: commands(["-g"])
-        .slice(0, 2)
-        .map((argv) => argv.join(" ")),
+      calls: commands(["-g", "-y"]).slice(0, 2),
+      stdout: printed(commands(["-g", "-y"]).slice(0, 2)),
     },
     // `--skill` (or `-s`, each followed by one or more names; `--all` and `*` mean every skill) selects by
     // name, and the CLI exits 1 with "No matching skills found" against a source that ships none of the names,
@@ -150,40 +150,48 @@ describe("bin/install.mjs", () => {
       args: ["-g", "--skill", "rubber-duck-review"],
       env: {},
       status: 0,
-      calls: only(["-g", "--skill", "rubber-duck-review"], 0),
-      stdout: printed(only(["-g", "--skill", "rubber-duck-review"], 0)),
+      calls: only(["-g", "--skill", "rubber-duck-review", "-y"], 0),
+      stdout: printed(only(["-g", "--skill", "rubber-duck-review", "-y"], 0)),
     },
     {
       name: "--skill naming an upstream skill runs that upstream's call alone",
       args: ["-g", "--skill", "unslop"],
       env: {},
       status: 0,
-      calls: only(["-g", "--skill", "unslop"], 3),
-      stdout: printed(only(["-g", "--skill", "unslop"], 3)),
+      calls: only(["-g", "--skill", "unslop", "-y"], 3),
+      stdout: printed(only(["-g", "--skill", "unslop", "-y"], 3)),
     },
     {
       name: "-s with several names runs each call that ships one of them, in catalog order",
       args: ["-s", "unslop", "rubber-duck-review", "-g"],
       env: {},
       status: 0,
-      calls: only(["-s", "unslop", "rubber-duck-review", "-g"], 0, 3),
-      stdout: printed(only(["-s", "unslop", "rubber-duck-review", "-g"], 0, 3)),
+      calls: only(["-s", "unslop", "rubber-duck-review", "-g", "-y"], 0, 3),
+      stdout: printed(only(["-s", "unslop", "rubber-duck-review", "-g", "-y"], 0, 3)),
     },
     {
       name: "an empty argument ends the CLI's name list, so a name after it selects nothing",
       args: ["-g", "--skill", "rubber-duck-review", "", "unslop"],
       env: {},
       status: 0,
-      calls: only(["-g", "--skill", "rubber-duck-review", "", "unslop"], 0),
-      stdout: printed(only(["-g", "--skill", "rubber-duck-review", "", "unslop"], 0)),
+      calls: only(["-g", "--skill", "rubber-duck-review", "", "unslop", "-y"], 0),
+      stdout: printed(only(["-g", "--skill", "rubber-duck-review", "", "unslop", "-y"], 0)),
     },
     {
       name: "--skill '*' runs every call, as no --skill does",
       args: ["--skill", "*", "-g"],
       env: {},
       status: 0,
-      calls: commands(["--skill", "*", "-g"]),
-      stdout: printed(commands(["--skill", "*", "-g"])),
+      calls: commands(["--skill", "*", "-g", "-y"]),
+      stdout: printed(commands(["--skill", "*", "-g", "-y"])),
+    },
+    {
+      name: "a user's own -y is not doubled",
+      args: ["-g", "-y"],
+      env: {},
+      status: 0,
+      calls: commands(["-g", "-y"]),
+      stdout: printed(commands(["-g", "-y"])),
     },
     {
       name: "--all runs every call",
@@ -199,7 +207,7 @@ describe("bin/install.mjs", () => {
       env: {},
       status: 0,
       calls: [],
-      stdout: printed(only(["--skill", "unslop", "-g"], 3)),
+      stdout: printed(only(["--skill", "unslop", "-g", "-y"], 3)),
     },
   ])("$name", ({ args, env, status, calls, stdout }) => {
     const result = run(args, { env });
@@ -213,11 +221,12 @@ describe("bin/install.mjs", () => {
   test("under npx, runs npm's own npx-cli.js through node, with a two-word flag value as one argument", () => {
     const result = run(["-g", "-a", "codex claude-code"], { npxOnPath: false, underNpx: true });
     expect(result.status).toBe(0);
-    expect(result.stdout).toEqual(
-      commands(["-g", "-a", "codex claude-code"]).map((argv) => argv.join(" ")),
-    );
+    expect(result.stdout).toEqual(printed(commands(["-g", "-a", "codex claude-code", "-y"])));
     expect(result.calls).toEqual(
-      commands(["-g", "-a", "codex claude-code"]).map((argv) => ["npx-cli.js", ...argv.slice(1)]),
+      commands(["-g", "-a", "codex claude-code", "-y"]).map((argv) => [
+        "npx-cli.js",
+        ...argv.slice(1),
+      ]),
     );
   });
 
@@ -225,19 +234,15 @@ describe("bin/install.mjs", () => {
     const result = run(["-g"], { npxOnPath: false });
     expect(result.status).toBe(1);
     // The first command prints before its launch fails; nothing else does.
-    expect(result.stdout).toEqual(
-      commands(["-g"])
-        .slice(0, 1)
-        .map((argv) => argv.join(" ")),
-    );
+    expect(result.stdout).toEqual(printed(commands(["-g", "-y"]).slice(0, 1)));
     expect(result.stderr).toBe(
       "install: run this through npx (npx -y github:Vivswan/skills), which gives it npm's path\n",
     );
     expect(result.calls).toEqual([]);
   });
 
-  // The bin resolves its catalog files beside itself through bin/catalog.mjs, so a copy of the pair in a scratch
-  // tree reads whatever sits there.
+  // The bin resolves its catalog files beside itself through bin/install-shared.mjs, so a copy of the pair in a
+  // scratch tree reads whatever sits there.
   const GOOD_MANIFEST = JSON.stringify({ repository: "https://github.com/example-org/example" });
   function binBeside(files: { manifest?: string; marketplace: string }): {
     bin: string;
@@ -248,7 +253,7 @@ describe("bin/install.mjs", () => {
     mkdirSync(join(root, "bin"));
     mkdirSync(join(root, ".claude-plugin"));
     copyFileSync(BIN, join(root, "bin", "install.mjs"));
-    copyFileSync(join(ROOT, "bin", "catalog.mjs"), join(root, "bin", "catalog.mjs"));
+    copyFileSync(join(ROOT, "bin", "install-shared.mjs"), join(root, "bin", "install-shared.mjs"));
     const manifest = join(root, ".claude-plugin", "plugin.json");
     const marketplace = join(root, ".claude-plugin", "marketplace.json");
     writeFileSync(manifest, files.manifest ?? GOOD_MANIFEST);

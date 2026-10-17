@@ -9,10 +9,10 @@
  *
  * Usage: bun scripts/link-agents.mts [--dry-run | --add]
  *   --dry-run  reports every link and prune, changes nothing
- *   --add      runs `npx skills add <upstream> --global` per upstream skill of the marketplace, then
- *              `npx skills add . --global` (its UI wires the per-agent pointers but overwrites the
- *              canonical symlinks with copies), then links; never --copy, so the per-agent
- *              directories keep symlinking into ~/.agents/skills
+ *   --add      runs `npx skills add <upstream> --global -y` per upstream skill of the marketplace,
+ *              then `npx skills add . --global -y` (its UI wires the per-agent pointers but
+ *              overwrites the canonical symlinks with copies), then links; never --copy, so the
+ *              per-agent directories keep symlinking into ~/.agents/skills
  * Revert: `npx skills add . --all` overwrites the symlinks with fresh copies.
  */
 
@@ -29,7 +29,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { CatalogError, upstreamSkills } from "../bin/catalog.mjs";
+import { CatalogError, upstreamSkills, withYes } from "../bin/install-shared.mjs";
 import {
   fail,
   isRecord,
@@ -82,7 +82,7 @@ export interface PruneOptions {
  */
 export function addCommands(upstream: readonly { readonly target: string }[]): string[][] {
   const targets = [...upstream.map(({ target }) => target), "."];
-  return targets.map((target) => ["npx", "skills", "add", target, "--global"]);
+  return targets.map((target) => ["npx", "skills", "add", target, ...withYes(["--global"])]);
 }
 
 /** The marketplace's upstream skills, a malformed catalog file failing like any other check. */

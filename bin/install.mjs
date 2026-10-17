@@ -3,17 +3,18 @@
 //   npx -y github:Vivswan/skills [flags]    runs `npx -y skills add <target> [flags]` for this repository, then
 //                                           once per upstream skill of .claude-plugin/marketplace.json
 //   npx -y github:Vivswan/skills --help     prints those commands and runs nothing
-// The flags pass through unchanged (-g, -a <agents>, -y, --skill <names>); a `--skill` selection also narrows
-// the calls to the sources that ship a selected name (targets, below), since the CLI exits 1 against a source
-// that ships none of them. Each command prints before it runs, and the first nonzero exit ends the run with that
-// code. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
+// The flags pass through unchanged (-g, -a <agents>, --skill <names>), and every call runs unattended (`-y`,
+// unless the flags already say yes), so nothing prompts and an installed copy is overwritten. A `--skill`
+// selection also narrows the calls to the sources that ship a selected name (targets, below), since the CLI
+// exits 1 against a source that ships none of them. Each command prints before it runs, and the first nonzero
+// exit ends the run with that code. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
 // started inherits npm_execpath (npm-cli.js, with npx-cli.js beside it) and npm_node_execpath. Started by hand,
 // the bin runs `npx` from PATH instead.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { CatalogError, repoCoordinate, upstreamSkills } from "./catalog.mjs";
+import { CatalogError, repoCoordinate, upstreamSkills, withYes } from "./install-shared.mjs";
 
 const BY_HAND = "run this through npx (npx -y github:Vivswan/skills), which gives it npm's path";
 
@@ -85,7 +86,7 @@ const help = argv.includes("--help");
 const flags = argv.filter((flag) => flag !== "--help");
 const [file, ...launcherArgs] = npxLauncher();
 for (const target of targetsOrFail(selectedSkills(flags))) {
-  const command = ["-y", "skills", "add", target, ...flags];
+  const command = ["-y", "skills", "add", target, ...withYes(flags)];
   console.log(["npx", ...command].join(" "));
   if (help) continue;
   const result = spawnSync(file, [...launcherArgs, ...command], { stdio: "inherit" });
