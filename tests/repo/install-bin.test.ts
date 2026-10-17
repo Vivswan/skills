@@ -56,6 +56,7 @@ interface Run {
 }
 
 interface RunOptions {
+  /** Extra environment; HOME is always a scratch directory, so a run never reaches the developer's own installs. */
   readonly env?: Record<string, string>;
   /** Put the stub `npx` on PATH; false leaves PATH without any npx. */
   readonly npxOnPath?: boolean;
@@ -76,7 +77,9 @@ function run(
     chmodSync(join(dir, "npx"), 0o755);
   }
   // bun run sets npm_execpath to bun itself, so the bin's npx detection is driven only by what this test sets.
-  const { npm_execpath: _npm, npm_node_execpath: _node, ...inherited } = process.env;
+  // HOME and the working directory are the case's own too: after its calls the bin marks installed copies under
+  // HOME (with -g) or under the working directory (without), never the developer's.
+  const { npm_execpath: _npm, npm_node_execpath: _node, HOME: _home, ...inherited } = process.env;
   const npm: Record<string, string> = {};
   if (underNpx) {
     mkdirSync(join(dir, "npm"));
@@ -88,9 +91,11 @@ function run(
   // With the stub on PATH, PATH keeps the real one behind it so `/usr/bin/env bash` resolves; without, PATH is the
   // scratch dir alone.
   const proc = spawnSync(NODE, [bin, ...args], {
+    cwd: dir,
     encoding: "utf-8",
     env: {
       ...inherited,
+      HOME: join(dir, "home"),
       PATH: npxOnPath ? `${dir}:${process.env.PATH}` : dir,
       STUB_ARGS_LOG: log,
       ...npm,
@@ -215,6 +220,39 @@ describe("bin/install.mjs", () => {
     expect(result.status).toBe(status);
     expect(result.calls).toEqual(calls);
     expect(result.stdout).toEqual(stdout);
+  });
+
+  // After the calls, the copies of the upstreams the marketplace flags are marked explicit-invocation-only where
+  // the CLI keeps them for these flags (`-g`: under HOME), the unflagged upstream's copy is left alone, and a
+  // flagged copy that is not there is one stderr line, not a failure.
+  test("-g marks the flagged upstream copies under HOME and reports a flagged copy that is missing", () => {
+    const home = temp.dir("install-bin-home-");
+    const skills = join(home, ".agents", "skills");
+    for (const name of ["frontend-design", "unslop"]) {
+      mkdirSync(join(skills, name), { recursive: true });
+      writeFileSync(join(skills, name, "SKILL.md"), `---\nname: ${name}\n---\nbody\n`);
+    }
+
+    const result = run(["-g"], { env: { HOME: home } });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toEqual([
+      ...printed(commands(["-g", "-y"])),
+      `marked explicit-invocation-only: ${join(skills, "frontend-design")}`,
+    ]);
+    expect(result.stderr.trimEnd().split("\n")).toEqual([
+      `install: no installed copy at ${join(skills, "design-taste-frontend")} to mark explicit-invocation-only`,
+      `install: no installed copy at ${join(skills, "impeccable")} to mark explicit-invocation-only`,
+    ]);
+    expect(readFileSync(join(skills, "frontend-design", "SKILL.md"), "utf8")).toBe(
+      "---\nname: frontend-design\ndisable-model-invocation: true\n---\nbody\n",
+    );
+    expect(readFileSync(join(skills, "frontend-design", "agents", "openai.yaml"), "utf8")).toBe(
+      "policy:\n  allow_implicit_invocation: false\n",
+    );
+    expect(readFileSync(join(skills, "unslop", "SKILL.md"), "utf8")).toBe(
+      "---\nname: unslop\n---\nbody\n",
+    );
   });
 
   // A bin that npx started inherits npm_execpath (npm-cli.js) and npm_node_execpath, and npx-cli.js sits beside

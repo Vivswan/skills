@@ -11,7 +11,8 @@
  *   --dry-run  reports every link and prune, changes nothing
  *   --add      runs `npx skills add <upstream> --global -y` per upstream skill of the marketplace,
  *              then `npx skills add . --global -y` (its UI wires the per-agent pointers but
- *              overwrites the canonical symlinks with copies), then links; never --copy, so the
+ *              overwrites the canonical symlinks with copies), marks the upstream copies the
+ *              marketplace flags explicit-invocation-only, then links; never --copy, so the
  *              per-agent directories keep symlinking into ~/.agents/skills
  * Revert: `npx skills add . --all` overwrites the symlinks with fresh copies.
  */
@@ -29,7 +30,12 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { CatalogError, upstreamSkills, withYes } from "../bin/install-shared.mjs";
+import {
+  CatalogError,
+  markExplicitOnlyUpstreams,
+  upstreamSkills,
+  withYes,
+} from "../bin/install-shared.mjs";
 import {
   fail,
   isRecord,
@@ -411,8 +417,10 @@ if (import.meta.main) {
     // installs it already rewired unlinked.
     const sourceByName = repoSkillSources(skillDirs());
 
+    const agentsSkillsDir = join(homedir(), ".agents", "skills");
     if (withAdd) {
-      for (const [command, ...args] of addCommands(catalogUpstream())) {
+      const upstream = catalogUpstream();
+      for (const [command, ...args] of addCommands(upstream)) {
         const shown = [command, ...args].join(" ");
         const result = spawnSync(command as string, args, { cwd: ROOT, stdio: "inherit" });
         if (result.error) fail(`${shown}: ${result.error.message}`);
@@ -420,9 +428,13 @@ if (import.meta.main) {
           fail(`${shown} exited with status ${result.status ?? "unknown"}; not linking`);
         }
       }
+      const { marked, missing } = markExplicitOnlyUpstreams(upstream, agentsSkillsDir);
+      for (const dir of marked) console.log(`marked explicit-invocation-only: ${dir}`);
+      for (const dir of missing) {
+        console.log(`notice: no installed copy at ${dir} to mark explicit-invocation-only`);
+      }
     }
 
-    const agentsSkillsDir = join(homedir(), ".agents", "skills");
     const actions = linkSkills([...sourceByName.values()], agentsSkillsDir, dryRun);
 
     const prefix = dryRun ? "[dry-run] " : "";

@@ -7,14 +7,23 @@
 // unless the flags already say yes), so nothing prompts and an installed copy is overwritten. A `--skill`
 // selection also narrows the calls to the sources that ship a selected name (targets, below), since the CLI
 // exits 1 against a source that ships none of them. Each command prints before it runs, and the first nonzero
-// exit ends the run with that code. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
+// exit ends the run with that code. After an upstream call, the copy of an upstream the marketplace marks
+// `disable-model-invocation` is marked explicit-invocation-only (install-shared.mjs); a copy not where the CLI
+// keeps it for these flags is reported on stderr and the run goes on. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
 // started inherits npm_execpath (npm-cli.js, with npx-cli.js beside it) and npm_node_execpath. Started by hand,
 // the bin runs `npx` from PATH instead.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { CatalogError, repoCoordinate, upstreamSkills, withYes } from "./install-shared.mjs";
+import {
+  CatalogError,
+  installedSkillsDir,
+  markExplicitOnlyUpstreams,
+  repoCoordinate,
+  upstreamSkills,
+  withYes,
+} from "./install-shared.mjs";
 
 const BY_HAND = "run this through npx (npx -y github:Vivswan/skills), which gives it npm's path";
 
@@ -58,6 +67,16 @@ function targets(selected) {
   return ownNamed ? [repoCoordinate(), ...wanted] : wanted;
 }
 
+/** Mark the upstream copies the completed calls installed, one stdout line per mark, one stderr line per miss. */
+function markInstalled(ranTargets, flags) {
+  const installed = upstreamSkills().filter(({ target }) => ranTargets.includes(target));
+  const { marked, missing } = markExplicitOnlyUpstreams(installed, installedSkillsDir(flags));
+  for (const dir of marked) console.log(`marked explicit-invocation-only: ${dir}`);
+  for (const dir of missing) {
+    console.error(`install: no installed copy at ${dir} to mark explicit-invocation-only`);
+  }
+}
+
 /**
  * How npx starts: npm's npx-cli.js under node when it sits beside the npm-cli.js that npm_execpath names (bun
  * sets npm_execpath to itself, with no npx-cli.js beside it), otherwise `npx` from PATH.
@@ -85,6 +104,7 @@ const argv = process.argv.slice(2);
 const help = argv.includes("--help");
 const flags = argv.filter((flag) => flag !== "--help");
 const [file, ...launcherArgs] = npxLauncher();
+const ran = [];
 for (const target of targetsOrFail(selectedSkills(flags))) {
   const command = ["-y", "skills", "add", target, ...withYes(flags)];
   console.log(["npx", ...command].join(" "));
@@ -93,4 +113,6 @@ for (const target of targetsOrFail(selectedSkills(flags))) {
   if (result.error?.code === "ENOENT") fail(BY_HAND);
   if (result.error) fail(result.error.message);
   if (result.status !== 0) process.exit(result.status ?? 1);
+  ran.push(target);
 }
+if (!help) markInstalled(ran, flags);

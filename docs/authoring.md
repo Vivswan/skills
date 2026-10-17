@@ -59,8 +59,8 @@ A skill written elsewhere is published by its own entry in [`.claude-plugin/mark
 
 To add one:
 
-1. The entry above, in `.claude-plugin/marketplace.json`; the one-command installer, `bin/install.mjs`, reads the entries, so it needs no change.
-2. A bullet under the root README's "Upstream skills", linking to the upstream folder at `tree/HEAD`, and one `npx skills add <owner/repo>/<path> -g` line there.
+1. The entry above, in `.claude-plugin/marketplace.json`; the one-command installer, `bin/install.mjs`, and `bun run add` read the entries, so they need no change. Add `"metadata": { "disable-model-invocation": true }` when the installed copy should load only on invocation: both commands then mark it so.
+2. A bullet under the root README's "Upstream skills", linking to the upstream folder at `tree/HEAD`, and one `npx skills add <owner/repo>/<path> -g` line there; a flagged skill's name joins the "Installed by ..., load only when you invoke them" sentence.
 3. A node in the mermaid graph, clicking to the same page.
 
 The smoke test holds the entry to that shape and the README to the entries. The layout above does not apply: upstream's folder is the skill as it is.

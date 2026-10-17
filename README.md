@@ -49,6 +49,8 @@ Skills written in other repositories. Nothing of them is copied here: the market
 - [/design-taste-frontend](https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill) - Anti-slop frontend for landing pages, portfolios, and redesigns (from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill))
 - [/impeccable](https://github.com/pbakaus/impeccable/tree/HEAD/.agents/skills/impeccable) - Design direction for frontend work: design, critique, audit, polish, or harden an interface, with detector rules against AI-template tells (from [pbakaus/impeccable](https://github.com/pbakaus/impeccable))
 
+Installed by `npx -y github:Vivswan/skills` or `bun run add`, `frontend-design`, `design-taste-frontend`, and `impeccable` load only when you invoke them: the install sets `disable-model-invocation: true` and `policy.allow_implicit_invocation: false` on the copy, and an `npx skills update` that refreshes the copy undoes it until you install again. The direct lines below and a Claude Code plugin install keep upstream's own trigger; `unslop` ships its own `disable-model-invocation: true`.
+
 | Where you run | How you install them |
 | --- | --- |
 | Claude Code | `/plugin marketplace add Vivswan/skills`, then `/plugin install unslop@vivswan-skills` (same for `frontend-design`, `design-taste-frontend`, and `impeccable`) |
