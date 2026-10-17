@@ -52,6 +52,10 @@ const TOOL_STUCK_MINUTES = 30;
 const CHILD_STILL_MINUTES = 30;
 // An ended turn is said once this old: its signal takes a moment to reach the one waiting on it.
 const ENDED_GRACE_MINUTES = 5;
+// A stillness already older than this when first judged (the first poll of a watch, a transcript
+// first seen) is history: one note, never an alert. One that crosses it under the watch was
+// judged fresh and stays an alert.
+const STALE_HOURS = 24;
 // A worktree the lead's own command named stays the lead's this long after the newest such command.
 const LEAD_CLAIM_MINUTES = 30;
 // A stuck or idle alert is repeated as its duration doubles, this many times, then held in silence.
@@ -482,17 +486,29 @@ function situationText(name: string, situation: Situation, nowMs: number): strin
   }
 }
 
-/** The minutes a stuck situation has held, the duration its repeats double on; null for an alert said once. */
-function stuckMinutes(situation: Situation, nowMs: number): number | null {
+/** The minutes a situation's stillness has held: a stuck call or a stall since it began, a still child since it last moved, an ended turn since it ended; null for one with no duration. */
+function heldMinutes(situation: Situation, nowMs: number): number | null {
   switch (situation.kind) {
     case "tool":
     case "stall":
+    case "ended":
       return minutesBetween(nowMs, situation.since);
     case "child":
       return minutesBetween(nowMs, situation.moved);
     default:
       return null;
   }
+}
+
+/** The minutes a stuck situation has held, the duration its repeats double on; null for an alert said once (an ended turn, a stranded job). */
+function stuckMinutes(situation: Situation, nowMs: number): number | null {
+  return situation.kind === "ended" ? null : heldMinutes(situation, nowMs);
+}
+
+/** The one note for a stillness judged history: how long it has held, and that it predates the watch. */
+function historyText(name: string, situation: Situation, held: number): string {
+  const head = situation.kind === "ended" ? `ended ${held} min ago` : `still ${held} min`;
+  return `agent ${name}: ${head}, long before this watch`;
 }
 
 /**
@@ -523,8 +539,10 @@ function restate(
 /**
  * The event for one agent this poll, or null. A stop and an ended turn whose signal arrived are
  * notes, said once while they hold; a return to fine retracts a standing alert with a note; an
- * alert is said on entering and repeated as its duration doubles. A judgment that rests on a
- * parent or a child whose read failed this poll is held: nothing said, nothing changed.
+ * alert is said on entering and repeated as its duration doubles. A stillness already past the
+ * horizon when first judged is history: a note, said once, with nothing to retract. A judgment
+ * that rests on a parent or a child whose read failed this poll is held: nothing said, nothing
+ * changed.
  */
 function agentTransition(
   target: Target,
@@ -536,38 +554,48 @@ function agentTransition(
 ): EventInput | null {
   const situation = situationOf(target, agentId, entry, nowMs, io, failed);
   if (situation.kind === "unread") return null;
-  const text = situationText(agentName(agentId, entry), situation, nowMs);
-  const event = (level: Level): EventInput => ({
+  const name = agentName(agentId, entry);
+  const key = situationKey(situation);
+  const event = (level: Level, text: string): EventInput => ({
     kind: "agent",
     level,
     text,
     url: fileUrl(entry.path),
     agentId,
   });
-
-  if (situation.kind === "stopped" || (situation.kind === "ended" && situation.signalled)) {
-    const key = situationKey(situation);
+  const note = (text: string): EventInput | null => {
     if (entry.said?.level === "note" && entry.said.key === key) return null;
     entry.said = { level: "note", key };
-    return event("note");
+    return event("note", text);
+  };
+
+  if (situation.kind === "stopped" || (situation.kind === "ended" && situation.signalled)) {
+    return note(situationText(name, situation, nowMs));
   }
 
   if (situation.kind === "fine") {
     const retract = entry.said?.level === "alert";
     entry.said = null;
-    return retract ? event("note") : null;
+    return retract ? event("note", situationText(name, situation, nowMs)) : null;
   }
 
+  // History is a stillness first judged (no alert stands on it) already past the horizon: the
+  // lead has nothing left to act on, and a watch started over an old session finds many.
   const standing = entry.said?.level === "alert" ? entry.said : null;
+  const held = heldMinutes(situation, nowMs);
+  if (standing?.key !== key && held !== null && held >= STALE_HOURS * 60) {
+    return note(historyText(name, situation, held));
+  }
+
   const next = restate(
     standing,
-    situationKey(situation),
-    text,
+    key,
+    situationText(name, situation, nowMs),
     stuckMinutes(situation, nowMs),
     nowMs,
   );
   entry.said = next.said;
-  return next.announce ? event("alert") : null;
+  return next.announce ? event("alert", next.said.text) : null;
 }
 
 /**

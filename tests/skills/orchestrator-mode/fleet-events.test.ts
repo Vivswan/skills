@@ -42,6 +42,8 @@ const GIT_TIMEOUT = 60_000;
 const TRACKS = { "wt-a": "track-a", "wt-b": "track-b" };
 const TWO_MINUTES_MS = 120_000;
 const HOUR_MS = 3_600_000;
+// In minutes, what `ago` takes: a transcript from a session days old.
+const FOUR_DAYS = 4 * 24 * 60;
 
 type Line = Record<string, unknown>;
 
@@ -910,6 +912,142 @@ describe("fleet-events.mts", () => {
     expect(s.state().targets[session.dir]).toMatchObject({
       agents: { [A]: { said: null } },
     });
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a stillness already older than a day when first judged is history: on a watch started over an old session, a stall and an unsignalled ended turn four days old are one note each, never an alert, " +
+    "while a stall of twenty minutes alerts as before; a transcript first seen later and four days old is started and history in one poll; a history agent moving is no retraction, " +
+    "its next stillness is judged fresh, and a restart over the saved state repeats no note", async () => {
+    const s = new Scenario(PROGRAM, "history");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const stilled = (agentId: string, at: string): Line[] => [
+      ...exchange(at, `toolu_${agentId.slice(0, 4)}`, agentId),
+      said(at, null, agentId),
+    ];
+    const pathA = writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build" },
+      stilled(A, ago(FOUR_DAYS)),
+    );
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      ...exchange(ago(FOUR_DAYS), "toolu_b0", B),
+      said(ago(FOUR_DAYS), "end_turn", B),
+    ]);
+    const pathC = writeAgent(
+      session,
+      C,
+      { name: "builder-c", description: "build" },
+      stilled(C, ago(20)),
+    );
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session);
+    expect(rows(s)).toEqual([
+      ["note", "agent builder-a: still 5760 min, long before this watch", fileUrl(pathA)],
+      ["note", "agent builder-b: ended 5760 min ago, long before this watch", fileUrl(pathB)],
+      ["alert", "agent builder-c: stuck 20 min mid-turn, nothing pending", fileUrl(pathC)],
+    ]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(await delivered(box, 1)).toEqual([
+      ["agent builder-c: stuck 20 min mid-turn, nothing pending"],
+    ]);
+    expect(standing(s, box.path)).toEqual([
+      "agent builder-c: stuck 20 min mid-turn, nothing pending",
+    ]);
+
+    // A transcript first seen on a later poll, four days old: started, and history, in one poll.
+    const pathD = writeAgent(
+      session,
+      D,
+      { name: "builder-d", description: "build" },
+      stilled(D, ago(FOUR_DAYS)),
+    );
+    expect(polled(s, box.path)).toBe(2);
+    expect(rows(s).slice(3)).toEqual([
+      ["note", "agent builder-d: started", fileUrl(pathD)],
+      ["note", "agent builder-d: still 5760 min, long before this watch", fileUrl(pathD)],
+    ]);
+
+    // B moves: nothing alerted, so nothing retracts. A moves and is quiet again past
+    // --quiet-after: a new stillness, judged fresh, so an alert.
+    const movedA = ago(15);
+    appendLines(pathB, exchange(ago(0), "toolu_b9", B));
+    appendLines(pathA, exchange(movedA, "toolu_a9", A));
+    expect(polled(s, box.path)).toBe(1);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s).slice(5)).toEqual([
+      ["alert", "agent builder-a: stuck 15 min mid-turn, nothing pending", fileUrl(pathA)],
+    ]);
+    expect(s.state().targets[session.dir]).toMatchObject({
+      agents: {
+        [A]: { said: { level: "alert", key: `stall:${movedA}`, duration: 15 } },
+        [B]: { said: null },
+        [D]: { said: { level: "note" } },
+      },
+    });
+
+    // The restart's own poll reads the saved notes back: nothing is said again.
+    s.stop({ inbox: box.path });
+    await s.start({ inbox: box.path });
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toHaveLength(6);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a stillness that crosses the day under the watch stays an alert: with its repeats spent it is held in silence and still listed by status, " +
+    "and after a day with no poll it repeats once more; history is only what was already old when first judged", async () => {
+    const s = new Scenario(PROGRAM, "crossing");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const began = ago(1500);
+    const stilled = (agentId: string): Line[] => [
+      ...exchange(began, `toolu_${agentId.slice(0, 4)}`, agentId),
+      said(began, null, agentId),
+    ];
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, stilled(A));
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, stilled(B));
+    // Both files were last written twenty minutes ago, so each stall is judged at twenty minutes.
+    const written = ago(20);
+    for (const path of [pathA, pathB]) utimesSync(path, new Date(written), new Date(written));
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session);
+    expect(rows(s)).toEqual([
+      ["alert", "agent builder-a: stuck 20 min mid-turn, nothing pending", fileUrl(pathA)],
+      ["alert", "agent builder-b: stuck 20 min mid-turn, nothing pending", fileUrl(pathB)],
+    ]);
+    s.stop({ inbox: box.path });
+
+    // Twenty-five hours on by the transcript's clock, each stall's start as its file's last line
+    // says it. A's saved alert is what a day of polling leaves: said when the stall was twenty
+    // minutes old, repeated at 40, 80, and 160, its repeats spent. B's is what a daemon stopped
+    // since the first alert left: said once at twenty minutes.
+    const spent = {
+      text: "agent builder-a: stuck 160 min mid-turn, nothing pending",
+      since: ago(1480),
+      duration: 160,
+      repeats: 3,
+    };
+    rewriteState(s, (target) => {
+      for (const [agentId, alert] of [
+        [A, spent],
+        [B, { since: ago(1480) }],
+      ] as const) {
+        const entry = target.agents[agentId] as PersistedTarget["agents"][string];
+        entry.state.lastMovedAt = began;
+        Object.assign(entry.said as Record<string, unknown>, { key: `stall:${began}`, ...alert });
+      }
+    });
+    for (const path of [pathA, pathB]) utimesSync(path, new Date(began), new Date(began));
+    await s.start({ inbox: box.path });
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s).slice(2)).toEqual([
+      ["alert", "agent builder-b: stuck 1500 min mid-turn, nothing pending", fileUrl(pathB)],
+    ]);
+    expect(standing(s, box.path)).toEqual([
+      "agent builder-a: stuck 160 min mid-turn, nothing pending",
+      "agent builder-b: stuck 1500 min mid-turn, nothing pending",
+    ]);
     s.stop({ inbox: box.path });
   }, 30000);
 
