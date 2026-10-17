@@ -35,6 +35,8 @@ const PATH_FIELD = /path|dir|cwd/i;
 // Distinct paths an agent named, the least recently named dropped past this: bounded state for a
 // long transcript, and a path in current use never lapses.
 const MAX_NAMED_PATHS = 1000;
+// The time a path saved before times were kept was named: long ago, so no lead claim rests on it.
+const LONG_AGO = new Date(0).toISOString();
 // Each teammate envelope with its body: the regex locates, the parsed body decides. A body with a
 // tag inside is text, never a notice, so it is not captured.
 const TEAMMATE_ENVELOPE =
@@ -80,8 +82,8 @@ export interface Activity {
   children: Record<string, Child>;
   /** Successful TaskStops on a task id that is no job and no child here, by that exact id: a nested agent another agent spawned, stopped by the lead. */
   stops: Record<string, string>;
-  /** Absolute paths named in this agent's tool-call inputs (never a result or a user text), resolved, distinct, least recently named first: the worktrees it works in by its own commands. */
-  named: string[];
+  /** Absolute paths named in this agent's tool-call inputs (never a result or a user text), resolved, each with the time of the newest call naming it, least recently named first: the worktrees it works in by its own commands. */
+  named: Record<string, string>;
   lines: number;
   /** Lines that were not a JSON object with a timestamp: counted, never fatal. */
   skipped: number;
@@ -174,7 +176,7 @@ function initialActivity(): Activity {
     jobs: {},
     children: {},
     stops: {},
-    named: [],
+    named: {},
     lines: 0,
     skipped: 0,
   };
@@ -192,20 +194,21 @@ function namedPathsIn(text: string, field: string): string[] {
 
 // The worktree an agent works in shows up in its own tool calls (`git -C /abs/wt status`) before
 // anything else does, and a tool call's input is the agent's own words, where a result or a user
-// text is not. Each string is read under the field that holds it, an array under its parent's.
-function namePaths(state: Activity, input: unknown, field = ""): void {
+// text is not. Each string is read under the field that holds it, an array under its parent's; a
+// path named again moves to the newest position with the newer time.
+function namePaths(state: Activity, input: unknown, at: string, field = ""): void {
   if (typeof input === "string") {
     for (const named of namedPathsIn(input, field)) {
       const path = resolve(named);
-      const at = state.named.indexOf(path);
-      if (at >= 0) state.named.splice(at, 1);
-      state.named.push(path);
-      if (state.named.length > MAX_NAMED_PATHS) state.named.shift();
+      delete state.named[path];
+      state.named[path] = at;
+      const paths = Object.keys(state.named);
+      if (paths.length > MAX_NAMED_PATHS) delete state.named[paths[0] as string];
     }
   } else if (Array.isArray(input)) {
-    for (const item of input) namePaths(state, item, field);
+    for (const item of input) namePaths(state, item, at, field);
   } else if (typeof input === "object" && input !== null) {
-    for (const [key, item] of Object.entries(input)) namePaths(state, item, key);
+    for (const [key, item] of Object.entries(input)) namePaths(state, item, at, key);
   }
 }
 
@@ -328,7 +331,7 @@ function reduceAssistant(state: Activity, line: Record<string, unknown>, at: str
     const tool = str(block.name);
     if (id === null || tool === null) continue;
     const input = record(block.input);
-    namePaths(state, input);
+    namePaths(state, input, at);
     let taskId: string | null = null;
     if (tool === "Agent") taskId = str(input?.name);
     if (tool === "TaskStop") taskId = str(input?.task_id);
@@ -576,6 +579,20 @@ function normalizeChild(value: unknown): Child | null {
   return { name: str(child.name), at, since: str(child.since) ?? at, outcome };
 }
 
+/** The saved named paths: the version before kept the paths alone, so each is named long ago; a shape no version wrote is empty. */
+function normalizeNamed(value: unknown): Record<string, string> {
+  if (Array.isArray(value)) {
+    const paths = value.filter((path): path is string => typeof path === "string");
+    return Object.fromEntries(paths.map((path) => [path, LONG_AGO]));
+  }
+  const saved = record(value) ?? {};
+  return Object.fromEntries(
+    Object.entries(saved).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+}
+
 /** A saved activity: `stops`, a child's `since`, and `named` came later and take their defaults; a shape no version wrote is null. */
 export function normalizeActivity(value: unknown): Activity | null {
   const saved = record(value);
@@ -592,7 +609,7 @@ export function normalizeActivity(value: unknown): Activity | null {
     jobs,
     children,
     stops,
-    named: Array.isArray(saved.named) ? saved.named.filter((p) => typeof p === "string") : [],
+    named: normalizeNamed(saved.named),
     lines: num(saved.lines) ?? 0,
     skipped: num(saved.skipped) ?? 0,
   };

@@ -52,6 +52,8 @@ const TOOL_STUCK_MINUTES = 30;
 const CHILD_STILL_MINUTES = 30;
 // An ended turn is said once this old: its signal takes a moment to reach the one waiting on it.
 const ENDED_GRACE_MINUTES = 5;
+// A worktree the lead's own command named stays the lead's this long after the newest such command.
+const LEAD_CLAIM_MINUTES = 30;
 // A stuck or idle alert is repeated as its duration doubles, this many times, then held in silence.
 const MAX_REPEATS = 3;
 // The harness closes a background job's output file with this line.
@@ -669,7 +671,7 @@ function readAgents(
     if (listed.has(agentId)) continue;
     entry.sidecar = null;
     entry.said = null;
-    entry.state.named = [];
+    entry.state.named = {};
   }
   return { events, busy, refreshed, failed };
 }
@@ -698,11 +700,17 @@ function countProcesses(processes: ProcessRow[]): { workers: number; shells: num
 
 /**
  * The worktrees agents claim, by a sidecar's path or by naming the path (or one under it) in a
- * tool call's input at any time in the watch; the lead's own tool calls claim the same way, so a
- * worktree the lead works in by hand is never read. The repository's main checkout is never
- * claimed by a command: every agent reads files there.
+ * tool call's input at any time in the watch. The lead's own tool calls claim the same way, for
+ * LEAD_CLAIM_MINUTES after the newest one naming the worktree: a gate or a restack names every
+ * builder's worktree in passing, and a permanent claim would hide a worker's idle line. The
+ * repository's main checkout is never claimed by a command: every agent reads files there.
  */
-function claimedWorktrees(target: Target, paths: string[], repo: string): Set<string> {
+function claimedWorktrees(
+  target: Target,
+  paths: string[],
+  repo: string,
+  nowMs: number,
+): Set<string> {
   const claimed = new Set<string>();
   const roots = paths.map((path) => resolve(path)).filter((root) => root !== resolve(repo));
   const claim = (named: string): void => {
@@ -712,9 +720,11 @@ function claimedWorktrees(target: Target, paths: string[], repo: string): Set<st
   };
   for (const entry of Object.values(target.agents)) {
     if (entry.sidecar?.worktreePath) claimed.add(resolve(entry.sidecar.worktreePath));
-    for (const named of entry.state.named) claim(named);
+    for (const named of Object.keys(entry.state.named)) claim(named);
   }
-  for (const named of target.lead.state.named) claim(named);
+  for (const [named, at] of Object.entries(target.lead.state.named)) {
+    if (nowMs - Date.parse(at) < LEAD_CLAIM_MINUTES * MINUTE_MS) claim(named);
+  }
   return claimed;
 }
 
@@ -824,6 +834,7 @@ async function readWorktrees(
     target,
     [...discovered.paths, ...Object.keys(target.worktrees)],
     repo,
+    nowMs,
   );
   const unclaimed = discovered.paths.filter((path) => !claimed.has(resolve(path)));
   let attributionOk = true;

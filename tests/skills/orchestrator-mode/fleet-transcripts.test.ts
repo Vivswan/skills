@@ -139,7 +139,7 @@ function activity(overrides: Partial<Activity>): Activity {
     jobs: {},
     children: {},
     stops: {},
-    named: [],
+    named: {},
     lines: 0,
     skipped: 0,
     ...overrides,
@@ -211,7 +211,7 @@ describe("the transcript reducer", () => {
       userText(at(2), "stop, change of plan"),
     ];
     expect(fold(lines)).toEqual(
-      activity({ lastMovedAt: at(2), named: ["/home/user/repo/README.md"], lines: 3 }),
+      activity({ lastMovedAt: at(2), named: { "/home/user/repo/README.md": at(0, 1) }, lines: 3 }),
     );
   });
 
@@ -225,7 +225,7 @@ describe("the transcript reducer", () => {
       message: { role: "user", content: texts.map((text) => ({ type: "text", text })) },
     });
     expect(fold([...pending, blocks("stop,", "change of plan")])).toEqual(
-      activity({ lastMovedAt: at(2), named: ["/home/user/repo/README.md"], lines: 3 }),
+      activity({ lastMovedAt: at(2), named: { "/home/user/repo/README.md": at(0, 1) }, lines: 3 }),
     );
     const mixed: Line = {
       ...envelope("user", at(2)),
@@ -242,7 +242,7 @@ describe("the transcript reducer", () => {
       activity({
         lastMovedAt: at(2),
         pending: { toolu_02: { tool: "Read", at: at(0, 1), taskId: null, timeoutMs: null } },
-        named: ["/home/user/repo/README.md"],
+        named: { "/home/user/repo/README.md": at(0, 1) },
         lines: 3,
       }),
     );
@@ -538,7 +538,7 @@ describe("the transcript reducer", () => {
         activity({
           lastMovedAt: at(3),
           jobs: { b1a2b3c4d: { at: at(0, 1) } },
-          named: ["/home/user/repo/README.md"],
+          named: { "/home/user/repo/README.md": at(2) },
           lines: 4,
         }),
       );
@@ -625,17 +625,18 @@ describe("the transcript reducer", () => {
         toolResult(at(9), "toolu_05"),
         userText(at(10), "and /tmp/user-text is not a tool call"),
       ]).named;
-      // Least recently named first: a.md, named in the prompt and again in the nested list, sits after b.md.
-      expect(named).toEqual([
-        "/repo/.worktrees/alerts",
-        "/repo/docs/b.md",
-        "/repo/.worktrees/x[1]/file",
-        "/repo/docs/a.md",
-        "/repo/here",
-        "/repo/.worktrees/x y/notes.md",
-        "/usr/bin/git",
-        "/repo/.worktrees/x y",
-        "/repo/.worktrees/x z",
+      // Least recently named first, each with the time of its newest naming: a.md, named in the
+      // prompt and again in the nested list, sits after b.md.
+      expect(Object.entries(named)).toEqual([
+        ["/repo/.worktrees/alerts", at(0)],
+        ["/repo/docs/b.md", at(2)],
+        ["/repo/.worktrees/x[1]/file", at(2)],
+        ["/repo/docs/a.md", at(2)],
+        ["/repo/here", at(2)],
+        ["/repo/.worktrees/x y/notes.md", at(4)],
+        ["/usr/bin/git", at(6)],
+        ["/repo/.worktrees/x y", at(6)],
+        ["/repo/.worktrees/x z", at(6)],
       ]);
     },
   );
@@ -650,9 +651,11 @@ describe("the transcript reducer", () => {
       );
     }
     const named = fold(lines).named;
-    expect(named).toHaveLength(1000);
-    expect(named.slice(-2)).toEqual(["/repo/.worktrees/x", "/other/file-999"]);
-    expect(named).not.toContain("/once/early");
+    const paths = Object.keys(named);
+    expect(paths).toHaveLength(1000);
+    expect(paths.slice(-2)).toEqual(["/repo/.worktrees/x", "/other/file-999"]);
+    expect(named["/repo/.worktrees/x"]).toBe(at(1, 999 % 60));
+    expect(paths).not.toContain("/once/early");
   });
 
   test("a resume keeps the child's spawn time: a send or a TaskStop by name reaches the latest spawn, not the resumed elder, while the elder's idle notification by that name finishes the elder, the running one", () => {
@@ -738,7 +741,13 @@ describe("the transcript reducer", () => {
       state: { ...saved.state, children: { [CHILD_C]: { ...children[CHILD_C], since: at(2, 1) } } },
     });
     expect(kept?.cursor).toEqual({ offset: 4096, ino: null, size: 4096 });
-    expect(kept?.state.named).toEqual([]);
+    expect(kept?.state.named).toEqual({});
+    // The version before kept the paths alone: each loads as named long ago.
+    const pathsAlone = normalizeTranscript({
+      ...saved,
+      state: { ...saved.state, named: ["/repo/.worktrees/x", 7] },
+    });
+    expect(pathsAlone?.state.named).toEqual({ "/repo/.worktrees/x": "1970-01-01T00:00:00.000Z" });
     expect(kept?.state.children).toEqual({
       [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "finished" },
     });

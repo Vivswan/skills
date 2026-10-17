@@ -1532,6 +1532,83 @@ describe("fleet-events.mts", () => {
   );
 
   test(
+    "the lead's claim is transient: a worktree the lead named is unread while that command is under 30 minutes old, and read again as unclaimed after, " +
+      "with no work remembered from the claimed period, so a worker that then comes and goes yields the idle line; a lead command naming it again at 20 minutes keeps it claimed, " +
+      "and an agent's command of any age keeps its claim",
+    async () => {
+      const s = new Scenario(PROGRAM, "leadlapse");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      const leadCommand = (id: string, at: string, path: string): Line[] => [
+        toolUse(at, id, "Bash", { command: `git -C ${path} status --short` }, null),
+        toolResult(at, id, { agentId: null }),
+      ];
+      appendLines(session.sessionFile, [
+        ...leadCommand("toolu_l1", ago(5), wtA),
+        ...leadCommand("toolu_l2", ago(5), wtB),
+      ]);
+      // The agent control: a third worktree named by an agent 40 minutes ago, claimed for good.
+      const nested = join(repo, ".worktrees", "nested");
+      git(repo, "worktree", "add", nested, "-b", "track-n");
+      writeAgent(session, A, { name: "builder-a", description: "build" }, [
+        toolUse(ago(40), "toolu_a1", "Bash", { command: `git -C ${nested} status --short` }),
+        toolResult(ago(40), "toolu_a1"),
+        ...exchange(ago(0), "toolu_a2"),
+      ]);
+      const parked = park(repo);
+      const workers: Array<ReturnType<typeof park>> = [park(wtA), park(wtB), park(nested)];
+      const leave = async () => {
+        for (const worker of workers.splice(0)) {
+          worker.kill();
+          await worker.exited;
+        }
+      };
+      try {
+        await s.start({ inbox: box.path });
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        expect(polled(s, box.path)).toBe(0);
+        await leave();
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(0);
+        expect(s.events()).toEqual([]);
+
+        // 31 minutes on, by the transcript's clock: the session file shrinks to nothing (so the
+        // daemon reads it from its start) and then carries wt-a's command 31 minutes old and wt-b
+        // named again at 20.
+        writeFileSync(session.sessionFile, "");
+        expect(polled(s, box.path)).toBe(0);
+        appendLines(session.sessionFile, [
+          ...leadCommand("toolu_l1", ago(31), wtA),
+          ...leadCommand("toolu_l2", ago(31), wtB),
+          ...leadCommand("toolu_l3", ago(20), wtB),
+        ]);
+        expect(polled(s, box.path)).toBe(0);
+        workers.push(park(wtA), park(wtB), park(nested));
+        expect(polled(s, box.path)).toBe(0);
+        await leave();
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        expect(rows(s)).toEqual([
+          ["alert", "worktree track-a: idle 2 polls after work", fileUrl(wtA)],
+        ]);
+        const target = s.state().targets[session.dir] as { worktrees: Record<string, unknown> };
+        expect(Object.keys(target.worktrees).sort()).toEqual([repo, wtA].sort());
+      } finally {
+        for (const worker of workers) worker.kill();
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
     "with every worktree claimed, the poll runs no process reading: a downed lsof is no trouble until an unclaimed worktree needs it",
     async () => {
       const s = new Scenario(PROGRAM, "allclaimed");
