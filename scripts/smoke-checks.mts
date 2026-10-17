@@ -438,6 +438,8 @@ export interface UpstreamSkill {
   readonly repo: string;
   /** The skill folder inside it, repository-relative. */
   readonly path: string;
+  /** The entry's `metadata["disable-model-invocation"]`: both install commands mark the installed copy. */
+  readonly explicitOnly: boolean;
 }
 
 /** The GitHub page of an upstream skill's folder at its default branch head, where the README links to it. */
@@ -604,6 +606,45 @@ export function checkReadmeMermaidGraph(
     if (!clicked.has(alias)) {
       fail(`README.md: mermaid node '${alias}' has no click line to its SKILL.md`);
     }
+  }
+}
+
+// The README names the upstream skills the install commands mark explicit-invocation-only; the
+// marketplace's metadata flags are what the commands read, so the two would drift apart silently.
+// The sentence under '### Upstream skills' must name exactly the flagged entries, parsed entry by
+// entry so unrecognized text fails instead of hiding.
+export function checkReadmeExplicitUpstreams(
+  readmeText: string,
+  upstream: readonly UpstreamSkill[],
+): void {
+  const flagged = upstream.filter((skill) => skill.explicitOnly).map((skill) => skill.name);
+  const area = readmeSection(readmeText, "Available Skills");
+  const sentence = /^Installed by [^,]+, (.+?) load only when you invoke (?:it|them)/m.exec(area);
+  if (sentence === null) {
+    if (flagged.length === 0) return;
+    fail(
+      "README.md: the Upstream skills subsection is missing the sentence 'Installed by <the two" +
+        " commands>, <roster> load only when you invoke them'",
+    );
+  }
+  const named: string[] = [];
+  for (const entry of (sentence[1] ?? "").split(/, and |, | and /)) {
+    const name = /^`([a-z0-9-]+)`$/.exec(entry)?.[1];
+    if (name === undefined) {
+      fail(
+        `README.md: cannot parse explicit-invocation-only upstream roster entry '${entry}'` +
+          " -- expected backticked skill names separated by ', ' and ', and '",
+      );
+    }
+    named.push(name);
+  }
+  const want = [...flagged].sort().join(", ");
+  const got = [...named].sort().join(", ");
+  if (want !== got) {
+    fail(
+      `README.md: the explicit-invocation-only upstream roster names [${got}], the marketplace` +
+        ` flags [${want}] -- the two must agree`,
+    );
   }
 }
 

@@ -17,6 +17,7 @@
     },
     {
       "name": "design-taste-frontend",
+      "metadata": { "disable-model-invocation": true },
       "description": "Art direction for public-facing web pages, dealt from a library of researched directions and held to a no-slop house style with a browser inspector",
       "source": {
         "source": "git-subdir",
@@ -27,11 +28,23 @@
     },
     {
       "name": "frontend-design",
+      "metadata": { "disable-model-invocation": true },
       "description": "Distinctive, intentional visual design for new or reshaped UI: aesthetic direction, typography, and choices that do not read as templated defaults",
       "source": {
         "source": "git-subdir",
         "url": "anthropics/skills",
         "path": "skills/frontend-design"
+      },
+      "skills": ["./"]
+    },
+    {
+      "name": "impeccable",
+      "metadata": { "disable-model-invocation": true },
+      "description": "Design direction for frontend work: commands to design, critique, audit, polish, or harden a web or native interface, with detector rules against AI-template tells",
+      "source": {
+        "source": "git-subdir",
+        "url": "pbakaus/impeccable",
+        "path": ".agents/skills/impeccable"
       },
       "skills": ["./"]
     },

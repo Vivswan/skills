@@ -1,3 +1,4 @@
+// reaches: bin/install-shared.mjs
 import { describe, expect, test } from "bun:test";
 import {
   lstatSync,
@@ -6,12 +7,14 @@ import {
   readlinkSync,
   realpathSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { CheckFailure } from "../../scripts/lib.mts";
 import {
-  discoverAgentSkillDirs,
+  addCommands,
+  installForAdd,
   linkSkills,
   loadLockAttribution,
   type PruneAction,
@@ -178,6 +181,63 @@ function installedCopy(dir: string, name: string): string {
 function entryExists(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
+
+describe("addCommands", () => {
+  // What drifts: the skills CLI's grammar is an external contract (`-y` is what skips its overwrite prompt), and
+  // the order is behavior (an upstream failure must leave this repository's skills as they were).
+  test("installs each upstream folder, then this working tree, every call global and unattended", () => {
+    expect(
+      addCommands([
+        { target: "example-org/monorepo/tools/alpha" },
+        { target: "example-org/beta/skills/beta" },
+      ]),
+    ).toEqual([
+      ["npx", "skills", "add", "example-org/monorepo/tools/alpha", "--global", "-y"],
+      ["npx", "skills", "add", "example-org/beta/skills/beta", "--global", "-y"],
+      ["npx", "skills", "add", ".", "--global", "-y"],
+    ]);
+  });
+});
+
+describe("installForAdd", () => {
+  // What drifts: the mark must follow each upstream's own call, so a later failure leaves the earlier copies
+  // marked and the run still ends with that failure, named, before anything is linked.
+  test("marks a flagged upstream's fresh copy right after its call; a later failure ends the run named", () => {
+    const home = temp.dir("skills-add-test-");
+    const skills = join(home, ".agents", "skills");
+    const past = new Date(Date.now() - 60_000);
+    const copies: Record<string, string> = {};
+    for (const name of ["alpha-one", "beta-two"]) {
+      copies[name] = join(skills, name);
+      mkdirSync(copies[name], { recursive: true });
+      writeFileSync(join(copies[name], "SKILL.md"), `---\nname: ${name}\n---\nbody\n`);
+      utimesSync(join(copies[name], "SKILL.md"), past, past);
+    }
+    const upstream = [
+      { name: "alpha-one", target: "example-org/alpha/skills/alpha-one", explicitOnly: true },
+      { name: "beta-two", target: "example-org/beta/skills/beta-two", explicitOnly: true },
+    ];
+    const calls: string[][] = [];
+    const lines: string[] = [];
+    const run = (argv: readonly string[]) => {
+      calls.push([...argv]);
+      if (calls.length === 2) return { status: 3 };
+      const skillMd = join(skills, basename(argv[3] as string), "SKILL.md");
+      utimesSync(skillMd, new Date(), new Date());
+      return { status: 0 };
+    };
+
+    expectCheckFailure(
+      () => installForAdd(upstream, skills, home, run, (line) => lines.push(line)),
+      /example-org\/beta\/skills\/beta-two --global -y exited with status 3; not linking/,
+    );
+    expect(calls).toHaveLength(2);
+    expect(lines).toEqual([`marked explicit-invocation-only: ${copies["alpha-one"]}`]);
+    expect(readFileSync(join(copies["beta-two"] as string, "SKILL.md"), "utf8")).toBe(
+      "---\nname: beta-two\n---\nbody\n",
+    );
+  });
+});
 
 describe("repoSkillSources", () => {
   test("maps each name to its one directory, whichever directory ships it", () => {
@@ -526,19 +586,6 @@ describe("pruneStaleSkills", () => {
     ]);
     expect(entryExists(staleCanonical)).toBe(false);
     expect(entryExists(pointer)).toBe(false);
-  });
-});
-
-describe("discoverAgentSkillDirs", () => {
-  test("finds dot-dir skills directories and skips the canonical one", () => {
-    const root = temp.dir("skills-discover-test-");
-    const agentsSkills = join(root, ".agents", "skills");
-    mkdirSync(agentsSkills, { recursive: true });
-    mkdirSync(join(root, ".claude", "skills"), { recursive: true });
-    mkdirSync(join(root, ".empty-agent"));
-    mkdirSync(join(root, "not-hidden", "skills"), { recursive: true });
-
-    expect(discoverAgentSkillDirs(root, agentsSkills)).toEqual([join(root, ".claude", "skills")]);
   });
 });
 
