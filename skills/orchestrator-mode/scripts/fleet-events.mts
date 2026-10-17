@@ -698,20 +698,23 @@ function countProcesses(processes: ProcessRow[]): { workers: number; shells: num
 
 /**
  * The worktrees agents claim, by a sidecar's path or by naming the path (or one under it) in a
- * tool call's input at any time in the watch. The repository's main checkout is never claimed by
- * a command: every agent reads files there.
+ * tool call's input at any time in the watch; the lead's own tool calls claim the same way, so a
+ * worktree the lead works in by hand is never read. The repository's main checkout is never
+ * claimed by a command: every agent reads files there.
  */
 function claimedWorktrees(target: Target, paths: string[], repo: string): Set<string> {
   const claimed = new Set<string>();
   const roots = paths.map((path) => resolve(path)).filter((root) => root !== resolve(repo));
+  const claim = (named: string): void => {
+    for (const root of roots) {
+      if (named === root || named.startsWith(`${root}/`)) claimed.add(root);
+    }
+  };
   for (const entry of Object.values(target.agents)) {
     if (entry.sidecar?.worktreePath) claimed.add(resolve(entry.sidecar.worktreePath));
-    for (const named of entry.state.named) {
-      for (const root of roots) {
-        if (named === root || named.startsWith(`${root}/`)) claimed.add(root);
-      }
-    }
+    for (const named of entry.state.named) claim(named);
   }
+  for (const named of target.lead.state.named) claim(named);
   return claimed;
 }
 

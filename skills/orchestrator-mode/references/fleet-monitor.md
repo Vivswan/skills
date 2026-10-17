@@ -71,7 +71,7 @@ A state is said once on entering and once on leaving. A stuck or idle alert is r
 | alert | `trouble` | `fleet: <reason>` | the daemon could not take a reading: tooling trouble, never a quiet fleet; the `/session-events` skill's line after three failed polls is the same kind |
 | note | `restored` | `fleet: reading restored` | the reading that failed is back; an empty process list is verified inactivity once more |
 
-A worktree an agent claims is not read at all: the transcript says everything the tree could, so its commits, its idleness, and its removal produce no line. A claim is the agent's sidecar naming the worktree, or any tool call of the agent's naming its path in the call's input (never a result); the repository's main checkout is never claimed by a command, since every agent reads files there.
+A worktree an agent claims is not read at all: the transcript says everything the tree could, so its commits, its idleness, and its removal produce no line. A claim is a sidecar naming the worktree, or a tool call of the agent's or the lead's naming its path in the call's input (never a result); the main checkout is never claimed by a command, since every agent reads there.
 
 What stays the lead's, by hand: content claims through `probe.mts`, standing state in `ledger.mts`, the PII grep at each builder report and at each landing gate, `baseline.mts` at landings, and every nudge and directive. Codex and Copilot workers write no Claude transcript, so for them the daemon has only the worktree reading, the same rows a monitor subagent sweeps.
 

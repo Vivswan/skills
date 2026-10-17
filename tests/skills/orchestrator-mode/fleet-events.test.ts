@@ -1490,6 +1490,48 @@ describe("fleet-events.mts", () => {
   );
 
   test(
+    "the lead's own commands claim a worktree as an agent's do: one named only in the session transcript's Bash input sees a worker come and go with no idle line, " +
+      "while one named nowhere idles two polls after work",
+    async () => {
+      const s = new Scenario(PROGRAM, "leadclaim");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const {
+        repo,
+        worktrees: { "wt-a": wtA, "wt-b": wtB },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      appendLines(session.sessionFile, [
+        toolUse(ago(5), "toolu_lead", "Bash", { command: `git -C ${wtA} log --oneline -3` }, null),
+        toolResult(ago(5), "toolu_lead", { agentId: null }),
+      ]);
+      const parked = park(repo);
+      const workers = [park(wtA), park(wtB)];
+      try {
+        await s.start({ inbox: box.path });
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        expect(polled(s, box.path)).toBe(0);
+        for (const worker of workers.splice(0)) {
+          worker.kill();
+          await worker.exited;
+        }
+        expect(polled(s, box.path)).toBe(0);
+        expect(polled(s, box.path)).toBe(1);
+        expect(polled(s, box.path)).toBe(0);
+        expect(rows(s)).toEqual([
+          ["alert", "worktree track-b: idle 2 polls after work", fileUrl(wtB)],
+        ]);
+        const target = s.state().targets[session.dir] as { worktrees: Record<string, unknown> };
+        expect(Object.keys(target.worktrees).sort()).toEqual([repo, wtB].sort());
+      } finally {
+        for (const worker of workers) worker.kill();
+        parked.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
     "with every worktree claimed, the poll runs no process reading: a downed lsof is no trouble until an unclaimed worktree needs it",
     async () => {
       const s = new Scenario(PROGRAM, "allclaimed");
