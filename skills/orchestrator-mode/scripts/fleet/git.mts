@@ -11,7 +11,7 @@ const COMMAND_TIMEOUT_MS = 15_000;
 const MAX_BUFFER = 32 * 1024 * 1024;
 
 export type RunResult =
-  | { ok: true; stdout: Buffer; stderr: Buffer; degraded?: boolean }
+  | { ok: true; stdout: Buffer; stderr: Buffer; code: number }
   | { ok: false; error: string; code: number | null };
 
 /**
@@ -61,19 +61,20 @@ export function run(
       },
       (error, stdout, stderr) => {
         if (!error) {
-          resolvePromise({ ok: true, stdout, stderr });
+          resolvePromise({ ok: true, stdout, stderr, code: 0 });
           return;
         }
         // lsof and ps exit nonzero when some processes are unreadable or
         // exited mid-sweep while still printing everything they could see;
-        // that partial view is the data. Only a genuine nonzero EXIT
-        // qualifies: a timeout kill or an overflowed output buffer also
-        // leaves partial stdout, and treating those as success would let an
-        // incomplete process list read as a quiet fleet.
+        // that partial view is the data, and the exit code travels with it
+        // for the caller to read. Only a genuine nonzero EXIT qualifies: a
+        // timeout kill or an overflowed output buffer also leaves partial
+        // stdout, and treating those as success would let an incomplete
+        // process list read as a quiet fleet.
         const genuineNonzeroExit =
           !error.killed && error.signal == null && typeof error.code === "number";
         if (opts.acceptStdoutOnError && genuineNonzeroExit && stdout.length > 0) {
-          resolvePromise({ ok: true, stdout, stderr, degraded: true });
+          resolvePromise({ ok: true, stdout, stderr, code: error.code as number });
           return;
         }
         const detail = stderr.toString("utf8").trim().split("\n")[0] ?? "";
