@@ -15,7 +15,19 @@
 // may name files the reader will create.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { List, Nodes, RootContent } from "mdast";
 import type { Position } from "unist";
@@ -75,19 +87,32 @@ function runBun(args: string[]): boolean {
   return step.status === 0;
 }
 
-function build(source: string, skill: string, built: string): void {
-  // bun build resolves installed packages only: install the pins for the build's duration, then remove them.
-  const ok =
-    runBun(["install", "--production", "--no-save", "--cwd", skill]) &&
-    runBun(["build", source, "--target", "bun", "--outfile", built]);
-  rmSync(join(skill, "node_modules"), { recursive: true, force: true });
-  if (!ok) process.exit(2);
+function build(source: string, scripts: string, skill: string, built: string): boolean {
+  // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
+  // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
+  mkdirSync(join(skill, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
+  try {
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 function ensureBuilt(source: string): boolean {
   if (!source.endsWith(".mts")) return false;
   const { scripts, skill, built } = buildPaths(source);
-  if (buildIsStale(scripts, skill, built)) build(source, skill, built);
+  if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
   const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
   // A bundle killed by a signal has no status: die of the same signal.
   if (run.signal) process.kill(process.pid, run.signal);

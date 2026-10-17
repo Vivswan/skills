@@ -86,13 +86,15 @@ skills/my-skill/
   .build/x.js            the bundle, written on first run; .build/ is gitignored
 ```
 
-The script bundles itself on first run. Run as source (`bun scripts/x.mts`), the block installs the pins into the skill folder, bundles the script and everything it imports into the `.build` folder with `bun build`, removes the install, and runs the bundle with the same arguments. Later runs go straight to the bundle until a file in `scripts/` or the `package.json` is newer.
+The script bundles itself on first run. Run as source (`bun scripts/x.mts`), the block copies `scripts/` and the `package.json` into a scratch directory under the `.build` folder, installs the pins and bundles the script there with `bun build`, moves the bundle into the `.build` folder, removes the scratch, and runs the bundle with the same arguments.
+
+Later runs go straight to the bundle until a file in `scripts/` or the `package.json` is newer. Two first runs at once each build in their own scratch and never share an install.
 
 An entry below `scripts/` bundles to the same relative path under the `.build` folder; the block finds the skill root by walking up to the `scripts/` directory with the `package.json` beside it.
 
 `bun build` resolves installed packages only, which is why the install step exists. A failed install or build prints bun's error and exits 2. A user may install any one skill alone, so no script imports from another skill.
 
-The block needs `spawnSync` from `node:child_process`, `existsSync`, `readdirSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join`, `relative` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
+The block needs `spawnSync` from `node:child_process`, `copyFileSync`, `cpSync`, `existsSync`, `mkdirSync`, `mkdtempSync`, `readdirSync`, `renameSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join`, `relative` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
 
 Below the guard, the program loads its packages and sibling scripts with `await import("yaml")`, never a static import: ESM hoists a static import above the guard, where the source path would resolve the package through bun's unpinned auto-install. Type-only imports stay static; they are erased. The smoke test refuses a hoisted import, and a load placed above the block.
 
@@ -134,19 +136,32 @@ function runBun(args: string[]): boolean {
   return step.status === 0;
 }
 
-function build(source: string, skill: string, built: string): void {
-  // bun build resolves installed packages only: install the pins for the build's duration, then remove them.
-  const ok =
-    runBun(["install", "--production", "--no-save", "--cwd", skill]) &&
-    runBun(["build", source, "--target", "bun", "--outfile", built]);
-  rmSync(join(skill, "node_modules"), { recursive: true, force: true });
-  if (!ok) process.exit(2);
+function build(source: string, scripts: string, skill: string, built: string): boolean {
+  // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
+  // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
+  mkdirSync(join(skill, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
+  try {
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 function ensureBuilt(source: string): boolean {
   if (!source.endsWith(".mts")) return false;
   const { scripts, skill, built } = buildPaths(source);
-  if (buildIsStale(scripts, skill, built)) build(source, skill, built);
+  if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
   const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
   // A bundle killed by a signal has no status: die of the same signal.
   if (run.signal) process.kill(process.pid, run.signal);
