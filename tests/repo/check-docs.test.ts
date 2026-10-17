@@ -11,6 +11,9 @@ import { tempDirs } from "../helpers/temp-dirs";
 // and passes vacuously, or a first set's failure that hides the second set's findings (a README
 // path finding masked a 71-word skill paragraph, which only a reviewer caught).
 const SCRIPT = join(ROOT, "scripts", "check-docs.mts");
+// The gate spawns the probe, whose first run installs and bundles: under a loaded machine that passed
+// bun's 5 s default, so every case gets what the suite gives its other spawned CLIs.
+const CLI_TIMEOUT = 60_000;
 const temp = tempDirs();
 
 const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
@@ -95,7 +98,11 @@ describe("check-docs", () => {
       { "memories/note.md": null },
       [2, "", "check-docs: memories/*.md matches no page under <root>\n"],
     ],
-  ])("%s", (_name, overrides, expected) => {
-    expect(run(tree(overrides))).toEqual(expected);
-  });
+  ])(
+    "%s",
+    (_name, overrides, expected) => {
+      expect(run(tree(overrides))).toEqual(expected);
+    },
+    CLI_TIMEOUT,
+  );
 });

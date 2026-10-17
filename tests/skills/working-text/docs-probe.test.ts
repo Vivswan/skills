@@ -12,6 +12,9 @@ import {
 import { tempDirs } from "../../helpers/temp-dirs";
 
 const PROBE = join(ROOT, "skills", "working-text", "scripts", "docs-probe.mts");
+// A spawned probe's first run installs and bundles, which passed bun's 5 s default beside two
+// other test processes and a typecheck, so every spawn gets what the suite gives its other CLIs.
+const CLI_TIMEOUT = 60_000;
 const temp = tempDirs();
 
 const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
@@ -235,32 +238,36 @@ describe("the path check", () => {
     ).toEqual(["`scripts/gone.mts` does not exist"]);
   });
 
-  test("--base adds a tree a page's paths also resolve against; a path missing there is still a finding", () => {
-    // A platform repository ships `.github/workflows/checks.yml` under files/base/ for OTHER
-    // repositories, while its own `.github/` exists too, so the foreign-layout exemption cannot fire.
-    const root = repo({
-      "docs/page.md": "",
-      ".github/workflows/ci.yml": "",
-      "files/base/.github/workflows/checks.yml": "",
-    });
-    const page =
-      "The sync writes `.github/workflows/checks.yml` and `.github/workflows/gone.yml`.\n";
-    expect(probePage(page, "docs/page.md", options(root)).map((f) => f.message)).toEqual([
-      "`.github/workflows/checks.yml` does not exist",
-      "`.github/workflows/gone.yml` does not exist",
-    ]);
-    const base = join(root, "files", "base");
-    expect(
-      probePage(page, "docs/page.md", { ...options(root), bases: [base] }).map((f) => f.message),
-    ).toEqual(["`.github/workflows/gone.yml` does not exist"]);
-    writeFileSync(join(root, "docs", "page.md"), page);
-    const cli = runProbe(root, "--base", "files/base", "docs/page.md");
-    expect([cli.status, cli.stdout, cli.stderr]).toEqual([
-      1,
-      "",
-      "docs-probe: 1 finding(s)\n  docs/page.md:1: `.github/workflows/gone.yml` does not exist\n",
-    ]);
-  });
+  test(
+    "--base adds a tree a page's paths also resolve against; a path missing there is still a finding",
+    () => {
+      // A platform repository ships `.github/workflows/checks.yml` under files/base/ for OTHER
+      // repositories, while its own `.github/` exists too, so the foreign-layout exemption cannot fire.
+      const root = repo({
+        "docs/page.md": "",
+        ".github/workflows/ci.yml": "",
+        "files/base/.github/workflows/checks.yml": "",
+      });
+      const page =
+        "The sync writes `.github/workflows/checks.yml` and `.github/workflows/gone.yml`.\n";
+      expect(probePage(page, "docs/page.md", options(root)).map((f) => f.message)).toEqual([
+        "`.github/workflows/checks.yml` does not exist",
+        "`.github/workflows/gone.yml` does not exist",
+      ]);
+      const base = join(root, "files", "base");
+      expect(
+        probePage(page, "docs/page.md", { ...options(root), bases: [base] }).map((f) => f.message),
+      ).toEqual(["`.github/workflows/gone.yml` does not exist"]);
+      writeFileSync(join(root, "docs", "page.md"), page);
+      const cli = runProbe(root, "--base", "files/base", "docs/page.md");
+      expect([cli.status, cli.stdout, cli.stderr]).toEqual([
+        1,
+        "",
+        "docs-probe: 1 finding(s)\n  docs/page.md:1: `.github/workflows/gone.yml` does not exist\n",
+      ]);
+    },
+    CLI_TIMEOUT,
+  );
 
   test("link destinations in every Markdown form are checked from the page; a link quoted in a code span, or a definition no reference uses, is not", () => {
     const root = repo({ "docs/a.md": "", "docs/b.md": "" });
@@ -326,64 +333,72 @@ describe("paths outside prose", () => {
 });
 
 describe("the CLI", () => {
-  test("clean pages exit 0 with the count line; findings exit 1 as page:line: message relative to --root", () => {
-    const root = repo({
-      "README.md": "# R\n\nShort.\n",
-      "docs/g.md": `# G\n\n${words(71)}\n\nSee \`docs/gone.md\`.\n`,
-    });
-    const clean = runProbe(root, "README.md");
-    expect([clean.status, clean.stdout]).toEqual([
-      0,
-      "docs-probe: 1 page(s) clean (cap 70 words)\n",
-    ]);
-    const found = runProbe(root, "--root", root, "docs/g.md");
-    expect(found.status).toBe(1);
-    expect(found.stderr.split("\n")).toEqual([
-      "docs-probe: 2 finding(s)",
-      "  docs/g.md:3: paragraph of 71 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps",
-      "  docs/g.md:5: `docs/gone.md` does not exist",
-      "",
-    ]);
-  });
+  test(
+    "clean pages exit 0 with the count line; findings exit 1 as page:line: message relative to --root",
+    () => {
+      const root = repo({
+        "README.md": "# R\n\nShort.\n",
+        "docs/g.md": `# G\n\n${words(71)}\n\nSee \`docs/gone.md\`.\n`,
+      });
+      const clean = runProbe(root, "README.md");
+      expect([clean.status, clean.stdout]).toEqual([
+        0,
+        "docs-probe: 1 page(s) clean (cap 70 words)\n",
+      ]);
+      const found = runProbe(root, "--root", root, "docs/g.md");
+      expect(found.status).toBe(1);
+      expect(found.stderr.split("\n")).toEqual([
+        "docs-probe: 2 finding(s)",
+        "  docs/g.md:3: paragraph of 71 words; the cap is 70. Split it, or turn its facts into bullets, a table, or numbered steps",
+        "  docs/g.md:5: `docs/gone.md` does not exist",
+        "",
+      ]);
+    },
+    CLI_TIMEOUT,
+  );
 
-  test("the usage line names the probe's own file: a vendored copy prints its name, an importer does not print its own", () => {
-    // A platform repository vendored the script as docs_probe.ts and its usage line still said docs-probe.mts.
-    const usage = (name: string) =>
-      [
-        `usage: ${name} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
-        "  --root        the repository root paths resolve against (default: cwd)",
-        "  --base        a directory under the root that paths also resolve against (repeatable)",
-        "  --max-words   the cap on a paragraph or list item (default: 70)",
-        "  --shape-only  word counts only; skip the check that named paths exist",
-        "exits: 0 every page is clean; 1 findings, one per line as page:line: message; 2 usage or an unreadable page",
-      ].join("\n");
-    // A vendored copy ships beside the skill's package.json, the pin list its dependencies install from.
-    const root = repo({ "a.md": "" });
-    copyFileSync(join(dirname(dirname(PROBE)), "package.json"), join(root, "package.json"));
-    const copy = join(root, "scripts", "docs_probe.ts");
-    mkdirSync(dirname(copy));
-    copyFileSync(PROBE, copy);
-    const renamed = spawnSync("bun", [copy], { cwd: root, encoding: "utf8" });
-    expect([renamed.status, renamed.stdout, renamed.stderr]).toEqual([
-      2,
-      "",
-      `docs-probe: ${usage("docs_probe.ts")}\n`,
-    ]);
-    const importer = spawnSync(
-      "bun",
-      ["-e", `import { parseArgs } from ${JSON.stringify(PROBE)}; parseArgs([]);`],
-      { cwd: root, encoding: "utf8" },
-    );
-    // Bun prints its own stack frames around the thrown message; the usage block between them is the contract.
-    const lines = importer.stderr.split("\n");
-    const from = lines.findIndex((l) => l.startsWith("error: usage:"));
-    const block = lines.slice(from, from + 6).join("\n");
-    expect([importer.status, importer.stdout, block]).toEqual([
-      1,
-      "",
-      `error: ${usage("docs-probe.mts")}`,
-    ]);
-  });
+  test(
+    "the usage line names the probe's own file: a vendored copy prints its name, an importer does not print its own",
+    () => {
+      // A platform repository vendored the script as docs_probe.ts and its usage line still said docs-probe.mts.
+      const usage = (name: string) =>
+        [
+          `usage: ${name} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
+          "  --root        the repository root paths resolve against (default: cwd)",
+          "  --base        a directory under the root that paths also resolve against (repeatable)",
+          "  --max-words   the cap on a paragraph or list item (default: 70)",
+          "  --shape-only  word counts only; skip the check that named paths exist",
+          "exits: 0 every page is clean; 1 findings, one per line as page:line: message; 2 usage or an unreadable page",
+        ].join("\n");
+      // A vendored copy ships beside the skill's package.json, the pin list its dependencies install from.
+      const root = repo({ "a.md": "" });
+      copyFileSync(join(dirname(dirname(PROBE)), "package.json"), join(root, "package.json"));
+      const copy = join(root, "scripts", "docs_probe.ts");
+      mkdirSync(dirname(copy));
+      copyFileSync(PROBE, copy);
+      const renamed = spawnSync("bun", [copy], { cwd: root, encoding: "utf8" });
+      expect([renamed.status, renamed.stdout, renamed.stderr]).toEqual([
+        2,
+        "",
+        `docs-probe: ${usage("docs_probe.ts")}\n`,
+      ]);
+      const importer = spawnSync(
+        "bun",
+        ["-e", `import { parseArgs } from ${JSON.stringify(PROBE)}; parseArgs([]);`],
+        { cwd: root, encoding: "utf8" },
+      );
+      // Bun prints its own stack frames around the thrown message; the usage block between them is the contract.
+      const lines = importer.stderr.split("\n");
+      const from = lines.findIndex((l) => l.startsWith("error: usage:"));
+      const block = lines.slice(from, from + 6).join("\n");
+      expect([importer.status, importer.stdout, block]).toEqual([
+        1,
+        "",
+        `error: ${usage("docs-probe.mts")}`,
+      ]);
+    },
+    CLI_TIMEOUT,
+  );
 
   test.each([
     ["a --root that is not a directory", ["--root", "package.json", "a.md"], /is not a directory/],
@@ -391,9 +406,13 @@ describe("the CLI", () => {
     ["a --base outside the root", ["--base", "..", "a.md"], /is outside the root/],
     ["a page that is a directory", ["docs"], /is not a readable file/],
     ["no pages", [], /usage: docs-probe\.mts/],
-  ])("%s exits 2 and says why", (_name, args, message) => {
-    const root = repo({ "a.md": "", "package.json": "{}", "docs/x.md": "" });
-    const result = runProbe(root, ...args);
-    expect([result.status, message.test(result.stderr)]).toEqual([2, true]);
-  });
+  ])(
+    "%s exits 2 and says why",
+    (_name, args, message) => {
+      const root = repo({ "a.md": "", "package.json": "{}", "docs/x.md": "" });
+      const result = runProbe(root, ...args);
+      expect([result.status, message.test(result.stderr)]).toEqual([2, true]);
+    },
+    CLI_TIMEOUT,
+  );
 });

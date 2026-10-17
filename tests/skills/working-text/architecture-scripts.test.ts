@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   cpSync,
@@ -31,6 +31,10 @@ const SCRIPTS = join(ROOT, "skills", "working-text", "scripts", "architecture");
 const ARCH_LINT = join(SCRIPTS, "lint.mts");
 const RENDER = join(SCRIPTS, "render-map.mts");
 const CHECK_PAGE = join(SCRIPTS, "check-page.mts");
+// Nearly every case spawns a script, and the first spawn of a cold checkout installs and bundles, which
+// passes bun's 5 s default under a loaded machine: the file's default is what the suite gives its CLIs.
+const CLI_TIMEOUT = 60_000;
+setDefaultTimeout(CLI_TIMEOUT);
 
 const CONFIG = `layers:
   main: [src/main.ts]
@@ -463,7 +467,11 @@ describe("self-building scripts", () => {
     const binDir = join(scratch, "recording-bun");
     const log = join(scratch, "recording-bun.log");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(join(binDir, "bun"), `#!/bin/sh\necho "$1" >> "${log}"\n`);
+    // The recording bun leaves the bundle a build is asked for, which the block then moves into place.
+    writeFileSync(
+      join(binDir, "bun"),
+      `#!/bin/sh\necho "$1" >> "${log}"\nwhile [ $# -gt 0 ]; do [ "$1" = --outfile ] && : > "$2"; shift; done\n`,
+    );
     chmodSync(join(binDir, "bun"), 0o755);
     const cache = join(scratch, "empty-package-cache");
     const env = { PATH: `${binDir}:${process.env.PATH ?? ""}`, BUN_INSTALL_CACHE_DIR: cache };
@@ -497,11 +505,71 @@ describe("self-building scripts", () => {
     chmodSync(join(binDir, "bun"), 0o755);
     const out = lint(root, { PATH: `${binDir}:${process.env.PATH ?? ""}` });
     expect(out).toEqual({ status: 2, stdout: "", stderr: "fake: build failed\n" });
+    // The scratch the build ran in is gone with it; .build holds nothing.
     expect(readdirSync(root).sort()).toEqual([
+      ".build",
       "architecture.yml",
       "package.json",
       "scripts",
       "src",
+    ]);
+    expect(readdirSync(join(root, ".build"))).toEqual([]);
+  });
+
+  test("four first runs at once each build in their own scratch: every run is green, the skill folder never holds a node_modules, and only the bundle is left", async () => {
+    // Two first runs once shared one node_modules under the skill (EEXIST on a half-linked package) and
+    // each removed the other's mid-build, failing concurrent runs of the docs-probe suite.
+    const root = copiedSkill("concurrent");
+    const binDir = join(scratch, "watching-bun");
+    const log = join(scratch, "watching-bun.log");
+    const barrier = join(scratch, "watching-bun.barrier");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(barrier);
+    // A bun whose build step waits (ten seconds at most) until all four builds have arrived, so the four
+    // overlap by construction, and notes whether the skill folder holds a node_modules at that moment.
+    writeFileSync(
+      join(binDir, "bun"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = build ]; then',
+        `  : > "${barrier}/$$"; n=0`,
+        `  while [ "$(ls "${barrier}" | wc -l)" -lt 4 ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n + 1)); done`,
+        `  if [ -e "${join(root, "node_modules")}" ]; then echo shared; else echo own; fi >> "${log}"`,
+        "fi",
+        `exec "${process.execPath}" "$@"`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(binDir, "bun"), 0o755);
+    const env = { ...process.env, NO_COLOR: "1", PATH: `${binDir}:${process.env.PATH ?? ""}` };
+    const entry = join(root, "scripts", "architecture", "lint.mts");
+    const runs = Array.from({ length: 4 }, () =>
+      Bun.spawn([process.execPath, entry], { cwd: root, env, stdout: "pipe", stderr: "pipe" }),
+    );
+    const outcomes = await Promise.all(
+      runs.map(async (proc) => ({
+        status: await proc.exited,
+        stdout: await new Response(proc.stdout).text(),
+        stderr: await new Response(proc.stderr).text(),
+      })),
+    );
+    expect(outcomes).toEqual([green, green, green, green]);
+    expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual([
+      "own",
+      "own",
+      "own",
+      "own",
+    ]);
+    expect(readdirSync(root).sort()).toEqual([
+      ".build",
+      "architecture.yml",
+      "package.json",
+      "scripts",
+      "src",
+    ]);
+    expect(readdirSync(join(root, ".build"), { recursive: true }).sort()).toEqual([
+      "architecture",
+      join("architecture", "lint.js"),
     ]);
   });
 });

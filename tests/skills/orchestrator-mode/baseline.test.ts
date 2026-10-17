@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -24,6 +24,9 @@ const temp = tempDirs();
 // silent pass.
 
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "baseline.mts");
+// Every case spawns the script, and the first spawn of a cold checkout installs and bundles, which passes
+// bun's 5 s default under a loaded machine: the file's default is what the suite gives its CLIs.
+setDefaultTimeout(60_000);
 
 interface Fixture {
   readonly tree: string;
