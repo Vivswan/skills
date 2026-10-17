@@ -8,9 +8,10 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempDisposableSync,
+  mkdtempSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -58,18 +59,22 @@ function build(source: string, scripts: string, skill: string, built: string): b
   // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
   // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
   mkdirSync(join(skill, ".build"), { recursive: true });
-  using scratch = mkdtempDisposableSync(join(skill, ".build", "scratch-"));
-  cpSync(scripts, join(scratch.path, "scripts"), { recursive: true });
-  copyFileSync(join(skill, "package.json"), join(scratch.path, "package.json"));
-  const entry = join(scratch.path, "scripts", relative(scripts, source));
-  const bundle = join(scratch.path, "bundle.js");
-  const ok =
-    runBun(["install", "--production", "--no-save", "--cwd", scratch.path]) &&
-    runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
-  if (!ok) return false;
-  mkdirSync(dirname(built), { recursive: true });
-  renameSync(bundle, built);
-  return true;
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
+  try {
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 function ensureBuilt(source: string): boolean {

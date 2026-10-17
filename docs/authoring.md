@@ -94,7 +94,7 @@ An entry below `scripts/` bundles to the same relative path under the `.build` f
 
 `bun build` resolves installed packages only, which is why the install step exists. A failed install or build prints bun's error and exits 2. A user may install any one skill alone, so no script imports from another skill.
 
-The block needs `spawnSync` from `node:child_process`, `copyFileSync`, `cpSync`, `existsSync`, `mkdirSync`, `mkdtempDisposableSync`, `readdirSync`, `renameSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join`, `relative` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
+The block needs `spawnSync` from `node:child_process`, `copyFileSync`, `cpSync`, `existsSync`, `mkdirSync`, `mkdtempSync`, `readdirSync`, `renameSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join`, `relative` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
 
 Below the guard, the program loads its packages and sibling scripts with `await import("yaml")`, never a static import: ESM hoists a static import above the guard, where the source path would resolve the package through bun's unpinned auto-install. Type-only imports stay static; they are erased. The smoke test refuses a hoisted import, and a load placed above the block.
 
@@ -140,18 +140,22 @@ function build(source: string, scripts: string, skill: string, built: string): b
   // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
   // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
   mkdirSync(join(skill, ".build"), { recursive: true });
-  using scratch = mkdtempDisposableSync(join(skill, ".build", "scratch-"));
-  cpSync(scripts, join(scratch.path, "scripts"), { recursive: true });
-  copyFileSync(join(skill, "package.json"), join(scratch.path, "package.json"));
-  const entry = join(scratch.path, "scripts", relative(scripts, source));
-  const bundle = join(scratch.path, "bundle.js");
-  const ok =
-    runBun(["install", "--production", "--no-save", "--cwd", scratch.path]) &&
-    runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
-  if (!ok) return false;
-  mkdirSync(dirname(built), { recursive: true });
-  renameSync(bundle, built);
-  return true;
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
+  try {
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 function ensureBuilt(source: string): boolean {

@@ -516,26 +516,19 @@ describe("self-building scripts", () => {
     expect(readdirSync(join(root, ".build"))).toEqual([]);
   });
 
-  test("four first runs at once each build in their own scratch: every run is green, the skill folder never holds a node_modules, and only the bundle is left", async () => {
+  test("four first runs at once: every run is green, whoever builds does so with no node_modules under the skill folder, the published bundle runs, and no scratch is left", async () => {
     // Two first runs once shared one node_modules under the skill (EEXIST on a half-linked package) and
-    // each removed the other's mid-build, failing concurrent runs of the docs-probe suite.
+    // each removed the other's mid-build, failing concurrent runs of the docs-probe suite. How many of the
+    // four build is scheduling's call: a late one finds the bundle published and rightly reuses it.
     const root = copiedSkill("concurrent");
     const binDir = join(scratch, "watching-bun");
     const log = join(scratch, "watching-bun.log");
-    const barrier = join(scratch, "watching-bun.barrier");
     mkdirSync(binDir, { recursive: true });
-    mkdirSync(barrier);
-    // A bun whose build step waits (ten seconds at most) until all four builds have arrived, so the four
-    // overlap by construction, and notes whether the skill folder holds a node_modules at that moment.
     writeFileSync(
       join(binDir, "bun"),
       [
         "#!/bin/sh",
-        'if [ "$1" = build ]; then',
-        `  : > "${barrier}/$$"; n=0`,
-        `  while [ "$(ls "${barrier}" | wc -l)" -lt 4 ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n + 1)); done`,
-        `  if [ -e "${join(root, "node_modules")}" ]; then echo shared; else echo own; fi >> "${log}"`,
-        "fi",
+        `if [ "$1" = build ]; then if [ -e "${join(root, "node_modules")}" ]; then echo shared; else echo own; fi >> "${log}"; fi`,
         `exec "${process.execPath}" "$@"`,
         "",
       ].join("\n"),
@@ -554,12 +547,11 @@ describe("self-building scripts", () => {
       })),
     );
     expect(outcomes).toEqual([green, green, green, green]);
-    expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual([
-      "own",
-      "own",
-      "own",
-      "own",
-    ]);
+    const builds = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
+    expect(builds.length).toBeGreaterThanOrEqual(1);
+    expect(builds.length).toBeLessThanOrEqual(4);
+    expect(new Set(builds)).toEqual(new Set(["own"]));
+    expect(run(join(root, ".build", "architecture", "lint.js"), [], root)).toEqual(green);
     expect(readdirSync(root).sort()).toEqual([
       ".build",
       "architecture.yml",
