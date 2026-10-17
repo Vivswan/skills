@@ -276,11 +276,20 @@ function agentName(agentId: string, entry: AgentEntry | undefined): string {
   return oneLine(displayName(agentId, entry?.sidecar ?? null));
 }
 
-/** The fleet agent a pending Agent call spawned, joined through the child's sidecar `toolUseId`. */
-function childOfCall(target: Target, toolUseId: string): string | undefined {
-  return Object.keys(target.agents).find(
+/** The fleet agent a pending Agent call spawned, joined through the child's sidecar `toolUseId`: one read, or one listed whose read failed this poll. */
+function childOfCall(
+  target: Target,
+  toolUseId: string,
+  failed: ReadonlyMap<string, Sidecar | null>,
+): string | undefined {
+  const known = Object.keys(target.agents).find(
     (agentId) => target.agents[agentId]?.sidecar?.toolUseId === toolUseId,
   );
+  if (known !== undefined) return known;
+  for (const [agentId, sidecar] of failed) {
+    if (sidecar?.toolUseId === toolUseId) return agentId;
+  }
+  return undefined;
 }
 
 /**
@@ -305,7 +314,7 @@ function stillChild(
   target: Target,
   childId: string,
   nowMs: number,
-  failed: ReadonlySet<string>,
+  failed: ReadonlyMap<string, Sidecar | null>,
 ): string | null | "unread" {
   if (failed.has(childId)) return "unread";
   const moved = target.agents[childId]?.state.lastMovedAt ?? null;
@@ -364,7 +373,7 @@ function situationOf(
   entry: AgentEntry,
   nowMs: number,
   io: Io,
-  failed: ReadonlySet<string>,
+  failed: ReadonlyMap<string, Sidecar | null>,
 ): Situation {
   const state = entry.state;
   // A parent whose read failed this poll is stale: nothing read of it judges this agent.
@@ -377,7 +386,7 @@ function situationOf(
 
   const pending = Object.entries(state.pending).sort(byTime(([, call]) => call.at));
   for (const [id, call] of pending) {
-    const childId = call.tool === "Agent" ? childOfCall(target, id) : undefined;
+    const childId = call.tool === "Agent" ? childOfCall(target, id, failed) : undefined;
     if (childId !== undefined) {
       const moved = stillChild(target, childId, nowMs, failed);
       if (moved === "unread") return { kind: "unread" };
@@ -521,7 +530,7 @@ function agentTransition(
   entry: AgentEntry,
   nowMs: number,
   io: Io,
-  failed: ReadonlySet<string>,
+  failed: ReadonlyMap<string, Sidecar | null>,
 ): EventInput | null {
   const situation = situationOf(target, agentId, entry, nowMs, io, failed);
   if (situation.kind === "unread") return null;
@@ -568,10 +577,18 @@ function readAgents(
   target: Target,
   trouble: Map<string, Trouble>,
   io: Io,
-): { events: EventInput[]; busy: boolean; refreshed: string[]; failed: Set<string> } {
+): {
+  events: EventInput[];
+  busy: boolean;
+  refreshed: string[];
+  failed: Map<string, Sidecar | null>;
+} {
   const events: EventInput[] = [];
   const refreshed: string[] = [];
-  const failed = new Set<string>();
+  // The agents whose read failed this poll, each with the sidecar the poll holds for it (the one
+  // just read, else a known agent's saved one, else null): a parent's call finds a child the fleet
+  // has not read yet, and holds with it.
+  const failed = new Map<string, Sidecar | null>();
   let busy = false;
 
   let names: string[];
@@ -610,7 +627,7 @@ function readAgents(
     const fail = (file: string, error: unknown): void => {
       const reason = error instanceof Error ? error.message : String(error);
       io.log(`${agentId}: ${reason}`);
-      failed.add(agentId);
+      failed.set(agentId, entry.sidecar);
       trouble.set(`agent:${agentId}`, {
         text: `fleet: cannot read ${file}: ${reason}`,
         url: fileUrl(join(target.subagentsDir, file)),

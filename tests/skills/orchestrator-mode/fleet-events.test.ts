@@ -36,6 +36,7 @@ const B = "b2c3d4e5f6071829";
 const C = "c3d4e5f607182930";
 const D = "d4e5f60718293041";
 const E = "e5f6071829304152";
+const F = "f60718293041526a";
 const MARKER = "MARKER-sunflower-9c1d";
 const GIT_TIMEOUT = 60_000;
 const TRACKS = { "wt-a": "track-a", "wt-b": "track-b" };
@@ -770,6 +771,106 @@ describe("fleet-events.mts", () => {
       ["note", "agent builder-a: ended 6 min ago, report received", fileUrl(pathA)],
       ["note", "agent scout one: ended 7 min ago, report received", fileUrl(pathC)],
       ["alert", "agent scout two: ended 7 min ago, no signal reached the lead", fileUrl(pathD)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a new child whose sidecar reads but whose transcript does not is found by the parent's Agent call through the poll's failed reads, and the parent is held: " +
+    "the trouble alert is the poll's only line, and the next readable poll says the child started and judges the parent afresh; a parent already stuck on a childless call " +
+    "keeps its alert while the child it gains reads badly, and is fine again once it reads; the control child reads at once and its parent is never stuck", async () => {
+    const s = new Scenario(PROGRAM, "firstread");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const call = (agentId: string, id: string): Line[] => [
+      ...exchange(ago(50), `toolu_${agentId.slice(0, 4)}`, agentId),
+      toolUse(
+        ago(45),
+        id,
+        "Agent",
+        { description: "scout", subagent_type: "Explore", prompt: "look" },
+        agentId,
+      ),
+    ];
+    writeAgent(session, A, { name: "builder-a", description: "build" }, call(A, "toolu_fg1"));
+    writeAgent(session, B, { name: "builder-b", description: "build" }, call(B, "toolu_fg2"));
+    // E's call has no child listed yet: stuck on Agent, rightly, until a child appears.
+    const pathE = writeAgent(
+      session,
+      E,
+      { name: "builder-e", description: "build" },
+      call(E, "toolu_fg3"),
+    );
+    // C: sidecar readable, transcript a directory. D: the control, readable and moving.
+    const pathC = writeAgent(
+      session,
+      C,
+      { description: "scout one", agentType: "Explore", toolUseId: "toolu_fg1", parentAgentId: A },
+      exchange(ago(0), "toolu_c0", C),
+    );
+    rmSync(pathC);
+    mkdirSync(pathC);
+    writeAgent(
+      session,
+      D,
+      { description: "scout two", agentType: "Explore", toolUseId: "toolu_fg2", parentAgentId: B },
+      exchange(ago(0), "toolu_d0", D),
+    );
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session, "--quiet-after", "1");
+    expect(rows(s)).toEqual([
+      [
+        "alert",
+        `fleet: cannot read agent-${C}.jsonl: ${pathC} is not a regular file`,
+        fileUrl(pathC),
+      ],
+      ["alert", "agent builder-e: stuck 45 min on Agent", fileUrl(pathE)],
+    ]);
+    // Nothing is saved for the unread child: the failed read stays no observation.
+    const saved = s.state().targets[session.dir] as { agents: Record<string, { said: unknown }> };
+    expect(Object.keys(saved.agents).sort()).toEqual([A, B, D, E].sort());
+    expect([saved.agents[A]?.said, saved.agents[B]?.said]).toEqual([null, null]);
+
+    // C reads; E gains a child F whose transcript reads badly: E's alert is held, not retracted.
+    rmSync(pathC, { recursive: true });
+    writeFileSync(pathC, "");
+    appendLines(pathC, exchange(ago(0), "toolu_c1", C));
+    const pathF = writeAgent(
+      session,
+      F,
+      {
+        description: "scout three",
+        agentType: "Explore",
+        toolUseId: "toolu_fg3",
+        parentAgentId: E,
+      },
+      exchange(ago(0), "toolu_f0", F),
+    );
+    rmSync(pathF);
+    mkdirSync(pathF);
+    expect(polled(s, box.path)).toBe(3);
+    expect(rows(s).slice(2)).toEqual([
+      [
+        "alert",
+        `fleet: cannot read agent-${F}.jsonl: ${pathF} is not a regular file`,
+        fileUrl(pathF),
+      ],
+      ["note", "fleet: reading restored", fileUrl(pathC)],
+      ["note", "agent scout one: started", fileUrl(pathC)],
+    ]);
+    expect(s.state().targets[session.dir]).toMatchObject({
+      agents: { [A]: { said: null }, [E]: { said: { level: "alert", key: "tool:toolu_fg3" } } },
+    });
+
+    // F reads and moves: E is fine again.
+    rmSync(pathF, { recursive: true });
+    writeFileSync(pathF, "");
+    appendLines(pathF, exchange(ago(0), "toolu_f1", F));
+    expect(polled(s, box.path)).toBe(3);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s).slice(5)).toEqual([
+      ["note", "fleet: reading restored", fileUrl(pathF)],
+      ["note", "agent scout three: started", fileUrl(pathF)],
+      ["note", "agent builder-e: fine again", fileUrl(pathE)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);
