@@ -42,7 +42,11 @@ const TEAMMATE_ENVELOPE =
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
 const NEWLINE = 0x0a;
 
-/** A tool call with no result yet: mid-call, or killed with the agent. `taskId` is the name an Agent call gives its child (what a TaskStop later takes), a TaskStop's own task_id, or a SendMessage's `to`; null for every other tool. `timeoutMs` is the call's own `timeout` input, when it carries one. */
+/**
+ * A tool call with no result yet: mid-call, or killed with the agent. `taskId` is the name an Agent
+ * call gives its child (what a TaskStop later takes), a TaskStop's own task_id, or a SendMessage's
+ * `to`; null for every other tool. `timeoutMs` is the call's own `timeout` input, when it carries one.
+ */
 export interface PendingCall {
   tool: string;
   at: string;
