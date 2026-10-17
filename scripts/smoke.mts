@@ -33,6 +33,7 @@ import {
   checkDescriptionTriggerForm,
   checkExplicitInvocationPairing,
   checkMarketplacePluginVersionBan,
+  checkReadmeExplicitUpstreams,
   checkReadmeInvocationGrouping,
   checkReadmeMermaidGraph,
   checkReadmeSkillList,
@@ -346,7 +347,22 @@ function checkUpstreamPlugins(
         `${where}: needs a description -- before install, users see nothing else of a git-subdir entry`,
       );
     }
-    skills.push({ name: plugin.name, repo: source.url, path: source.path });
+    const metadata = plugin.metadata;
+    if (metadata !== undefined && !isRecord(metadata)) {
+      fail(`${where}: metadata must be an object`);
+    }
+    const explicitOnly = metadata?.["disable-model-invocation"];
+    if (explicitOnly !== undefined && explicitOnly !== true) {
+      fail(
+        `${where}: metadata["disable-model-invocation"] is true or absent -- the install commands read nothing else`,
+      );
+    }
+    skills.push({
+      name: plugin.name,
+      repo: source.url,
+      path: source.path,
+      explicitOnly: explicitOnly === true,
+    });
   }
   return skills;
 }
@@ -1009,6 +1025,7 @@ function main(): void {
   checkManifestEntriesHaveFolders(manifest, skillNames);
   const readmeText = readTextFile(join(ROOT, "README.md"));
   checkReadmeSkillList(readmeText, skillNames, upstream);
+  checkReadmeExplicitUpstreams(readmeText, upstream);
   checkReadmeMermaidGraph(readmeText, allNames, upstream);
   // The upstream skills carry their own frontmatter, which this repository does not hold, so the invocation
   // grouping covers this repository's own skills only.

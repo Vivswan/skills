@@ -9,9 +9,11 @@
  *
  * Usage: bun scripts/link-agents.mts [--dry-run | --add]
  *   --dry-run  reports every link and prune, changes nothing
- *   --add      runs `npx skills add . --global` first (its UI wires the per-agent pointers but
- *              overwrites the canonical symlinks with copies), then links; never --copy, so the
- *              per-agent directories keep symlinking into ~/.agents/skills
+ *   --add      runs `npx skills add <upstream> --global -y` per upstream skill of the marketplace,
+ *              then `npx skills add . --global -y` (its UI wires the per-agent pointers but
+ *              overwrites the canonical symlinks with copies), marking the copies each flagged
+ *              upstream's call wrote explicit-invocation-only right after it, then links; never
+ *              --copy, so the per-agent directories keep symlinking into ~/.agents/skills
  * Revert: `npx skills add . --all` overwrites the symlinks with fresh copies.
  */
 
@@ -28,6 +30,14 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import {
+  agentSkillDirs,
+  CatalogError,
+  copiesBefore,
+  markWrittenCopies,
+  upstreamSkills,
+  withYes,
+} from "../bin/install-shared.mjs";
 import {
   fail,
   isRecord,
@@ -72,6 +82,61 @@ export interface PruneOptions {
   /** Called as each action happens, so removals are reported even if a later step throws. */
   readonly onAction?: (action: PruneAction) => void;
   readonly dryRun?: boolean;
+}
+
+/**
+ * The `npx skills add` argv lists `--add` runs: the upstream folders first, so a failure among them
+ * leaves this repository's skills as they were rather than installed and unlinked, then this tree.
+ */
+export function addCommands(upstream: readonly { readonly target: string }[]): string[][] {
+  const targets = [...upstream.map(({ target }) => target), "."];
+  return targets.map((target) => ["npx", "skills", "add", target, ...withYes(["--global"])]);
+}
+
+/** What a `skills add` call returned: the spawn's status, or the error that kept it from running. */
+export interface AddRun {
+  readonly status: number | null;
+  readonly error?: Error;
+}
+
+/**
+ * Run `--add`'s installs in order, marking a flagged upstream's freshly written copies right after its own
+ * call, so a later failure leaves the earlier copies marked; the failure then ends the run, named, and nothing
+ * is linked. `run` is the spawn (injected by the tests), `log` takes the mark and notice lines.
+ */
+export function installForAdd(
+  upstream: ReturnType<typeof upstreamSkills>,
+  agentsSkillsDir: string,
+  home: string,
+  run: (argv: readonly string[]) => AddRun,
+  log: (line: string) => void,
+): void {
+  for (const argv of addCommands(upstream)) {
+    const shown = argv.join(" ");
+    const skill = upstream.find((candidate) => candidate.target === argv[3]);
+    const before = skill?.explicitOnly
+      ? copiesBefore(skill.name, agentsSkillsDir, home)
+      : undefined;
+    const result = run(argv);
+    if (result.error) fail(`${shown}: ${result.error.message}`);
+    if (result.status !== 0) {
+      fail(`${shown} exited with status ${result.status ?? "unknown"}; not linking`);
+    }
+    if (before === undefined) continue;
+    const { marked, notices } = markWrittenCopies(before);
+    for (const path of marked) log(`marked explicit-invocation-only: ${path}`);
+    for (const notice of notices) log(`notice: ${notice}`);
+  }
+}
+
+/** The marketplace's upstream skills, a malformed catalog file failing like any other check. */
+function catalogUpstream(): ReturnType<typeof upstreamSkills> {
+  try {
+    return upstreamSkills();
+  } catch (error) {
+    if (error instanceof CatalogError) fail(error.message);
+    throw error;
+  }
 }
 
 /**
@@ -255,23 +320,6 @@ export function pruneStaleSkills(options: PruneOptions): PruneAction[] {
 }
 
 /**
- * Per-agent skill directories npx skills wires pointers into: every
- * ~/.<agent>/skills directory except the canonical ~/.agents/skills itself.
- */
-export function discoverAgentSkillDirs(home: string, agentsSkillsDir: string): string[] {
-  const agentsForms = pathForms(agentsSkillsDir);
-  const dirs: string[] = [];
-  for (const name of readdirSync(home).sort()) {
-    if (!name.startsWith(".")) continue;
-    const candidate = join(home, name, "skills");
-    if (!safeIsDirectory(candidate)) continue;
-    if (isUnder(canonicalTarget(candidate), agentsForms)) continue;
-    dirs.push(candidate);
-  }
-  return dirs;
-}
-
-/**
  * Read the npx skills lockfile and judge, per installed skill name, whether
  * its recorded source is this repo. Deletion demands unanimity: "ours" only
  * when every recorded identity matches this repo, and any malformed identity
@@ -390,18 +438,20 @@ if (import.meta.main) {
     // installs it already rewired unlinked.
     const sourceByName = repoSkillSources(skillDirs());
 
+    const agentsSkillsDir = join(homedir(), ".agents", "skills");
     if (withAdd) {
-      const result = spawnSync("npx", ["skills", "add", ".", "--global"], {
-        cwd: ROOT,
-        stdio: "inherit",
-      });
-      if (result.error) fail(`npx skills add .: ${result.error.message}`);
-      if (result.status !== 0) {
-        fail(`npx skills add . exited with status ${result.status ?? "unknown"}; not linking`);
-      }
+      installForAdd(
+        catalogUpstream(),
+        agentsSkillsDir,
+        homedir(),
+        ([command, ...args]) => {
+          const result = spawnSync(command as string, args, { cwd: ROOT, stdio: "inherit" });
+          return { status: result.status, error: result.error };
+        },
+        console.log,
+      );
     }
 
-    const agentsSkillsDir = join(homedir(), ".agents", "skills");
     const actions = linkSkills([...sourceByName.values()], agentsSkillsDir, dryRun);
 
     const prefix = dryRun ? "[dry-run] " : "";
@@ -431,7 +481,7 @@ if (import.meta.main) {
       repoSkillsDirs: [SKILLS_DIR],
       currentSkills: new Set(sourceByName.keys()),
       agentsSkillsDir,
-      agentSkillDirs: discoverAgentSkillDirs(homedir(), agentsSkillsDir),
+      agentSkillDirs: agentSkillDirs(homedir(), agentsSkillsDir),
       lockAttribution: loadLockAttribution(lockfilePath, repoSourceIds(repository)),
       // Report as it happens: a removal stays visible even if a later step throws.
       onAction: (action) => {

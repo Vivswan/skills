@@ -6,13 +6,13 @@ Skills for AI coding agents, installable with one command.
 
 ## Installation
 
-One command installs this catalog and the three [upstream skills](#upstream-skills) through the skills CLI:
+One command installs this catalog and the four [upstream skills](#upstream-skills) through the skills CLI:
 
 ```bash
 npx -y github:Vivswan/skills -g
 ```
 
-Its flags pass through to each `npx skills add` it runs (`-g` for your user, `-a codex` for one agent), and `--help` prints the four commands without running them. One skill alone: `npx skills add Vivswan/skills -g --skill <name>`.
+Each `npx skills add` it runs is unattended (`-y`), so nothing prompts and an installed copy is overwritten. Its flags pass through to every call (`-g` for your user, `-a codex` for one agent, `--skill <name>` for one skill, which runs only the call that ships it), and `--help` prints the five commands without running them.
 
 Or as a Claude Code plugin. The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes this catalog as the `vivswan-skills` plugin, and each upstream skill by its own name (`/plugin install unslop@vivswan-skills`):
 
@@ -60,6 +60,9 @@ Skills written in other repositories. Nothing of them is copied here: the market
 - [/unslop](https://github.com/cursor/plugins/tree/HEAD/pstack/skills/unslop) - Cut AI tells from any writing (from [cursor/plugins](https://github.com/cursor/plugins))
 - [/frontend-design](https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design) - Distinctive visual design for new or reshaped UI (from [anthropics/skills](https://github.com/anthropics/skills))
 - [/design-taste-frontend](https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill) - Anti-slop frontend for landing pages, portfolios, and redesigns (from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill))
+- [/impeccable](https://github.com/pbakaus/impeccable/tree/HEAD/.agents/skills/impeccable) - Design direction for frontend work: design, critique, audit, polish, or harden an interface, with detector rules against AI-template tells (from [pbakaus/impeccable](https://github.com/pbakaus/impeccable))
+
+Installed by `npx -y github:Vivswan/skills -g` or `bun run add`, `frontend-design`, `design-taste-frontend`, and `impeccable` load only when you invoke them: the install sets `disable-model-invocation: true` and `policy.allow_implicit_invocation: false` on the copy, and an `npx skills update` that refreshes the copy undoes it until you install again. The direct lines below and a Claude Code plugin install keep upstream's own trigger; `unslop` ships its own `disable-model-invocation: true`.
 
 Each one alone, through the skills CLI:
 
@@ -67,6 +70,7 @@ Each one alone, through the skills CLI:
 npx skills add cursor/plugins/pstack/skills/unslop -g
 npx skills add anthropics/skills/skills/frontend-design -g
 npx skills add Leonxlnx/taste-skill/skills/taste-skill -g
+npx skills add pbakaus/impeccable/.agents/skills/impeccable -g
 ```
 
 How the skills reference each other (an arrow means "mentions and hands off to, where installed"):
@@ -100,6 +104,7 @@ graph LR
   crp["/claude-remote-peers"]
   fd["/frontend-design"]
   dtf["/design-taste-frontend"]
+  imp["/impeccable"]
 
   cs <--> wt
   cs <--> rdr
@@ -159,6 +164,7 @@ graph LR
   click crp "./skills/claude-remote-peers/SKILL.md"
   click fd "https://github.com/anthropics/skills/tree/HEAD/skills/frontend-design"
   click dtf "https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill"
+  click imp "https://github.com/pbakaus/impeccable/tree/HEAD/.agents/skills/impeccable"
 ```
 
 ## License
