@@ -135,8 +135,8 @@ usage: sweep.mts <repo-root> [--base <ref>] [--transcripts <dir>]
   --transcripts <dir>  add one liveness line over the agent-*.jsonl transcripts in the directory
 prints: one JSON line each, in this order, each only when its condition holds
   {"control":"FAILED","reason":...}          the sweep itself is broken
-  {"lsof":{"ok":false,"error":...}}          process attribution is down (rows carry processes:[])
-  {"lsof":{"ok":true,"degraded":true,...}}   lsof exited nonzero but produced records (lists may omit processes)
+  {"lsof":{"ok":false,"error":...}}          process attribution is down: no lsof, a timeout or signal, exit 2 and above, or no records on exit 0 (rows carry processes:[])
+  {"lsof":{"ok":true,"degraded":true,...}}   lsof exited 1 with no records, answering for no process (rows carry processes:[]); exit 1 with records is a complete reading, no line
   {"defaultRef":{"ok":false,"error":...}}    origin's default branch is unresolvable (rows carry aheadBehind:null)
   {"baseRef":{"ok":false,"error":...}}       the --base ref is unresolvable or ambiguous (same, never a fallback)
   {"worktree":...,"ok":true,...}             one per worktree: branch, headSha, aheadBehind {ahead, behind}, treeFileCount,
@@ -179,7 +179,7 @@ A broken probe is loud, never zero:
 - A vanished worktree or failed git reading is an `ok:false` row carrying its error.
 - A row whose HEAD, branch, or gitdir moved mid-measurement refuses itself as `ok:false` rather than mixing two states (the next sweep re-measures).
 - A degraded or downed instrument is a leading `{"control":"FAILED",...}`, `{"lsof":{"ok":false,...}}`, `{"defaultRef":{"ok":false,...}}`, or `{"baseRef":{"ok":false,...}}` line.
-- Partial lsof visibility is its own documented state, not a failure. lsof exiting nonzero while still producing records emits `{"lsof":{"ok":true,"degraded":true,...}}`, and process lists may omit unreadable processes. Under degraded, an EMPTY `processes` list is NOT verified inactivity: treat it as unknown and escalate rather than reading absence into it.
+- lsof exits 1 whenever one process it scanned could not be read (another user's sandbox) and still prints every process that answered. Exit 1 with records is a complete reading of those processes, with no lsof line. Exit 1 with no records answered for nobody and emits `{"lsof":{"ok":true,"degraded":true,...}}`: an EMPTY `processes` list under it is NOT verified inactivity, so escalate rather than read absence into it.
 - Exit 0 means the sweep ran, `ok:false` rows included. Exit 1 is reserved for a control failure (worktree discovery failed, or the main checkout's own row, the positive control, is impossible).
 - A downed lsof, an unresolvable default branch, or an unresolvable or ambiguous `--base` ref still exits 0 with its warning line. So read the leading lines and the per-row `ok` fields, never the exit code alone. A dead sweep is an instrument failure, never a quiet fleet.
 

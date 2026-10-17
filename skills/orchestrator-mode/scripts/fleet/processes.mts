@@ -3,7 +3,7 @@
 
 import { existsSync, realpathSync } from "node:fs";
 import { parse } from "node:path";
-import { run } from "./git.mts";
+import { type RunResult, run } from "./git.mts";
 
 // The instrument's own children run from the filesystem root, which no worktree holds: spawned
 // where the caller stands, lsof (which lists itself) and ps would be attributed to that worktree.
@@ -88,11 +88,40 @@ export async function processStates(pids: number[]): Promise<Map<number, string>
   return states;
 }
 
-/** The lsof outcome a sweep reports as its own line: down, or degraded. Null: nothing to say. */
+/** The lsof outcome a sweep reports as its own line: down, or degraded. Null: a complete reading. */
 export type LsofLine =
   | { lsof: { ok: false; error: string } }
   | { lsof: { ok: true; degraded: true; note: string } }
   | null;
+
+/**
+ * What one lsof run says, from its exit code and its parsed cwd records together. lsof exits 1
+ * whenever one process it scanned could not be read (another user's sandbox, a pid gone mid-scan)
+ * and still prints every process that answered, so exit 1 with records is a complete reading of
+ * those processes; with no records it answered for nobody, which is degraded. A missing binary, a
+ * timeout, or exit 2 and above is the instrument down, and so is exit 0 with no records: this
+ * process holds a cwd and is in the scanned set, so a working lsof never prints nothing.
+ */
+function lsofReading(result: RunResult, records: number): LsofLine {
+  if (result.code === 1) {
+    if (records > 0) return null;
+    const note = "lsof exited 1 with no cwd records: it answered for no process";
+    return { lsof: { ok: true, degraded: true, note } };
+  }
+  if (!result.ok) return { lsof: { ok: false, error: result.error } };
+  if (result.code >= 2) {
+    const detail = result.stderr.toString("utf8").trim().split("\n")[0] ?? "";
+    return {
+      lsof: { ok: false, error: `lsof exited ${result.code}${detail ? ` [${detail}]` : ""}` },
+    };
+  }
+  if (records > 0) return null;
+
+  const shape = result.stdout.length === 0 ? "empty" : "nonempty";
+  return {
+    lsof: { ok: false, error: `lsof exited 0 and parsed zero cwd records from ${shape} output` },
+  };
+}
 
 /**
  * Every process running inside one of the worktrees, by worktree path, with its state. lsof
@@ -116,40 +145,11 @@ export async function attributeProcesses(
     acceptStdoutOnError: true,
     cwd: FILESYSTEM_ROOT,
   });
-  let attributed = new Map<string, CwdEntry[]>();
-  let lsofLine: LsofLine = lsofResult.ok ? null : { lsof: { ok: false, error: lsofResult.error } };
-  if (lsofResult.ok) {
-    const entries = parseLsofFields(lsofResult.stdout.toString("utf8"));
-    if (entries.length === 0) {
-      // Zero cwd records is IMPOSSIBLE for a working probe regardless of
-      // exit code: this sweep's own process holds a cwd and is in the
-      // scanned set. Empty stdout on a clean exit and parser drift both
-      // land here - a broken instrument, never an idle fleet.
-      const shape = lsofResult.stdout.length === 0 ? "empty" : "nonempty";
-      const exit = lsofResult.degraded === true ? "nonzero" : "zero";
-      lsofLine = {
-        lsof: {
-          ok: false,
-          error: `lsof parsed zero cwd records from ${shape} output (${exit} exit)`,
-        },
-      };
-    } else {
-      attributed = attributeByCwd(entries, realPathByWorktree);
-      if (lsofResult.degraded === true) {
-        // Partial visibility (lsof exited nonzero but produced records) is
-        // its routine mode on multi-user systems, so it is not a failure -
-        // but an unreadable process is invisible to attribution, and a
-        // silent processes:[] must not be mistaken for a verified absence.
-        lsofLine = {
-          lsof: {
-            ok: true,
-            degraded: true,
-            note: "lsof exited nonzero; process lists may omit unreadable processes",
-          },
-        };
-      }
-    }
-  }
+  const entries = lsofResult.ok ? parseLsofFields(lsofResult.stdout.toString("utf8")) : [];
+  const lsofLine = lsofReading(lsofResult, entries.length);
+  const attributed =
+    lsofLine === null ? attributeByCwd(entries, realPathByWorktree) : new Map<string, CwdEntry[]>();
+
   const allPids = [...attributed.values()].flat().map((entry) => entry.pid);
   const states = await processStates(allPids);
   const processesByWorktree = new Map<string, ProcessRow[]>();
