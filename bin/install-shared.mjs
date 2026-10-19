@@ -1,10 +1,9 @@
-// What the two install commands share: the catalog as they read it (this repository's coordinate from the plugin
-// manifest, the upstream skills from the marketplace, each a git-subdir entry whose fetched folder is the skill
-// itself), the flags every `skills add` call carries, and the explicit-invocation-only mark the copies an upstream
-// `skills add` wrote get right after it. bin/install.mjs (the consumer's `npx -y github:Vivswan/skills`) and scripts/link-agents.mts
-// (`bun run add`) both import it, so one edit here changes both. Dependency-free node, since the bin runs before
-// anything is installed.
+// What the two install commands share: the catalog (this repository's coordinate, the marketplace's upstream
+// skills), the flags every `skills add` call carries, the explicit-invocation-only mark for an upstream's fresh
+// copies, one call run with its output kept, and the summary of the failed calls. bin/install.mjs and
+// scripts/link-agents.mts both import it. Dependency-free node, since the bin runs before anything is installed.
 
+import { spawn } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -18,6 +17,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 
 const MANIFEST = new URL("../.claude-plugin/plugin.json", import.meta.url);
 const MARKETPLACE = new URL("../.claude-plugin/marketplace.json", import.meta.url);
@@ -262,4 +262,89 @@ export function markWrittenCopies(before) {
     notices.push(`no fresh copy at ${canonical} to mark explicit-invocation-only`);
   }
   return { marked, notices };
+}
+
+/**
+ * @typedef {object} CallResult
+ * @property {number | null} status the exit status, null when a signal ended the call
+ * @property {string | null} signal the signal that ended the call, else null
+ * @property {Error} [error] the error that kept the call from running at all
+ * @property {string} stdout what the call printed on stdout
+ * @property {string} stderr what the call printed on stderr
+ */
+
+/**
+ * Run one `skills add` call, its output streamed through as it comes and kept for the run's summary. The
+ * child's streams are pipes, so the environment hands it what a terminal would have: color (`FORCE_COLOR`,
+ * when this process writes to a terminal and the user set neither `FORCE_COLOR` nor `NO_COLOR`), and no npm
+ * update notice (`npm_config_update_notifier`, five stderr lines after any command that say nothing about it).
+ * @param {string} file
+ * @param {readonly string[]} args
+ * @param {{ cwd?: string }} [options]
+ * @returns {Promise<CallResult>}
+ */
+export function runCall(file, args, options = {}) {
+  const env = { ...process.env, npm_config_update_notifier: "false" };
+  if (process.stdout.isTTY && !("FORCE_COLOR" in env) && !("NO_COLOR" in env))
+    env.FORCE_COLOR = "1";
+  return new Promise((resolve) => {
+    const child = spawn(file, args, { cwd: options.cwd, env, stdio: ["inherit", "pipe", "pipe"] });
+    const out = [];
+    const err = [];
+    child.stdout.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      out.push(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      process.stderr.write(chunk);
+      err.push(chunk);
+    });
+    const text = (chunks) => Buffer.concat(chunks).toString("utf8");
+    child.on("error", (error) =>
+      resolve({ status: null, signal: null, error, stdout: text(out), stderr: text(err) }),
+    );
+    child.on("close", (status, signal) =>
+      resolve({ status, signal, stdout: text(out), stderr: text(err) }),
+    );
+  });
+}
+
+/** The non-blank lines of a stream, terminal escapes stripped. */
+function spokenLines(text) {
+  return stripVTControlCharacters(text)
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== "");
+}
+
+/**
+ * The lines a summary quotes for a failed call: the CLI's stderr (a skipped SKILL.md and why), then its closing
+ * stdout line (`No valid skills found`, `Failed to install from`). Earlier stdout lines are progress, and npm's
+ * notice and warning lines (`npm warn exec ... will be installed` on a cold cache) are about npx, not the call.
+ * An `npm error` line stays: then npx itself is what failed.
+ * @param {CallResult} result
+ * @returns {string[]}
+ */
+export function callDiagnostics(result) {
+  const said = spokenLines(result.stderr ?? "").filter(
+    (line) => !/^npm (notice|warn)( |$)/.test(line),
+  );
+  const closing = spokenLines(result.stdout ?? "").at(-1);
+  return [...said, ...(closing === undefined ? [] : [closing])];
+}
+
+/**
+ * The summary of a run's failed calls as one block: how many of the run's calls failed, then per call its target,
+ * how it ended, and the lines it said, indented under it.
+ * @param {readonly { target: string, result: CallResult }[]} failures
+ * @param {number} total how many calls the run made
+ * @returns {string}
+ */
+export function failureSummary(failures, total) {
+  const block = [`${failures.length} of ${total} skills add calls failed`];
+  for (const { target, result } of failures) {
+    const ended = result.status === null ? `signal ${result.signal}` : `exit ${result.status}`;
+    block.push(`  ${target}: ${ended}`, ...callDiagnostics(result).map((line) => `    ${line}`));
+  }
+  return block.join("\n");
 }

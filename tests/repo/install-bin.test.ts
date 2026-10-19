@@ -37,17 +37,18 @@ const only = (flags: string[], ...which: number[]) =>
   which.map((index) => commands(flags)[index] as string[]);
 const printed = (argvs: string[][]) => argvs.map((argv) => argv.join(" "));
 
-// The stubs log their own name and argv, one call per line with a unit separator between arguments so the
-// boundaries survive, and exit 0, or 3 on the call STUB_FAIL_AT names. One is an `npx` on PATH, the other npm's
-// own `npx-cli.js`, which the bin runs through node when npx started it. The PATH stub also plays the CLI's
-// install for the target's skill (the target-to-name map comes from STUB_INSTALL_NAMES): a listing writes
-// nothing; `--copy -a claude-code` creates or rewrites Claude's own copy under HOME/.claude/skills; otherwise
-// the canonical copy under HOME/.agents/skills is rewritten (touched) when it is a real directory, never through
-// a symlink.
+// Two stubs for the bin's launcher: an `npx` on PATH, and npm's own `npx-cli.js` for a bin that npx started.
+// Each logs its name and argv (one call per line, a unit separator between arguments) and exits 0, or 3 on the
+// call STUB_FAIL_AT names after speaking as the CLI does on a failure: npm's cold-cache line and a colored
+// warning on stderr, progress and a closing verdict on stdout (quoting npm's update-notice setting).
 const SEPARATOR = String.fromCharCode(0x1f);
 const FAKE_NPX = `#!/usr/bin/env bash
 { printf '%s' "$(basename "$0")"; printf '\\x1f%s' "$@"; printf '\\n'; } >> "\${STUB_ARGS_LOG}"
-if [ -n "\${STUB_FAIL_AT}" ] && [ "$(wc -l < "\${STUB_ARGS_LOG}")" -eq "\${STUB_FAIL_AT}" ]; then exit 3; fi
+if [ -n "\${STUB_FAIL_AT}" ] && [ "$(wc -l < "\${STUB_ARGS_LOG}")" -eq "\${STUB_FAIL_AT}" ]; then
+  printf 'npm warn exec stub: the skills package will be installed\\n\\033[33m\u26a0 stub skipped %s\\033[0m\\n' "$4" >&2
+  printf 'spinner frames\\n\u2514  stub gave up (update notifier: %s)\\n' "\${npm_config_update_notifier}"
+  exit 3
+fi
 case " $* " in *" -l "*|*" --list "*) exit 0;; esac
 name=""
 IFS=';' read -ra pairs <<< "\${STUB_INSTALL_NAMES}"
@@ -67,6 +68,10 @@ else
 fi
 exit 0
 `;
+// The PATH stub also plays the CLI's install for the target's skill (STUB_INSTALL_NAMES maps target to name): a
+// listing writes nothing; `--copy -a claude-code` creates or rewrites Claude's own copy under HOME/.claude/skills;
+// otherwise the canonical copy under HOME/.agents/skills is touched when it is a real directory, never through a
+// symlink.
 const INSTALL_NAMES = [
   "Leonxlnx/taste-skill/skills/taste-skill=design-taste-frontend",
   "anthropics/skills/skills/frontend-design=frontend-design",
@@ -82,6 +87,8 @@ interface Run {
   readonly stdout: string[];
   readonly stderr: string;
   readonly calls: string[][];
+  /** The scratch HOME the run installed under. */
+  readonly home: string;
 }
 
 interface RunOptions {
@@ -141,8 +148,29 @@ function run(
     calls: existsSync(log)
       ? lines(readFileSync(log, "utf-8")).map((line) => line.split(SEPARATOR))
       : [],
+    home: env.HOME ?? join(dir, "home"),
   };
 }
+
+/** What the stub says on a failing call, as the bin streams it: the raw stderr lines, the two stdout lines. */
+const STUB_WARNING = (target: string) =>
+  `npm warn exec stub: the skills package will be installed\n\u001b[33m\u26a0 stub skipped ${target}\u001b[0m\n`;
+const STUB_PROGRESS = "spinner frames";
+const STUB_VERDICT = "\u2514  stub gave up (update notifier: false)";
+/** The summary the bin ends with: npm's line dropped, the warning quoted without its color, the verdict last. */
+const summary = (total: number, ...failed: [target: string, status: number][]) =>
+  [
+    `install: ${failed.length} of ${total} skills add calls failed`,
+    ...failed.flatMap(([target, status]) => [
+      `  ${target}: exit ${status}`,
+      `    \u26a0 stub skipped ${target}`,
+      `    ${STUB_VERDICT}`,
+    ]),
+    "",
+  ].join("\n");
+/** The stderr line for a flagged upstream whose call wrote no copy under the run's HOME. */
+const noCopy = (home: string, name: string) =>
+  `install: no fresh copy at ${join(home, ".agents", "skills", name)} to mark explicit-invocation-only\n`;
 
 interface Case {
   readonly name: string;
@@ -151,6 +179,8 @@ interface Case {
   readonly status: number;
   readonly calls: string[][];
   readonly stdout: string[];
+  /** The whole stderr, given the run's scratch HOME; absent when the case leaves stderr unasserted. */
+  readonly stderr?: (home: string) => string;
 }
 
 describe("bin/install.mjs", () => {
@@ -171,13 +201,24 @@ describe("bin/install.mjs", () => {
       calls: [],
       stdout: printed(commands(["-g", "-y"])),
     },
+    // A failing call streams its output where it happens and the run goes on (the two flagged upstreams after
+    // it run and say they found no copy to mark); the summary at the end names it with what it said, and the
+    // run exits 1 whatever the call's own code was.
     {
-      name: "stops at the first failing command and exits with its code",
+      name: "a failing call does not stop the run; the summary at the end names it and the run exits 1",
       args: ["-g"],
       env: { STUB_FAIL_AT: "2" },
-      status: 3,
-      calls: commands(["-g", "-y"]).slice(0, 2),
-      stdout: printed(commands(["-g", "-y"]).slice(0, 2)),
+      status: 1,
+      calls: commands(["-g", "-y"]),
+      stdout: (() => {
+        const [first, second, ...rest] = printed(commands(["-g", "-y"]));
+        return [first, second, STUB_PROGRESS, STUB_VERDICT, ...rest] as string[];
+      })(),
+      stderr: (home) =>
+        STUB_WARNING("Leonxlnx/taste-skill/skills/taste-skill") +
+        noCopy(home, "frontend-design") +
+        noCopy(home, "impeccable") +
+        summary(5, ["Leonxlnx/taste-skill/skills/taste-skill", 3]),
     },
     // `--skill` (or `-s`, each followed by one or more names; `--all` and `*` mean every skill) selects by
     // name, and the CLI exits 1 with "No matching skills found" against a source that ships none of the names,
@@ -246,11 +287,12 @@ describe("bin/install.mjs", () => {
       calls: [],
       stdout: printed(only(["--skill", "unslop", "-g", "-y"], 4)),
     },
-  ])("$name", ({ args, env, status, calls, stdout }) => {
+  ])("$name", ({ args, env, status, calls, stdout, stderr }) => {
     const result = run(args, { env });
     expect(result.status).toBe(status);
     expect(result.calls).toEqual(calls);
     expect(result.stdout).toEqual(stdout);
+    if (stderr !== undefined) expect(result.stderr).toBe(stderr(result.home));
   });
 
   // An installed copy from an earlier run: its SKILL.md is a minute old, so the stub's rewrite shows as a newer
@@ -313,28 +355,44 @@ describe("bin/install.mjs", () => {
     expect(readFileSync(join(skills, "unslop", "SKILL.md"), "utf8")).toBe(UNMARKED("unslop"));
   });
 
-  // The mark follows each call, so a failure later in the run leaves the earlier copies marked and the run
-  // still ends with that failure.
-  test("a failing later call leaves the earlier upstream's fresh copy marked and exits with the failure", () => {
+  // The mark follows each call, so a failing call in the middle leaves the earlier copy marked, its own copy
+  // unmarked and without a notice (it wrote nothing), and the later calls still run and mark as usual.
+  test("a failing call in the middle leaves the earlier copy marked, its own untouched, and the later calls run", () => {
     const home = temp.dir("install-bin-home-");
     const skills = join(home, ".agents", "skills");
     installedCopy(skills, "design-taste-frontend");
     installedCopy(skills, "frontend-design");
+    installedCopy(skills, "impeccable");
 
     const result = run(["-g"], { env: { HOME: home, STUB_FAIL_AT: "3" } });
 
-    expect(result.status).toBe(3);
-    const [catalog, taste, frontend] = printed(commands(["-g", "-y"])) as [string, string, string];
+    expect(result.status).toBe(1);
+    const [catalog, taste, frontend, impeccable, unslop] = printed(commands(["-g", "-y"])) as [
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
     expect(result.stdout).toEqual([
       catalog,
       taste,
       `marked explicit-invocation-only: ${join(skills, "design-taste-frontend")}`,
       frontend,
+      STUB_PROGRESS,
+      STUB_VERDICT,
+      impeccable,
+      `marked explicit-invocation-only: ${join(skills, "impeccable")}`,
+      unslop,
     ]);
-    expect(result.stderr).toBe("");
+    expect(result.stderr).toBe(
+      STUB_WARNING("anthropics/skills/skills/frontend-design") +
+        summary(5, ["anthropics/skills/skills/frontend-design", 3]),
+    );
     expect(readFileSync(join(skills, "frontend-design", "SKILL.md"), "utf8")).toBe(
       UNMARKED("frontend-design"),
     );
+    expect(readFileSync(join(skills, "impeccable", "SKILL.md"), "utf8")).toBe(MARKED("impeccable"));
   });
 
   // `--list` makes every call list and install nothing, so an installed copy is left byte-identical.
