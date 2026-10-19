@@ -1,5 +1,5 @@
 // What the two install commands share: the catalog (this repository's coordinate, the marketplace's upstream
-// skills), the flags every `skills add` call carries, the explicit-invocation-only mark for an upstream's fresh
+// skills), the flags every `skills add` call carries and the agents it names, the explicit-invocation-only mark for an upstream's fresh
 // copies, one call run with its output kept, and the summary of the failed calls. bin/install.mjs and
 // scripts/link-agents.mts both import it. Dependency-free node, since the bin runs before anything is installed.
 
@@ -50,14 +50,38 @@ function loadObject(url) {
 }
 
 /**
- * The flags with `-y` appended unless they already say yes (`-y`, `--yes`, `--all`): the skills CLI otherwise
- * asks "Proceed with installation?" before it overwrites an installed copy, and both commands run unattended.
+ * The values the flags give a repeatable option, in the skills CLI's grammar: each occurrence of one of `names`
+ * takes every following argument up to the next flag or an empty argument.
+ * @param {readonly string[]} flags
+ * @param {readonly string[]} names
+ * @returns {string[]}
+ */
+export function flagValues(flags, names) {
+  const values = [];
+  for (let i = 0; i < flags.length; i++) {
+    if (!names.includes(flags[i])) continue;
+    while (i + 1 < flags.length && flags[i + 1] !== "" && !flags[i + 1].startsWith("-")) {
+      values.push(flags[++i]);
+    }
+  }
+  return values;
+}
+
+const AGENT_FLAGS = ["-a", "--agent"];
+
+/**
+ * The flags every call carries: the caller's, then `-y` unless they say yes (the CLI otherwise asks before
+ * overwriting an installed copy), then `-a universal` unless `--all`, `-a '*'`, or a named `universal` covers
+ * it. `universal` is the one `~/.agents/skills` directory, the canonical copy every other agent's symlink points
+ * at; without it the CLI under `-y` installs to every agent it detects plus the twenty-odd that read it.
  * @param {readonly string[]} flags
  * @returns {string[]}
  */
-export function withYes(flags) {
+export function callFlags(flags) {
   const yes = flags.some((flag) => flag === "-y" || flag === "--yes" || flag === "--all");
-  return yes ? [...flags] : [...flags, "-y"];
+  const agents = flagValues(flags, AGENT_FLAGS);
+  const covered = flags.includes("--all") || agents.includes("universal") || agents.includes("*");
+  return [...flags, ...(yes ? [] : ["-y"]), ...(covered ? [] : ["-a", "universal"])];
 }
 
 /** This catalog as GitHub owner/repo, read from the plugin manifest's repository URL. */

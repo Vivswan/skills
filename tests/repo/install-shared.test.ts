@@ -13,6 +13,7 @@ import {
   agentSkillDirs,
   callDiagnostics,
   copiesBefore,
+  flagValues,
   markExplicitOnly,
   markWrittenCopies,
   runCall,
@@ -322,5 +323,17 @@ describe("runCall and callDiagnostics", () => {
     const result = await runCall(join(temp.dir("install-shared-"), "no-such-npx"), ["add"]);
     expect(result.status).toBeNull();
     expect((result.error as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+  });
+});
+
+describe("flagValues", () => {
+  // What drifts: the skills CLI's grammar for a repeatable option is an external contract: each `-a` or `--agent`
+  // takes every following argument up to the next flag or an empty argument, and the occurrences add up.
+  test("reads the CLI's repeatable-option grammar", () => {
+    expect(
+      flagValues(["-a", "codex", "claude-code", "-g", "--agent", "junie"], ["-a", "--agent"]),
+    ).toEqual(["codex", "claude-code", "junie"]);
+    expect(flagValues(["-a", "codex", "", "junie"], ["-a", "--agent"])).toEqual(["codex"]);
+    expect(flagValues(["-g", "-a"], ["-a", "--agent"])).toEqual([]);
   });
 });

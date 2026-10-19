@@ -3,22 +3,24 @@
 //   npx -y github:Vivswan/skills [flags]    runs `npx -y skills add <target> [flags]` for this repository, then
 //                                           once per upstream skill of .claude-plugin/marketplace.json
 //   npx -y github:Vivswan/skills --help     prints those commands and runs nothing
-// Flags pass through unchanged, with `-y` added unless they say yes (the CLI's overwrite prompt would stop an
-// unattended run). A failed call does not stop the next: the run ends with the failures summarized on stderr,
-// exit 1. Only a launcher that cannot start (no npx) ends it at once, since every call would fail the same way.
+// Flags pass through unchanged, plus `-y` unless they say yes (the CLI's overwrite prompt would stop an
+// unattended run) and `-a universal` unless the agents cover it (install-shared.mjs). A failed call does not
+// stop the next: the run ends with the failures summarized on stderr, exit 1. Only a launcher that cannot start
+// (no npx) ends it at once, since every call would fail the same way.
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CatalogError,
+  callFlags,
   copiesBefore,
   failureSummary,
+  flagValues,
   installedSkillsDir,
   markWrittenCopies,
   repoCoordinate,
   runCall,
   upstreamSkills,
-  withYes,
 } from "./install-shared.mjs";
 
 const BY_HAND = "run this through npx (npx -y github:Vivswan/skills), which gives it npm's path";
@@ -30,22 +32,13 @@ function fail(message) {
 }
 
 /**
- * The skill names the flags select, lowercased as the CLI compares them. The CLI's grammar: `-s` or `--skill`
- * takes every following argument up to the next flag or an empty argument, and may repeat; `*` or `--all` means
- * every skill. Undefined when nothing is selected or every skill is, so the caller runs every call.
+ * The skill names the flags select (`-s` or `--skill`, repeatable), lowercased as the CLI compares them; `*` or
+ * `--all` means every skill. Undefined when nothing is selected or every skill is, so the caller runs every call.
  */
 function selectedSkills(flags) {
-  const names = new Set();
-  let every = flags.includes("--all");
-  for (let i = 0; i < flags.length; i++) {
-    if (flags[i] !== "-s" && flags[i] !== "--skill") continue;
-    while (i + 1 < flags.length && flags[i + 1] !== "" && !flags[i + 1].startsWith("-")) {
-      i++;
-      if (flags[i] === "*") every = true;
-      else names.add(flags[i].toLowerCase());
-    }
-  }
-  return every || names.size === 0 ? undefined : names;
+  const names = flagValues(flags, ["-s", "--skill"]);
+  if (flags.includes("--all") || names.includes("*") || names.length === 0) return undefined;
+  return new Set(names.map((name) => name.toLowerCase()));
 }
 
 /**
@@ -95,7 +88,7 @@ const [file, ...launcherArgs] = npxLauncher();
 const calls = targets(selectedSkills(flags), coordinate, upstream);
 const failures = [];
 for (const target of calls) {
-  const command = ["-y", "skills", "add", target, ...withYes(flags)];
+  const command = ["-y", "skills", "add", target, ...callFlags(flags)];
   console.log(["npx", ...command].join(" "));
   if (help) continue;
   const skill = upstream.find((candidate) => candidate.target === target);
