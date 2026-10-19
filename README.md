@@ -9,10 +9,13 @@ Skills for AI coding agents, installable with one command.
 One command installs this catalog and the four [upstream skills](#upstream-skills) through the skills CLI:
 
 ```bash
-npx -y github:Vivswan/skills -g
+npx -y github:Vivswan/skills -g                   # one copy under ~/.agents/skills, for the agents that read it
+npx -y github:Vivswan/skills -g -a claude-code    # the same copy, plus a symlink to it for Claude Code
 ```
 
-Each `npx skills add` it runs is unattended (`-y`), so nothing prompts and an installed copy is overwritten. Its flags pass through to every call (`-g` for your user, `-a codex` for one agent, `--skill <name>` for one skill, which runs only the call that ships it), and `--help` prints the five commands without running them.
+Each `npx skills add` it runs is unattended (`-y`), so nothing prompts and an installed copy is overwritten. Its flags pass through to every call (`-g` for your user, `-a <agents>` for the agents, `--skill <name>` for one skill, which runs only the call that ships it), and `--help` prints the five commands without running them.
+
+Every call installs to `universal`: the one `~/.agents/skills` directory that Codex, GitHub Copilot, OpenCode, and most other agents read. Claude Code, Junie, and Cursor read their own directories, so `-a` names them to get a symlink each. Without `-a universal` behind the scenes, the CLI would install to every agent it knows.
 
 A call that fails does not stop the others. The run ends with the failed calls listed, each with how it ended and the lines the CLI said, and exits 1:
 
@@ -71,7 +74,7 @@ Skills written in other repositories. Nothing of them is copied here: the market
 - [/design-taste-frontend](https://github.com/Leonxlnx/taste-skill/tree/HEAD/skills/taste-skill) - Anti-slop frontend for landing pages, portfolios, and redesigns (from [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill))
 - [/impeccable](https://github.com/pbakaus/impeccable/tree/HEAD/.agents/skills/impeccable) - Design direction for frontend work: design, critique, audit, polish, or harden an interface, with detector rules against AI-template tells (from [pbakaus/impeccable](https://github.com/pbakaus/impeccable))
 
-Installed by `npx -y github:Vivswan/skills -g` or `bun run add`, `frontend-design`, `design-taste-frontend`, and `impeccable` load only when you invoke them: the install sets `disable-model-invocation: true` and `policy.allow_implicit_invocation: false` on the copy, and an `npx skills update` that refreshes the copy undoes it until you install again. The direct lines below and a Claude Code plugin install keep upstream's own trigger; `unslop` ships its own `disable-model-invocation: true`.
+Installed by `npx -y github:Vivswan/skills -g` or `bun run add [-a <agents>]`, `frontend-design`, `design-taste-frontend`, and `impeccable` load only when you invoke them: the install sets `disable-model-invocation: true` and `policy.allow_implicit_invocation: false` on the copy, and an `npx skills update` that refreshes the copy undoes it until you install again. The direct lines below and a Claude Code plugin install keep upstream's own trigger; `unslop` ships its own `disable-model-invocation: true`.
 
 Each one alone, through the skills CLI:
 

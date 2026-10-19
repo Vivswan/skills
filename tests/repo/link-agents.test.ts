@@ -20,6 +20,7 @@ import {
   loadLockAttribution,
   type PruneAction,
   type PruneOptions,
+  parseArgs,
   pruneStaleSkills,
   repoSkillSources,
   repoSourceIds,
@@ -185,19 +186,96 @@ function entryExists(path: string): boolean {
 }
 
 describe("addCommands", () => {
-  // What drifts: the skills CLI's grammar is an external contract (`-y` is what skips its overwrite prompt), and
-  // the order is behavior (this tree's call comes last, right before the linking that depends on it).
-  test("installs each upstream folder, then this working tree, every call global and unattended", () => {
-    expect(
-      addCommands([
-        { target: "example-org/monorepo/tools/alpha" },
-        { target: "example-org/beta/skills/beta" },
-      ]),
-    ).toEqual([
-      ["npx", "skills", "add", "example-org/monorepo/tools/alpha", "--global", "-y"],
-      ["npx", "skills", "add", "example-org/beta/skills/beta", "--global", "-y"],
-      ["npx", "skills", "add", ".", "--global", "-y"],
+  const upstream = [
+    { target: "example-org/monorepo/tools/alpha" },
+    { target: "example-org/beta/skills/beta" },
+  ];
+
+  // What drifts: the skills CLI's grammar is an external contract (`-y` skips its overwrite prompt; `-a universal`
+  // is its one shared directory, where no `-a` would mean every agent it knows), and the order is behavior (this
+  // tree's call comes last, right before the linking that depends on it).
+  test("installs each upstream folder, then this working tree, every call global, unattended, universal", () => {
+    expect(addCommands(upstream, [])).toEqual([
+      [
+        "npx",
+        "skills",
+        "add",
+        "example-org/monorepo/tools/alpha",
+        "--global",
+        "-y",
+        "-a",
+        "universal",
+      ],
+      ["npx", "skills", "add", "example-org/beta/skills/beta", "--global", "-y", "-a", "universal"],
+      ["npx", "skills", "add", ".", "--global", "-y", "-a", "universal"],
     ]);
+  });
+
+  // Measured with the CLI: an agent named alone gets a plain copy in its own directory and no canonical one, which
+  // the linking could not rewire; so `universal` rides along with whatever the caller names, and a caller who
+  // already names it, or asks for every agent, gets no second one.
+  test("keeps universal among the named agents, once", () => {
+    expect(addCommands(upstream.slice(1), ["-a", "claude-code", "codex"])).toEqual([
+      [
+        "npx",
+        "skills",
+        "add",
+        "example-org/beta/skills/beta",
+        "--global",
+        "-a",
+        "claude-code",
+        "codex",
+        "-y",
+        "-a",
+        "universal",
+      ],
+      [
+        "npx",
+        "skills",
+        "add",
+        ".",
+        "--global",
+        "-a",
+        "claude-code",
+        "codex",
+        "-y",
+        "-a",
+        "universal",
+      ],
+    ]);
+    expect(addCommands([], ["-a", "universal", "junie", "-y"])).toEqual([
+      ["npx", "skills", "add", ".", "--global", "-a", "universal", "junie", "-y"],
+    ]);
+    expect(addCommands([], ["--all"])).toEqual([
+      ["npx", "skills", "add", ".", "--global", "--all"],
+    ]);
+  });
+});
+
+describe("parseArgs", () => {
+  // What drifts: addCommands puts --global on every call, so a caller's own -g must not double it.
+  test("hands addCommands the flags after --add with one --global on the call", () => {
+    const { flags } = parseArgs(["--add", "-a", "claude-code", "-g"]);
+    expect(addCommands([], flags)).toEqual([
+      ["npx", "skills", "add", ".", "--global", "-a", "claude-code", "-y", "-a", "universal"],
+    ]);
+  });
+
+  test.each([
+    [["--add", "--dry-run"], /--add and --dry-run cannot be combined/],
+    [["-a", "codex"], /flags for skills add need --add: -a codex/],
+    [
+      ["--add", "--copy", "-a", "claude-code"],
+      /--copy is refused: a --copy install gives each agent its own copy/,
+    ],
+    [
+      ["--add", "--skill", "unslop"],
+      /--skill is refused: a selection of skills has nothing to link/,
+    ],
+    [["--add", "-l"], /-l is refused: a listing installs nothing to link/],
+    [["--add", "--help"], /--help is refused: the CLI's help installs nothing to link/],
+  ])("%j is refused", (args, message) => {
+    expectCheckFailure(() => parseArgs(args), message);
   });
 });
 
@@ -234,7 +312,9 @@ describe("installForAdd", () => {
       return ok();
     };
 
-    const failures = await installForAdd(upstream, skills, home, run, (line) => lines.push(line));
+    const failures = await installForAdd(upstream, skills, home, [], run, (line) =>
+      lines.push(line),
+    );
 
     expect(calls).toHaveLength(3);
     expect(failures).toEqual([{ target: "example-org/beta/skills/beta-two", result: refused }]);
@@ -250,10 +330,10 @@ describe("installForAdd", () => {
       { name: "alpha-one", target: "example-org/alpha/skills/alpha-one", explicitOnly: false },
     ];
     const run = (): AddRun => ({ ...ok(), status: null, error: new Error("spawn npx ENOENT") });
-    const pending = installForAdd(upstream, "/nowhere", "/nowhere", run, () => {});
+    const pending = installForAdd(upstream, "/nowhere", "/nowhere", [], run, () => {});
     await expect(pending).rejects.toBeInstanceOf(CheckFailure);
     await expect(pending).rejects.toThrow(
-      /^npx skills add example-org\/alpha\/skills\/alpha-one --global -y: spawn npx ENOENT$/,
+      /^npx skills add example-org\/alpha\/skills\/alpha-one --global -y -a universal: spawn npx ENOENT$/,
     );
   });
 });

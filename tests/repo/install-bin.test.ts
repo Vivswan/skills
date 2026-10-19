@@ -22,9 +22,10 @@ const NODE = Bun.which("node") ?? "node";
 
 // What would drift silently: the skills CLI's grammar, `skills add <owner/repo>[/<path>] [flags]`, is an external
 // contract nothing here enforces, and the marketplace file is the roster the bin reads. These are the argv lists a
-// user's `npx -y github:Vivswan/skills <flags>` runs for the files as committed, this repository first. Every
-// call carries `-y` (the CLI's overwrite prompt would otherwise stop an unattended run) unless the user's flags
-// already say yes, so each row states the flags it expects after the target.
+// user's `npx -y github:Vivswan/skills <flags>` runs for the files as committed, this repository first.
+//
+// Every call carries `-y` unless the flags say yes (the CLI's overwrite prompt would stop an unattended run) and
+// `-a universal` unless the agents cover it (the CLI would otherwise install to every agent it knows).
 const commands = (flags: string[]) => [
   ["npx", "-y", "skills", "add", "Vivswan/skills", ...flags],
   ["npx", "-y", "skills", "add", "Leonxlnx/taste-skill/skills/taste-skill", ...flags],
@@ -190,8 +191,8 @@ describe("bin/install.mjs", () => {
       args: ["-g", "-a", "codex"],
       env: {},
       status: 0,
-      calls: commands(["-g", "-a", "codex", "-y"]),
-      stdout: printed(commands(["-g", "-a", "codex", "-y"])),
+      calls: commands(["-g", "-a", "codex", "-y", "-a", "universal"]),
+      stdout: printed(commands(["-g", "-a", "codex", "-y", "-a", "universal"])),
     },
     {
       name: "--help prints the commands and runs none of them",
@@ -199,7 +200,7 @@ describe("bin/install.mjs", () => {
       env: {},
       status: 0,
       calls: [],
-      stdout: printed(commands(["-g", "-y"])),
+      stdout: printed(commands(["-g", "-y", "-a", "universal"])),
     },
     // A failing call streams its output where it happens and the run goes on (the two flagged upstreams after
     // it run and say they found no copy to mark); the summary at the end names it with what it said, and the
@@ -209,9 +210,9 @@ describe("bin/install.mjs", () => {
       args: ["-g"],
       env: { STUB_FAIL_AT: "2" },
       status: 1,
-      calls: commands(["-g", "-y"]),
+      calls: commands(["-g", "-y", "-a", "universal"]),
       stdout: (() => {
-        const [first, second, ...rest] = printed(commands(["-g", "-y"]));
+        const [first, second, ...rest] = printed(commands(["-g", "-y", "-a", "universal"]));
         return [first, second, STUB_PROGRESS, STUB_VERDICT, ...rest] as string[];
       })(),
       stderr: (home) =>
@@ -228,56 +229,80 @@ describe("bin/install.mjs", () => {
       args: ["-g", "--skill", "rubber-duck-review"],
       env: {},
       status: 0,
-      calls: only(["-g", "--skill", "rubber-duck-review", "-y"], 0),
-      stdout: printed(only(["-g", "--skill", "rubber-duck-review", "-y"], 0)),
+      calls: only(["-g", "--skill", "rubber-duck-review", "-y", "-a", "universal"], 0),
+      stdout: printed(only(["-g", "--skill", "rubber-duck-review", "-y", "-a", "universal"], 0)),
     },
     {
       name: "--skill naming an upstream skill runs that upstream's call alone",
       args: ["-g", "--skill", "unslop"],
       env: {},
       status: 0,
-      calls: only(["-g", "--skill", "unslop", "-y"], 4),
-      stdout: printed(only(["-g", "--skill", "unslop", "-y"], 4)),
+      calls: only(["-g", "--skill", "unslop", "-y", "-a", "universal"], 4),
+      stdout: printed(only(["-g", "--skill", "unslop", "-y", "-a", "universal"], 4)),
     },
     {
       name: "-s with several names runs each call that ships one of them, in catalog order",
       args: ["-s", "unslop", "rubber-duck-review", "-g"],
       env: {},
       status: 0,
-      calls: only(["-s", "unslop", "rubber-duck-review", "-g", "-y"], 0, 4),
-      stdout: printed(only(["-s", "unslop", "rubber-duck-review", "-g", "-y"], 0, 4)),
+      calls: only(["-s", "unslop", "rubber-duck-review", "-g", "-y", "-a", "universal"], 0, 4),
+      stdout: printed(
+        only(["-s", "unslop", "rubber-duck-review", "-g", "-y", "-a", "universal"], 0, 4),
+      ),
     },
     {
       name: "an empty argument ends the CLI's name list, so a name after it selects nothing",
       args: ["-g", "--skill", "rubber-duck-review", "", "unslop"],
       env: {},
       status: 0,
-      calls: only(["-g", "--skill", "rubber-duck-review", "", "unslop", "-y"], 0),
-      stdout: printed(only(["-g", "--skill", "rubber-duck-review", "", "unslop", "-y"], 0)),
+      calls: only(
+        ["-g", "--skill", "rubber-duck-review", "", "unslop", "-y", "-a", "universal"],
+        0,
+      ),
+      stdout: printed(
+        only(["-g", "--skill", "rubber-duck-review", "", "unslop", "-y", "-a", "universal"], 0),
+      ),
     },
     {
       name: "--skill '*' runs every call, as no --skill does",
       args: ["--skill", "*", "-g"],
       env: {},
       status: 0,
-      calls: commands(["--skill", "*", "-g", "-y"]),
-      stdout: printed(commands(["--skill", "*", "-g", "-y"])),
+      calls: commands(["--skill", "*", "-g", "-y", "-a", "universal"]),
+      stdout: printed(commands(["--skill", "*", "-g", "-y", "-a", "universal"])),
     },
     {
       name: "a user's own -y is not doubled",
       args: ["-g", "-y"],
       env: {},
       status: 0,
-      calls: commands(["-g", "-y"]),
-      stdout: printed(commands(["-g", "-y"])),
+      calls: commands(["-g", "-y", "-a", "universal"]),
+      stdout: printed(commands(["-g", "-y", "-a", "universal"])),
     },
     {
-      name: "--all runs every call",
+      name: "--all runs every call, and means every agent to the CLI, so no universal is added",
       args: ["--all"],
       env: {},
       status: 0,
       calls: commands(["--all"]),
       stdout: printed(commands(["--all"])),
+    },
+    // Agents named in either spelling of the flag stay, universal joins them once; `*` already covers it.
+    {
+      name: "--agent naming agents keeps them, with universal beside them",
+      args: ["--agent", "codex", "claude-code", "-g"],
+      env: {},
+      status: 0,
+      calls: commands(["--agent", "codex", "claude-code", "-g", "-y", "-a", "universal"]),
+      stdout: printed(commands(["--agent", "codex", "claude-code", "-g", "-y", "-a", "universal"])),
+    },
+    {
+      name: "-a '*' asks for every agent, so no universal is added",
+      args: ["-a", "*", "-g"],
+      env: {},
+      status: 0,
+      calls: commands(["-a", "*", "-g", "-y"]),
+      stdout: printed(commands(["-a", "*", "-g", "-y"])),
     },
     {
       name: "--help with --skill prints the one command that would run",
@@ -285,7 +310,7 @@ describe("bin/install.mjs", () => {
       env: {},
       status: 0,
       calls: [],
-      stdout: printed(only(["--skill", "unslop", "-g", "-y"], 4)),
+      stdout: printed(only(["--skill", "unslop", "-g", "-y", "-a", "universal"], 4)),
     },
   ])("$name", ({ args, env, status, calls, stdout, stderr }) => {
     const result = run(args, { env });
@@ -324,13 +349,9 @@ describe("bin/install.mjs", () => {
     const result = run(["-g"], { env: { HOME: home } });
 
     expect(result.status).toBe(0);
-    const [catalog, taste, frontend, impeccable, unslop] = printed(commands(["-g", "-y"])) as [
-      string,
-      string,
-      string,
-      string,
-      string,
-    ];
+    const [catalog, taste, frontend, impeccable, unslop] = printed(
+      commands(["-g", "-y", "-a", "universal"]),
+    ) as [string, string, string, string, string];
     expect(result.stdout).toEqual([
       catalog,
       taste,
@@ -367,13 +388,9 @@ describe("bin/install.mjs", () => {
     const result = run(["-g"], { env: { HOME: home, STUB_FAIL_AT: "3" } });
 
     expect(result.status).toBe(1);
-    const [catalog, taste, frontend, impeccable, unslop] = printed(commands(["-g", "-y"])) as [
-      string,
-      string,
-      string,
-      string,
-      string,
-    ];
+    const [catalog, taste, frontend, impeccable, unslop] = printed(
+      commands(["-g", "-y", "-a", "universal"]),
+    ) as [string, string, string, string, string];
     expect(result.stdout).toEqual([
       catalog,
       taste,
@@ -404,7 +421,7 @@ describe("bin/install.mjs", () => {
     const result = run(["-g", "--list"], { env: { HOME: home } });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toEqual(printed(commands(["-g", "--list", "-y"])));
+    expect(result.stdout).toEqual(printed(commands(["-g", "--list", "-y", "-a", "universal"])));
     expect(result.stderr).toBe("");
     expect(readFileSync(join(skills, "frontend-design", "SKILL.md"), "utf8")).toBe(
       UNMARKED("frontend-design"),
@@ -430,7 +447,20 @@ describe("bin/install.mjs", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toEqual([
       ...printed(
-        only(["-g", "--skill", "frontend-design", "--copy", "-a", "claude-code", "-y"], 2),
+        only(
+          [
+            "-g",
+            "--skill",
+            "frontend-design",
+            "--copy",
+            "-a",
+            "claude-code",
+            "-y",
+            "-a",
+            "universal",
+          ],
+          2,
+        ),
       ),
       `marked explicit-invocation-only: ${copied}`,
     ]);
@@ -446,9 +476,11 @@ describe("bin/install.mjs", () => {
   test("under npx, runs npm's own npx-cli.js through node, with a two-word flag value as one argument", () => {
     const result = run(["-g", "-a", "codex claude-code"], { npxOnPath: false, underNpx: true });
     expect(result.status).toBe(0);
-    expect(result.stdout).toEqual(printed(commands(["-g", "-a", "codex claude-code", "-y"])));
+    expect(result.stdout).toEqual(
+      printed(commands(["-g", "-a", "codex claude-code", "-y", "-a", "universal"])),
+    );
     expect(result.calls).toEqual(
-      commands(["-g", "-a", "codex claude-code", "-y"]).map((argv) => [
+      commands(["-g", "-a", "codex claude-code", "-y", "-a", "universal"]).map((argv) => [
         "npx-cli.js",
         ...argv.slice(1),
       ]),
@@ -459,7 +491,7 @@ describe("bin/install.mjs", () => {
     const result = run(["-g"], { npxOnPath: false });
     expect(result.status).toBe(1);
     // The first command prints before its launch fails; nothing else does.
-    expect(result.stdout).toEqual(printed(commands(["-g", "-y"]).slice(0, 1)));
+    expect(result.stdout).toEqual(printed(commands(["-g", "-y", "-a", "universal"]).slice(0, 1)));
     expect(result.stderr).toBe(
       "install: run this through npx (npx -y github:Vivswan/skills), which gives it npm's path\n",
     );

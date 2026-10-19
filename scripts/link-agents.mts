@@ -7,14 +7,18 @@
  * (~/.claude/skills, ...) symlink to that copy, never to the source. Linking the source directly
  * is an open upstream request (vercel-labs/skills#748), so this script rewires the canonical copy.
  *
- * Usage: bun scripts/link-agents.mts [--dry-run | --add]
+ * Usage: bun scripts/link-agents.mts [--dry-run | --add [skills add flags]]
  *   --dry-run  reports every link and prune, changes nothing
- *   --add      runs `npx skills add <upstream> --global -y` per upstream skill of the marketplace,
- *              then `npx skills add . --global -y` (which overwrites the canonical symlinks with
- *              copies, so the linking follows it), marks the copies each flagged upstream's call
- *              wrote explicit-invocation-only, then links; never --copy, so the per-agent
- *              directories keep symlinking into ~/.agents/skills. A failed call stops neither the
- *              next call nor the linking: the run ends FAIL with the failed calls listed
+ *   --add      installs first: `npx skills add <upstream> --global -y -a universal` per upstream
+ *              skill of the marketplace, then the same for `.`, marking each flagged upstream's
+ *              fresh copies explicit-invocation-only; the flags after --add go to every call
+ *
+ * Every call includes the universal agent: its copy under ~/.agents/skills is the one the linking
+ * rewires and every other agent's symlink points at, so `-a claude-code` adds a symlink for Claude
+ * Code beside it. --copy, --skill, --list, and --help are refused: each leaves nothing to link.
+ *
+ * A failed call stops neither the next call nor the linking: the run ends FAIL with the failed
+ * calls listed.
  * Revert: `npx skills add . --all` overwrites the symlinks with fresh copies.
  */
 
@@ -33,12 +37,12 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   agentSkillDirs,
   CatalogError,
+  callFlags,
   copiesBefore,
   failureSummary,
   markWrittenCopies,
   runCall,
   upstreamSkills,
-  withYes,
 } from "../bin/install-shared.mjs";
 import {
   CheckFailure,
@@ -89,11 +93,48 @@ export interface PruneOptions {
 
 /**
  * The `npx skills add` argv lists `--add` runs: the upstream folders first, then this tree, whose
- * call is the one the linking that follows depends on.
+ * call is the one the linking that follows depends on. `flags` are the caller's; every call is
+ * global, unattended, and installs to `universal` among whatever agents they name.
  */
-export function addCommands(upstream: readonly { readonly target: string }[]): string[][] {
+export function addCommands(
+  upstream: readonly { readonly target: string }[],
+  flags: readonly string[],
+): string[][] {
   const targets = [...upstream.map(({ target }) => target), "."];
-  return targets.map((target) => ["npx", "skills", "add", target, ...withYes(["--global"])]);
+  const shared = ["--global", ...callFlags(flags)];
+  return targets.map((target) => ["npx", "skills", "add", target, ...shared]);
+}
+
+/** What the command line asked for. */
+export interface Args {
+  readonly dryRun: boolean;
+  readonly withAdd: boolean;
+  /** The flags after `--add`, for every `skills add` call; `--global` is dropped, since every call carries it. */
+  readonly flags: string[];
+}
+
+/** The CLI flags that leave the linking nothing to rewire, each with why it is refused. */
+const REFUSED_FLAGS: Record<string, string> = {
+  "--copy":
+    "a --copy install gives each agent its own copy, which rewiring ~/.agents/skills never reaches",
+  "-s": "a selection of skills has nothing to link; to install one, use the consumer command",
+  "--skill": "a selection of skills has nothing to link; to install one, use the consumer command",
+  "-l": "a listing installs nothing to link",
+  "--list": "a listing installs nothing to link",
+  "-h": "the CLI's help installs nothing to link; this script's usage is in its header comment",
+  "--help": "the CLI's help installs nothing to link; this script's usage is in its header comment",
+};
+
+/** Read the argv: `--dry-run`, `--add`, and with `--add` the flags for its calls. */
+export function parseArgs(args: readonly string[]): Args {
+  const dryRun = args.includes("--dry-run");
+  const withAdd = args.includes("--add");
+  const flags = args.filter((arg) => arg !== "--dry-run" && arg !== "--add");
+  if (withAdd && dryRun) fail("--add and --dry-run cannot be combined");
+  if (flags.length > 0 && !withAdd) fail(`flags for skills add need --add: ${flags.join(" ")}`);
+  const refused = flags.find((arg) => arg in REFUSED_FLAGS);
+  if (refused !== undefined) fail(`${refused} is refused: ${REFUSED_FLAGS[refused]}`);
+  return { dryRun, withAdd, flags: flags.filter((arg) => arg !== "-g" && arg !== "--global") };
 }
 
 /** What a `skills add` call returned: the shared runner's result, or the error that kept it from running. */
@@ -115,11 +156,12 @@ export async function installForAdd(
   upstream: ReturnType<typeof upstreamSkills>,
   agentsSkillsDir: string,
   home: string,
+  flags: readonly string[],
   run: (argv: readonly string[]) => AddRun | Promise<AddRun>,
   log: (line: string) => void,
 ): Promise<AddFailure[]> {
   const failures: AddFailure[] = [];
-  for (const argv of addCommands(upstream)) {
+  for (const argv of addCommands(upstream, flags)) {
     const target = argv[3] as string;
     const skill = upstream.find((candidate) => candidate.target === target);
     const before = skill?.explicitOnly
@@ -515,12 +557,7 @@ function linkAndPrune(
 
 if (import.meta.main) {
   runChecks(async () => {
-    const args = process.argv.slice(2);
-    const unknown = args.filter((arg) => arg !== "--dry-run" && arg !== "--add");
-    if (unknown.length > 0) fail(`unknown option(s): ${unknown.join(", ")}`);
-    const dryRun = args.includes("--dry-run");
-    const withAdd = args.includes("--add");
-    if (withAdd && dryRun) fail("--add and --dry-run cannot be combined");
+    const { dryRun, withAdd, flags } = parseArgs(process.argv.slice(2));
     // Settled before the installer runs: a refused source set must not leave
     // installs it already rewired unlinked.
     const sourceByName = repoSkillSources(skillDirs());
@@ -532,11 +569,12 @@ if (import.meta.main) {
           upstream,
           agentsSkillsDir,
           homedir(),
+          flags,
           ([command, ...args]) => runCall(command as string, args, { cwd: ROOT }),
           console.log,
         )
       : [];
-    summaryAfter(failures, addCommands(upstream).length, () =>
+    summaryAfter(failures, addCommands(upstream, flags).length, () =>
       linkAndPrune(sourceByName, agentsSkillsDir, dryRun),
     );
   });
