@@ -1,5 +1,5 @@
 // reaches: bin/install-shared.mjs
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   lstatSync,
   mkdirSync,
@@ -11,8 +11,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { CheckFailure } from "../../scripts/lib.mts";
+import { CheckFailure, fail } from "../../scripts/lib.mts";
 import {
+  type AddRun,
   addCommands,
   installForAdd,
   linkSkills,
@@ -22,6 +23,7 @@ import {
   pruneStaleSkills,
   repoSkillSources,
   repoSourceIds,
+  summaryAfter,
 } from "../../scripts/link-agents.mts";
 import { expectCheckFailure } from "../helpers/check-failure";
 import { tempDirs } from "../helpers/temp-dirs";
@@ -184,7 +186,7 @@ function entryExists(path: string): boolean {
 
 describe("addCommands", () => {
   // What drifts: the skills CLI's grammar is an external contract (`-y` is what skips its overwrite prompt), and
-  // the order is behavior (an upstream failure must leave this repository's skills as they were).
+  // the order is behavior (this tree's call comes last, right before the linking that depends on it).
   test("installs each upstream folder, then this working tree, every call global and unattended", () => {
     expect(
       addCommands([
@@ -200,9 +202,12 @@ describe("addCommands", () => {
 });
 
 describe("installForAdd", () => {
-  // What drifts: the mark must follow each upstream's own call, so a later failure leaves the earlier copies
-  // marked and the run still ends with that failure, named, before anything is linked.
-  test("marks a flagged upstream's fresh copy right after its call; a later failure ends the run named", () => {
+  const ok = (): AddRun => ({ status: 0, signal: null, stdout: "", stderr: "" });
+
+  // What drifts: the mark must follow each upstream's own call, so a failing call in the middle leaves the
+  // earlier copy marked and its own unmarked, the calls after it still run, and the failure comes back for the
+  // summary with what the call said, rather than ending the run there.
+  test("marks a flagged upstream's fresh copy right after its call; a failing call is kept and the next runs", async () => {
     const home = temp.dir("skills-add-test-");
     const skills = join(home, ".agents", "skills");
     const past = new Date(Date.now() - 60_000);
@@ -219,23 +224,93 @@ describe("installForAdd", () => {
     ];
     const calls: string[][] = [];
     const lines: string[] = [];
-    const run = (argv: readonly string[]) => {
+    const refused: AddRun = { status: 3, signal: null, stdout: "step\nverdict\n", stderr: "why\n" };
+    const run = (argv: readonly string[]): AddRun => {
       calls.push([...argv]);
-      if (calls.length === 2) return { status: 3 };
+      if (calls.length === 2) return refused;
+      if (argv[3] === ".") return ok();
       const skillMd = join(skills, basename(argv[3] as string), "SKILL.md");
       utimesSync(skillMd, new Date(), new Date());
-      return { status: 0 };
+      return ok();
     };
 
-    expectCheckFailure(
-      () => installForAdd(upstream, skills, home, run, (line) => lines.push(line)),
-      /example-org\/beta\/skills\/beta-two --global -y exited with status 3; not linking/,
-    );
-    expect(calls).toHaveLength(2);
+    const failures = await installForAdd(upstream, skills, home, run, (line) => lines.push(line));
+
+    expect(calls).toHaveLength(3);
+    expect(failures).toEqual([{ target: "example-org/beta/skills/beta-two", result: refused }]);
     expect(lines).toEqual([`marked explicit-invocation-only: ${copies["alpha-one"]}`]);
     expect(readFileSync(join(copies["beta-two"] as string, "SKILL.md"), "utf8")).toBe(
       "---\nname: beta-two\n---\nbody\n",
     );
+  });
+
+  // A call that could not start at all would fail the same way for every call after it, so it ends the run.
+  test("a call that cannot start ends the run, named", async () => {
+    const upstream = [
+      { name: "alpha-one", target: "example-org/alpha/skills/alpha-one", explicitOnly: false },
+    ];
+    const run = (): AddRun => ({ ...ok(), status: null, error: new Error("spawn npx ENOENT") });
+    const pending = installForAdd(upstream, "/nowhere", "/nowhere", run, () => {});
+    await expect(pending).rejects.toBeInstanceOf(CheckFailure);
+    await expect(pending).rejects.toThrow(
+      /^npx skills add example-org\/alpha\/skills\/alpha-one --global -y: spawn npx ENOENT$/,
+    );
+  });
+});
+
+describe("summaryAfter", () => {
+  const failures = [
+    {
+      target: "example-org/alpha/skills/alpha-one",
+      result: { status: 1, signal: null, stdout: "verdict\n", stderr: "" },
+    },
+  ];
+
+  // What drifts: a linking failure after failed installs reported only itself (the missing canonical directory),
+  // and the failed targets with their diagnostics were lost; the one FAIL must carry both, the installs first.
+  test("a failing step keeps the install failures ahead of its own message", () => {
+    expectCheckFailure(
+      () =>
+        summaryAfter(failures, 3, () => {
+          fail("/home/user/.agents/skills: missing");
+        }),
+      /^1 of 3 skills add calls failed\n {2}example-org\/alpha\/skills\/alpha-one: exit 1\n {4}verdict\n\/home\/user\/\.agents\/skills: missing$/,
+    );
+  });
+
+  // A native error (EACCES from a remove) is no CheckFailure: it must still carry the summary ahead of itself.
+  test("a step that crashes prints the install failures first, then throws its own error", () => {
+    const printed: string[] = [];
+    const spy = spyOn(console, "error").mockImplementation((line: string) => {
+      printed.push(line);
+    });
+    try {
+      expect(() =>
+        summaryAfter(failures, 3, () => {
+          throw new Error("EACCES: permission denied");
+        }),
+      ).toThrow("EACCES: permission denied");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(printed).toEqual([
+      "1 of 3 skills add calls failed\n  example-org/alpha/skills/alpha-one: exit 1\n    verdict",
+    ]);
+  });
+
+  test("a step that passes still ends the run with the install failures", () => {
+    expectCheckFailure(
+      () => summaryAfter(failures, 3, () => {}),
+      /^1 of 3 skills add calls failed\n {2}example-org\/alpha\/skills\/alpha-one: exit 1\n {4}verdict$/,
+    );
+  });
+
+  test("nothing failed: the step runs and the run goes on", () => {
+    let ran = false;
+    summaryAfter([], 3, () => {
+      ran = true;
+    });
+    expect(ran).toBe(true);
   });
 });
 

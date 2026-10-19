@@ -3,26 +3,20 @@
 //   npx -y github:Vivswan/skills [flags]    runs `npx -y skills add <target> [flags]` for this repository, then
 //                                           once per upstream skill of .claude-plugin/marketplace.json
 //   npx -y github:Vivswan/skills --help     prints those commands and runs nothing
-// The flags pass through unchanged (-g, -a <agents>, --skill <names>), and every call runs unattended (`-y`,
-// unless the flags already say yes), so nothing prompts and an installed copy is overwritten. A `--skill`
-// selection also narrows the calls to the sources that ship a selected name (targets, below), since the CLI
-// exits 1 against a source that ships none of them. Each command prints before it runs, and the first nonzero
-// exit ends the run with that code. Right after an upstream call that installed, the copies it wrote of an
-// upstream the marketplace marks `disable-model-invocation` are marked explicit-invocation-only
-// (install-shared.mjs); `-l`/`--list` installs nothing, so nothing is marked; a symlinked canonical entry, or a
-// call that wrote no copy to mark, is a stderr line and the run goes on. The CLI runs through npm's own npx-cli.js under node, with no shell on any platform: a bin that npx
-// started inherits npm_execpath (npm-cli.js, with npx-cli.js beside it) and npm_node_execpath. Started by hand,
-// the bin runs `npx` from PATH instead.
+// Flags pass through unchanged, with `-y` added unless they say yes (the CLI's overwrite prompt would stop an
+// unattended run). A failed call does not stop the next: the run ends with the failures summarized on stderr,
+// exit 1. Only a launcher that cannot start (no npx) ends it at once, since every call would fail the same way.
 
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CatalogError,
   copiesBefore,
+  failureSummary,
   installedSkillsDir,
   markWrittenCopies,
   repoCoordinate,
+  runCall,
   upstreamSkills,
   withYes,
 } from "./install-shared.mjs";
@@ -98,7 +92,9 @@ const installing = !help && !flags.includes("-l") && !flags.includes("--list");
 const { coordinate, upstream } = catalogOrFail();
 const skillsDir = installedSkillsDir(flags);
 const [file, ...launcherArgs] = npxLauncher();
-for (const target of targets(selectedSkills(flags), coordinate, upstream)) {
+const calls = targets(selectedSkills(flags), coordinate, upstream);
+const failures = [];
+for (const target of calls) {
   const command = ["-y", "skills", "add", target, ...withYes(flags)];
   console.log(["npx", ...command].join(" "));
   if (help) continue;
@@ -107,12 +103,19 @@ for (const target of targets(selectedSkills(flags), coordinate, upstream)) {
     installing && skill?.explicitOnly
       ? copiesBefore(skill.name, skillsDir, dirname(dirname(skillsDir)))
       : undefined;
-  const result = spawnSync(file, [...launcherArgs, ...command], { stdio: "inherit" });
+  const result = await runCall(file, [...launcherArgs, ...command]);
   if (result.error?.code === "ENOENT") fail(BY_HAND);
   if (result.error) fail(result.error.message);
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  if (result.status !== 0) {
+    failures.push({ target, result });
+    continue;
+  }
   if (before === undefined) continue;
   const { marked, notices } = markWrittenCopies(before);
   for (const path of marked) console.log(`marked explicit-invocation-only: ${path}`);
   for (const notice of notices) console.error(`install: ${notice}`);
+}
+if (failures.length > 0) {
+  console.error(`install: ${failureSummary(failures, calls.length)}`);
+  process.exitCode = 1;
 }

@@ -11,9 +11,11 @@ import {
 import { dirname, join } from "node:path";
 import {
   agentSkillDirs,
+  callDiagnostics,
   copiesBefore,
   markExplicitOnly,
   markWrittenCopies,
+  runCall,
 } from "../../bin/install-shared.mjs";
 import { tempDirs } from "../helpers/temp-dirs";
 
@@ -247,5 +249,78 @@ describe("copiesBefore and markWrittenCopies", () => {
       marked: [copied],
       notices: [],
     });
+  });
+});
+
+describe("runCall and callDiagnostics", () => {
+  // What drifts: the CLI speaks a failure on both streams (a warning on stderr, its closing verdict on stdout,
+  // both colored), and the bin's summary must still quote it plain; the two environment settings are what the
+  // piped child needs in place of a terminal.
+  const CHILD = [
+    "process.stderr.write('\\u001b[33m\\u26a0 skipped\\u001b[0m\\n\\n');",
+    "process.stdout.write('step one\\n\\u001b[1G\\u001b[Jspin\\n\\u001b[31m\\u2514  gave up\\u001b[0m\\n');",
+    "process.stdout.write('notifier=' + process.env.npm_config_update_notifier + ' color=' + process.env.FORCE_COLOR + '\\n');",
+    "process.exit(3);",
+  ].join(" ");
+
+  /** Run `body` with FORCE_COLOR and NO_COLOR as given (absent when undefined), this process's own restored after. */
+  async function withColorEnv(
+    settings: { FORCE_COLOR?: string; NO_COLOR?: string },
+    body: () => Promise<void>,
+  ): Promise<void> {
+    const saved = { FORCE_COLOR: process.env.FORCE_COLOR, NO_COLOR: process.env.NO_COLOR };
+    for (const [key, value] of Object.entries({ ...saved, ...settings })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    try {
+      await body();
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+
+  test("runCall keeps both streams and the exit status, and hands the child the two settings", async () => {
+    await withColorEnv({ FORCE_COLOR: undefined, NO_COLOR: undefined }, async () => {
+      const result = await runCall(process.execPath, ["-e", CHILD]);
+      expect(result.status).toBe(3);
+      expect(result.signal).toBeNull();
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe("\u001b[33m⚠ skipped\u001b[0m\n\n");
+      // With neither variable set, FORCE_COLOR follows this process's own stdout: a terminal passes it on, a
+      // pipe (the launcher's, CI's) does not.
+      const color = process.stdout.isTTY ? "1" : "undefined";
+      expect(result.stdout.endsWith(`notifier=false color=${color}\n`)).toBe(true);
+    });
+  });
+
+  test("runCall leaves the user's own FORCE_COLOR as it is", async () => {
+    await withColorEnv({ FORCE_COLOR: "0", NO_COLOR: undefined }, async () => {
+      const result = await runCall(process.execPath, ["-e", CHILD]);
+      expect(result.stdout.endsWith("notifier=false color=0\n")).toBe(true);
+    });
+  });
+
+  test("callDiagnostics quotes the stderr lines and the closing stdout line; escapes, blanks, npm's chatter gone", () => {
+    expect(
+      callDiagnostics({
+        status: 3,
+        signal: null,
+        stderr:
+          "npm warn exec The following package was not found and will be installed: skills@1.0.0\n" +
+          "\u001b[33m⚠ skipped\u001b[0m\n\n   \nnpm notice\nnpm notice New major version of npm available!\nnpm error code E404\n",
+        stdout: "step one\n\u001b[1G\u001b[Jspin\n\u001b[31m└  gave up\u001b[0m\n\n",
+      }),
+    ).toEqual(["⚠ skipped", "npm error code E404", "└  gave up"]);
+    expect(callDiagnostics({ status: 1, signal: null, stdout: "", stderr: "" })).toEqual([]);
+  });
+
+  test("runCall reports a launcher that cannot start as the error, not a status", async () => {
+    const result = await runCall(join(temp.dir("install-shared-"), "no-such-npx"), ["add"]);
+    expect(result.status).toBeNull();
+    expect((result.error as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
   });
 });

@@ -10,14 +10,14 @@
  * Usage: bun scripts/link-agents.mts [--dry-run | --add]
  *   --dry-run  reports every link and prune, changes nothing
  *   --add      runs `npx skills add <upstream> --global -y` per upstream skill of the marketplace,
- *              then `npx skills add . --global -y` (its UI wires the per-agent pointers but
- *              overwrites the canonical symlinks with copies), marking the copies each flagged
- *              upstream's call wrote explicit-invocation-only right after it, then links; never
- *              --copy, so the per-agent directories keep symlinking into ~/.agents/skills
+ *              then `npx skills add . --global -y` (which overwrites the canonical symlinks with
+ *              copies, so the linking follows it), marks the copies each flagged upstream's call
+ *              wrote explicit-invocation-only, then links; never --copy, so the per-agent
+ *              directories keep symlinking into ~/.agents/skills. A failed call stops neither the
+ *              next call nor the linking: the run ends FAIL with the failed calls listed
  * Revert: `npx skills add . --all` overwrites the symlinks with fresh copies.
  */
 
-import { spawnSync } from "node:child_process";
 import {
   lstatSync,
   readdirSync,
@@ -34,11 +34,14 @@ import {
   agentSkillDirs,
   CatalogError,
   copiesBefore,
+  failureSummary,
   markWrittenCopies,
+  runCall,
   upstreamSkills,
   withYes,
 } from "../bin/install-shared.mjs";
 import {
+  CheckFailure,
   fail,
   isRecord,
   loadJsonObject,
@@ -85,48 +88,77 @@ export interface PruneOptions {
 }
 
 /**
- * The `npx skills add` argv lists `--add` runs: the upstream folders first, so a failure among them
- * leaves this repository's skills as they were rather than installed and unlinked, then this tree.
+ * The `npx skills add` argv lists `--add` runs: the upstream folders first, then this tree, whose
+ * call is the one the linking that follows depends on.
  */
 export function addCommands(upstream: readonly { readonly target: string }[]): string[][] {
   const targets = [...upstream.map(({ target }) => target), "."];
   return targets.map((target) => ["npx", "skills", "add", target, ...withYes(["--global"])]);
 }
 
-/** What a `skills add` call returned: the spawn's status, or the error that kept it from running. */
-export interface AddRun {
-  readonly status: number | null;
-  readonly error?: Error;
+/** What a `skills add` call returned: the shared runner's result, or the error that kept it from running. */
+export type AddRun = Awaited<ReturnType<typeof runCall>>;
+
+/** A `skills add` call that ended nonzero, for the summary that ends the run. */
+export interface AddFailure {
+  readonly target: string;
+  readonly result: AddRun;
 }
 
 /**
  * Run `--add`'s installs in order, marking a flagged upstream's freshly written copies right after its own
- * call, so a later failure leaves the earlier copies marked; the failure then ends the run, named, and nothing
- * is linked. `run` is the spawn (injected by the tests), `log` takes the mark and notice lines.
+ * call. A call that fails is kept for the summary and the next call runs; only a call that could not start at
+ * all (no npx) ends the run at once, since every call would fail the same way. `run` is the spawn (injected by
+ * the tests), `log` takes the mark and notice lines.
  */
-export function installForAdd(
+export async function installForAdd(
   upstream: ReturnType<typeof upstreamSkills>,
   agentsSkillsDir: string,
   home: string,
-  run: (argv: readonly string[]) => AddRun,
+  run: (argv: readonly string[]) => AddRun | Promise<AddRun>,
   log: (line: string) => void,
-): void {
+): Promise<AddFailure[]> {
+  const failures: AddFailure[] = [];
   for (const argv of addCommands(upstream)) {
-    const shown = argv.join(" ");
-    const skill = upstream.find((candidate) => candidate.target === argv[3]);
+    const target = argv[3] as string;
+    const skill = upstream.find((candidate) => candidate.target === target);
     const before = skill?.explicitOnly
       ? copiesBefore(skill.name, agentsSkillsDir, home)
       : undefined;
-    const result = run(argv);
-    if (result.error) fail(`${shown}: ${result.error.message}`);
+    const result = await run(argv);
+    if (result.error) fail(`${argv.join(" ")}: ${result.error.message}`);
     if (result.status !== 0) {
-      fail(`${shown} exited with status ${result.status ?? "unknown"}; not linking`);
+      failures.push({ target, result });
+      continue;
     }
     if (before === undefined) continue;
     const { marked, notices } = markWrittenCopies(before);
     for (const path of marked) log(`marked explicit-invocation-only: ${path}`);
     for (const notice of notices) log(`notice: ${notice}`);
   }
+  return failures;
+}
+
+/**
+ * Run `step` (the linking and pruning) and then end the run with the install failures, when there were any. A
+ * step that fails keeps them ahead of its own failure: a check's FAIL carries the summary first, then the
+ * check's message; a crash gets the summary on stderr and then its own stack.
+ */
+export function summaryAfter(
+  failures: readonly AddFailure[],
+  total: number,
+  step: () => void,
+): void {
+  try {
+    step();
+  } catch (error) {
+    if (failures.length === 0) throw error;
+    const summary = failureSummary(failures, total);
+    if (error instanceof CheckFailure) fail(`${summary}\n${error.message}`);
+    console.error(summary);
+    throw error;
+  }
+  if (failures.length > 0) fail(failureSummary(failures, total));
 }
 
 /** The marketplace's upstream skills, a malformed catalog file failing like any other check. */
@@ -426,8 +458,63 @@ function safeRealpath(path: string): string | undefined {
   }
 }
 
+/** Link this repository's skills into the canonical directory, then prune the stale installs attributable to it. */
+function linkAndPrune(
+  sourceByName: Map<string, string>,
+  agentsSkillsDir: string,
+  dryRun: boolean,
+): void {
+  const actions = linkSkills([...sourceByName.values()], agentsSkillsDir, dryRun);
+
+  const prefix = dryRun ? "[dry-run] " : "";
+  for (const action of actions) {
+    const source = rel(sourceByName.get(action.skill) ?? join(SKILLS_DIR, action.skill));
+    if (action.kind === "already-linked") {
+      console.log(`${prefix}already linked: ${action.skill}`);
+    } else {
+      console.log(`${prefix}${action.kind}: ${action.skill} -> ${source}`);
+    }
+  }
+  const created = actions.filter((action) => action.kind === "created");
+  if (created.length > 0) {
+    console.log(
+      `note: ${created.map((action) => action.skill).join(", ")} had no prior install; ` +
+        "per-agent directories (e.g. ~/.claude/skills) only gain pointers via " +
+        "`npx skills add .`, so run that first for brand-new skills, then re-link.",
+    );
+  }
+
+  const repository = loadRootManifest().raw.repository;
+  if (typeof repository !== "string" || repository.length === 0) {
+    fail(".claude-plugin/plugin.json: repository must be a non-empty string URL");
+  }
+  const lockfilePath = join(dirname(agentsSkillsDir), ".skill-lock.json");
+  const pruneActions = pruneStaleSkills({
+    repoSkillsDirs: [SKILLS_DIR],
+    currentSkills: new Set(sourceByName.keys()),
+    agentsSkillsDir,
+    agentSkillDirs: agentSkillDirs(homedir(), agentsSkillsDir),
+    lockAttribution: loadLockAttribution(lockfilePath, repoSourceIds(repository)),
+    // Report as it happens: a removal stays visible even if a later step throws.
+    onAction: (action) => {
+      if (action.kind === "kept") {
+        console.log(`notice: kept ${action.path}: ${action.reason}`);
+      } else if (action.kind === "would-prune") {
+        console.log(`[dry-run] would prune: ${action.path} (${action.reason})`);
+      } else {
+        console.log(`pruned: ${action.path} (${action.reason})`);
+      }
+    },
+    dryRun,
+  });
+
+  if (!pruneActions.some((action) => action.kind !== "kept")) {
+    console.log(`${prefix}nothing to prune: no stale installs attributable to this repo`);
+  }
+}
+
 if (import.meta.main) {
-  runChecks(() => {
+  runChecks(async () => {
     const args = process.argv.slice(2);
     const unknown = args.filter((arg) => arg !== "--dry-run" && arg !== "--add");
     if (unknown.length > 0) fail(`unknown option(s): ${unknown.join(", ")}`);
@@ -439,65 +526,18 @@ if (import.meta.main) {
     const sourceByName = repoSkillSources(skillDirs());
 
     const agentsSkillsDir = join(homedir(), ".agents", "skills");
-    if (withAdd) {
-      installForAdd(
-        catalogUpstream(),
-        agentsSkillsDir,
-        homedir(),
-        ([command, ...args]) => {
-          const result = spawnSync(command as string, args, { cwd: ROOT, stdio: "inherit" });
-          return { status: result.status, error: result.error };
-        },
-        console.log,
-      );
-    }
-
-    const actions = linkSkills([...sourceByName.values()], agentsSkillsDir, dryRun);
-
-    const prefix = dryRun ? "[dry-run] " : "";
-    for (const action of actions) {
-      const source = rel(sourceByName.get(action.skill) ?? join(SKILLS_DIR, action.skill));
-      if (action.kind === "already-linked") {
-        console.log(`${prefix}already linked: ${action.skill}`);
-      } else {
-        console.log(`${prefix}${action.kind}: ${action.skill} -> ${source}`);
-      }
-    }
-    const created = actions.filter((action) => action.kind === "created");
-    if (created.length > 0) {
-      console.log(
-        `note: ${created.map((action) => action.skill).join(", ")} had no prior install; ` +
-          "per-agent directories (e.g. ~/.claude/skills) only gain pointers via " +
-          "`npx skills add .`, so run that first for brand-new skills, then re-link.",
-      );
-    }
-
-    const repository = loadRootManifest().raw.repository;
-    if (typeof repository !== "string" || repository.length === 0) {
-      fail(".claude-plugin/plugin.json: repository must be a non-empty string URL");
-    }
-    const lockfilePath = join(dirname(agentsSkillsDir), ".skill-lock.json");
-    const pruneActions = pruneStaleSkills({
-      repoSkillsDirs: [SKILLS_DIR],
-      currentSkills: new Set(sourceByName.keys()),
-      agentsSkillsDir,
-      agentSkillDirs: agentSkillDirs(homedir(), agentsSkillsDir),
-      lockAttribution: loadLockAttribution(lockfilePath, repoSourceIds(repository)),
-      // Report as it happens: a removal stays visible even if a later step throws.
-      onAction: (action) => {
-        if (action.kind === "kept") {
-          console.log(`notice: kept ${action.path}: ${action.reason}`);
-        } else if (action.kind === "would-prune") {
-          console.log(`[dry-run] would prune: ${action.path} (${action.reason})`);
-        } else {
-          console.log(`pruned: ${action.path} (${action.reason})`);
-        }
-      },
-      dryRun,
-    });
-
-    if (!pruneActions.some((action) => action.kind !== "kept")) {
-      console.log(`${prefix}nothing to prune: no stale installs attributable to this repo`);
-    }
+    const upstream = withAdd ? catalogUpstream() : [];
+    const failures = withAdd
+      ? await installForAdd(
+          upstream,
+          agentsSkillsDir,
+          homedir(),
+          ([command, ...args]) => runCall(command as string, args, { cwd: ROOT }),
+          console.log,
+        )
+      : [];
+    summaryAfter(failures, addCommands(upstream).length, () =>
+      linkAndPrune(sourceByName, agentsSkillsDir, dryRun),
+    );
   });
 }

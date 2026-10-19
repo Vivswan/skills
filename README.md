@@ -14,6 +14,15 @@ npx -y github:Vivswan/skills -g
 
 Each `npx skills add` it runs is unattended (`-y`), so nothing prompts and an installed copy is overwritten. Its flags pass through to every call (`-g` for your user, `-a codex` for one agent, `--skill <name>` for one skill, which runs only the call that ships it), and `--help` prints the five commands without running them.
 
+A call that fails does not stop the others. The run ends with the failed calls listed, each with how it ended and the lines the CLI said, and exits 1:
+
+```text
+install: 1 of 5 skills add calls failed
+  Leonxlnx/taste-skill/skills/taste-skill: exit 1
+    Skipped /tmp/skills-ME8i1r/skills/taste-skill/SKILL.md - YAML parse error: Nested mappings are not allowed in compact mappings at line 2, column 14
+    No valid skills found. Skills require a SKILL.md with name and description.
+```
+
 Or as a Claude Code plugin. The root [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json) publishes this catalog as the `vivswan-skills` plugin, and each upstream skill by its own name (`/plugin install unslop@vivswan-skills`):
 
 ```text

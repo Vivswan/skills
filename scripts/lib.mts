@@ -20,10 +20,10 @@ export function fail(message: string): never {
   throw new CheckFailure(message);
 }
 
-/** Entry-point wrapper: print a CheckFailure as `FAIL: ...` and exit 1. */
-export function runChecks(main: () => void): void {
+/** Entry-point wrapper: print a CheckFailure as `FAIL: ...` and exit 1. A main that awaits is caught the same. */
+export async function runChecks(main: () => void | Promise<void>): Promise<void> {
   try {
-    main();
+    await main();
   } catch (error) {
     if (error instanceof CheckFailure) {
       console.error(`FAIL: ${error.message}`);
