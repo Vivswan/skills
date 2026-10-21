@@ -106,6 +106,8 @@ A stage's records, constants, and small functions gather in its `records`, `cons
 
 Specimen: one sweep split a tree into 269 modules, among them a file holding a single format-conversion helper and another holding a default layer list.
 
+A file per function is the same defect from the other side: a file holds one concept with its helpers, as a function holds one concept with its steps.
+
 Any file may move, a pure move is its own PR with an export census and an equal test count, and a whole-repo reorganisation is proposed as a target layout first. Full detail: `references/structure.md`; the barrel in each language: `references/languages/`.
 
 ### No planning references in code
@@ -160,7 +162,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - A nested conditional expression, a conditional splice, a first-match lookup where a keyed table reads once, an assignment inside a condition, `and`/`or` as control flow, a guard's body wrapped in an `else`, a loop nesting what a `continue` would skip, or a hand-written cleanup block where the language binds cleanup to the acquisition.
 - A body with no blank line between its decisions, an untyped signature, a public item without a doc comment in the language's form, a docstring over three short paragraphs or narrating behaviour instead of stating what the function returns, or an underscore-prefixed name, module level or attribute, on what the module's user may touch.
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
-- A file holding two main things, or named unlike the one it holds, a helper of one caller or a constant given its own module outside the `records`, `constants`, and `util` modules, a sibling whose internal template differs from the folder's, or a concept spelled differently across sibling stages.
+- A file holding two main things, a concept scattered over several files, or a file named unlike the one it holds, a helper of one caller or a constant given its own module outside the `records`, `constants`, and `util` modules, a sibling whose internal template differs from the folder's, or a concept spelled differently across sibling stages.
 - A move that leaves a path it changed unrepaired (an importer, a workflow or manifest path, a comment, a relative path inside the moved file), that edits the moved code beyond its paths in the same PR, or that lacks the export census and test count; a confusing layout kept because moving files is "churn".
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
