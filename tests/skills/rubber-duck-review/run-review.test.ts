@@ -814,7 +814,7 @@ describe("run-review.mts", () => {
     expect(r.stderr).toContain(BWRAP_LINE);
   });
 
-  test("a launch directory with no directory twin in the copy (ignored, or under a staged file) starts at the copy's root", () => {
+  test("a launch directory with no directory twin inside the copy (ignored, or under a staged file or symlink) starts at the copy's root", () => {
     const ignored = fixtureRepo();
     // sub/ replaced by a staged file named sub, then recreated unstaged with a child, so the twin of
     // sub is that file (no cwd) and the twin of sub/deep lies under a file (ENOTDIR, no cwd either).
@@ -824,10 +824,21 @@ describe("run-review.mts", () => {
     git(replaced, "add", "-A", "sub");
     rmSync(join(replaced, "sub"));
     mkdirSync(join(replaced, "sub", "deep"), { recursive: true });
+    // sub/ replaced by a staged symlink to its own live path, then recreated unstaged with a child: the
+    // twin of sub is a symlink into the live checkout and the twin of sub/deep resolves through it, and
+    // following either would start the reviewer in the checkout under review.
+    const linked = fixtureRepo();
+    rmSync(join(linked, "sub"), { recursive: true });
+    symlinkSync(join(linked, "sub"), join(linked, "sub"));
+    git(linked, "add", "-A", "sub");
+    rmSync(join(linked, "sub"));
+    mkdirSync(join(linked, "sub", "deep"), { recursive: true });
     for (const [id, cwd] of [
       ["ignored", join(ignored, ".venv")],
       ["replaced-by-a-file", join(replaced, "sub")],
       ["under-a-file", join(replaced, "sub", "deep")],
+      ["replaced-by-a-symlink", join(linked, "sub")],
+      ["under-a-symlink", join(linked, "sub", "deep")],
     ] as const) {
       const reportFile = join(binDir, `cwd-report-${id}`);
       const r = run(
@@ -843,19 +854,34 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("a skip-worktree entry is checked out in the copy: the bit describes the checkout's tree, not the copy's", () => {
-    const repo = fixtureRepo();
-    git(repo, "update-index", "--skip-worktree", "sub/tracked.txt");
-    const reportFile = join(binDir, "cwd-report-skip-worktree");
+  test("a blobless partial clone with a sparse checkout snapshots as it is: a skip-worktree entry stays out, its blob may not be local", () => {
+    // The origin allows filtered fetches; the clone takes no blobs and checks out the sub/ cone, so
+    // other/b.txt is skip-worktree with its blob only on the promisor remote, which the copy lacks.
+    const origin = temp.dir("run-review-promisor-");
+    git(origin, "init", "-q", "-b", "main");
+    writeFileSync(join(origin, "a.txt"), "one\n");
+    mkdirSync(join(origin, "sub"));
+    writeFileSync(join(origin, "sub", "tracked.txt"), "tracked\n");
+    mkdirSync(join(origin, "other"));
+    writeFileSync(join(origin, "other", "b.txt"), "elsewhere\n");
+    git(origin, "add", ".");
+    git(origin, "commit", "-q", "-m", "init");
+    git(origin, "config", "uploadpack.allowFilter", "true");
+    const sparse = temp.dir("run-review-sparse-");
+    git(sparse, "clone", "-q", "--filter=blob:none", "--no-checkout", `file://${origin}`, ".");
+    git(sparse, "sparse-checkout", "set", "--cone", "sub");
+    git(sparse, "checkout", "-q", "main");
+    writeFileSync(join(sparse, "sub", "tracked.txt"), "changed\n");
+    git(sparse, "add", "sub/tracked.txt");
+    const reportFile = join(binDir, "cwd-report-sparse");
     const r = run(
       ["codex", promptFile],
       { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile },
       undefined,
-      join(repo, "sub"),
+      sparse,
     );
     expect(r.code).toBe(0);
-    // sub/ exists in the copy only through that one file, so the launch directory's twin is the proof.
-    expect(cwdReport(reportFile).cwd).toMatch(/\/rubber-duck-[^/]+\/repo\/sub$/);
+    expect(cwdReport(reportFile).status).toEqual(["M  sub/tracked.txt"]);
   });
 
   test("a linked worktree, a detached checkout, and an unborn branch each snapshot their own HEAD and index", () => {

@@ -340,20 +340,25 @@ function snapshotRepository(
     const detail = error instanceof Error ? error.message : String(error);
     return { ok: false as const, reason: `snapshot of ${launch.root} failed: ${detail}` };
   }
-  // The cwd's twin is a directory when the cwd holds something tracked; from
-  // an untracked or ignored directory, or one a staged file replaced (itself
-  // or an ancestor), the reviewer starts at the copy's root.
-  const twin = join(copy, launch.subdir);
-  return { ok: true as const, copy, cwd: isDirectory(twin) ? twin : copy };
+  // The cwd's twin is a directory inside the copy when the cwd holds something
+  // tracked; from an untracked or ignored directory, or one a staged file or
+  // symlink replaced (itself or an ancestor), the reviewer starts at the
+  // copy's root.
+  return { ok: true as const, copy, cwd: directoryInside(copy, launch.subdir) ?? copy };
 }
 
-/** False for a missing path and for a path under a file (ENOTDIR), which
- * `throwIfNoEntry` does not cover. */
-function isDirectory(path: string): boolean {
+/** The real path of `copy/subdir` when it is a directory inside the copy,
+ * else null: a missing path, a path under a file (ENOTDIR), or one a staged
+ * symlink on the way (the leaf or an ancestor) resolves out of the copy, into
+ * the live checkout. The resolved path decides, never the lexical one. */
+function directoryInside(copy: string, subdir: string): string | null {
   try {
-    return statSync(path).isDirectory();
+    const root = realpathSync(copy);
+    const real = realpathSync(join(copy, subdir));
+    const inside = real === root || real.startsWith(`${root}${sep}`);
+    return inside && statSync(real).isDirectory() ? real : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -394,14 +399,12 @@ function buildSnapshot(copy: string): void {
   for (const name of readdirSync(gitDir)) {
     if (name.startsWith("sharedindex.")) copyFileSync(join(gitDir, name), join(copy, ".git", name));
   }
-  // Every entry, a skip-worktree one included (that bit describes the
-  // checkout's tree, not the copy's); `-u` points the copied stat data at the
-  // files just written, or every status re-hashes them. Large-file pointers
-  // stay pointers: a smudge filter would fetch what a review never reads.
-  git(["checkout-index", "-a", "-u", "--ignore-skip-worktree-bits"], {
-    cwd: copy,
-    env: { ...copyEnv, GIT_LFS_SKIP_SMUDGE: "1" },
-  });
+  // The working tree as the checkout's own: a skip-worktree entry stays
+  // absent, as under sparse checkout, where a partial clone may not even hold
+  // its blob. `-u` points the copied stat data at the files just written, or
+  // every status re-hashes them. Large-file pointers stay pointers: a smudge
+  // filter would fetch what a review never reads.
+  git(["checkout-index", "-a", "-u"], { cwd: copy, env: { ...copyEnv, GIT_LFS_SKIP_SMUDGE: "1" } });
 }
 
 /** `force` skips what is missing, not what a tree's own modes refuse (a
