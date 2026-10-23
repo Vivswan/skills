@@ -9,6 +9,7 @@
  *   predictable prompt path      -> one agent overwrites another's: prepare mints a private dir
  *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
+ *   cp -a of the checkout        -> venvs and nested worktrees weigh gigabytes: snapshot HEAD, the refs, the index
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
  */
 
@@ -298,33 +299,109 @@ function planLaunch(tool: Tool): Launch {
   return { sandbox: "copy", reason: refusal, root, subdir };
 }
 
-/** The snapshot is the whole checkout, `.git` included, so `git diff --cached`
- * in the copy shows the staged change the prompt names. `cp -a` rather than a
- * linked worktree: a worktree's `.git` still points into the real repository. */
+/** Runs one git command and returns its stdout. A failure throws, naming the
+ * command and what git said. Node passes `input` only through a piped stdin
+ * (an ignored one drops it; bun passes it either way). */
+function git(
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: Buffer } = {},
+): Buffer {
+  const result = spawnSync("git", args, {
+    cwd: options.cwd,
+    env: options.env,
+    input: options.input,
+    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    maxBuffer: Number.MAX_SAFE_INTEGER,
+  });
+  if (result.status === 0) return result.stdout;
+  const detail = result.error?.message ?? result.stderr.toString().trim();
+  throw new Error(`git ${args.join(" ")}: ${detail}`);
+}
+
+/** The copy is what git has committed or would commit, its object store
+ * shared with the checkout through an alternates link, so `git diff --cached`
+ * and `git diff <base>...HEAD` there show the change the prompt names. A
+ * `cp -a` of the toplevel also carried the ignored trees (virtualenvs, nested
+ * worktrees) and failed midway on a checkout of gigabytes; a linked worktree
+ * is no copy, its `.git` points into the repository. SKILL.md names what
+ * travels and what stays behind. */
 function snapshotRepository(
   launch: Extract<Launch, { sandbox: "copy" }>,
   scratch: Scratch,
   warn: (line: string) => void,
 ) {
   const copy = join(scratch.dir, "repo");
-  const cp = spawnSync("cp", ["-a", launch.root, copy], { stdio: ["ignore", "ignore", "pipe"] });
-  if (cp.status !== 0) {
+  try {
+    buildSnapshot(copy);
+  } catch (error) {
     // A copy that failed midway is still a copy: it goes with the failure,
     // not into a capture dir that is kept for a day.
     removeTree(copy, warn);
-    const detail = cp.error?.message ?? cp.stderr.toString().trim();
+    const detail = error instanceof Error ? error.message : String(error);
     return { ok: false as const, reason: `snapshot of ${launch.root} failed: ${detail}` };
   }
-  // A repository-level core.worktree names the live checkout by absolute path
-  // and travelled with the copied config; unset, git finds the copy. Only for
-  // a `.git` directory: in a linked worktree `--local` is the shared config.
-  if (lstatSync(join(copy, ".git")).isDirectory()) {
-    spawnSync("git", ["-C", copy, "config", "--local", "--unset-all", "core.worktree"], {
-      env: withoutGitEnv(process.env),
-      stdio: "ignore",
-    });
+  // The cwd's twin is a directory when the cwd holds something tracked; from
+  // an untracked or ignored directory, or one a staged file replaced (itself
+  // or an ancestor), the reviewer starts at the copy's root.
+  const twin = join(copy, launch.subdir);
+  return { ok: true as const, copy, cwd: isDirectory(twin) ? twin : copy };
+}
+
+/** False for a missing path and for a path under a file (ENOTDIR), which
+ * `throwIfNoEntry` does not cover. */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
   }
-  return { ok: true as const, copy, cwd: join(copy, launch.subdir) };
+}
+
+/** Reads of the checkout run where the launcher runs, with its environment:
+ * a `GIT_DIR` there, relative or absolute, may be how the caller names the
+ * repository. Every write into the copy drops the `GIT_*` variables, or it
+ * would land in the checkout. */
+function buildSnapshot(copy: string): void {
+  const read = (...args: string[]) => git(args).toString().trim();
+  const copyEnv = withoutGitEnv(process.env);
+  const write = (args: string[], input?: Buffer) => git(args, { cwd: copy, env: copyEnv, input });
+
+  const objectFormat = read("rev-parse", "--show-object-format");
+  const objects = read("rev-parse", "--path-format=absolute", "--git-path", "objects");
+  const shallow = read("rev-parse", "--path-format=absolute", "--git-path", "shallow");
+  const index = read("rev-parse", "--path-format=absolute", "--git-path", "index");
+  const gitDir = read("rev-parse", "--absolute-git-dir");
+  const refs = git(["for-each-ref", "--format=update %(refname) %(objectname)"]);
+  // Empty for a detached HEAD; an unborn branch has a name and no commit.
+  const branch = read("branch", "--show-current");
+
+  mkdirSync(copy);
+  write(["init", "-q", `--object-format=${objectFormat}`]);
+  writeFileSync(join(copy, ".git", "objects", "info", "alternates"), `${objects}\n`);
+  // A shallow clone's boundary travels too, or a walk of the history in the
+  // copy dies at the first missing parent.
+  if (existsSync(shallow)) copyFileSync(shallow, join(copy, ".git", "shallow"));
+  write(["update-ref", "--stdin"], refs);
+  if (branch === "") {
+    write(["update-ref", "--no-deref", "HEAD", read("rev-parse", "--verify", "HEAD")]);
+  } else {
+    write(["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
+  }
+  // The index file itself, so an intent-to-add, skip-worktree, or unmerged
+  // entry keeps its flags (a listing of the entries would stage an
+  // intent-to-add file outright); a split index's shared halves sit beside it.
+  if (existsSync(index)) copyFileSync(index, join(copy, ".git", "index"));
+  for (const name of readdirSync(gitDir)) {
+    if (name.startsWith("sharedindex.")) copyFileSync(join(gitDir, name), join(copy, ".git", name));
+  }
+  // Every entry, a skip-worktree one included (that bit describes the
+  // checkout's tree, not the copy's); `-u` points the copied stat data at the
+  // files just written, or every status re-hashes them. Large-file pointers
+  // stay pointers: a smudge filter would fetch what a review never reads.
+  git(["checkout-index", "-a", "-u", "--ignore-skip-worktree-bits"], {
+    cwd: copy,
+    env: { ...copyEnv, GIT_LFS_SKIP_SMUDGE: "1" },
+  });
 }
 
 /** `force` skips what is missing, not what a tree's own modes refuse (a
