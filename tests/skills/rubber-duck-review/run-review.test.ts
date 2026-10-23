@@ -11,15 +11,15 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
 import { writeAllSync } from "../../../skills/rubber-duck-review/scripts/run-review.mts";
+import { git } from "../../helpers/scratch-repo";
 import { tempDirs } from "../../helpers/temp-dirs";
 
 const temp = tempDirs();
@@ -117,7 +117,13 @@ if [ -n "\${STUB_HOME_REPORT:-}" ]; then
   if [ -n "\${STUB_REAL_AUTH_WRITE:-}" ]; then printf '%s' "\${STUB_REAL_AUTH_WRITE}" > "\${STUB_REAL_AUTH_PATH}"; fi
 fi
 if [ -n "\${STUB_CWD_REPORT:-}" ]; then
-  { echo "$PWD"; git rev-parse --show-toplevel; git --no-pager diff --cached --name-only; } > "\${STUB_CWD_REPORT}"
+  # One line per fact about the copy as the reviewer sees it: cwd, toplevel, branch, status entries
+  # joined by |, HEAD (empty when unborn), commits reachable from HEAD, the first line of a.txt as checked out, and the
+  # LFS smudge filter the copy's git has configured, the last line of a diff against origin/main, and ORIG_HEAD.
+  { printf '%s\\n' "$PWD" "$(git rev-parse --show-toplevel)" "$(git branch --show-current)" \\
+      "$(git status --porcelain -uall --ignored | tr '\\n' '|')" "$(git rev-parse -q --verify HEAD)" \\
+      "$(git rev-list --count HEAD 2>&1 | tail -1)" "$(head -1 "$(git rev-parse --show-toplevel)/a.txt" 2>/dev/null)" \\
+      "$(git config --get filter.lfs.smudge)" "$(git --no-pager diff --stat origin/main...HEAD 2>&1 | tail -1)" "$(git rev-parse -q --verify ORIG_HEAD)"; } > "\${STUB_CWD_REPORT}"
   # A write the prompt forbade: it must land in the copy, never in the checkout under review.
   touch "$(git rev-parse --show-toplevel)/REVIEWER_WROTE"
 fi
@@ -299,12 +305,15 @@ esac
 exit "\${STUB_EXIT:-0}"
 `;
 
-/** The copy-mode snapshot runs `cp` through PATH, so this stub can fail it midway. */
-const FAKE_CP = `#!/usr/bin/env bash
-if [ "\${STUB_CP_FAIL:-0}" = "1" ]; then
-  mkdir -p "$3"; : > "$3/partial"; echo "cp: disk full" >&2; exit 1
-fi
-exec /bin/cp "$@"
+/** The snapshot runs git through PATH, so this stub can fail the subcommand STUB_GIT_FAIL names
+ * midway; every other call goes to the machine's git. */
+const REAL_GIT = Bun.which("git");
+if (REAL_GIT === null) throw new Error("git is not installed");
+const FAKE_GIT = `#!/usr/bin/env bash
+for arg in "$@"; do
+  if [ -n "\${STUB_GIT_FAIL:-}" ] && [ "$arg" = "\${STUB_GIT_FAIL}" ]; then echo "fatal: disk full" >&2; exit 128; fi
+done
+exec "${REAL_GIT}" "$@"
 `;
 
 const binDir = temp.dir("run-review-test-");
@@ -313,7 +322,7 @@ for (const [name, body] of [
   ["codex", FAKE_CODEX],
   ["claude", FAKE_CLAUDE],
   ["copilot", FAKE_COPILOT],
-  ["cp", FAKE_CP],
+  ["git", FAKE_GIT],
 ] as const) {
   writeFileSync(join(binDir, name), body);
   chmodSync(join(binDir, name), 0o755);
@@ -729,31 +738,48 @@ describe("run-review.mts", () => {
     expect(r.stderr).toContain("reviewer binary not found");
   });
 
-  /** A repository with one staged change and an untracked file, the shape a
-   * pre-commit review targets; `git status` must read the same after the run. */
+  /** A repository the shape a pre-commit review targets, carrying everything a copy of the checkout
+   * once dragged along: a staged change under an unstaged edit, an untracked file, an ignored tree
+   * and a nested worktree; `git status` must read the same after the run. */
   function fixtureRepo(): string {
     const repo = temp.dir("run-review-repo-");
-    const git = (...args: string[]) => {
-      const result = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
-      expect(result.stderr.toString(), args.join(" ")).toBe("");
-      expect(result.exitCode, args.join(" ")).toBe(0);
-    };
-    git("init", "-q", "-b", "main");
+    git(repo, "init", "-q", "-b", "main");
     writeFileSync(join(repo, "a.txt"), "one\n");
-    git("add", "a.txt");
-    git("commit", "-q", "-m", "init");
-    writeFileSync(join(repo, "a.txt"), "two\n");
-    git("add", "a.txt");
     mkdirSync(join(repo, "sub"));
+    writeFileSync(join(repo, "sub", "tracked.txt"), "tracked\n");
+    writeFileSync(join(repo, ".gitignore"), ".venv/\n.claude/\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "init");
+    writeFileSync(join(repo, "a.txt"), "two\n");
+    git(repo, "add", "a.txt");
+    writeFileSync(join(repo, "a.txt"), "three\n");
     writeFileSync(join(repo, "sub", "note.txt"), "untracked\n");
+    mkdirSync(join(repo, ".venv"));
+    writeFileSync(join(repo, ".venv", "big.bin"), "x".repeat(1 << 16));
+    git(repo, "worktree", "add", "-q", join(repo, ".claude", "worktrees", "other"), "-b", "other");
     return repo;
   }
 
   function porcelain(repo: string): string {
-    return Bun.spawnSync(["git", "status", "--porcelain", "-uall"], {
-      cwd: repo,
-      stdout: "pipe",
-    }).stdout.toString();
+    return git(repo, "status", "--porcelain", "-uall");
+  }
+
+  /** The stub's report of the copy as the reviewer saw it (the stub's cwd-report block names the lines). */
+  function cwdReport(file: string) {
+    const [cwd, top, branch, status, head, commits, aText, lfsSmudge, branchDiff, origHead] =
+      readFileSync(file, "utf-8").split("\n");
+    return {
+      cwd,
+      top,
+      branch,
+      status: status?.split("|").filter(Boolean) ?? [],
+      head,
+      commits,
+      aText,
+      lfsSmudge,
+      branchDiff,
+      origHead,
+    };
   }
 
   const BWRAP_LINE =
@@ -762,26 +788,229 @@ describe("run-review.mts", () => {
   test("codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy that dies with the review", () => {
     const repo = fixtureRepo();
     const before = porcelain(repo);
-    const cwdReport = join(binDir, "cwd-report-copy");
+    const reportFile = join(binDir, "cwd-report-copy");
     const r = run(
       ["codex", promptFile],
-      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: cwdReport },
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile },
       undefined,
       join(repo, "sub"),
     );
     expect(r.code).toBe(0);
     expect(r.report().sandbox).toBe("copy");
     expect(r.report().verdict).toEqual(CODEX_VERDICT);
-    // The reviewer ran in the cwd's twin inside the copy, with the staged change intact.
-    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
-    expect(copyCwd).toMatch(/\/rubber-duck-[^/]+\/repo\/sub$/);
-    expect(top).toBe(dirname(copyCwd as string));
-    expect(staged).toEqual(["a.txt"]);
+    // The reviewer ran in the cwd's twin inside the copy, on the branch, with the staged change intact.
+    const seen = cwdReport(reportFile);
+    expect(seen.cwd).toMatch(/\/rubber-duck-[^/]+\/repo\/sub$/);
+    expect(seen.top).toBe(dirname(seen.cwd as string));
+    expect(seen.branch).toBe("main");
+    // One status line is the whole proof that nothing else travelled: a.txt reads as staged, not as
+    // edited, and the untracked note, the ignored tree, and the nested worktree are absent.
+    expect(seen.status).toEqual(["M  a.txt"]);
+    expect(seen.aText).toBe("two");
     // Its write landed in the copy, the copy is gone, and the checkout reads as before.
     expect(r.copyLeft).toBe(false);
     expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
     expect(porcelain(repo)).toBe(before);
     expect(r.stderr).toContain(BWRAP_LINE);
+  });
+
+  test("a launch directory with no directory twin inside the copy (ignored, or under a staged file or symlink) starts at the copy's root", () => {
+    const ignored = fixtureRepo();
+    // sub/ replaced by a staged file named sub, then recreated unstaged with a child, so the twin of
+    // sub is that file (no cwd) and the twin of sub/deep lies under a file (ENOTDIR, no cwd either).
+    const replaced = fixtureRepo();
+    rmSync(join(replaced, "sub"), { recursive: true });
+    writeFileSync(join(replaced, "sub"), "a file where the directory was\n");
+    git(replaced, "add", "-A", "sub");
+    rmSync(join(replaced, "sub"));
+    mkdirSync(join(replaced, "sub", "deep"), { recursive: true });
+    // sub/ replaced by a staged symlink to its own live path, then recreated unstaged with a child: the
+    // twin of sub is a symlink into the live checkout and the twin of sub/deep resolves through it, and
+    // following either would start the reviewer in the checkout under review.
+    const linked = fixtureRepo();
+    rmSync(join(linked, "sub"), { recursive: true });
+    symlinkSync(join(linked, "sub"), join(linked, "sub"));
+    git(linked, "add", "-A", "sub");
+    rmSync(join(linked, "sub"));
+    mkdirSync(join(linked, "sub", "deep"), { recursive: true });
+    for (const [id, cwd] of [
+      ["ignored", join(ignored, ".venv")],
+      ["replaced-by-a-file", join(replaced, "sub")],
+      ["under-a-file", join(replaced, "sub", "deep")],
+      ["replaced-by-a-symlink", join(linked, "sub")],
+      ["under-a-symlink", join(linked, "sub", "deep")],
+    ] as const) {
+      const reportFile = join(binDir, `cwd-report-${id}`);
+      const r = run(
+        ["codex", promptFile],
+        { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile },
+        undefined,
+        cwd,
+      );
+      expect(r.code, id).toBe(0);
+      const seen = cwdReport(reportFile);
+      expect(seen.cwd, id).toMatch(/\/rubber-duck-[^/]+\/repo$/);
+      expect(seen.top, id).toBe(seen.cwd);
+    }
+  });
+
+  test("a blobless partial clone snapshots as it is: sparse entries stay out, and a base blob the checkout lacks arrives from its promisor remote", () => {
+    // The origin allows filtered fetches; the clone takes no blobs and checks out the sub/ cone, so
+    // other/b.txt is skip-worktree with its blob only on the promisor remote. The topic branch changes
+    // a.txt, whose base blob the clone never fetched either.
+    const origin = temp.dir("run-review-promisor-");
+    git(origin, "init", "-q", "-b", "main");
+    writeFileSync(join(origin, "a.txt"), "one\n");
+    mkdirSync(join(origin, "sub"));
+    writeFileSync(join(origin, "sub", "tracked.txt"), "tracked\n");
+    mkdirSync(join(origin, "other"));
+    writeFileSync(join(origin, "other", "b.txt"), "elsewhere\n");
+    git(origin, "add", ".");
+    git(origin, "commit", "-q", "-m", "init");
+    git(origin, "config", "uploadpack.allowFilter", "true");
+    git(origin, "checkout", "-q", "-b", "topic");
+    writeFileSync(join(origin, "a.txt"), "two\n");
+    git(origin, "commit", "-q", "-am", "two");
+    // Three spellings of one local promisor URL, each behind an insteadOf alias, with the promisor
+    // flag in another of git's boolean spellings: git's own reading of the flag and the alias must
+    // travel, and the path git reads from the checkout's top level must hold where the copy lives:
+    // a plain relative path, one through a symlink that a lexical `..` would collapse wrongly, and
+    // git's own `~/` expansion.
+    const shapes: [string, (sparse: string) => string, Record<string, string>][] = [
+      ["relative", (sparse) => relative(sparse, origin), {}],
+      [
+        "through-a-symlink",
+        (sparse) => {
+          symlinkSync(join(origin, ".git"), join(sparse, "link"));
+          return "link/..";
+        },
+        {},
+      ],
+      ["home-relative", () => `~/${basename(origin)}`, { HOME: dirname(origin) }],
+    ];
+    for (const [id, alias, env] of shapes) {
+      const sparse = temp.dir("run-review-sparse-");
+      git(
+        sparse,
+        "clone",
+        "-q",
+        "--filter=blob:none",
+        "--no-checkout",
+        "-b",
+        "topic",
+        `file://${origin}`,
+        ".",
+      );
+      git(sparse, "sparse-checkout", "set", "--cone", "sub");
+      git(sparse, "checkout", "-q", "topic");
+      writeFileSync(join(sparse, "sub", "tracked.txt"), "changed\n");
+      git(sparse, "add", "sub/tracked.txt");
+      git(sparse, "config", "remote.origin.promisor", "yes");
+      git(sparse, "config", "remote.origin.url", "lazy:origin");
+      git(sparse, "config", `url.${alias(sparse)}.insteadOf`, "lazy:origin");
+      const reportFile = join(binDir, `cwd-report-sparse-${id}`);
+      const r = run(
+        ["codex", promptFile],
+        { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile, ...env },
+        undefined,
+        sparse,
+      );
+      expect(r.code, id).toBe(0);
+      const seen = cwdReport(reportFile);
+      expect(seen.status, id).toEqual(["M  sub/tracked.txt"]);
+      // A content diff against origin/main needs the base blob of a.txt, which only the promisor remote has.
+      expect(seen.branchDiff, id).toBe(" 1 file changed, 1 insertion(+), 1 deletion(-)");
+    }
+  });
+
+  test("ORIG_HEAD travels with the snapshot, so the tip before a reset or rebase resolves as a diff base in the copy", () => {
+    const repo = fixtureRepo();
+    git(repo, "reset", "-q", "--soft", "HEAD");
+    const reportFile = join(binDir, "cwd-report-orig-head");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    const seen = cwdReport(reportFile);
+    expect(seen.origHead).toBe(seen.head);
+  });
+
+  test("a linked worktree, a detached checkout, and an unborn branch each snapshot their own HEAD and index", () => {
+    const repo = fixtureRepo();
+    const linked = temp.dir("run-review-linked-");
+    git(repo, "worktree", "add", "-q", linked, "-b", "topic");
+    writeFileSync(join(linked, "a.txt"), "topic\n");
+    git(linked, "add", "a.txt");
+    const detached = temp.dir("run-review-detached-");
+    git(repo, "worktree", "add", "-q", "--detach", detached);
+    writeFileSync(join(detached, "a.txt"), "detached\n");
+    git(detached, "add", "a.txt");
+    const unborn = temp.dir("run-review-unborn-");
+    git(unborn, "init", "-q", "-b", "main");
+    writeFileSync(join(unborn, "a.txt"), "unborn\n");
+    git(unborn, "add", "a.txt");
+    const cases = [
+      {
+        id: "linked",
+        cwd: linked,
+        branch: "topic",
+        head: git(linked, "rev-parse", "HEAD").trim(),
+        status: "M  a.txt",
+      },
+      {
+        id: "detached",
+        cwd: detached,
+        branch: "",
+        head: git(detached, "rev-parse", "HEAD").trim(),
+        status: "M  a.txt",
+      },
+      { id: "unborn", cwd: unborn, branch: "main", head: "", status: "A  a.txt" },
+    ];
+    for (const { id, cwd, branch, head, status } of cases) {
+      const reportFile = join(binDir, `cwd-report-${id}`);
+      const r = run(
+        ["codex", promptFile],
+        { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile },
+        undefined,
+        cwd,
+      );
+      expect(r.code, id).toBe(0);
+      const seen = cwdReport(reportFile);
+      expect(seen.top, id).toMatch(/\/rubber-duck-[^/]+\/repo$/);
+      expect(seen.branch, id).toBe(branch);
+      expect(seen.head, id).toBe(head);
+      expect(seen.status, id).toEqual([status]);
+      expect(existsSync(join(cwd, "REVIEWER_WROTE")), id).toBe(false);
+    }
+  });
+
+  test("a shallow clone's boundary travels with the snapshot, so the copy's history reads as far as the clone's", () => {
+    const origin = temp.dir("run-review-origin-");
+    git(origin, "init", "-q", "-b", "main");
+    for (const text of ["one", "two"]) {
+      writeFileSync(join(origin, "a.txt"), `${text}\n`);
+      git(origin, "add", "a.txt");
+      git(origin, "commit", "-q", "-m", text);
+    }
+    const shallow = temp.dir("run-review-shallow-");
+    git(shallow, "clone", "-q", "--depth", "1", `file://${origin}`, ".");
+    writeFileSync(join(shallow, "a.txt"), "three\n");
+    git(shallow, "add", "a.txt");
+    const reportFile = join(binDir, "cwd-report-shallow");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile },
+      undefined,
+      shallow,
+    );
+    expect(r.code).toBe(0);
+    const seen = cwdReport(reportFile);
+    expect(seen.status).toEqual(["M  a.txt"]);
+    // Without the boundary, counting dies at the clone's missing parent instead of stopping at it.
+    expect(seen.commits).toBe("1");
   });
 
   // A removal that only ran on the success path would leave one full checkout
@@ -804,12 +1033,12 @@ describe("run-review.mts", () => {
 
   test("copy mode drops every GIT_* variable, so the reviewer's git reads the copy, not the checkout", () => {
     const repo = fixtureRepo();
-    const cwdReport = join(binDir, "cwd-report-redirect");
+    const reportFile = join(binDir, "cwd-report-redirect");
     const r = run(
       ["codex", promptFile],
       {
         STUB_SANDBOX: "bwrap",
-        STUB_CWD_REPORT: cwdReport,
+        STUB_CWD_REPORT: reportFile,
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "core.worktree",
         GIT_CONFIG_VALUE_0: repo,
@@ -819,39 +1048,94 @@ describe("run-review.mts", () => {
       repo,
     );
     expect(r.code).toBe(0);
-    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
-    expect(top).toBe(copyCwd as string);
-    expect(top).not.toBe(repo);
-    expect(staged).toEqual(["a.txt"]);
+    const seen = cwdReport(reportFile);
+    expect(seen.top).toBe(seen.cwd);
+    expect(seen.top).not.toBe(repo);
+    expect(seen.status).toEqual(["M  a.txt"]);
     expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
   });
 
-  test("a copied core.worktree is unset in the copy, so the reviewer's git finds the copy", () => {
+  test("a relative GIT_DIR and GIT_WORK_TREE, valid from the launch directory, still snapshot the whole index", () => {
     const repo = fixtureRepo();
-    const configured = Bun.spawnSync(["git", "config", "--local", "core.worktree", repo], {
-      cwd: repo,
-    });
-    expect(configured.exitCode).toBe(0);
-    const cwdReport = join(binDir, "cwd-report-worktree");
-    // GIT_DIR would point the unset at the live config; the launcher must drop it there too.
+    const reportFile = join(binDir, "cwd-report-relative-gitdir");
     const r = run(
       ["codex", promptFile],
-      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: cwdReport, GIT_DIR: join(repo, ".git") },
+      {
+        STUB_SANDBOX: "bwrap",
+        STUB_CWD_REPORT: reportFile,
+        GIT_DIR: "../.git",
+        GIT_WORK_TREE: "..",
+      },
+      undefined,
+      join(repo, "sub"),
+    );
+    expect(r.code).toBe(0);
+    const seen = cwdReport(reportFile);
+    expect(seen.top).not.toBe(repo);
+    // Read from the subdirectory, the snapshot still holds the whole index: a.txt is staged, not deleted.
+    expect(seen.status).toEqual(["M  a.txt"]);
+    expect(seen.aText).toBe("two");
+  });
+
+  test("an intent-to-add entry stays intent-to-add in the copy, so the staged diff there is the checkout's", () => {
+    const repo = fixtureRepo();
+    writeFileSync(join(repo, "new.txt"), "not staged yet\n");
+    git(repo, "add", "-N", "new.txt");
+    const reportFile = join(binDir, "cwd-report-intent-to-add");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile },
       undefined,
       repo,
     );
     expect(r.code).toBe(0);
-    const [copyCwd, top, ...staged] = readFileSync(cwdReport, "utf-8").trimEnd().split("\n");
-    expect(top).toBe(copyCwd as string);
-    expect(staged).toEqual(["a.txt"]);
-    expect(existsSync(join(repo, "REVIEWER_WROTE"))).toBe(false);
-    // The checkout's own config is untouched.
-    const kept = Bun.spawnSync(["git", "config", "--local", "core.worktree"], {
-      cwd: repo,
-      stdout: "pipe",
-    });
-    expect(kept.stdout.toString().trim()).toBe(repo);
+    // A listing of the index entries would have staged new.txt as an empty file: "A  new.txt".
+    expect(cwdReport(reportFile).status).toEqual(["M  a.txt", " A new.txt"]);
   });
+
+  test.skipIf(Bun.which("git-lfs") === null)(
+    "a Git LFS pointer is checked out as the pointer, never fetched: the copy has no remote to fetch from",
+    () => {
+      // A hand-written pointer committed as-is, and a home whose global config wires the real
+      // git-lfs filters the way `git lfs install` does. The launcher drops every GIT_* variable for
+      // the copy, so the config reaches the copy's git through HOME, and the copy has no LFS objects.
+      const repo = temp.dir("run-review-lfs-");
+      git(repo, "init", "-q", "-b", "main");
+      writeFileSync(join(repo, ".gitattributes"), "a.txt filter=lfs diff=lfs merge=lfs -text\n");
+      writeFileSync(
+        join(repo, "a.txt"),
+        `version https://git-lfs.github.com/spec/v1\noid sha256:${"0123456789abcdef".repeat(4)}\nsize 5\n`,
+      );
+      writeFileSync(join(repo, "b.txt"), "one\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "init");
+      writeFileSync(join(repo, "b.txt"), "two\n");
+      git(repo, "add", "b.txt");
+      const home = temp.dir("run-review-lfs-home-");
+      writeFileSync(
+        join(home, ".gitconfig"),
+        '[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n',
+      );
+      const reportFile = join(binDir, "cwd-report-lfs");
+      const r = run(
+        ["codex", promptFile],
+        {
+          STUB_SANDBOX: "bwrap",
+          STUB_CWD_REPORT: reportFile,
+          HOME: home,
+          XDG_CONFIG_HOME: join(home, ".config"),
+        },
+        undefined,
+        repo,
+      );
+      expect(r.code).toBe(0);
+      const seen = cwdReport(reportFile);
+      // The positive control: the copy's git did have the smudge filter to run.
+      expect(seen.lfsSmudge).toBe("git-lfs smudge -- %f");
+      expect(seen.status).toEqual(["M  b.txt"]);
+      expect(seen.aText).toBe("version https://git-lfs.github.com/spec/v1");
+    },
+  );
 
   test("copy mode runs codex under a scratch CODEX_HOME holding copies of the user's config and credentials, so codex's trust write never reaches the user's file", () => {
     const repo = fixtureRepo();
@@ -1120,40 +1404,18 @@ describe("run-review.mts", () => {
     const repo = fixtureRepo();
     const launched = run(
       ["codex", promptFile, "--background"],
-      { STUB_SANDBOX: "bwrap", STUB_CP_FAIL: "1" },
+      { STUB_SANDBOX: "bwrap", STUB_GIT_FAIL: "checkout-index" },
       undefined,
       repo,
     );
     expect(launched.code).toBe(0);
     const outputFile = backgroundOutputFile(launched.stdout);
-    expect(waitForStatus(outputFile)).toContain(
-      `spawn failed: Error: snapshot of ${repo} failed: cp: disk full`,
-    );
+    const status = waitForStatus(outputFile);
+    expect(status).toContain(`spawn failed: Error: snapshot of ${repo} failed: git checkout-index`);
+    expect(status).toContain(": fatal: disk full");
     expect(existsSync(join(dirname(outputFile), "repo"))).toBe(false);
     rmSync(dirname(outputFile), { recursive: true, force: true });
   });
-
-  // Root removes a 0555 directory's contents regardless, so the refusal this
-  // case pins cannot happen there.
-  test.skipIf(process.getuid?.() === 0)(
-    "a copy whose own directory modes refuse removal is made writable and removed; the checkout keeps its modes",
-    () => {
-      const repo = fixtureRepo();
-      mkdirSync(join(repo, "locked"));
-      writeFileSync(join(repo, "locked", "pinned.txt"), "x\n");
-      chmodSync(join(repo, "locked"), 0o555);
-      try {
-        const r = run(["codex", promptFile], { STUB_SANDBOX: "bwrap" }, undefined, repo);
-        expect(r.code).toBe(0);
-        expect(r.report().sandbox).toBe("copy");
-        expect(r.copyLeft).toBe(false);
-        expect(r.stderr).not.toContain("not removed");
-        expect(statSync(join(repo, "locked")).mode & 0o777).toBe(0o555);
-      } finally {
-        chmodSync(join(repo, "locked"), 0o755);
-      }
-    },
-  );
 
   test("unknown reviewer or missing prompt file are usage errors: exit 2", () => {
     const cases = [
