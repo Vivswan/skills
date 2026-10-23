@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
 import { writeAllSync } from "../../../skills/rubber-duck-review/scripts/run-review.mts";
 import { git } from "../../helpers/scratch-repo";
@@ -119,11 +119,11 @@ fi
 if [ -n "\${STUB_CWD_REPORT:-}" ]; then
   # One line per fact about the copy as the reviewer sees it: cwd, toplevel, branch, status entries
   # joined by |, HEAD (empty when unborn), commits reachable from HEAD, the first line of a.txt as checked out, and the
-  # LFS smudge filter the copy's git has configured.
+  # LFS smudge filter the copy's git has configured, the last line of a diff against origin/main, and ORIG_HEAD.
   { printf '%s\\n' "$PWD" "$(git rev-parse --show-toplevel)" "$(git branch --show-current)" \\
       "$(git status --porcelain -uall --ignored | tr '\\n' '|')" "$(git rev-parse -q --verify HEAD)" \\
       "$(git rev-list --count HEAD 2>&1 | tail -1)" "$(head -1 "$(git rev-parse --show-toplevel)/a.txt" 2>/dev/null)" \\
-      "$(git config --get filter.lfs.smudge)"; } > "\${STUB_CWD_REPORT}"
+      "$(git config --get filter.lfs.smudge)" "$(git --no-pager diff --stat origin/main...HEAD 2>&1 | tail -1)" "$(git rev-parse -q --verify ORIG_HEAD)"; } > "\${STUB_CWD_REPORT}"
   # A write the prompt forbade: it must land in the copy, never in the checkout under review.
   touch "$(git rev-parse --show-toplevel)/REVIEWER_WROTE"
 fi
@@ -766,10 +766,8 @@ describe("run-review.mts", () => {
 
   /** The stub's report of the copy as the reviewer saw it (the stub's cwd-report block names the lines). */
   function cwdReport(file: string) {
-    const [cwd, top, branch, status, head, commits, aText, lfsSmudge] = readFileSync(
-      file,
-      "utf-8",
-    ).split("\n");
+    const [cwd, top, branch, status, head, commits, aText, lfsSmudge, branchDiff, origHead] =
+      readFileSync(file, "utf-8").split("\n");
     return {
       cwd,
       top,
@@ -779,6 +777,8 @@ describe("run-review.mts", () => {
       commits,
       aText,
       lfsSmudge,
+      branchDiff,
+      origHead,
     };
   }
 
@@ -854,9 +854,10 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("a blobless partial clone with a sparse checkout snapshots as it is: a skip-worktree entry stays out, its blob may not be local", () => {
+  test("a blobless partial clone snapshots as it is: sparse entries stay out, and a base blob the checkout lacks arrives from its promisor remote", () => {
     // The origin allows filtered fetches; the clone takes no blobs and checks out the sub/ cone, so
-    // other/b.txt is skip-worktree with its blob only on the promisor remote, which the copy lacks.
+    // other/b.txt is skip-worktree with its blob only on the promisor remote. The topic branch changes
+    // a.txt, whose base blob the clone never fetched either.
     const origin = temp.dir("run-review-promisor-");
     git(origin, "init", "-q", "-b", "main");
     writeFileSync(join(origin, "a.txt"), "one\n");
@@ -867,21 +868,74 @@ describe("run-review.mts", () => {
     git(origin, "add", ".");
     git(origin, "commit", "-q", "-m", "init");
     git(origin, "config", "uploadpack.allowFilter", "true");
-    const sparse = temp.dir("run-review-sparse-");
-    git(sparse, "clone", "-q", "--filter=blob:none", "--no-checkout", `file://${origin}`, ".");
-    git(sparse, "sparse-checkout", "set", "--cone", "sub");
-    git(sparse, "checkout", "-q", "main");
-    writeFileSync(join(sparse, "sub", "tracked.txt"), "changed\n");
-    git(sparse, "add", "sub/tracked.txt");
-    const reportFile = join(binDir, "cwd-report-sparse");
+    git(origin, "checkout", "-q", "-b", "topic");
+    writeFileSync(join(origin, "a.txt"), "two\n");
+    git(origin, "commit", "-q", "-am", "two");
+    // Three spellings of one local promisor URL, each behind an insteadOf alias, with the promisor
+    // flag in another of git's boolean spellings: git's own reading of the flag and the alias must
+    // travel, and the path git reads from the checkout's top level must hold where the copy lives:
+    // a plain relative path, one through a symlink that a lexical `..` would collapse wrongly, and
+    // git's own `~/` expansion.
+    const shapes: [string, (sparse: string) => string, Record<string, string>][] = [
+      ["relative", (sparse) => relative(sparse, origin), {}],
+      [
+        "through-a-symlink",
+        (sparse) => {
+          symlinkSync(join(origin, ".git"), join(sparse, "link"));
+          return "link/..";
+        },
+        {},
+      ],
+      ["home-relative", () => `~/${basename(origin)}`, { HOME: dirname(origin) }],
+    ];
+    for (const [id, alias, env] of shapes) {
+      const sparse = temp.dir("run-review-sparse-");
+      git(
+        sparse,
+        "clone",
+        "-q",
+        "--filter=blob:none",
+        "--no-checkout",
+        "-b",
+        "topic",
+        `file://${origin}`,
+        ".",
+      );
+      git(sparse, "sparse-checkout", "set", "--cone", "sub");
+      git(sparse, "checkout", "-q", "topic");
+      writeFileSync(join(sparse, "sub", "tracked.txt"), "changed\n");
+      git(sparse, "add", "sub/tracked.txt");
+      git(sparse, "config", "remote.origin.promisor", "yes");
+      git(sparse, "config", "remote.origin.url", "lazy:origin");
+      git(sparse, "config", `url.${alias(sparse)}.insteadOf`, "lazy:origin");
+      const reportFile = join(binDir, `cwd-report-sparse-${id}`);
+      const r = run(
+        ["codex", promptFile],
+        { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile, ...env },
+        undefined,
+        sparse,
+      );
+      expect(r.code, id).toBe(0);
+      const seen = cwdReport(reportFile);
+      expect(seen.status, id).toEqual(["M  sub/tracked.txt"]);
+      // A content diff against origin/main needs the base blob of a.txt, which only the promisor remote has.
+      expect(seen.branchDiff, id).toBe(" 1 file changed, 1 insertion(+), 1 deletion(-)");
+    }
+  });
+
+  test("ORIG_HEAD travels with the snapshot, so the tip before a reset or rebase resolves as a diff base in the copy", () => {
+    const repo = fixtureRepo();
+    git(repo, "reset", "-q", "--soft", "HEAD");
+    const reportFile = join(binDir, "cwd-report-orig-head");
     const r = run(
       ["codex", promptFile],
       { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile },
       undefined,
-      sparse,
+      repo,
     );
     expect(r.code).toBe(0);
-    expect(cwdReport(reportFile).status).toEqual(["M  sub/tracked.txt"]);
+    const seen = cwdReport(reportFile);
+    expect(seen.origHead).toBe(seen.head);
   });
 
   test("a linked worktree, a detached checkout, and an unborn branch each snapshot their own HEAD and index", () => {

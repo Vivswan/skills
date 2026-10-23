@@ -116,6 +116,16 @@ const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
 const TIMEOUT_SECONDS = /^[1-9][0-9]*$/;
 const MINT_MARKER = ".minted-by-run-review";
 const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** Revision files outside refs/ that a prompt may name as a diff base: the tip before a reset or
+ * rebase, the last fetch, the heads of an operation in progress. */
+const REVISION_FILES = [
+  "ORIG_HEAD",
+  "FETCH_HEAD",
+  "MERGE_HEAD",
+  "CHERRY_PICK_HEAD",
+  "REVERT_HEAD",
+  "REBASE_HEAD",
+];
 
 /** Thrown after exit output is queued, so `never`-typed helpers stay honest. */
 class SilentExit extends Error {}
@@ -299,13 +309,20 @@ function planLaunch(tool: Tool): Launch {
   return { sandbox: "copy", reason: refusal, root, subdir };
 }
 
+interface GitOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  input?: Buffer;
+}
+
 /** Runs one git command and returns its stdout. A failure throws, naming the
- * command and what git said. Node passes `input` only through a piped stdin
- * (an ignored one drops it; bun passes it either way). */
-function git(
-  args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: Buffer } = {},
-): Buffer {
+ * command and what git said; with `absentOk`, exit 1 is git's "nothing to
+ * say" (`config --get` of an unset key) and returns null. Node passes `input`
+ * only through a piped stdin (an ignored one drops it; bun passes it either
+ * way). */
+function git(args: string[], options?: GitOptions & { absentOk?: false }): Buffer;
+function git(args: string[], options: GitOptions & { absentOk: true }): Buffer | null;
+function git(args: string[], options: GitOptions & { absentOk?: boolean } = {}): Buffer | null {
   const result = spawnSync("git", args, {
     cwd: options.cwd,
     env: options.env,
@@ -314,6 +331,7 @@ function git(
     maxBuffer: Number.MAX_SAFE_INTEGER,
   });
   if (result.status === 0) return result.stdout;
+  if (result.status === 1 && options.absentOk === true) return null;
   const detail = result.error?.message ?? result.stderr.toString().trim();
   throw new Error(`git ${args.join(" ")}: ${detail}`);
 }
@@ -362,6 +380,56 @@ function directoryInside(copy: string, subdir: string): string | null {
   }
 }
 
+/** The remote's effective fetch URL (the first of several, `insteadOf`
+ * applied), made absolute when it is a relative local path, since the copy
+ * lives elsewhere. git reads such a path from the top level, and its local
+ * transport is a chdir into the path and a discovery there, so the same
+ * chdir asks git for the repository it finds (symlinks and `..` as the
+ * kernel reads them). A `~` path git expands itself, in the copy too, and a
+ * path with no repository is left as it is. */
+function absoluteRemoteUrl(remote: string): string {
+  const url = git(["ls-remote", "--get-url", remote]).toString().trim();
+  const isLocalPath = !/^[a-z][a-z0-9+.-]*:\/\//i.test(url) && !/^[^/]+:/.test(url);
+  if (!isLocalPath || isAbsolute(url) || url.startsWith("~")) return url;
+  const top = git(["rev-parse", "--show-toplevel"]).toString().trim();
+  const discover = [
+    "-C",
+    top,
+    "-C",
+    url,
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ];
+  try {
+    return git(discover, { env: withoutGitEnv(process.env) })
+      .toString()
+      .trim();
+  } catch {
+    return url;
+  }
+}
+
+/** The config that makes the copy fetch from the checkout's promisor remotes
+ * as the checkout would (a partial clone reads a blob it lacks from them on
+ * first use): each promisor remote's flag, its effective fetch URL, and its
+ * partial-clone filter. git answers every question, so its boolean spellings
+ * and URL rewrites hold. */
+function promisorConfig(): [string, string][] {
+  const config: [string, string][] = [];
+  for (const remote of git(["remote"]).toString().split("\n").filter(Boolean)) {
+    const promisorKey = `remote.${remote}.promisor`;
+    const promisor = git(["config", "--type=bool", "--get", promisorKey], { absentOk: true });
+    if (promisor?.toString().trim() !== "true") continue;
+    config.push([promisorKey, "true"]);
+    config.push([`remote.${remote}.url`, absoluteRemoteUrl(remote)]);
+    const filterKey = `remote.${remote}.partialclonefilter`;
+    const filter = git(["config", "--get", filterKey], { absentOk: true });
+    if (filter !== null) config.push([filterKey, filter.toString().trim()]);
+  }
+  return config;
+}
+
 /** Reads of the checkout run where the launcher runs, with its environment:
  * a `GIT_DIR` there, relative or absolute, may be how the caller names the
  * repository. Every write into the copy drops the `GIT_*` variables, or it
@@ -391,6 +459,15 @@ function buildSnapshot(copy: string): void {
     write(["update-ref", "--no-deref", "HEAD", read("rev-parse", "--verify", "HEAD")]);
   } else {
     write(["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
+  }
+  // A branch diff in the copy may need a blob the checkout never read (a base
+  // blob of a partial clone): with the promisor remotes along, the copy fetches
+  // it as the checkout would, into its own store.
+  for (const [key, value] of promisorConfig()) {
+    write(["config", key, value]);
+  }
+  for (const name of REVISION_FILES) {
+    if (existsSync(join(gitDir, name))) copyFileSync(join(gitDir, name), join(copy, ".git", name));
   }
   // The index file itself, so an intent-to-add, skip-worktree, or unmerged
   // entry keeps its flags (a listing of the entries would stage an
