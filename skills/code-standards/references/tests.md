@@ -91,6 +91,7 @@ expect(parseToml(read("files/rust/Cargo.toml")).workspace.lints.clippy).toEqual(
 
 // KEEP: an external fact the file cannot express; a renamed lint fails here, not in every consumer's CI
 const known = new Set(clippyLintNames(pinnedClippyVersion));
+
 for (const lint of Object.keys(parseToml(read("files/rust/Cargo.toml")).workspace.lints.clippy)) {
   expect(known, `${lint} is not a clippy lint in ${pinnedClippyVersion}`).toContain(lint);
 }
@@ -135,9 +136,11 @@ A fixture is written by hand, never recorded from real data: not from logs, sess
 ```ts
 const out = resolve(args.out ?? fail("--out <path outside the repository> is required"));
 const rel = relative(repoRoot, out);
-const outside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);   // a bare startsWith("..") would pass "/repo/..profile.json"
+const outside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 if (!outside) fail(`refusing to write measured data inside the repository: ${out}`);
 ```
+
+The three-way test is deliberate: a bare `startsWith("..")` would pass `/repo/..profile.json`.
 
 Specimen: a statistical profile measured from the author's real sessions was committed as a test fixture and found by a later sweep. The replacement was a hand-written fixture. The landing gate grepped the PR's added lines, body, and comments for every full-precision ratio and 4+ digit integer of the old file, and the repository's history was rewritten to drop the original.
 
