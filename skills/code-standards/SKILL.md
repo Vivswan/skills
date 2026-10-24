@@ -52,7 +52,9 @@ Specimen: fifteen tests each asserting one key of a dict became one parametrized
 
 The reason a choice was made, an invariant another file relies on, an external system's quirk, a consequence invisible here, the input that motivated a guard. Never what the code does, its types, its control flow, its history, the alternatives.
 
-Tell first, in one or two sentences, then show (aligned rows, an arrow flow) only when a block is faster. Never pack prose to fit a cap: cut honestly. Before writing or keeping one: what does this say that the code does not, and could a tired human read it in one pass? Specimens, the TODO ban: `references/comments.md`.
+Tell first, in one or two sentences, then show (aligned rows, an arrow flow) only when a block is faster. Never pack prose to fit a cap: cut honestly. Before writing or keeping one: what does this say that the code does not, and could a tired human read it in one pass?
+
+On a variable, a field, or a constant, the comment is one line above the item, never more; what needs more goes into the name or a short tell above the group. Once one field of a record or one constant of a block carries a comment, every one does. Specimen: a record with one three-line comment over three fields and four fields bare. Specimens, the TODO ban: `references/comments.md`.
 
 ### Heal at the boundary, or refuse there
 
@@ -67,6 +69,7 @@ Code always looks beautiful and reads once. A module reads top to bottom with no
 - **Split, or fold:** two nameable things split into named steps, and a step called from one place that is no concept of its own folds back into its caller. A complexity lint is the backstop, raised with a reason or split, never silenced inline, and never set tighter than the language page's floor.
 - **Line:** no ugly one-liners (nested conditionals, conditional splices, first-match lookups, assignment in a condition, `and`/`or` as control flow). One computation per line under a plain-noun name; named arguments once three values share a type; cleanup bound to its acquisition (`with`, `defer`, `Drop`, `using`).
 - **Body:** blank lines after the setup, between decisions and branches, before the return; none inside an `if` and its single consequence.
+- **Members:** once a record's members carry comments, a blank line between every member, commented or not, and around a commented constant or variable, so each stands alone; bare members that read whole stay together.
 - **Surface:** every signature typed; a doc comment on every public item saying what it returns and what the arguments mean, never a narrative of its behaviour; no underscore-prefixed names, module level or attribute, beyond the language's own visibility, except on what the module's user must never touch (the value behind a property and its setter, a framework-fixed hook).
 
 Specimen, the body that set the paragraph rule:
@@ -156,6 +159,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - A skill's script copied into a repository, or a library finding that counts a transitive dependency or a library's private module as already in the repository.
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
 - Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), several ideas in one sentence, prose packed to fit a cap.
+- A comment on a variable, field, or constant over one line, a record or constants block where some items carry a comment and others none, members of a commented record running together, or a commented constant or variable not spaced out from its neighbours.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - A boundary that refuses state the tool outputs and could repair unambiguously, repairs input the tool only reads, or lets malformed input through to fail later; a healing step whose comment argues instead of stating the rule.
 - A module constant below the first function, a function above one it calls, a section separator where a split was due, a function holding two nameable concepts, a one-caller step that is no concept of its own kept out of its caller, a complexity finding silenced inline instead of split or raised at config level with its reason, or a lint cap tighter than the language page's floor.
@@ -177,8 +181,8 @@ Cross-language standards, one page each:
 
 - `references/design.md`: fix the class, guard the floor, general-purpose over special-case (one pipeline per concept, DRY boundaries), maintainability over effort, prefer a library, heal at the boundary
 - `references/tests.md`: the minimum standard for tests, the drift question, proving a guard test, the census rule for deletions, hand-authored fixtures
-- `references/comments.md`: what a good comment carries, tell then show, the two-question test, the specimens, the TODO ban, planning references
-- `references/shape.md`: module layout, define before use, one concept per function, guards and early exits, the ugly-to-clear table, the paragraph specimen, types and docs
+- `references/comments.md`: what a good comment carries, tell then show, the one-line rule for variables, fields, and constants, the two-question test, the specimens, the TODO ban, planning references
+- `references/shape.md`: module layout, define before use, one concept per function, guards and early exits, the ugly-to-clear table, the paragraph specimen, members standing alone, types and docs
 - `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging, the predictable layout and its specimen tree, the pure-move PR and the target layout for a reorganisation
 - `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions, hooks that check and never commit
 
