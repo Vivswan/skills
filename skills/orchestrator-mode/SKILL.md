@@ -65,7 +65,7 @@ Confirm what the repo itself answers instead of asking open-ended: branch protec
 
    Production shape: a 10-surface prose wave launched all at once hit the same three brief defects on every surface and needed live broadcast amendments to every builder. One pilot would have caught all three in one ordinary review. Independent tracks with distinct briefs do not pilot: this rule is about brief risk, not parallelism.
 7. **Fan out builders** for the independent tracks, in the isolation the interview chose.
-   - Every spawn brief is self-contained per `references/spawn-briefs.md`: the full task contract inline, the territory whitelist, the gates, the signal format, the stop-and-wait ban, the TODO ban, and the test rule (red-then-green for behavior changes only). Where the `/code-standards` skill is installed, briefs point builders at it for the comment rules and the rest of the house standards.
+   - Every spawn brief is self-contained per `references/spawn-briefs.md`: the full task contract inline, the territory whitelist, the gates, the signal format, the stop-and-wait ban, the TODO ban, the ask-the-lead rule, and the test rule (red-then-green for behavior changes only). Where the `/code-standards` skill is installed, briefs point builders at it for the comment rules and the rest of the house standards.
    - Every claim the brief asks for in the signal names its read-back command (the GraphQL `isResolved` read, the daemon's `status` line, `git ls-remote origin refs/heads/<branch>`), and the signal quotes what was read back, never what was run: `references/spawn-briefs.md`, Read-back reporting.
    - One-shot watchers and gate reviewers spawn UNNAMED where the harness delivers a completed agent's output automatically. A named watcher must remember to report at exactly the seam where agents strand (details in `references/spawn-briefs.md`).
 8. **Rely on the harness's completion notice** for subagent completion (Claude Code's task notification, Codex handing a child's final output to its spawner): the lead never sleeps or polls while waiting on a subagent, since the notice re-invokes it, and briefs propagate the rule to workers. The fleet monitor's polls and sweeps are different: they report waits and stalls, not completion.
@@ -190,6 +190,6 @@ Triage findings against sections 2 (Decompose, Board, Monitor, Builders) and 7 (
 
 ## References
 
-- `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, the test rule, unnamed one-shot watchers, git-fixture hygiene for test suites)
+- `references/spawn-briefs.md`: the spawn-brief checklist (the stop-and-wait ban, the TODO ban, the ask-the-lead rule, the test rule, unnamed one-shot watchers, git-fixture hygiene for test suites)
 - `references/fleet-monitor.md`: the monitor role's two instruments (the daemon's events, the monitor subagent's brief) and the judgment rules; `sweep.mts` for a one-shot reading; probe, ledger, and baseline as the lead's instruments
 - `references/landing.md`: the two landing gates (direct commits, and PRs with per-track bases, including the stacked-chain flow and the worktree rules around it)
