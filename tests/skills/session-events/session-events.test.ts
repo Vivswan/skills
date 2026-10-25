@@ -382,9 +382,12 @@ describe("session-events.mts", () => {
     s.polls({ events: [changed("t1", "one")] });
     await s.start({ inbox: box.path });
     expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
-    const start = readFileSync(`/proc/${process.pid}/stat`, "utf-8");
-    const token = start.slice(start.lastIndexOf(")") + 2).split(" ")[19];
-    expect(token).toMatch(/^\d+$/);
+    // The token's source per platform: the process start time from /proc, else the inbox socket's inode.
+    const procStat = `/proc/${process.pid}/stat`;
+    const token = existsSync(procStat)
+      ? readFileSync(procStat, "utf-8").split(") ").at(-1)?.split(" ")[19]
+      : `i${statSync(box.path).ino}`;
+    expect(token).toMatch(/^(\d+|i\d+)$/);
     const stem = join(s.dir, `${process.pid}-${token}.${NAME}`);
     expect(s.files()).toEqual({
       socket: join(s.dir, `${process.pid}.${NAME}.sock`),
@@ -418,7 +421,8 @@ describe("session-events.mts", () => {
     mkdirSync(join(s.dir, `${session.pid}.inbox`));
     const owner = { pid: session.pid, inbox: inboxPath };
     const daemon = await s.start({ inbox: inboxPath });
-    // The stem's start token is read from /proc while the session lives.
+    // The stem's start token is read while the session lives: from /proc where it exists, else the inbox
+    // socket's inode, else 0 (this case makes no socket).
     const { socket, log } = s.files(owner);
     expect(existsSync(socket)).toBe(true);
     expect(s.run(["status"], { inbox: inboxPath }).stdout).toContain(`for session ${session.pid}`);
