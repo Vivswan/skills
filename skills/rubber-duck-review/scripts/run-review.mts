@@ -11,6 +11,7 @@
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
  *   cp -a of the checkout        -> venvs and nested worktrees weigh gigabytes: snapshot HEAD, the refs, the index
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
+ *   the stream goes silent       -> a stuck child held one run for hours: --stall kills the reviewer's process group
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -95,16 +96,17 @@ const TOOL_ARGS: Record<Tool, (prompt: string, sandbox: CodexSandbox) => string[
 };
 
 const USAGE = [
-  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt]",
+  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>]",
   "       run-review.mts <codex|claude|copilot> --extract <output-file>",
   "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
-  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir>  (internal)",
+  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>]  (internal)",
   "       run-review.mts prepare <section>",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
   "codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir",
+  "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
   "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
   "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
-  "       1 review FAILED - relaunch: no usable verdict, whatever the cause, or --wait timed out; never a clean pass;",
+  "       1 review FAILED - relaunch: no usable verdict, whatever the cause, a stall, or --wait timed out; never a clean pass;",
   "       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository",
 ].join("\n");
 
@@ -113,7 +115,9 @@ const PROMPT_DIR_PREFIX = "rubber-duck-prompt-";
 const SCRATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 const WAIT_POLL_MS = 2000;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
-const TIMEOUT_SECONDS = /^[1-9][0-9]*$/;
+const DEFAULT_STALL_SECONDS = 900;
+const WHOLE_SECONDS = /^[1-9][0-9]*$/;
+const STALL_STATUS = /^stalled: /;
 const MINT_MARKER = ".minted-by-run-review";
 const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Revision files outside refs/ that a prompt may name as a diff base: the tip before a reset or
@@ -606,10 +610,27 @@ function forwardSignals(): { child: ReturnType<typeof spawn> | null } {
   const holder: { child: ReturnType<typeof spawn> | null } = { child: null };
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     process.on(signal, () => {
-      holder.child?.kill(signal);
+      if (holder.child !== null) killTree(holder.child, signal);
     });
   }
   return holder;
+}
+
+/** The reviewer leads its own process group (spawned detached), so the signal reaches the
+ * children it leaves behind: a stuck helper of codex's once held a silent review for hours.
+ * The child alone is the fallback once its group is gone. */
+function killTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
+/** A stall is the launcher's own verdict and is reported as itself; any other failure is the reviewer's. */
+function failureReason(status: string, otherwise: string): string {
+  return STALL_STATUS.test(status) ? status : otherwise;
 }
 
 // Exits go through process.exitCode + a natural event-loop drain, never
@@ -706,6 +727,7 @@ function runReviewer(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
+  stallSeconds: number,
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
   let stdinFd: number | null = null;
@@ -777,6 +799,7 @@ function runReviewer(
       cwd,
       env,
       stdio: [stdinFd ?? "ignore", "pipe", "pipe"],
+      detached: true,
     });
   } catch (error) {
     closeFds();
@@ -784,6 +807,22 @@ function runReviewer(
     return null;
   }
   let sawLife = false;
+  let stalled = false;
+  let stallClock: ReturnType<typeof setTimeout> | null = null;
+  /** Every byte from the reviewer winds the clock. When it runs out, the reviewer's whole
+   * process group is killed and the run is a stall: a stuck browser-extension host codex spawned
+   * once held a silent review for three hours while a 3600 s wait ran. */
+  const windStallClock = () => {
+    if (stallClock !== null) clearTimeout(stallClock);
+    stallClock = setTimeout(() => {
+      stalled = true;
+      warn(
+        `review stalled: no stream event for ${stallSeconds} s; killing the reviewer (pid ${child.pid})`,
+      );
+      killTree(child, "SIGKILL");
+    }, stallSeconds * 1000);
+  };
+  windStallClock();
   // stdio[1] and stdio[2] are "pipe" in the spawn call above, so both streams
   // exist; the null in their types only covers other stdio configurations.
   child.stdout!.on("data", (chunk: Buffer) => {
@@ -791,9 +830,11 @@ function runReviewer(
       sawLife = true;
       hooks.onLife?.();
     }
+    windStallClock();
     writeAllSync(outFd, chunk);
   });
   child.stderr!.on("data", (chunk: Buffer) => {
+    windStallClock();
     writeAllSync(errFd, chunk);
   });
   // A spawn failure emits 'error' and may still emit 'close'; settle once.
@@ -801,6 +842,7 @@ function runReviewer(
   const settle = (handle: () => void) => {
     if (settled) return;
     settled = true;
+    if (stallClock !== null) clearTimeout(stallClock);
     closeFds();
     handle();
   };
@@ -809,7 +851,9 @@ function runReviewer(
   });
   child.on("close", (code) => {
     settle(() => {
-      const status = String(code ?? "signal");
+      const status = stalled
+        ? `stalled: no stream event for ${stallSeconds} s`
+        : String(code ?? "signal");
       recordStatus(scratch, tool, { status, sandbox });
       hooks.onDone(status);
     });
@@ -822,8 +866,9 @@ function runForeground(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
+  stallSeconds: number,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, {
+  return runReviewer(tool, launch, delivery, scratch, stallSeconds, {
     onLife: () => process.stderr.write("review stream alive\n"),
     onFallback: (message) => process.stderr.write(`${message}\n`),
     onSpawnError: (error) => {
@@ -840,10 +885,13 @@ function runForeground(
     onDone: (status) => {
       process.stderr.write(`reviewer exited (status=${status})\n`);
       let extraction = extractVerdict(tool, readFileSync(scratch.outFile, "utf-8"));
-      if (status !== "0" && extraction.ok) {
+      if (STALL_STATUS.test(status) || (status !== "0" && extraction.ok)) {
         extraction = {
           ok: false,
-          reason: `reviewer status: ${status} (stderr kept at ${scratch.errFile})`,
+          reason: failureReason(
+            status,
+            `reviewer status: ${status} (stderr kept at ${scratch.errFile})`,
+          ),
         };
       }
       // The capture stays on success too: the printed report names it, so a
@@ -859,8 +907,9 @@ function runCapture(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
+  stallSeconds: number,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, {
+  return runReviewer(tool, launch, delivery, scratch, stallSeconds, {
     onSpawnError: (error) => {
       recordStatus(scratch, tool, {
         status: isEnoent(error) ? "not-found" : `spawn failed: ${String(error)}`,
@@ -870,7 +919,13 @@ function runCapture(
   });
 }
 
-function runBackground(tool: Tool, launch: Launch, prompt: string, stdinPrompt: boolean): void {
+function runBackground(
+  tool: Tool,
+  launch: Launch,
+  prompt: string,
+  stdinPrompt: boolean,
+  stallSeconds: number,
+): void {
   const scratch = scratchPaths(mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
   // Snapshot the prompt: the caller's file may be edited or deleted before
   // the detached monitor gets around to reading it.
@@ -885,6 +940,8 @@ function runBackground(tool: Tool, launch: Launch, prompt: string, stdinPrompt: 
     promptSnapshot,
     "--capture",
     scratch.dir,
+    "--stall",
+    String(stallSeconds),
   ];
   if (stdinPrompt) monitorArgs.push("--stdin-prompt");
   const monitor = spawn(process.execPath, monitorArgs, { detached: true, stdio: "ignore" });
@@ -946,15 +1003,20 @@ function readLaunchRecord(tool: Tool, outputFile: string): LaunchRecord | null {
   return { ...record, status };
 }
 
-function reportRecordedRun(tool: Tool, outputFile: string, record: LaunchRecord): void {
-  const { status, sandbox } = record;
+function reportRecordedRun(
+  tool: Tool,
+  outputFile: string,
+  status: string,
+  sandbox: "copy" | undefined,
+): void {
   if (status === "not-found") {
     process.stderr.write(`reviewer binary not found: ${tool}\n`);
     process.exitCode = 2;
     return;
   }
   if (status !== "0") {
-    reportVerdict({ ok: false, reason: `recorded reviewer status: ${status}` }, outputFile);
+    const reason = failureReason(status, `recorded reviewer status: ${status}`);
+    reportVerdict({ ok: false, reason }, outputFile);
     return;
   }
   let raw: string;
@@ -978,7 +1040,14 @@ function extractRecorded(tool: Tool, outputFile: string): void {
     );
     return;
   }
-  reportRecordedRun(tool, outputFile, record);
+  reportRecordedRun(tool, outputFile, record.status, record.sandbox);
+}
+
+function secondsArg(flag: string, value: string | undefined): number {
+  if (value === undefined || !WHOLE_SECONDS.test(value)) {
+    usageError(`${flag} requires a whole number of seconds, at least 1`);
+  }
+  return Number(value);
 }
 
 /** Blocks the main thread; a timer callback could not route a usage error
@@ -1013,7 +1082,7 @@ function extractAfterWait(tool: Tool, outputFile: string, timeoutSeconds: number
     sleepSync(Math.min(WAIT_POLL_MS, remaining));
     record = readLaunchRecord(tool, outputFile) ?? noRecord();
   }
-  reportRecordedRun(tool, outputFile, record);
+  reportRecordedRun(tool, outputFile, record.status, record.sandbox);
 }
 
 function main(): void {
@@ -1045,12 +1114,9 @@ function main(): void {
       if (arg === "--wait") wait = true;
       else if (arg === "--timeout") {
         i += 1;
-        const value = rest[i];
-        if (value === undefined || !TIMEOUT_SECONDS.test(value)) {
-          usageError("--timeout requires a whole number of seconds, at least 1");
-        }
-        timeoutSeconds = Number(value);
-      } else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
+        timeoutSeconds = secondsArg(arg, rest[i]);
+      } else if (arg === "--stall") usageError("--stall applies only to a launch");
+      else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
       else files.push(arg);
     }
     if (timeoutSeconds !== null && !wait) usageError("--timeout applies only to --extract --wait");
@@ -1066,6 +1132,7 @@ function main(): void {
   let background = false;
   let stdinPrompt = false;
   let captureDir: string | null = null;
+  let stallSeconds = DEFAULT_STALL_SECONDS;
   const positional: string[] = [];
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i] as string;
@@ -1074,6 +1141,9 @@ function main(): void {
     else if (arg === "--capture") {
       i += 1;
       captureDir = rest[i] ?? usageError("--capture requires a directory");
+    } else if (arg === "--stall") {
+      i += 1;
+      stallSeconds = secondsArg(arg, rest[i]);
     } else if (arg === "--wait" || arg === "--timeout") {
       usageError(`${arg} applies only to --extract`);
     } else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
@@ -1110,7 +1180,7 @@ function main(): void {
   const launch = planLaunch(tool);
   if (captureDir === null) purgeStaleScratch();
   if (background) {
-    runBackground(tool, launch, prompt, stdinPrompt);
+    runBackground(tool, launch, prompt, stdinPrompt, stallSeconds);
     return;
   }
   const scratch = scratchPaths(captureDir ?? mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
@@ -1123,8 +1193,8 @@ function main(): void {
   const delivery = stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, prompt);
   const child =
     captureDir !== null
-      ? runCapture(tool, launch, delivery, scratch)
-      : runForeground(tool, launch, delivery, scratch);
+      ? runCapture(tool, launch, delivery, scratch, stallSeconds)
+      : runForeground(tool, launch, delivery, scratch, stallSeconds);
   if (forwarded !== null) forwarded.child = child;
 }
 
