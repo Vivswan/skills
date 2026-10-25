@@ -12,6 +12,7 @@
  *   cp -a of the checkout        -> venvs and nested worktrees weigh gigabytes: snapshot HEAD, the refs, the index
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
  *   the stream goes silent       -> a stuck child held one run for hours: --stall kills the reviewer's process group
+ *   criteria pasted by hand      -> thirty rounds passed what the house rules forbid: the launcher names this collection's pages
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -41,6 +42,19 @@ import { parseArgs } from "node:util";
 import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
 
 const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), "verdict-schema.json");
+
+// This skill's directory through any install symlink; its siblings are the installed skills.
+const SKILL_DIR = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
+
+const SKILLS_ROOT = dirname(SKILL_DIR);
+
+// A checkout of the repository: its plugin manifest beside skills/ lists this skill, and every skill it lists is the collection.
+const PLUGIN_MANIFEST = join(dirname(SKILLS_ROOT), ".claude-plugin", "plugin.json");
+
+const CRITERIA_HEADING = "Review Criteria";
+const COMPANION_HEADING = "## Companion review criteria";
+const COMPANION_INSTRUCTION =
+  "Read the `## Review Criteria` section of each page below and apply it as part of this review:";
 
 /** Read once at launch; a missing or malformed schema beside the script is a
  * broken install, not a review failure. */
@@ -96,11 +110,16 @@ const TOOL_ARGS: Record<Tool, (prompt: string, sandbox: CodexSandbox) => string[
 };
 
 const USAGE = [
-  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>]",
+  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>] [--criteria <names>|none]",
   "       run-review.mts <codex|claude|copilot> --extract <output-file>",
   "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
-  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>]  (internal)",
+  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
   "       run-review.mts prepare <section>",
+  "       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)",
+  "the prompt gets a '## Companion review criteria' section naming the SKILL.md of every installed skill of this collection (the installer's",
+  "  records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',",
+  "  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;",
+  "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
   "codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir",
   "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
@@ -127,11 +146,12 @@ const FLAGS = {
   "stdin-prompt": { type: "boolean" },
   capture: { type: "string" },
   stall: { type: "string" },
+  criteria: { type: "string" },
   wait: { type: "boolean" },
   timeout: { type: "string" },
 } as const;
 
-const LAUNCH_FLAGS = ["background", "stdin-prompt", "capture", "stall"] as const;
+const LAUNCH_FLAGS = ["background", "stdin-prompt", "capture", "stall", "criteria"] as const;
 const EXTRACT_FLAGS = ["wait", "timeout"] as const;
 const STALL_STATUS = /^stalled: /;
 const MINT_MARKER = ".minted-by-run-review";
@@ -249,6 +269,280 @@ function requireCaptureProvenance(tool: Tool, promptFile: string, captureDir: st
 
 function isEnoent(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
+}
+
+interface Criteria {
+  /** The skill's directory name, as `--criteria` names it. */
+  name: string;
+
+  /** The page's real path, which the reviewer reads from any cwd, a snapshot copy included. */
+  page: string;
+
+  /** The skill came from the same source as this one, per the installer; only those ride in by default. */
+  ours: boolean;
+
+  /** The skill is user-invoke-only, so it is folded in only when `--criteria` names it. */
+  userOnly: boolean;
+}
+
+/** A page's frontmatter (the YAML between its opening `---` lines, null without one) and the
+ * Markdown body after it, whatever the line endings. A frontmatter that never closes is refused,
+ * since read as a body its metadata would declare criteria and its invocation policy would be lost. */
+function splitPage(page: string, pagePath: string): { frontmatter: string | null; body: string } {
+  const lines = page.split(/\r?\n/);
+  if (lines[0] !== "---") return { frontmatter: null, body: lines.join("\n") };
+
+  const end = lines.indexOf("---", 1);
+  if (end === -1) usageError(`the frontmatter of ${pagePath} never closes`);
+
+  return { frontmatter: lines.slice(1, end).join("\n"), body: lines.slice(end + 1).join("\n") };
+}
+
+/** Whether the page's frontmatter carries `disable-model-invocation: true`: automatic folding is a
+ * model invocation, which such a skill forbids. Frontmatter that does not parse is a usage error,
+ * since the silent reading would be an unwanted invocation. */
+function userInvokeOnly(frontmatter: string | null, pagePath: string): boolean {
+  if (frontmatter === null) return false;
+
+  let parsed: unknown;
+  try {
+    parsed = Bun.YAML.parse(frontmatter);
+  } catch (error) {
+    usageError(`cannot parse the frontmatter of ${pagePath}: ${String(error)}`);
+  }
+  return isRecord(parsed) && parsed["disable-model-invocation"] === true;
+}
+
+/** What the launch runs under beyond the sandbox: the stall clock and the criteria appended to the prompt. */
+interface Rules {
+  stallSeconds: number;
+  criteria: Criteria[];
+}
+
+/** Whether the body declares the `## Review Criteria` heading at its root: rendered, with every
+ * container dropped, so a quoted or listed example, a sample inside a code fence, a `## <Context>
+ * Review Criteria`, trailing spaces, or CRLF endings read as a reader would. */
+function declaresCriteria(body: string): boolean {
+  // Only a heading emits the marker; a table cell, an HTML comment, or any other text never can.
+  const marker = (text: string) => `\u0000${text}\u0000`;
+  const rendered = Bun.markdown.render(body, {
+    heading: (text, { level }) => (level === 2 ? marker(text) : ""),
+    blockquote: () => "",
+    list: () => "",
+    listItem: () => "",
+  });
+
+  return rendered.includes(marker(CRITERIA_HEADING));
+}
+
+/** Where the skills CLI keeps its records (its dist/cli.mjs, getLocalLockPath and getSkillLockPath):
+ * a project's skills-lock.json, looked for upward from the skills directory since each agent's
+ * directory sits at its own depth under the project, and the one global .skill-lock.json, under
+ * $XDG_STATE_HOME/skills when that is set and under ~/.agents otherwise. */
+function lockfileCandidates(): { project: string[]; global: string } {
+  const project: string[] = [];
+  for (let dir = dirname(SKILLS_ROOT); ; dir = dirname(dir)) {
+    project.push(join(dir, "skills-lock.json"));
+    if (dirname(dir) === dir) break;
+  }
+
+  const stateHome = process.env.XDG_STATE_HOME;
+  const global = stateHome
+    ? join(stateHome, "skills", ".skill-lock.json")
+    : join(homedir(), ".agents", ".skill-lock.json");
+  return { project, global };
+}
+
+/** A lockfile source as the installer may spell it twice: a trailing slash or .git, a case difference. */
+function sourceId(source: string): string {
+  return source
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "")
+    .toLowerCase();
+}
+
+/** A recorded source, comparable: a local path resolved against its lockfile and through the file
+ * system (a project lockfile spells it relative, a spelling may differ in case or pass a link, and a
+ * .git suffix there is part of the directory's name); a repository id as the installer may spell it twice. */
+function comparableSource(entry: unknown, file: string): string | null {
+  if (!isRecord(entry) || typeof entry.source !== "string") return null;
+
+  if (entry.sourceType !== "local") return sourceId(entry.source);
+
+  const path = resolve(dirname(file), entry.source);
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}
+
+/** Each skill's comparable source in one lockfile. A file that does not parse is a usage error,
+ * never a guess at the collection. */
+function lockedSources(file: string, raw: string): Map<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    usageError(`cannot parse ${file}: ${String(error)}`);
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.skills)) {
+    usageError(`${file}: expected a "skills" object; the lockfile format has changed`);
+  }
+
+  const sources = new Map<string, string>();
+  for (const [name, entry] of Object.entries(parsed.skills)) {
+    const source = comparableSource(entry, file);
+    if (source !== null) sources.set(name, source);
+  }
+  return sources;
+}
+
+/** Every record with an entry for this skill, as each skill's comparable source. No record says
+ * where it installed to, so none can be matched to this root by path; every one that names this
+ * skill speaks for it, and inclusion is the safer error. */
+function installerRecords(): Map<string, string>[] {
+  const { project, global } = lockfileCandidates();
+  const records: Map<string, string>[] = [];
+  for (const file of [...project, global]) {
+    let raw: string;
+    try {
+      raw = readFileSync(file, "utf-8");
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      usageError(`cannot read ${file}: ${String(error)}`);
+    }
+
+    const sources = lockedSources(file, raw);
+    if (sources.has(basename(SKILL_DIR))) records.push(sources);
+  }
+  return records;
+}
+
+/** The skills the plugin manifest beside the root lists, when its list names this skill at this
+ * root: a checkout of the repository, which the installer's records say nothing about. Null for
+ * another plugin's manifest or none. */
+function checkoutCollection(): Set<string> | null {
+  let raw: string;
+  try {
+    raw = readFileSync(PLUGIN_MANIFEST, "utf-8");
+  } catch (error) {
+    if (isEnoent(error)) return null;
+    usageError(`cannot read ${PLUGIN_MANIFEST}: ${String(error)}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.skills)) return null;
+
+  const listed = parsed.skills.filter((entry): entry is string => typeof entry === "string");
+  if (!listed.some((entry) => resolve(dirname(SKILLS_ROOT), entry) === SKILL_DIR)) return null;
+  return new Set(listed.map((entry) => basename(entry)));
+}
+
+/** The collection: the repository checkout's own list, else every name the installer recorded
+ * under this skill's source in any record naming it, else "none", said on stderr so an empty list
+ * is never silent. */
+function collectionNames(): Set<string> | "none" {
+  const checkout = checkoutCollection();
+  if (checkout !== null) return checkout;
+
+  const records = installerRecords();
+  if (records.length === 0) {
+    process.stderr.write(
+      `no companion criteria: no skills-lock.json from ${dirname(SKILLS_ROOT)} upward names ${basename(SKILL_DIR)}, nor ${lockfileCandidates().global}\n`,
+    );
+    return "none";
+  }
+
+  const names = new Set<string>();
+  for (const sources of records) {
+    const own = sources.get(basename(SKILL_DIR));
+    for (const [name, source] of sources) {
+      if (source === own) names.add(name);
+    }
+  }
+  return names;
+}
+
+/** An entry with no SKILL.md (a file, a dangling link, a stray directory) is no skill; any other
+ * failure to read one is a broken install, since a skill silently dropped is a rule silently dropped. */
+function installedCriteria(): Criteria[] {
+  const collection = collectionNames();
+  const found: Criteria[] = [];
+  for (const name of readdirSync(SKILLS_ROOT).sort()) {
+    const pagePath = join(SKILLS_ROOT, name, "SKILL.md");
+    let page: string;
+    try {
+      page = readFileSync(pagePath, "utf-8");
+    } catch (error) {
+      if (isEnoent(error) || (isRecord(error) && error.code === "ENOTDIR")) continue;
+      usageError(`cannot read ${pagePath}: ${String(error)}`);
+    }
+    const { frontmatter, body } = splitPage(page, pagePath);
+    if (!declaresCriteria(body)) continue;
+
+    const ours = collection !== "none" && collection.has(name);
+    found.push({
+      name,
+      page: realpathSync(pagePath),
+      ours,
+      userOnly: userInvokeOnly(frontmatter, pagePath),
+    });
+  }
+  return found;
+}
+
+/** The criteria a launch appends: this collection's declaring skills that allow model invocation
+ * by default, the named ones (any declaring skill, user-only included) under `--criteria a,b`,
+ * none under `--criteria none`. A name that declares none is a usage error. */
+function selectCriteria(spec: string | null): Criteria[] {
+  // Opting out reads no record and no page, so a broken install cannot stop a review that asked for none.
+  if (spec === "none") return [];
+
+  const installed = installedCriteria();
+  if (spec === null) return installed.filter((criteria) => criteria.ours && !criteria.userOnly);
+
+  const chosen = spec.split(",");
+  const declaring = installed.map((criteria) => criteria.name);
+  const unknown = chosen.filter((name) => !declaring.includes(name));
+  if (unknown.length > 0) {
+    usageError(
+      `--criteria: ${unknown.join(", ")} declares no ## ${CRITERIA_HEADING}; the installed skills that do: ${declaring.join(", ")}`,
+    );
+  }
+  return installed.filter((criteria) => chosen.includes(criteria.name));
+}
+
+/** The block a launch appends to the prompt: the pages to read, never their text, so the prompt
+ * stays short and the reviewer reads each skill's own words. Empty under `--criteria none`. */
+function companionBlock(criteria: Criteria[]): string {
+  if (criteria.length === 0) return "";
+
+  const pages = criteria.map(({ name, page }) => `- ${name}: ${page}`);
+  return `${COMPANION_HEADING}\n${COMPANION_INSTRUCTION}\n${pages.join("\n")}\n`;
+}
+
+function withCriteria(prompt: string, criteria: Criteria[]): string {
+  const block = companionBlock(criteria);
+  if (block === "") return prompt;
+
+  return `${prompt.trimEnd()}\n\n${block}`;
+}
+
+/** The `criteria` subcommand: the same block for a review run through a dedicated tool, which the
+ * launcher never sees, so that path cannot omit the companion criteria either. */
+function printCriteria(args: string[]): void {
+  let spec: string | null = null;
+  if (args.length === 2 && args[0] === "--criteria") spec = args[1] ?? null;
+  else if (args.length !== 0)
+    usageError("criteria takes at most --criteria <name>[,<name>] or none");
+  process.stdout.write(companionBlock(selectCriteria(spec)));
 }
 
 interface Delivery {
@@ -651,7 +945,12 @@ function failureReason(status: string, otherwise: string): string {
 
 // Exits go through process.exitCode + a natural event-loop drain, never
 // process.exit(): an explicit exit can truncate a large pending stream write.
-function reportVerdict(extraction: Extraction, outputFile: string, sandbox?: "copy"): void {
+function reportVerdict(
+  extraction: Extraction,
+  outputFile: string,
+  sandbox?: "copy",
+  criteria: string[] = [],
+): void {
   if (extraction.ok) {
     const { verdict, toolCalls, trajectory } = extraction.review;
     const report = {
@@ -659,6 +958,7 @@ function reportVerdict(extraction: Extraction, outputFile: string, sandbox?: "co
       tool_calls: toolCalls,
       capture: outputFile,
       ...(sandbox === undefined ? {} : { sandbox }),
+      criteria,
       trajectory,
     };
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -696,7 +996,7 @@ function scratchPaths(dir: string, tool: Tool): Scratch {
 function recordStatus(
   scratch: Scratch,
   tool: Tool,
-  fields: { status?: string; sandbox?: "copy" } = {},
+  fields: { criteria: string[]; status?: string; sandbox?: "copy" },
 ): void {
   // Write-then-rename: a concurrent --extract must never observe a truncated
   // record (writeFileSync truncates before writing).
@@ -706,6 +1006,7 @@ function recordStatus(
     JSON.stringify({
       tool,
       output: basename(scratch.outFile),
+      criteria: fields.criteria,
       ...(fields.sandbox === undefined ? {} : { sandbox: fields.sandbox }),
       ...(fields.status === undefined ? {} : { status: fields.status }),
     }),
@@ -727,9 +1028,11 @@ function runReviewer(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
-  stallSeconds: number,
+  rules: Rules,
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
+  const criteria = rules.criteria.map((entry) => entry.name);
+  const { stallSeconds } = rules;
   let stdinFd: number | null = null;
   if (delivery.stdinFile !== null) {
     try {
@@ -741,7 +1044,7 @@ function runReviewer(
   const outFd = openSync(scratch.outFile, "w");
   const errFd = openSync(scratch.errFile, "w");
   const sandbox = launch.sandbox === "copy" ? "copy" : undefined;
-  recordStatus(scratch, tool, { sandbox });
+  recordStatus(scratch, tool, { criteria, sandbox });
   // A warning lands in review.err, which outlives the run and is named by a
   // failure, as well as on stderr (ignored for a detached monitor).
   const warn = (line: string) => {
@@ -854,7 +1157,7 @@ function runReviewer(
       const status = stalled
         ? `stalled: no stream event for ${stallSeconds} s`
         : String(code ?? "signal");
-      recordStatus(scratch, tool, { status, sandbox });
+      recordStatus(scratch, tool, { criteria, status, sandbox });
       hooks.onDone(status);
     });
   });
@@ -866,9 +1169,9 @@ function runForeground(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
-  stallSeconds: number,
+  rules: Rules,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, stallSeconds, {
+  return runReviewer(tool, launch, delivery, scratch, rules, {
     onLife: () => process.stderr.write("review stream alive\n"),
     onFallback: (message) => process.stderr.write(`${message}\n`),
     onSpawnError: (error) => {
@@ -896,7 +1199,12 @@ function runForeground(
       }
       // The capture stays on success too: the printed report names it, so a
       // surprising verdict can be traced to the exact reviewer message.
-      reportVerdict(extraction, scratch.outFile, launch.sandbox === "copy" ? "copy" : undefined);
+      reportVerdict(
+        extraction,
+        scratch.outFile,
+        launch.sandbox === "copy" ? "copy" : undefined,
+        rules.criteria.map((entry) => entry.name),
+      );
     },
   });
 }
@@ -907,11 +1215,12 @@ function runCapture(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
-  stallSeconds: number,
+  rules: Rules,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, stallSeconds, {
+  return runReviewer(tool, launch, delivery, scratch, rules, {
     onSpawnError: (error) => {
       recordStatus(scratch, tool, {
+        criteria: rules.criteria.map((entry) => entry.name),
         status: isEnoent(error) ? "not-found" : `spawn failed: ${String(error)}`,
       });
     },
@@ -924,7 +1233,8 @@ function runBackground(
   launch: Launch,
   prompt: string,
   stdinPrompt: boolean,
-  stallSeconds: number,
+  rules: Rules,
+  criteriaSpec: string | null,
 ): void {
   const scratch = scratchPaths(mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
   // Snapshot the prompt: the caller's file may be edited or deleted before
@@ -933,7 +1243,11 @@ function runBackground(
   writeFileSync(promptSnapshot, prompt);
   // The launch record is what lets the monitor's --capture prove its
   // provenance (and what --extract reads while the run is still pending).
-  recordStatus(scratch, tool, { sandbox: launch.sandbox === "copy" ? "copy" : undefined });
+  recordStatus(scratch, tool, {
+    criteria: rules.criteria.map((entry) => entry.name),
+    sandbox: launch.sandbox === "copy" ? "copy" : undefined,
+  });
+  // The monitor re-reads the snapshot and appends the criteria itself, so it takes the same selection.
   const monitorArgs = [
     fileURLToPath(import.meta.url),
     tool,
@@ -941,8 +1255,9 @@ function runBackground(
     "--capture",
     scratch.dir,
     "--stall",
-    String(stallSeconds),
+    String(rules.stallSeconds),
   ];
+  if (criteriaSpec !== null) monitorArgs.push("--criteria", criteriaSpec);
   if (stdinPrompt) monitorArgs.push("--stdin-prompt");
   const monitor = spawn(process.execPath, monitorArgs, { detached: true, stdio: "ignore" });
   monitor.on("error", (error) => {
@@ -956,8 +1271,12 @@ function runBackground(
 }
 
 interface LaunchRecord {
+  /** The skills whose Review Criteria the launch appended to the prompt. */
+  criteria: string[];
+
   /** Absent until the monitor records the reviewer's exit. */
   status?: string;
+
   /** Present when the reviewer ran unsandboxed in a snapshot copy. */
   sandbox?: "copy";
 }
@@ -982,8 +1301,10 @@ function readLaunchRecord(tool: Tool, outputFile: string): LaunchRecord | null {
     notCapture();
   }
   if (!isRecord(parsed)) notCapture();
-  const { tool: recordedTool, output: recordedOutput, status, sandbox } = parsed;
+  // A record from before the launcher appended criteria carries none; its capture still reads.
+  const { tool: recordedTool, output: recordedOutput, status, sandbox, criteria = [] } = parsed;
   if (typeof recordedTool !== "string" || typeof recordedOutput !== "string") notCapture();
+  if (!Array.isArray(criteria) || criteria.some((name) => typeof name !== "string")) notCapture();
   if (recordedTool !== tool) {
     usageError(
       `this capture was launched with reviewer '${recordedTool}', not '${tool}'; extract with the same reviewer`,
@@ -995,7 +1316,7 @@ function readLaunchRecord(tool: Tool, outputFile: string): LaunchRecord | null {
   if ("sandbox" in parsed && sandbox !== "copy") {
     usageError(`unrecognized review.status beside ${outputFile}: unknown sandbox`);
   }
-  const record: LaunchRecord = sandbox === "copy" ? { sandbox } : {};
+  const record: LaunchRecord = sandbox === "copy" ? { criteria, sandbox } : { criteria };
   if (!("status" in parsed)) return record;
   if (typeof status !== "string") {
     usageError(`unrecognized review.status beside ${outputFile}: non-string status`);
@@ -1008,6 +1329,7 @@ function reportRecordedRun(
   outputFile: string,
   status: string,
   sandbox: "copy" | undefined,
+  criteria: string[],
 ): void {
   if (status === "not-found") {
     process.stderr.write(`reviewer binary not found: ${tool}\n`);
@@ -1026,7 +1348,7 @@ function reportRecordedRun(
     reportVerdict({ ok: false, reason: `cannot read output file: ${String(error)}` }, outputFile);
     return;
   }
-  reportVerdict(extractVerdict(tool, raw), outputFile, sandbox);
+  reportVerdict(extractVerdict(tool, raw), outputFile, sandbox, criteria);
 }
 
 function extractRecorded(tool: Tool, outputFile: string): void {
@@ -1040,7 +1362,7 @@ function extractRecorded(tool: Tool, outputFile: string): void {
     );
     return;
   }
-  reportRecordedRun(tool, outputFile, record.status, record.sandbox);
+  reportRecordedRun(tool, outputFile, record.status, record.sandbox, record.criteria);
 }
 
 function secondsArg(flag: string, value: string | undefined): number {
@@ -1069,6 +1391,7 @@ function parseFlags(args: string[], form: "launch" | "extract") {
     if (code !== "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") throw error;
     if (foreignFlag(flag)) refuse(flag.slice(2));
     if (flag === "--capture") usageError("--capture requires a directory");
+    if (flag === "--criteria") usageError("--criteria requires <name>[,<name>] or none");
     if (flag === "--timeout" || flag === "--stall") secondsArg(flag, undefined);
     usageError(message);
   }
@@ -1077,12 +1400,6 @@ function parseFlags(args: string[], form: "launch" | "extract") {
     if (parsed.values[flag] !== undefined) refuse(flag);
   }
   return parsed;
-}
-
-/** Blocks the main thread; a timer callback could not route a usage error
- * through SilentExit, and the wait has nothing else to do. */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /** The launch writes the record before it prints the output-file line, so
@@ -1108,10 +1425,10 @@ function extractAfterWait(tool: Tool, outputFile: string, timeoutSeconds: number
       );
       return;
     }
-    sleepSync(Math.min(WAIT_POLL_MS, remaining));
+    Bun.sleepSync(Math.min(WAIT_POLL_MS, remaining));
     record = readLaunchRecord(tool, outputFile) ?? noRecord();
   }
-  reportRecordedRun(tool, outputFile, record.status, record.sandbox);
+  reportRecordedRun(tool, outputFile, record.status, record.sandbox, record.criteria);
 }
 
 function main(): void {
@@ -1125,6 +1442,10 @@ function main(): void {
     if (section === undefined || argv.length !== 2)
       usageError("prepare takes exactly one <section>");
     preparePrompt(section);
+    return;
+  }
+  if (argv[0] === "criteria") {
+    printCriteria(argv.slice(1));
     return;
   }
   const toolArg = argv[0];
@@ -1156,6 +1477,7 @@ function main(): void {
   const captureDir = values.capture ?? null;
   const stallSeconds =
     values.stall === undefined ? DEFAULT_STALL_SECONDS : secondsArg("--stall", values.stall);
+  const criteriaSpec = values.criteria ?? null;
   if (background && captureDir !== null) {
     usageError("--background and --capture are mutually exclusive");
   }
@@ -1173,6 +1495,8 @@ function main(): void {
     usageError(`cannot read prompt file ${promptFile}: ${String(error)}`);
   }
   if (prompt.trim() === "") usageError(`prompt file is empty: ${promptFile}`);
+  // Selected in the parent of a --background launch too, so an unknown name is its usage error.
+  const rules: Rules = { stallSeconds, criteria: selectCriteria(criteriaSpec) };
 
   // stdinDelivery owns the copilot rejection; validate up front (against the
   // caller's path) so a bad tool/flag combination is a parent-side usage
@@ -1188,21 +1512,21 @@ function main(): void {
   const launch = planLaunch(tool);
   if (captureDir === null) purgeStaleScratch();
   if (background) {
-    runBackground(tool, launch, prompt, stdinPrompt, stallSeconds);
+    runBackground(tool, launch, prompt, stdinPrompt, rules, criteriaSpec);
     return;
   }
   const scratch = scratchPaths(captureDir ?? mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
-  // Snapshot the prompt into the scratch dir (in capture mode this rewrites
-  // the snapshot the parent already made): everything the launcher writes,
-  // including any code excerpts in the prompt, lives and dies with the
-  // capture. The caller's own prompt file stays theirs.
+  // The snapshot lives and dies with the capture; the caller's own prompt file stays theirs.
+  const fullPrompt = withCriteria(prompt, rules.criteria);
   const promptSnapshot = join(scratch.dir, "prompt.txt");
-  writeFileSync(promptSnapshot, prompt);
-  const delivery = stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, prompt);
+  writeFileSync(promptSnapshot, fullPrompt);
+  const delivery = stdinPrompt
+    ? stdinDelivery(tool, promptSnapshot)
+    : argvDelivery(tool, fullPrompt);
   const child =
     captureDir !== null
-      ? runCapture(tool, launch, delivery, scratch, stallSeconds)
-      : runForeground(tool, launch, delivery, scratch, stallSeconds);
+      ? runCapture(tool, launch, delivery, scratch, rules)
+      : runForeground(tool, launch, delivery, scratch, rules);
   if (forwarded !== null) forwarded.child = child;
 }
 

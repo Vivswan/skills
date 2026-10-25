@@ -42,4 +42,6 @@ Read the change before you answer: a report with no reads behind it is not a rev
 - copilot has no schema flag, so for copilot the block above is the only thing asking for the object. The script parses the plain-text answer as JSON (a ```json fence is fine) and fails the review when it is not the object.
 - The script also refuses a verdict with no tool call before it in the same turn. codex fills its narration into the schema too, so "I will review now" comes back as an empty, valid verdict. The missing reads are what give it away.
 
-Skills that declare a `## Review Criteria` section contribute extra bullets when installed: expand each one's section into the review list above. In this collection, `/no-invalid-states`, `/code-standards`, `/never-twice`, and `/verify-with-controls` declare it. On someone else's PR, expand only the sections the user chose under the `/reply-and-review-discipline` skill.
+The launcher appends a `## Companion review criteria` section after this block: the `SKILL.md` of every installed skill of this collection that declares `## Review Criteria`, one line each, with the instruction to read and apply each. A user-invoke-only skill rides in only when named (step 3). The template needs no slot for them.
+
+A review run through a dedicated tool instead of the launcher pastes the same block from `bun "<skill-dir>/scripts/run-review.mts" criteria`. On someone else's PR, `--criteria <name>[,<name>]` names only the skills the user chose under the `/reply-and-review-discipline` skill; `--criteria none` appends nothing.
