@@ -59,7 +59,7 @@ A state is said once on entering and once on leaving. A stuck or idle alert is r
 | alert | `agent` | `agent <name>: stranded, job <id> ended with no notice` | the job's output file under the harness's tasks directory ends with its exit line while the transcript carries no notice for it; said at once. A job whose own last line spells that footer reads as ended too: open the file |
 | alert | `agent` | `agent <name>: stuck 12 min mid-turn, nothing pending` | past `--quiet-after`: a stall, or a worker composing a large edit; Priors at the Quiet Seams carries the base rates |
 | alert | `agent` | `agent <name>: ended 7 min ago, no signal reached the lead` | past a five-minute grace, the agent is still running in the child map of whoever spawned it (the lead's for the lead's own children), or nobody the fleet read spawned it: a report never sent, or a wait on a message the lead owes |
-| note | `agent` | `agent <name>: ended 7 min ago, report received` | the idle notification or the task notice arrived; nothing to do |
+| note | `agent` | `agent <name>: ended 7 min ago, report received` | the idle notification or the task notice arrived; nothing to do. The same note when the transcript left the turn open: the harness omits the final stop reason when a hook closes the turn, and a fork whose notice the lead holds is finished, never stuck |
 | note | `agent` | `agent <name>: started` | nothing yet |
 | note | `agent` | `agent <name>: stopped by the lead` | the stop landed |
 | note | `agent` | `agent <name>: fine again` | the alert on it is void |
@@ -74,6 +74,8 @@ A state is said once on entering and once on leaving. A stuck or idle alert is r
 | note | `restored` | `fleet: reading restored` | the reading that failed is back, and it covers the processes lsof could read: a sandboxed worker it cannot read is invisible, so its worktree can idle beside it |
 
 A worktree an agent claims is not read at all: the transcript says everything the tree could, so its commits, idleness, and removal produce no line. A claim is a sidecar naming the worktree, or a tool call of the agent's naming its path in the input (never a result), or the lead's, for 30 minutes after its last command there; the main checkout is never claimed by command.
+
+Paths compare by their real form, so a worktree named through a symlink (`/tmp/...` for git's `/private/tmp/...` on macOS) is claimed.
 
 What stays the lead's, by hand: content claims through `probe.mts`, standing state in `ledger.mts`, the PII grep at each builder report and at each landing gate, `baseline.mts` at landings, and every nudge and directive. Codex and Copilot workers write no Claude transcript, so for them the daemon has only the worktree reading, the same rows a monitor subagent sweeps.
 

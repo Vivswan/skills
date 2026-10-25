@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   type Stats,
   statSync,
 } from "node:fs";
@@ -146,6 +147,19 @@ export function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * `path` by its real form when it exists, as written when it does not. Git and the daemon name a
+ * worktree by its real path and an agent by the path it was given, and on macOS `/tmp` is a link
+ * to `/private/tmp`: a named worktree, or a file in it, must compare equal to the row read from git.
+ */
+export function realPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}
+
 function parseRecord(text: string): Record<string, unknown> | null {
   try {
     return record(JSON.parse(text));
@@ -199,7 +213,7 @@ function namedPathsIn(text: string, field: string): string[] {
 function namePaths(state: Activity, input: unknown, at: string, field = ""): void {
   if (typeof input === "string") {
     for (const named of namedPathsIn(input, field)) {
-      const path = resolve(named);
+      const path = realPath(resolve(named));
       delete state.named[path];
       state.named[path] = at;
       const paths = Object.keys(state.named);

@@ -34,6 +34,7 @@ import {
   projectsRoot,
   readSidecar,
   readTranscript,
+  realPath,
   record,
   type Sidecar,
   sidecarOf,
@@ -371,7 +372,9 @@ function signalReached(target: Target, agentId: string, entry: AgentEntry): bool
  * What stands for one agent now, read off its transcript against the bounds: a stop, a stuck call
  * (past its own timeout plus the grace, or the plain bound), a child still past the bound, a job
  * whose output ended with no notice, a stall past `--quiet-after`, an ended turn past the grace;
- * else fine, which is moving or waiting within bounds.
+ * else fine, which is moving or waiting within bounds. A turn the transcript leaves open is over
+ * once the one waiting on the agent holds its finish: the harness omits the final stop reason
+ * when a hook closes the turn, and a completed fork is never a stall.
  */
 function situationOf(
   target: Target,
@@ -430,16 +433,13 @@ function situationOf(
   if (jobs.length > 0 || state.lastMovedAt === null) return { kind: "fine" };
 
   const stillMs = nowMs - Date.parse(state.lastMovedAt);
-  if (state.turn === "open") {
+  const signalled = signalReached(target, agentId, entry);
+  if (state.turn === "open" && !signalled) {
     if (stillMs < target.quietAfterMinutes * MINUTE_MS) return { kind: "fine" };
     return { kind: "stall", since: state.lastMovedAt };
   }
   if (stillMs < ENDED_GRACE_MINUTES * MINUTE_MS) return { kind: "fine" };
-  return {
-    kind: "ended",
-    since: state.lastMovedAt,
-    signalled: signalReached(target, agentId, entry),
-  };
+  return { kind: "ended", since: state.lastMovedAt, signalled };
 }
 
 function situationKey(situation: Situation): string {
@@ -740,14 +740,15 @@ function claimedWorktrees(
   nowMs: number,
 ): Set<string> {
   const claimed = new Set<string>();
-  const roots = paths.map((path) => resolve(path)).filter((root) => root !== resolve(repo));
+  const checkout = realPath(resolve(repo));
+  const roots = paths.map((path) => realPath(resolve(path))).filter((root) => root !== checkout);
   const claim = (named: string): void => {
     for (const root of roots) {
       if (named === root || named.startsWith(`${root}/`)) claimed.add(root);
     }
   };
   for (const entry of Object.values(target.agents)) {
-    if (entry.sidecar?.worktreePath) claimed.add(resolve(entry.sidecar.worktreePath));
+    if (entry.sidecar?.worktreePath) claimed.add(realPath(resolve(entry.sidecar.worktreePath)));
     for (const named of Object.keys(entry.state.named)) claim(named);
   }
   for (const [named, at] of Object.entries(target.lead.state.named)) {

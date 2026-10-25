@@ -5,6 +5,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -724,6 +725,57 @@ describe("fleet-events.mts", () => {
       ["note", "agent run it: ended 7 min ago, report received", fileUrl(pathD)],
     ]);
     expect(polled(s, box.path)).toBe(0);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a fork whose transcript leaves its last turn open while the lead holds its notice is ended, report received, never stuck: " +
+    "the harness omits the final stop reason when a hook closes the turn; the same shape with no notice is the stall it reads as", async () => {
+    const s = new Scenario(PROGRAM, "finished-open");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    // Both forks end on a text block the harness never closed (stop_reason null), twelve minutes ago.
+    const openEnd = (agentId: string): Line[] => [
+      ...exchange(ago(20), `toolu_${agentId.slice(0, 4)}`, agentId),
+      said(ago(12), null, agentId),
+    ];
+    const pathA = writeAgent(
+      session,
+      A,
+      { description: "audit it", agentType: "fork" },
+      openEnd(A),
+    );
+    const pathB = writeAgent(
+      session,
+      B,
+      { description: "build it", agentType: "fork" },
+      openEnd(B),
+    );
+    const launched = (id: string, agentId: string, description: string): Line[] => [
+      toolUse(ago(30), id, "Agent", { description, subagent_type: "fork", prompt: "go" }, null),
+      toolResult(ago(30), id, {
+        toolUseResult: { status: "async_launched", agentId },
+        agentId: null,
+      }),
+    ];
+    // The lead holds A's notice and nothing of B's.
+    appendLines(session.sessionFile, [
+      ...launched("toolu_spawn_a", A, "audit it"),
+      ...launched("toolu_spawn_b", B, "build it"),
+      userText(ago(11), notice(A), null),
+    ]);
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session, "--quiet-after", "10");
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["note", "agent audit it: ended 12 min ago, report received", fileUrl(pathA)],
+      ["alert", "agent build it: stuck 12 min mid-turn, nothing pending", fileUrl(pathB)],
+    ]);
+    expect(standing(s, box.path)).toEqual([
+      "agent build it: stuck 12 min mid-turn, nothing pending",
+    ]);
+    // Nothing more is said of the finished fork as it ages: no 20-minute repeat.
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toHaveLength(2);
     s.stop({ inbox: box.path });
   }, 30000);
 
@@ -1658,6 +1710,44 @@ describe("fleet-events.mts", () => {
         expect(Object.keys(after.worktrees).sort()).toEqual([repo, wtA, wtB, nested].sort());
       } finally {
         for (const worker of workers) worker.kill();
+      }
+      s.stop({ inbox: box.path });
+    },
+    GIT_TIMEOUT,
+  );
+
+  test(
+    "a worktree named through a symlink to its path is claimed: the agent's command names the alias, git lists the real path, " +
+      "and a worker seen there and gone brings no idle line",
+    async () => {
+      const s = new Scenario(PROGRAM, "alias");
+      const box = await s.inbox("a");
+      const session = sessionDir(s.fixtureDir);
+      const {
+        base,
+        repo,
+        worktrees: { "wt-a": wtA },
+      } = scratchRepo(s.fixtureDir, TRACKS);
+      // As macOS hands an agent /tmp for git's /private/tmp.
+      const alias = join(s.fixtureDir, "alias");
+      symlinkSync(base, alias);
+      writeAgent(session, A, { name: "builder-a", description: "build" }, [
+        toolUse(ago(0), "toolu_01", "Bash", { command: `git -C ${join(alias, "wt-a")} status` }),
+        toolResult(ago(0), "toolu_01"),
+      ]);
+      const worker = park(wtA);
+      try {
+        await s.start({ inbox: box.path });
+        watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
+        expect(polled(s, box.path)).toBe(0);
+        worker.kill();
+        await worker.exited;
+        for (let poll = 0; poll < 3; poll += 1) expect(polled(s, box.path)).toBe(0);
+        expect(rows(s)).toEqual([]);
+        const target = s.state().targets[session.dir] as { worktrees: Record<string, unknown> };
+        expect(Object.keys(target.worktrees)).not.toContain(wtA);
+      } finally {
+        worker.kill();
       }
       s.stop({ inbox: box.path });
     },
