@@ -371,16 +371,18 @@ describe("the CLI", () => {
           "exits: 0 every page is clean; 1 findings, one per line as page:line: message; 2 usage or an unreadable page",
         ].join("\n");
       // A vendored copy ships beside the skill's package.json, the pin list its dependencies install from.
+      // --help is answered above the imports: a .ts copy never self-builds, so any other argument would load
+      // its packages through bun's unpinned auto-install from the live registry.
       const root = repo({ "a.md": "" });
       copyFileSync(join(dirname(dirname(PROBE)), "package.json"), join(root, "package.json"));
       const copy = join(root, "scripts", "docs_probe.ts");
       mkdirSync(dirname(copy));
       copyFileSync(PROBE, copy);
-      const renamed = spawnSync("bun", [copy], { cwd: root, encoding: "utf8" });
+      const renamed = spawnSync("bun", [copy, "--help"], { cwd: root, encoding: "utf8" });
       expect([renamed.status, renamed.stdout, renamed.stderr]).toEqual([
-        2,
+        0,
+        `${usage("docs_probe.ts")}\n`,
         "",
-        `docs-probe: ${usage("docs_probe.ts")}\n`,
       ]);
       const importer = spawnSync(
         "bun",
