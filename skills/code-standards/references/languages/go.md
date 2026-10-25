@@ -57,7 +57,7 @@ import (
 const cacheDirName = ".cache/asr"
 
 var (
-	segments   = map[cacheKey][]Segment{} // the one process-wide cache, keyed by video and model
+	segments   = map[cacheKey][]Segment{}
 	segmentsMu sync.Mutex
 )
 

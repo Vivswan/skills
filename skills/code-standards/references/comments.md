@@ -26,6 +26,62 @@ Never a comment: what the code does, its types, its control flow, its history, t
 - **No limits here:** length and width caps, where a repository has them, belong to its own lint or file-size check, not to this rule.
 - **Never pack prose to fit a cap.** A wall under the cap is worse than the original, and a marker on a packed block is the worst of both. Cut honestly, and a block still over the cap after that is reported to the user, or to the lead agent when one briefed you.
 
+## On a variable, field, or constant
+
+Most variables, fields, and constants carry no comment at all: the first rule of this page decides whether one exists. These rules decide its shape once it does.
+
+The comment on a variable, a field, or a constant is one line above the item, never more. What needs a second line goes into the name, or into a short tell above the group the item belongs to.
+
+Commented all or none: once one field of a record (an interface, a class, a struct, a dataclass) or one constant of a block carries a comment, every field of that record and every constant of that block carries one. A half-commented record reads as a hodgepodge; uniform, it reads once.
+
+How the item is spaced is the shape rule in `shape.md`, Members stand alone. A method's doc comment is a function's: `shape.md`, Typed, documented, public.
+
+Specimen: the record behind one site's footer animation. One three-line comment covering three fields, four fields bare, and most members running together.
+
+```ts
+interface Network {
+  /** The links, one segment each, with their own alpha in the fourth colour component. */
+  readonly lines: THREE.LineSegments;
+
+  /** Each point's home on the plane as (u, v) in system units, its small lift off the plane, and its place this
+   * frame: the home carried off by the pointer's motion. The points draw at their places; the links are found by the
+   * homes, so they hold and stretch with their points. */
+  readonly homes: Float32Array;
+
+  readonly lift: Float32Array;
+  readonly places: Float32Array;
+  /** The plane's basis and its centre, from the closing camera's stance. */
+  readonly right: THREE.Vector3;
+  readonly up: THREE.Vector3;
+  readonly center: THREE.Vector3;
+```
+
+```ts
+interface Network {
+  /** The links, one segment each, with their own alpha in the fourth colour component. */
+  readonly lines: THREE.LineSegments;
+
+  /** Each point's home on the plane as (u, v) in system units; the links are knitted by the homes, so they stretch with their points. */
+  readonly homes: Float32Array;
+
+  /** Each point's small lift off the plane. */
+  readonly lift: Float32Array;
+
+  /** Each point's place this frame, its home carried off by the pointer's motion; the points draw at their places. */
+  readonly places: Float32Array;
+
+  /** The plane's right axis, from the closing camera's stance. */
+  readonly right: THREE.Vector3;
+
+  /** The plane's up axis, from the same stance. */
+  readonly up: THREE.Vector3;
+
+  /** The plane's centre, from the same stance. */
+  readonly center: THREE.Vector3;
+```
+
+The three-line comment was three fields' comments; each went to its field. The same file's constants block had a five-line comment over three constants, a group's tell merged into its first constant's comment, and bare constants among commented ones: the tell went on its own line above the group, and every constant got one line.
+
 ## Combinations
 
 The carrier follows the fact at that spot. Real-shaped examples, tell first in each:
@@ -188,6 +244,7 @@ Comments describe purpose and constraints, not where the code came from. Commit 
 
 - **Run the two-question test** before writing a comment and before keeping one you meet.
 - **Shape every comment you keep:** tell, then show only when a block is faster.
+- **On a variable, field, or constant:** one line above it, and the record or block commented throughout or not at all.
 - **Redesign around a defended hack.** Treat any multi-line comment defending a hack, special case, or fragile assumption as a signal to redesign that code until the comment becomes unnecessary.
 - **Run these checks explicitly** in every pre-commit review pass (see the `/rubber-duck-review` skill).
 - **Hand a subagent that writes or sweeps comments this file** and the SKILL.md section by path, and tell it to read both first. Never a paraphrase: a briefing agent's paraphrase is where the rule inverts. One such paraphrase read "prefer one dense paragraph over bullets", and six agents produced packed walls of text with markers on top.

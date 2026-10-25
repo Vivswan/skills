@@ -52,7 +52,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 const CACHE_DIR: &str = ".cache/asr";
-static SEGMENTS: LazyLock<Mutex<HashMap<CacheKey, Vec<Segment>>>> = LazyLock::new(Default::default); // the one process-wide cache
+static SEGMENTS: LazyLock<Mutex<HashMap<CacheKey, Vec<Segment>>>> = LazyLock::new(Default::default);
 
 type Window = (f64, f64);
 type CacheKey = (String, String, String);
@@ -189,7 +189,7 @@ The ugly-to-clear table of `../shape.md`, with each row as Rust writes it:
 `Drop` binds cleanup to the value, so every return path, `?` included, releases it. The standard library and the usual crates already own the common resources: `File`, `MutexGuard`, `tempfile::TempDir`. A manual cleanup call that every return path must remember is the finding, and so is a hand-written guard for a resource a crate already owns (the library rule).
 
 ```rust
-let work = tempfile::tempdir()?;                       // removed on every path out of this function
+let work = tempfile::tempdir()?;
 let wav = full_audio_wav(video, work.path())?;
 ```
 

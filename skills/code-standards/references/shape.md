@@ -21,9 +21,8 @@ from pathlib import Path
 
 __all__ = ["transcribe"]
 
-# Module constants, one block, grouped; a reason comment only where the value is not self-evident.
 CACHE_DIR = Path.home() / ".cache" / "asr"
-SEGMENTS: dict[tuple[str, str], list[str]] = {}  # the one process-wide cache, keyed by video and model
+SEGMENTS: dict[tuple[str, str], list[str]] = {}
 
 Window = tuple[float, float]
 
@@ -42,7 +41,7 @@ def transcribe(video: Path, model: str) -> list[Segment]:
     ...
 ```
 
-- **Constants sit in one block after the imports,** caches included. A constant placed mid-file beside its one use is a finding: the reader meets module state in one place or hunts for it.
+- **Constants sit in one block after the imports,** caches included. A constant placed mid-file beside its one use is a finding: the reader meets module state in one place or hunts for it. A commented constant stands alone in the block (Members stand alone, below), and its comment follows `comments.md`, On a variable, field, or constant.
 - **A table that names functions** (a dispatch dict, a handler list) cannot sit in that block without breaking the order rule below. It is built inside the function that uses it.
 - **Types before functions:** aliases, data classes, and the one class a module is named after come after the constants and before the first function. One main thing per module, held with its helpers, the module named after it in that thing's own case (`structure.md`, A predictable layout), where the language's package model allows (`languages/go.md` is the exception).
 - **Section separators mark a small, clearly bounded group only.** A module that wants `# ----- section` comments is usually two modules: split it, one module per concern.
@@ -148,7 +147,7 @@ Readability and beauty come first: this rule yields where following it would rea
 
 A blank line after the docstring, after the setup lines (grouped by topic, a blank line between groups), between decision blocks (each `if` that decides something stands alone), between the branches of an `if`/`elif`/`else`, and before the final return. No blank line inside a two-line pair that is one thought: an `if` and its single consequence.
 
-A short step comment opens a block only when its names do not already say what the block does.
+A short step comment opens a block only when its names do not already say what the block does. A commented local stands alone: a blank line before its comment and after the declaration (Members stand alone, below).
 
 The specimen that set the rule, as approved:
 
@@ -176,6 +175,14 @@ return with_min_words(segments, min_words)
 ```
 
 Read the blank lines: setup, then the cache decision as its own paragraph with two inner decisions, then the window pair kept together because it is one thought, then the return.
+
+Readability and beauty come first: this rule yields where following it would read worse, and the deviation is said in a line.
+
+## Members stand alone
+
+- **A blank line between every member of a record** (an interface, a class, a struct, a dataclass) once its members carry comments: field or method, commented or not. A comment interrupts the reading, and the blank lines give each member back its own place. Bare members that read whole in one pass stay together: `type Window struct{ Start, End float64 }`, a dataclass of two fields.
+- **A commented constant or variable stands alone:** a blank line before its comment and after its declaration. Bare constants may run together, as the layout example above does; the comment is what sets an item apart.
+- **The comment itself** follows `comments.md`, On a variable, field, or constant, which holds the specimen that set all of this.
 
 Readability and beauty come first: this rule yields where following it would read worse, and the deviation is said in a line.
 

@@ -68,7 +68,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const CACHE_DIR = join(process.env.HOME ?? ".", ".cache", "asr");
-const SEGMENTS = new Map<string, Segment[]>(); // the one process-wide cache, keyed by video and model
+const SEGMENTS = new Map<string, Segment[]>();
 const USAGE = "usage: transcribe.mts <video>...";
 
 type Window = readonly [start: number, end: number];
@@ -192,12 +192,13 @@ The ugly-to-clear table of `../shape.md`, with each row as TypeScript writes it:
 `using` (TypeScript 5.2 and later, supported by bun) binds cleanup to the acquisition where the resource exposes `Symbol.dispose`, and more of the platform does every release: a `ChildProcess` disposes by killing itself. Without a disposer, the `try`/`finally` sits directly after the acquisition it cleans, with nothing between them.
 
 ```ts
-using child = spawn("ffmpeg", args);   // killed when the block ends, on every path
+using child = spawn("ffmpeg", args);
+
 return await collect(child.stdout);
 ```
 
 ```ts
-const fd = openSync(path, "r");        // a bare descriptor has no disposer: the finally sits right here
+const fd = openSync(path, "r");
 try {
   return readHeader(fd);
 } finally {
