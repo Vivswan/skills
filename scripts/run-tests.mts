@@ -20,9 +20,8 @@
  */
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { hermeticGitEnv } from "./hermetic-git-env.mts";
+import { hermeticGitEnv, SCRATCH_PREFIX, scratchParent } from "./hermetic-git-env.mts";
 import { ROOT } from "./lib.mts";
 
 // Path-like arguments are resolved against the repository root (the scratch
@@ -53,7 +52,7 @@ if (!hasPathTarget) args.push(join(ROOT, "tests"));
 
 // cwd sits one level below the scratch ceiling: a default-cwd git checks
 // cwd, finds no repository, and cannot climb further.
-const scratch = mkdtempSync(join(tmpdir(), "hermetic-tests-"));
+const scratch = mkdtempSync(join(scratchParent(), SCRATCH_PREFIX));
 const cwd = join(scratch, "cwd");
 mkdirSync(cwd);
 let status: number;
