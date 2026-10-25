@@ -131,11 +131,12 @@ function fold(lines: Line[]): Activity {
   return lines.reduce(reduce, initialTranscript().state);
 }
 
-/** Every fixture opens with an assistant line at `at(0)`, so the newest run begins there until an input resets it. */
+/** Every fixture opens with an assistant line at `at(0)`, so the newest run begins there until an input and the line after it move it. */
 function activity(overrides: Partial<Activity>): Activity {
   return {
     lastMovedAt: null,
     runSince: at(0),
+    runPending: false,
     turn: "open",
     pending: {},
     jobs: {},
@@ -215,7 +216,7 @@ describe("the transcript reducer", () => {
     expect(fold(lines)).toEqual(
       activity({
         lastMovedAt: at(2),
-        runSince: null,
+        runPending: true,
         named: { "/home/user/repo/README.md": at(0, 1) },
         lines: 3,
       }),
@@ -234,7 +235,7 @@ describe("the transcript reducer", () => {
     expect(fold([...pending, blocks("stop,", "change of plan")])).toEqual(
       activity({
         lastMovedAt: at(2),
-        runSince: null,
+        runPending: true,
         named: { "/home/user/repo/README.md": at(0, 1) },
         lines: 3,
       }),
@@ -285,7 +286,7 @@ describe("the transcript reducer", () => {
     expect(fold(lines.slice(0, 4))).toEqual(
       activity({ lastMovedAt: at(3, 1), turn: "ended", lines: 4 }),
     );
-    expect(fold(lines)).toEqual(activity({ lastMovedAt: at(9), runSince: null, lines: 5 }));
+    expect(fold(lines)).toEqual(activity({ lastMovedAt: at(9), runPending: true, lines: 5 }));
     expect(fold([said(at(0), "stop_sequence")])).toEqual(
       activity({ lastMovedAt: at(0), lines: 1 }),
     );
@@ -312,7 +313,7 @@ describe("the transcript reducer", () => {
       prompt: notice("b9z8y7x6w", "failed"),
     });
     expect(fold([...launch, ...movedOut, formA, formB])).toEqual(
-      activity({ lastMovedAt: at(6), runSince: null, lines: 6 }),
+      activity({ lastMovedAt: at(6), runPending: true, lines: 6 }),
     );
   });
 
@@ -325,11 +326,11 @@ describe("the transcript reducer", () => {
       prompt: notice("b1a2b3c4d"),
     });
     expect(fold([...ended, formB])).toEqual(
-      activity({ lastMovedAt: at(6), runSince: null, lines: 4 }),
+      activity({ lastMovedAt: at(6), runPending: true, lines: 4 }),
     );
     const formA = userText(at(6), notice("b1a2b3c4d"), { kind: "task-notification" });
     expect(fold([...ended, formA])).toEqual(
-      activity({ lastMovedAt: at(6), runSince: null, lines: 4 }),
+      activity({ lastMovedAt: at(6), runPending: true, lines: 4 }),
     );
   });
 
@@ -622,7 +623,7 @@ describe("the transcript reducer", () => {
       ];
       const both = `${notice("b1a2b3c4d")}\n${notice("b9z8y7x6w", "failed")}`;
       expect(fold([...twoJobs, userText(at(5), both)])).toEqual(
-        activity({ lastMovedAt: at(5), runSince: null, lines: 5 }),
+        activity({ lastMovedAt: at(5), runPending: true, lines: 5 }),
       );
       const blocks: Line = {
         ...envelope("user", at(5)),
@@ -635,7 +636,7 @@ describe("the transcript reducer", () => {
         },
       };
       expect(fold([...twoJobs, blocks])).toEqual(
-        activity({ lastMovedAt: at(5), runSince: null, lines: 5 }),
+        activity({ lastMovedAt: at(5), runPending: true, lines: 5 }),
       );
       // The harness writes each queued item as its own block, so a notice beside an envelope is a
       // teammate's words: the idle envelope still finishes its sender, the notice counts for nothing.
@@ -660,7 +661,7 @@ describe("the transcript reducer", () => {
       expect(interrupted).toEqual(
         activity({
           lastMovedAt: at(3),
-          runSince: null,
+          runPending: true,
           jobs: { b1a2b3c4d: { at: at(0, 1) } },
           named: { "/home/user/repo/README.md": at(2) },
           lines: 4,
@@ -671,7 +672,7 @@ describe("the transcript reducer", () => {
       expect(fold([...twoJobs, userText(at(5), `${notice("b1a2b3c4d")}\n${quotedB}`)])).toEqual(
         activity({
           lastMovedAt: at(5),
-          runSince: null,
+          runPending: true,
           jobs: { b1a2b3c4d: { at: at(0, 1) }, b9z8y7x6w: { at: at(1, 1) } },
           lines: 5,
         }),
@@ -860,9 +861,12 @@ describe("the transcript reducer", () => {
       pending: { toolu_01: { tool: "Bash", at: at(3), taskId: null } },
     };
     expect(normalizeTranscript({ ...saved, state: withoutTimeout })).toEqual(initialTranscript());
-    // An activity saved before `runSince` cannot say whether a finished child ran again: replayed too.
+    // An activity saved before `runSince`, or before `runPending`, cannot say whether a finished child
+    // ran again: replayed too.
     const { runSince: _runSince, ...withoutRun } = saved.state;
     expect(normalizeTranscript({ ...saved, state: withoutRun })).toEqual(initialTranscript());
+    const { runPending: _runPending, ...withoutPending } = saved.state;
+    expect(normalizeTranscript({ ...saved, state: withoutPending })).toEqual(initialTranscript());
 
     const kept = normalizeTranscript({
       cursor: { offset: 4096 },
@@ -980,12 +984,36 @@ describe("the transcript reducer", () => {
       toolResult(at(11, 1), "toolu_stop"),
       userText(at(22), notice(CHILD_C)),
       userText(at(23), idle("builder-b")),
+      // A queued notice read later keeps its enqueue time: an older stamp never moves the finish back.
+      attachment(at(10), {
+        type: "queued_command",
+        commandMode: "task-notification",
+        prompt: notice(CHILD_C),
+      }),
     ]);
     expect(finishedTwice.children[CHILD_C]).toMatchObject({
       outcome: "finished",
       finishedAt: at(22),
     });
     expect(finishedTwice.children[CHILD_B]).toMatchObject({ outcome: "stopped", finishedAt: null });
+  });
+
+  test("the run start is the first assistant line after an input and holds across a later input with no line after it yet, so an input alone never erases a run that began after a finish", () => {
+    const lines = [
+      toolUse(at(0), "toolu_01", "Bash", { command: "bun test" }),
+      toolResult(at(1), "toolu_01"),
+      userText(at(5), "carry on"),
+      toolUse(at(6), "toolu_02", "Bash", { command: "bun test" }),
+      toolResult(at(6, 1), "toolu_02"),
+      userText(at(8), "and this too"),
+    ];
+    expect(fold(lines)).toMatchObject({ runSince: at(6), runPending: true });
+    expect(fold([...lines, toolUse(at(9), "toolu_03", "Read", { file_path: "/x" })])).toMatchObject(
+      {
+        runSince: at(9),
+        runPending: false,
+      },
+    );
   });
 
   test("timestamps are not monotonic (a queued attachment keeps its enqueue time), and lastMovedAt never moves backwards", () => {

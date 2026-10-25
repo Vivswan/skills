@@ -760,6 +760,14 @@ describe("fleet-events.mts", () => {
       ...exchange(ago(13), "toolu_c1", C),
       said(ago(13), null, C),
     ]);
+    // D the same, then a second message with no line after it: the run that began after the finish stands.
+    const pathD = writeAgent(session, D, { description: "read it", agentType: "fork" }, [
+      ...exchange(ago(70), "toolu_d0", D),
+      said(ago(61), "end_turn", D),
+      userText(ago(20), "also read the header", D),
+      ...exchange(ago(20), "toolu_d1", D),
+      userText(ago(15), "and the footer", D),
+    ]);
     const launched = (id: string, agentId: string, description: string): Line[] => [
       toolUse(ago(30), id, "Agent", { description, subagent_type: "fork", prompt: "go" }, null),
       toolResult(ago(30), id, {
@@ -772,7 +780,8 @@ describe("fleet-events.mts", () => {
       ...launched("toolu_spawn_a", A, "audit it"),
       ...launched("toolu_spawn_b", B, "build it"),
       ...launched("toolu_spawn_c", C, "check it"),
-      userText(ago(60), notice(C), null),
+      ...launched("toolu_spawn_d", D, "read it"),
+      userText(ago(60), `${notice(C)}\n${notice(D)}`, null),
       userText(ago(11), notice(A), null),
     ]);
     await s.start({ inbox: box.path });
@@ -782,14 +791,16 @@ describe("fleet-events.mts", () => {
       ["note", "agent audit it: ended 12 min ago, report received", fileUrl(pathA)],
       ["alert", "agent build it: stuck 12 min mid-turn, nothing pending", fileUrl(pathB)],
       ["alert", "agent check it: stuck 13 min mid-turn, nothing pending", fileUrl(pathC)],
+      ["alert", "agent read it: stuck 15 min mid-turn, nothing pending", fileUrl(pathD)],
     ]);
     expect(standing(s, box.path)).toEqual([
       "agent build it: stuck 12 min mid-turn, nothing pending",
       "agent check it: stuck 13 min mid-turn, nothing pending",
+      "agent read it: stuck 15 min mid-turn, nothing pending",
     ]);
     // Nothing more is said of the finished fork as it ages: no 20-minute repeat.
     expect(polled(s, box.path)).toBe(0);
-    expect(rows(s)).toHaveLength(3);
+    expect(rows(s)).toHaveLength(4);
     s.stop({ inbox: box.path });
   }, 30000);
 

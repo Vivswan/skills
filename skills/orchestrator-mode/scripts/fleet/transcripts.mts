@@ -79,8 +79,10 @@ export interface Child {
 /** What an agent's transcript says it is doing. `lastMovedAt` is the newest timestamp seen, floored by the file's mtime once read from disk. */
 export interface Activity {
   lastMovedAt: string | null;
-  /** When the newest run began: the first assistant line after the newest input (a user text, a queued notice); null while none has followed it. */
+  /** When the newest run began: the first assistant line after an input (a user text, a queued notice); null before any assistant line. */
   runSince: string | null;
+  /** Whether an input arrived with no assistant line after it yet: the next one begins a new run. */
+  runPending: boolean;
   turn: "open" | "ended";
   pending: Record<string, PendingCall>;
   jobs: Record<string, Job>;
@@ -190,6 +192,7 @@ function initialActivity(): Activity {
   return {
     lastMovedAt: null,
     runSince: null,
+    runPending: true,
     turn: "open",
     pending: {},
     jobs: {},
@@ -309,7 +312,10 @@ function finishChild(state: Activity, taskId: string, at: string): void {
   const child = id === undefined ? undefined : state.children[id];
   if (child === undefined || child.outcome === "stopped") return;
   child.outcome = "finished";
-  child.finishedAt = at;
+  // A queued notice keeps its enqueue time, so one read later may be stamped earlier: the finish is the latest.
+  if (child.finishedAt === null || Date.parse(at) > Date.parse(child.finishedAt)) {
+    child.finishedAt = at;
+  }
 }
 
 function finishTask(state: Activity, taskId: string, at: string): void {
@@ -344,7 +350,10 @@ function stopTask(state: Activity, taskId: string, at: string): void {
 // One line per content block, and only the message's last block carries the real stop_reason:
 // the others say null, which keeps the turn open until the final block says end_turn.
 function reduceAssistant(state: Activity, line: Record<string, unknown>, at: string): void {
-  if (state.runSince === null) state.runSince = at;
+  if (state.runPending) {
+    state.runSince = at;
+    state.runPending = false;
+  }
   const message = record(line.message);
   state.turn = message?.stop_reason === "end_turn" ? "ended" : "open";
 
@@ -371,7 +380,7 @@ function reduceAssistant(state: Activity, line: Record<string, unknown>, at: str
 // abandoned. Notices are not interruptions: they are queued and delivered between turns, one block
 // per text, and every one in a pure notice block counts (noticeIdsOf above).
 function reduceInjected(state: Activity, texts: string[], at: string): void {
-  state.runSince = null;
+  state.runPending = true;
   let notices = 0;
   for (const text of texts) {
     const tasks = noticeIdsOf(text);
@@ -456,7 +465,7 @@ function reduceAttachment(state: Activity, line: Record<string, unknown>, at: st
 
   // A notice is the turn's input in this form as in the user-line form: the turn it lands in is open.
   state.turn = "open";
-  state.runSince = null;
+  state.runPending = true;
   for (const taskId of noticeIdsOf(str(attachment.prompt) ?? "")) finishTask(state, taskId, at);
 }
 
@@ -629,7 +638,7 @@ function normalizeNamed(value: unknown): Record<string, string> {
   );
 }
 
-/** A saved activity: `stops`, a child's `since` and `finishedAt`, `runSince`, and `named` came later and take their defaults; a shape no version wrote is null. */
+/** A saved activity: `stops`, a child's `since` and `finishedAt`, `runSince` and `runPending`, and `named` came later and take their defaults; a shape no version wrote is null. */
 export function normalizeActivity(value: unknown): Activity | null {
   const saved = record(value);
   if (saved === null) return null;
@@ -641,6 +650,7 @@ export function normalizeActivity(value: unknown): Activity | null {
   return {
     lastMovedAt: str(saved.lastMovedAt),
     runSince: str(saved.runSince),
+    runPending: saved.runPending === true,
     turn: saved.turn === "ended" ? "ended" : "open",
     pending,
     jobs,
@@ -661,13 +671,15 @@ export function normalizeTranscript(value: unknown): Transcript | null {
   if (cursor === null || offset === null || state === null) return null;
   // The version that added `stops` also stopped moving a resumed child's `at` to the message, so
   // an older activity's `at` values are not the spawn times the name lookup needs; the one that
-  // added a pending call's `timeoutMs` reads it off the call; the one that added `runSince` and a
-  // child's `finishedAt` reads both off lines already consumed. Each older shape replays the file.
+  // added a pending call's `timeoutMs` reads it off the call; the ones that added `runSince`, then
+  // `runPending`, and a child's `finishedAt` read them off lines already consumed. Each older shape
+  // replays the file.
   const activity = record(saved?.state);
   const calls = Object.values(record(activity?.pending) ?? {});
   if (
     activity?.stops === undefined ||
     activity.runSince === undefined ||
+    activity.runPending === undefined ||
     calls.some((call) => record(call)?.timeoutMs === undefined)
   ) {
     return initialTranscript();

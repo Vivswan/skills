@@ -358,7 +358,8 @@ function jobEnded(path: string, io: Io): boolean {
 // A finish closes the run it reached the parent in. A message from a sibling resumes the agent in
 // its own transcript alone (the sender's map moves, the parent's does not), so a run begun after
 // the finish is judged on its own. The run's start is its first assistant line, stamped when
-// written; an input's own stamp can be its enqueue time, well behind.
+// written; an input's own stamp can be its enqueue time, well behind, and an input still waiting
+// for its first line leaves the known start in place.
 function finishHolds(child: Child, state: Activity): boolean {
   if (child.outcome !== "finished") return false;
   if (child.finishedAt === null || state.runSince === null) return true;
