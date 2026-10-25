@@ -64,10 +64,15 @@ Use this skill when someone asks for:
   - Speculative hardening (hostile callers that cannot reach the code, races in single-user tools, deadlines already bounded by an outer timeout, defensive checks for inputs the code never receives) is listed under a `Recorded, not built` heading, never as a finding. It stays unbuilt unless the user asks for it.
 
     In a repository with outside users or a hostile-input surface (a published package, a public service), or when the user asks, it is instead surfaced to the user and built only after they confirm (step 6). A small, obvious hardening that rides along in the change under review (an exit-code check beside a version check) is fine to keep. The reviewer must not propose a wider one to replace it.
-- Fold in criteria from **companion skills**: for EVERY installed skill that declares a `## Review Criteria` section in its SKILL.md, expand that section into the reviewer prompt. Triage the resulting findings with that skill's own workflow. One exception: on someone else's PR, the `/reply-and-review-discipline` skill's lens choice names which sections are expanded.
-  - There is no registry. Declaring the section is what makes a skill part of the review. In this collection, `/no-invalid-states`, `/code-standards`, `/never-twice`, and `/verify-with-controls` declare it.
-  - Enumerate participants by grepping installed skills, e.g. `grep -rlE '^## Review Criteria' ~/.claude/skills/*/SKILL.md .claude/skills/*/SKILL.md 2>/dev/null` (adjust the paths to wherever your harness installs skills).
-  - A skill whose criteria only apply in a specific context names its heading differently (e.g. `## <Context> Review Criteria`) and folds its own criteria into the reviews it launches itself.
+- **Companion skills' criteria ride in by the script, never from memory.** A launch through `scripts/run-review.mts` appends a `## Companion review criteria` section naming the page of every installed skill of this collection that declares `## Review Criteria`, one line each with its real path, and tells the reviewer to read and apply each. Triage the resulting findings with that skill's own workflow.
+  - The collection is what the installer recorded: in every record naming this skill (each `skills-lock.json` above the skills directory, and the global `.skill-lock.json`), the skills under the same source as this skill's. A checkout of the repository counts what its plugin manifest lists. Another collection's skill never rides in by default, even when it declares the heading. No record at all is said on stderr, never silent.
+  - A review through a dedicated tool (step 1) never passes the launcher, so its prompt gets the same block pasted from `bun "<skill-dir>/scripts/run-review.mts" criteria`.
+  - A skill marked user-invoke-only (`disable-model-invocation: true` in its frontmatter) is never appended by default, since automatic folding is a model invocation; it rides in only when `--criteria` names it.
+
+  Specimen: a lead's fifteen briefs pointed builders at the prompt template and never said "expand code-standards"; about thirty rounds in one day passed closure factories and paragraph comments the house rules forbid.
+  - There is no registry: the installer's record and the top-level heading decide. A context-specific `## <Context> Review Criteria` is not picked up: that skill folds its own criteria into the reviews it launches itself. The pages are named, never pasted, so the prompt stays short and the reviewer reads each skill's own words.
+  - `--criteria <name>[,<name>]` names the given skills alone, any installed one that declares the heading, for the one exception: someone else's PR, where the `/reply-and-review-discipline` skill's lens choice names them. `--criteria none` appends nothing. A name that declares no section is a usage error naming the ones that do.
+  - The report's `criteria` field lists the names that went in, so a converged report can cite its rubric (step 7).
 - Ask for **prioritized** findings (blocking vs non-blocking), and ask it to say so plainly if the code is correct. This keeps re-reviews terminable.
 - The report is one JSON object: `blocking` and `non_blocking` arrays of `{where, claim, evidence}`, a `recorded_not_built` string array, and a `summary`. Paste the report-format block from the template. The script enforces the shape for codex and claude through `scripts/verdict-schema.json`, and copilot has only the prompt to go on.
 - If the user has already declined or reverted something in this thread, add a short `Already decided / out of scope` section so the reviewer does not keep re-raising it.
@@ -89,11 +94,16 @@ This skill ships `scripts/run-review.mts` (the path is relative to the installed
 `bun "<skill-dir>/scripts/run-review.mts" --help`:
 
 ```text usage=skills/rubber-duck-review/scripts/run-review.mts
-usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>]
+usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>] [--criteria <names>|none]
        run-review.mts <codex|claude|copilot> --extract <output-file>
        run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)
-       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>]  (internal)
+       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)
        run-review.mts prepare <section>
+       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)
+the prompt gets a '## Companion review criteria' section naming the SKILL.md of every installed skill of this collection (the installer's
+  records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',
+  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;
+  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names
 scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones
 codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir
 a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s
@@ -140,6 +150,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - `--stdin-prompt` (codex/claude only): add it if the environment rejects the prompt as a command argument, or the prompt is very large. The prompt file itself is served as the reviewer's stdin.
 
   A file fd is EOF-terminated, so it cannot hang. The stdin hang trap is an open pipe, not a used stdin.
+- `--criteria <name>[,<name>]` or `--criteria none`: which installed skills' Review Criteria pages the launcher names in the prompt (step 3). Absent, this collection's declaring skills.
 - `--stall <seconds>` (default 900): how long the captured stream may stay silent before the launcher kills the reviewer and its process group and fails the review as stalled. Every byte on stdout or stderr resets it, so a slow review that keeps talking is never a stall. Raise it for a reviewer that prints nothing until the end (copilot) on a very large change.
 - Foreground (the default) blocks until the reviewer exits, so give the tool call a generous explicit timeout. Subagents (worktree builders, spawned workers) run the launch foreground under one, or `--background` and then wait in bounded foreground calls (step 5): a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
 - `--background` prints exactly two lines, `output-file: <path>` and `pid: <n>`.
@@ -147,7 +158,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 5); a subagent uses it for a review that may outlast one foreground call, with step 5's bounded waits.
   - Killing that PID cancels the review (the signal is forwarded to the reviewer and its process group).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line; the codex copy mode adds its notice first). Silence in between is normal. A real review can take a while.
-- Runtime: `bun`. `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
+- Runtime: `bun` (the frontmatter read uses its YAML parser).
 - Exit codes: the `exits:` lines of the usage block above. Step 5 says what to do on each.
 - The shipped script and these citations (the reviewer invocations, the flags, the failure verdict) are kept in sync upstream, and the usage block is held equal to the script by a test there. Where they disagree, trust the script and report the drift.
 
@@ -159,6 +170,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - `verdict.summary`: what was reviewed and how. Treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes.
   - `tool_calls`, `trajectory`: how many reads and commands preceded the verdict, and a compact row per reviewer step. A verdict whose trajectory shows a single `git diff` and no reads of the changed files is a weak review. Sharpen the prompt (name the files) and relaunch.
   - `capture`: the full reviewer stream, kept for 24 hours. Read it when a finding or the summary looks off and you want the exact reviewer message.
+  - `criteria`: the skills whose Review Criteria pages the launcher named, `[]` under `--criteria none`. The prompt snapshot beside the capture holds the text as sent.
 - **Exit 1** (`review FAILED - relaunch`): that is no review at all, never a clean pass. Relaunch it.
 
   It means the reviewer was killed as stalled, the stream was empty, cut mid-turn, truncated on its final line, held a failed turn or an error with no verdict after it, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. While the captured stream still exists, the failure message names its path.
@@ -230,7 +242,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   That convergence IS the gate: nothing commits or lands until the review has converged on the exact final content of the change being landed. At commit time that is the staged diff, since Git commits the index, not the tree. At merge time it is the branch or PR diff.
 
   This is the single definition of review convergence. Skills that gate on it (e.g. `/pr-landing-discipline`'s Converged) point here rather than restating it.
-- **A converged report names the rubric it ran against:** the prompt file's path, or a one-line digest of its criteria and its `Already decided` list. Instructions move mid-run, and a lead reading "converged" needs to see which version it converged on.
+- **A converged report names the rubric it ran against:** the prompt file's path, or a one-line digest of its criteria (the report's `criteria` list plus the prompt's own) and its `Already decided` list. Instructions move mid-run, and a lead reading "converged" needs to see which version it converged on.
 
   Specimen: three builders reported "converged" against a rubric the owner had superseded while their rounds ran; nothing in their reports showed it. One line per report would have.
 

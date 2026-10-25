@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   linkSync,
   lstatSync,
@@ -38,6 +39,36 @@ const SCHEMA = join(ROOT, "skills", "rubber-duck-review", "scripts", "verdict-sc
 
 // Prompt content that a shell would mangle: proves no shell ever sees it.
 const PROMPT = "Review only.\nRun `git --no-pager diff HEAD` and note $(hostname) stays literal.\n";
+
+const SKILLS_ROOT = join(ROOT, "skills");
+
+/** The skills under `root` whose page carries the `## Review Criteria` heading, in directory
+ * order, each with its page's real path, read from the files and never from a pasted copy. */
+function declaringSkills(root: string): { name: string; page: string }[] {
+  const found: { name: string; page: string }[] = [];
+  for (const name of readdirSync(root).sort()) {
+    const page = join(root, name, "SKILL.md");
+    if (!existsSync(page)) continue;
+    if (/^## Review Criteria[^\S\n]*$/m.test(readFileSync(page, "utf-8"))) {
+      found.push({ name, page: realpathSync(page) });
+    }
+  }
+  return found;
+}
+
+/** The block the reviewer must receive after the caller's prompt: the pages to read, one line each. */
+function companionBlock(skills: { name: string; page: string }[]): string {
+  if (skills.length === 0) return "";
+  const pages = skills.map(({ name, page }) => `- ${name}: ${page}`);
+  return `## Companion review criteria\nRead the \`## Review Criteria\` section of each page below and apply it as part of this review:\n${pages.join("\n")}\n`;
+}
+
+/** The prompt as the reviewer must receive it: the caller's text, then the companion section. */
+function withCompanion(prompt: string, skills = declaringSkills(SKILLS_ROOT)): string {
+  if (skills.length === 0) return prompt;
+  return `${prompt.trimEnd()}\n\n${companionBlock(skills)}`;
+}
+const FULL_PROMPT = withCompanion(PROMPT);
 
 const BIG_VERDICT_BYTES = 262144;
 
@@ -360,17 +391,24 @@ interface Report {
   tool_calls: number;
   capture: string;
   sandbox?: "copy";
+  criteria: string[];
   trajectory: { event: string; text?: string }[];
 }
 
 let scenario = 0;
-function run(args: string[], env: Record<string, string> = {}, path?: string, cwd?: string) {
+function run(
+  args: string[],
+  env: Record<string, string> = {},
+  path?: string,
+  cwd?: string,
+  script: string = SCRIPT,
+) {
   scenario += 1;
   const violations = join(binDir, `violations-${scenario}`);
   const promptCopy = join(binDir, `prompt-copy-${scenario}`);
   // process.execPath is absolute, so the script launches even when PATH is
   // reduced to the stub dir (the missing-binary scenario).
-  const result = Bun.spawnSync([process.execPath, SCRIPT, ...args], {
+  const result = Bun.spawnSync([process.execPath, script, ...args], {
     cwd,
     env: {
       ...process.env,
@@ -539,7 +577,7 @@ describe("run-review.mts", () => {
     expect(report.trajectory[3]?.event).toBe("agent_message");
     expect(report.trajectory[3]?.text).toMatch(/^\{"blocking":\[\].*\.\.\.$/);
     expect(report.trajectory).toHaveLength(4);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
     const statusLines = r.stderr.split("\n").filter(Boolean);
     expect(statusLines).toEqual(["review stream alive", "reviewer exited (status=0)"]);
   });
@@ -552,7 +590,7 @@ describe("run-review.mts", () => {
     // The StructuredOutput call delivers the answer; only Bash is a review step.
     expect(report.tool_calls).toBe(1);
     expect(report.trajectory.map((row) => row.event)).toEqual(["text", "tool_use", "result"]);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
   });
 
   test("claude: a result string carrying the object is the verdict when structured_output is absent", () => {
@@ -566,7 +604,7 @@ describe("run-review.mts", () => {
       const r = run(["copilot", promptFile], { STUB_MODE: mode });
       expect(r.code, mode).toBe(0);
       expect(r.report().verdict, mode).toEqual(COPILOT_VERDICT);
-      expect(readFileSync(r.promptCopy, "utf-8"), mode).toBe(PROMPT);
+      expect(readFileSync(r.promptCopy, "utf-8"), mode).toBe(FULL_PROMPT);
     }
   });
 
@@ -639,7 +677,7 @@ describe("run-review.mts", () => {
       const r = run([tool, promptFile, "--stdin-prompt"]);
       expect(r.code, tool).toBe(0);
       expect(r.report().verdict, tool).toEqual(verdict);
-      expect(readFileSync(r.promptCopy, "utf-8"), tool).toBe(PROMPT);
+      expect(readFileSync(r.promptCopy, "utf-8"), tool).toBe(FULL_PROMPT);
     }
   });
 
@@ -654,7 +692,7 @@ describe("run-review.mts", () => {
     writeFileSync(hugePrompt, hugeContent);
     const r = run(["codex", hugePrompt, "--stdin-prompt"]);
     expect(r.code).toBe(0);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(hugeContent);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(withCompanion(hugeContent));
   });
 
   test("a reviewer that ignores its stdin prompt file cannot hang or crash the run", () => {
@@ -1605,6 +1643,321 @@ describe("run-review.mts", () => {
     }
   });
 
+  test("the launcher names this collection's declaring skills' pages in the prompt, so a prompt cannot omit their criteria", () => {
+    const declaring = declaringSkills(SKILLS_ROOT);
+    const r = run(["codex", promptFile]);
+    expect(r.code).toBe(0);
+    expect(r.report().criteria).toEqual(declaring.map((skill) => skill.name));
+    const delivered = readFileSync(r.promptCopy, "utf-8");
+    expect(delivered.startsWith(PROMPT.trimEnd())).toBe(true);
+    expect(delivered).toBe(FULL_PROMPT);
+  });
+
+  test("the criteria subcommand prints the block a launch appends, so a review through a dedicated tool pastes the same text", () => {
+    const launched = run(["codex", promptFile]);
+    expect(launched.code).toBe(0);
+    const delivered = readFileSync(launched.promptCopy, "utf-8");
+    const block = delivered.slice(`${PROMPT.trimEnd()}\n\n`.length);
+    expect(block.startsWith("## Companion review criteria\n")).toBe(true);
+    const printed = run(["criteria"]);
+    expect(printed.code).toBe(0);
+    expect(printed.stdout).toBe(block);
+    const none = run(["criteria", "--criteria", "none"]);
+    expect(none.code).toBe(0);
+    expect(none.stdout).toBe("");
+    const only = run(["criteria", "--criteria", "code-standards"]);
+    expect(only.code).toBe(0);
+    expect(only.stdout).toBe(
+      companionBlock(declaringSkills(SKILLS_ROOT).filter((s) => s.name === "code-standards")),
+    );
+    expectFailure(run(["criteria", "--criteria", "rubber-duck-review"]), {
+      code: 2,
+      stderr: "--criteria: rubber-duck-review declares no ## Review Criteria",
+    });
+  });
+
+  test("--criteria none sends the caller's prompt unchanged and reports an empty criteria list", () => {
+    const r = run(["codex", promptFile, "--criteria", "none"]);
+    expect(r.code).toBe(0);
+    expect(r.report().criteria).toEqual([]);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+  });
+
+  test("--criteria <name> names that skill's page alone, for the lens choice on someone else's PR", () => {
+    const only = declaringSkills(SKILLS_ROOT).filter((skill) => skill.name === "code-standards");
+    const r = run(["codex", promptFile, "--criteria", "code-standards"]);
+    expect(r.code).toBe(0);
+    expect(r.report().criteria).toEqual(["code-standards"]);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(withCompanion(PROMPT, only));
+  });
+
+  test("--criteria naming a skill that declares no section is a usage error that names the ones that do", () => {
+    const declaring = declaringSkills(SKILLS_ROOT).map((skill) => skill.name);
+    expectFailure(run(["codex", promptFile, "--criteria", "code-standards,rubber-duck-review"]), {
+      code: 2,
+      stderr: `--criteria: rubber-duck-review declares no ## Review Criteria; the installed skills that do: ${declaring.join(", ")}`,
+    });
+    expectFailure(run(["codex", "--extract", "--criteria", "none", pendingCapture()]), {
+      code: 2,
+      stderr: "--criteria applies only to a launch",
+    });
+  });
+
+  /** A scratch install: this skill copied whole under <base>/skills (the script finds its root
+   * through its own real path), beside the siblings the case needs. The run uses the copy's script,
+   * so the stub is told the copy's schema path. */
+  function scratchInstall(
+    base: string,
+    rootUnderBase = "skills",
+    extraEnv: Record<string, string> = {},
+  ): {
+    launch: (...args: string[]) => ReturnType<typeof run>;
+    print: (...args: string[]) => ReturnType<typeof run>;
+    page: (name: string) => string;
+  } {
+    const root = join(base, rootUnderBase);
+    mkdirSync(root, { recursive: true });
+    cpSync(join(SKILLS_ROOT, "rubber-duck-review"), join(root, "rubber-duck-review"), {
+      recursive: true,
+    });
+    const sibling = (name: string, page: string) => {
+      mkdirSync(join(root, name));
+      writeFileSync(join(root, name, "SKILL.md"), page);
+    };
+    // A heading with trailing spaces is still the heading, and a fence opener quoted in the
+    // frontmatter's description hides nothing in the body.
+    sibling(
+      "alpha",
+      "---\nname: alpha\ndescription: |\n  Use when a page shows:\n  ```markdown\n---\n# Alpha\n\n## Review Criteria  \n\n- an alpha rule\n\n## After\n\nnot criteria\n",
+    );
+    // A context-specific heading is not the heading.
+    sibling("beta", "# Beta\n\n## Landing Review Criteria\n\n- a beta rule\n");
+    // A page saved with CRLF endings still declares the heading.
+    sibling("gamma", "# Gamma\r\n\r\n## Review Criteria\r\n\r\n- a gamma rule\r\n");
+    // User-invoke-only, the marker in a YAML form a line regex would miss: named or nothing.
+    sibling(
+      "delta",
+      "---\nname: delta\ndescription: Use when asked by name.\ndisable-model-invocation : true # explicit only\n---\n\n# Delta\n\n## Review Criteria\n\n- a delta rule\n",
+    );
+    // Declares the heading but was installed from another collection.
+    sibling("epsilon", "# Epsilon\n\n## Review Criteria\n\n- a foreign rule\n");
+    // The heading only inside a code fence is a sample, not a declaration.
+    sibling("zeta", "# Zeta\n\n```md\n## Review Criteria\n```\n");
+    // So is the heading only inside a quoted example.
+    sibling("eta", "# Eta\n\n> ## Review Criteria\n>\n> - a quoted rule\n");
+    // The heading only inside the frontmatter's description is not in the body at all.
+    sibling(
+      "theta",
+      "---\nname: theta\ndescription: |\n  Use when checking pages containing:\n  ## Review Criteria\n---\n# Sample\n",
+    );
+    const scripts = join(root, "rubber-duck-review", "scripts");
+    const script = join(scripts, "run-review.mts");
+    const env = { STUB_SCHEMA: realpathSync(join(scripts, "verdict-schema.json")), ...extraEnv };
+    return {
+      launch: (...args) => run(["codex", promptFile, ...args], env, undefined, undefined, script),
+      print: (...args) => run(["criteria", ...args], extraEnv, undefined, undefined, script),
+      page: (name) => realpathSync(join(root, name, "SKILL.md")),
+    };
+  }
+
+  /** The installer's record: every name under one source, spelled as the installer may spell it. */
+  function lockfile(entries: Record<string, string>, sourceType = "github", version = 3): string {
+    const skills = Object.fromEntries(
+      Object.entries(entries).map(([name, source]) => [name, { source, sourceType }]),
+    );
+    return JSON.stringify({ version, skills });
+  }
+
+  /** The one global record, where the skills CLI keeps it under $XDG_STATE_HOME. */
+  function globalRecord(base: string, content: string): Record<string, string> {
+    const state = join(base, "state");
+    mkdirSync(join(state, "skills"), { recursive: true });
+    writeFileSync(join(state, "skills", ".skill-lock.json"), content);
+    return { XDG_STATE_HOME: state };
+  }
+
+  test("by default the launcher names this collection's declaring pages alone: the installer's record decides the collection, a foreign or user-only skill rides in only when named, and a record left beside the root is not the record", () => {
+    const base = temp.dir("run-review-install-");
+    const env = globalRecord(
+      base,
+      lockfile({
+        "rubber-duck-review": "example/skills",
+        alpha: "Example/Skills",
+        gamma: "example/skills/",
+        delta: "example/skills.git",
+        epsilon: "other/collection",
+        eta: "example/skills",
+        theta: "example/skills",
+      }),
+    );
+    // An older record beside the root, from before XDG_STATE_HOME was set: the CLI reads only the XDG one.
+    writeFileSync(
+      join(base, ".skill-lock.json"),
+      lockfile({ "rubber-duck-review": "x/y", gamma: "x/y" }),
+    );
+    const install = scratchInstall(base, "skills", env);
+    const r = install.launch();
+    expect(r.code).toBe(0);
+    expect(r.report().criteria).toEqual(["alpha", "gamma"]);
+    const block = companionBlock([
+      { name: "alpha", page: install.page("alpha") },
+      { name: "gamma", page: install.page("gamma") },
+    ]);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(`${PROMPT.trimEnd()}\n\n${block}`);
+    expect(install.print().stdout).toBe(block);
+
+    for (const name of ["delta", "epsilon"]) {
+      const named = install.launch("--criteria", name);
+      expect(named.code).toBe(0);
+      expect(named.report().criteria).toEqual([name]);
+      const one = companionBlock([{ name, page: install.page(name) }]);
+      expect(readFileSync(named.promptCopy, "utf-8")).toBe(`${PROMPT.trimEnd()}\n\n${one}`);
+      expect(install.print("--criteria", name).stdout).toBe(one);
+    }
+
+    // eta is in the collection, and its only heading sits in a quoted example: it declares nothing.
+    expectFailure(install.launch("--criteria", "eta"), {
+      code: 2,
+      stderr:
+        "--criteria: eta declares no ## Review Criteria; the installed skills that do: alpha, delta, epsilon, gamma",
+    });
+  });
+
+  test("a checkout of the repository is its plugin manifest listing this skill, and the collection is what the manifest lists; another plugin's manifest beside the root is not a checkout, and a root with no record names nothing, out loud", () => {
+    const checkout = temp.dir("run-review-checkout-");
+    mkdirSync(join(checkout, ".claude-plugin"));
+    const manifest = (skills: string[]) =>
+      writeFileSync(join(checkout, ".claude-plugin", "plugin.json"), JSON.stringify({ skills }));
+    manifest([
+      "./skills/rubber-duck-review",
+      "./skills/alpha",
+      "./skills/gamma",
+      "./skills/delta",
+      "./skills/eta",
+      "./skills/theta",
+    ]);
+    const inCheckout = scratchInstall(checkout).launch();
+    expect(inCheckout.code).toBe(0);
+    expect(inCheckout.report().criteria).toEqual(["alpha", "gamma"]);
+
+    const strayBase = realpathSync(temp.dir("run-review-stray-"));
+    mkdirSync(join(strayBase, ".claude-plugin"));
+    writeFileSync(
+      join(strayBase, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ skills: ["./skills/other"] }),
+    );
+    const stray = scratchInstall(strayBase, "skills", {
+      XDG_STATE_HOME: join(strayBase, "state"),
+    }).launch();
+    expect(stray.code).toBe(0);
+    expect(stray.report().criteria).toEqual([]);
+    expect(readFileSync(stray.promptCopy, "utf-8")).toBe(PROMPT);
+    // Beside the launch's own progress lines: the notice names where it looked.
+    expect(stray.stderr).toContain(
+      `no companion criteria: no skills-lock.json from ${strayBase} upward names rubber-duck-review, nor ${join(strayBase, "state", "skills", ".skill-lock.json")}\n`,
+    );
+  });
+
+  test("a project install is recorded at the project's top as skills-lock.json, whatever depth the agent's directory sits at, local sources relative to it and a .git suffix kept; a copy under an agent's own directory is in the global record", () => {
+    // Two project layouts the skills CLI writes: <project>/.posit/assistant/skills and <project>/skills,
+    // both recorded in <project>/skills-lock.json (getLocalLockPath), local sources relative to the project.
+    for (const under of [join(".posit", "assistant", "skills"), "skills"]) {
+      const project = temp.dir("run-review-project-");
+      const inProject = scratchInstall(project, under, { XDG_STATE_HOME: join(project, "state") });
+      // The collection's directory, and a link to it: two spellings of one place.
+      mkdirSync(join(project, "vendor", "collection"), { recursive: true });
+      symlinkSync(join(project, "vendor", "collection"), join(project, "link"));
+      writeFileSync(
+        join(project, "skills-lock.json"),
+        lockfile(
+          {
+            "rubber-duck-review": "./vendor/collection",
+            alpha: "vendor/collection/",
+            gamma: "./link",
+            epsilon: "./vendor/collection.git",
+          },
+          "local",
+          1,
+        ),
+      );
+      const projectRun = inProject.launch();
+      expect(projectRun.code).toBe(0);
+      expect(projectRun.report().criteria).toEqual(["alpha", "gamma"]);
+    }
+
+    // ~/.claude/skills as a copy, recorded in $XDG_STATE_HOME/skills/.skill-lock.json (getSkillLockPath).
+    const home = temp.dir("run-review-home-");
+    const env = globalRecord(
+      home,
+      lockfile({ "rubber-duck-review": "example/skills", gamma: "example/skills" }),
+    );
+    const asCopy = scratchInstall(home, join(".claude", "skills"), env);
+    const copyRun = asCopy.launch();
+    expect(copyRun.code).toBe(0);
+    expect(copyRun.report().criteria).toEqual(["gamma"]);
+    expect(asCopy.print().stdout).toBe(
+      companionBlock([{ name: "gamma", page: asCopy.page("gamma") }]),
+    );
+
+    // The same copy under the home directory itself (HOME, no XDG), with a global record at ~/.agents
+    // and a project record from an install run from the home directory: no record says where it
+    // installed to, so every record naming this skill speaks for it, and both collections count.
+    const ownHome = realpathSync(temp.dir("run-review-ownhome-"));
+    mkdirSync(join(ownHome, ".agents"), { recursive: true });
+    writeFileSync(
+      join(ownHome, ".agents", ".skill-lock.json"),
+      lockfile({ "rubber-duck-review": "example/skills", alpha: "example/skills" }),
+    );
+    writeFileSync(
+      join(ownHome, "skills-lock.json"),
+      lockfile({ "rubber-duck-review": "x/y", gamma: "x/y" }),
+    );
+    const underHome = scratchInstall(ownHome, join(".claude", "skills"), {
+      HOME: ownHome,
+      XDG_STATE_HOME: "",
+    });
+    const homeRun = underHome.launch();
+    expect(homeRun.code).toBe(0);
+    expect(homeRun.report().criteria).toEqual(["alpha", "gamma"]);
+  });
+
+  test("a page whose frontmatter never closes is a usage error naming the page: read as a body, its metadata would declare criteria and its invocation policy would be lost", () => {
+    const base = realpathSync(temp.dir("run-review-openfm-"));
+    const env = globalRecord(base, lockfile({ "rubber-duck-review": "example/skills" }));
+    const install = scratchInstall(base, "skills", env);
+    const kappa = join(base, "skills", "kappa");
+    mkdirSync(kappa);
+    writeFileSync(
+      join(kappa, "SKILL.md"),
+      "---\nname: kappa\ndisable-model-invocation: true\ndescription: |\n  ## Review Criteria\n",
+    );
+    expectFailure(install.launch(), {
+      code: 2,
+      stderr: `the frontmatter of ${join(kappa, "SKILL.md")} never closes`,
+    });
+  });
+
+  test("a record that does not parse, or has no skills object, is a usage error naming the file, never a guess at the collection", () => {
+    const base = realpathSync(temp.dir("run-review-badlock-"));
+    const env = globalRecord(base, "{ not json");
+    const install = scratchInstall(base, "skills", env);
+    const lock = join(base, "state", "skills", ".skill-lock.json");
+    expectFailure(install.launch(), { code: 2, stderr: `cannot parse ${lock}:` });
+    writeFileSync(lock, JSON.stringify({ version: 3 }));
+    expectFailure(install.launch(), {
+      code: 2,
+      stderr: `${lock}: expected a "skills" object; the lockfile format has changed`,
+    });
+
+    // Opting out reads no record: the same broken record stops neither a launch nor the subcommand.
+    const optedOut = install.launch("--criteria", "none");
+    expect(optedOut.code).toBe(0);
+    expect(optedOut.report().criteria).toEqual([]);
+    expect(readFileSync(optedOut.promptCopy, "utf-8")).toBe(PROMPT);
+    const printedNone = install.print("--criteria", "none");
+    expect([printedNone.code, printedNone.stdout, printedNone.stderr]).toEqual([0, "", ""]);
+  });
+
   test("a reviewer silent past --stall is killed with its process group, the sleep it left behind included, and the run fails as a stall", () => {
     const pidFile = join(binDir, "stall-pids");
     const r = run(["codex", promptFile, "--stall", "1"], {
@@ -1686,7 +2039,8 @@ describe("run-review.mts", () => {
     expect(extracted.stderr).toBe("");
     expect(extracted.report().verdict).toEqual(CODEX_VERDICT);
     expect(extracted.report().capture).toBe(outputFile);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    expect(extracted.report().criteria).toEqual(declaringSkills(SKILLS_ROOT).map((s) => s.name));
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
     rmSync(dirname(outputFile), { recursive: true, force: true });
   }, 15000);
 
