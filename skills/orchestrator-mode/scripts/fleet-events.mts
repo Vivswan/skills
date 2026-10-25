@@ -24,6 +24,7 @@ import { attributeProcesses, type ProcessRow } from "./fleet/processes.mts";
 import { readTail } from "./fleet/transcript-tail.mts";
 import {
   type Activity,
+  type Child,
   displayName,
   initialTranscript,
   isStopped,
@@ -34,6 +35,7 @@ import {
   projectsRoot,
   readSidecar,
   readTranscript,
+  realPath,
   record,
   type Sidecar,
   sidecarOf,
@@ -353,16 +355,28 @@ function jobEnded(path: string, io: Io): boolean {
   }
 }
 
+// A finish closes the run it reached the parent in. A message from a sibling resumes the agent in
+// its own transcript alone (the sender's map moves, the parent's does not), so a run begun after
+// the finish is judged on its own. The run's start is its first assistant line, stamped when
+// written; an input's own stamp can be its enqueue time, well behind, and an input still waiting
+// for its first line leaves the known start in place.
+function finishHolds(child: Child, state: Activity): boolean {
+  if (child.outcome !== "finished") return false;
+  if (child.finishedAt === null || state.runSince === null) return true;
+  return Date.parse(state.runSince) <= Date.parse(child.finishedAt);
+}
+
 /**
  * Whether the agent's finish reached the one waiting on it: a spawned child is finished in its
- * parent's child map (an idle notification, a task notice); a foreground child's result closed the
- * parent's call that spawned it. Nothing read of the parent is no signal.
+ * parent's child map (an idle notification, a task notice) with no newer input of its own; a
+ * foreground child's result closed the parent's call that spawned it. Nothing read of the parent
+ * is no signal.
  */
 function signalReached(target: Target, agentId: string, entry: AgentEntry): boolean {
   const waiting = parentState(target, entry);
   if (waiting === undefined) return false;
   const child = waiting.children[agentId];
-  if (child !== undefined) return child.outcome === "finished";
+  if (child !== undefined) return finishHolds(child, entry.state);
   const call = entry.sidecar?.toolUseId ?? null;
   return call !== null && !Object.hasOwn(waiting.pending, call);
 }
@@ -371,7 +385,9 @@ function signalReached(target: Target, agentId: string, entry: AgentEntry): bool
  * What stands for one agent now, read off its transcript against the bounds: a stop, a stuck call
  * (past its own timeout plus the grace, or the plain bound), a child still past the bound, a job
  * whose output ended with no notice, a stall past `--quiet-after`, an ended turn past the grace;
- * else fine, which is moving or waiting within bounds.
+ * else fine, which is moving or waiting within bounds. A turn the transcript leaves open is over
+ * once the one waiting on the agent holds its finish: the harness omits the final stop reason
+ * when a hook closes the turn, and a completed fork is never a stall.
  */
 function situationOf(
   target: Target,
@@ -430,16 +446,13 @@ function situationOf(
   if (jobs.length > 0 || state.lastMovedAt === null) return { kind: "fine" };
 
   const stillMs = nowMs - Date.parse(state.lastMovedAt);
-  if (state.turn === "open") {
+  const signalled = signalReached(target, agentId, entry);
+  if (state.turn === "open" && !signalled) {
     if (stillMs < target.quietAfterMinutes * MINUTE_MS) return { kind: "fine" };
     return { kind: "stall", since: state.lastMovedAt };
   }
   if (stillMs < ENDED_GRACE_MINUTES * MINUTE_MS) return { kind: "fine" };
-  return {
-    kind: "ended",
-    since: state.lastMovedAt,
-    signalled: signalReached(target, agentId, entry),
-  };
+  return { kind: "ended", since: state.lastMovedAt, signalled };
 }
 
 function situationKey(situation: Situation): string {
@@ -740,14 +753,15 @@ function claimedWorktrees(
   nowMs: number,
 ): Set<string> {
   const claimed = new Set<string>();
-  const roots = paths.map((path) => resolve(path)).filter((root) => root !== resolve(repo));
+  const checkout = realPath(resolve(repo));
+  const roots = paths.map((path) => realPath(resolve(path))).filter((root) => root !== checkout);
   const claim = (named: string): void => {
     for (const root of roots) {
       if (named === root || named.startsWith(`${root}/`)) claimed.add(root);
     }
   };
   for (const entry of Object.values(target.agents)) {
-    if (entry.sidecar?.worktreePath) claimed.add(resolve(entry.sidecar.worktreePath));
+    if (entry.sidecar?.worktreePath) claimed.add(realPath(resolve(entry.sidecar.worktreePath)));
     for (const named of Object.keys(entry.state.named)) claim(named);
   }
   for (const [named, at] of Object.entries(target.lead.state.named)) {

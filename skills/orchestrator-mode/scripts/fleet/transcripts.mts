@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   type Stats,
   statSync,
 } from "node:fs";
@@ -71,11 +72,17 @@ export interface Child {
   readonly at: string;
   since: string;
   outcome: "running" | "finished" | "stopped";
+  /** When the finish reached this agent; null while the child runs, and for a finish saved before the time was kept. */
+  finishedAt: string | null;
 }
 
 /** What an agent's transcript says it is doing. `lastMovedAt` is the newest timestamp seen, floored by the file's mtime once read from disk. */
 export interface Activity {
   lastMovedAt: string | null;
+  /** When the newest run began: the first assistant line after an input (a user text, a queued notice); null before any assistant line. */
+  runSince: string | null;
+  /** Whether an input arrived with no assistant line after it yet: the next one begins a new run. */
+  runPending: boolean;
   turn: "open" | "ended";
   pending: Record<string, PendingCall>;
   jobs: Record<string, Job>;
@@ -146,6 +153,19 @@ export function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * `path` by its real form when it exists, as written when it does not. Git and the daemon name a
+ * worktree by its real path and an agent by the path it was given, and on macOS `/tmp` is a link
+ * to `/private/tmp`: a named worktree, or a file in it, must compare equal to the row read from git.
+ */
+export function realPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}
+
 function parseRecord(text: string): Record<string, unknown> | null {
   try {
     return record(JSON.parse(text));
@@ -171,6 +191,8 @@ function moveTo(state: Activity, at: string): void {
 function initialActivity(): Activity {
   return {
     lastMovedAt: null,
+    runSince: null,
+    runPending: true,
     turn: "open",
     pending: {},
     jobs: {},
@@ -199,7 +221,7 @@ function namedPathsIn(text: string, field: string): string[] {
 function namePaths(state: Activity, input: unknown, at: string, field = ""): void {
   if (typeof input === "string") {
     for (const named of namedPathsIn(input, field)) {
-      const path = resolve(named);
+      const path = realPath(resolve(named));
       delete state.named[path];
       state.named[path] = at;
       const paths = Object.keys(state.named);
@@ -281,15 +303,24 @@ function childOf(state: Activity, taskId: string): string | undefined {
 
 // An idle notification names its sender, and a resumed elder may share the name with a later
 // spawn: the running one is the sender.
-function finishChild(state: Activity, taskId: string): void {
-  const id = Object.hasOwn(state.children, taskId) ? taskId : childNamed(state, taskId, "running");
+// A finish lands on the running child of that name, else on the finished one: a child resumed by a
+// sibling (its own transcript moves, this map does not) finishes again under a newer notice.
+function finishChild(state: Activity, taskId: string, at: string): void {
+  const id = Object.hasOwn(state.children, taskId)
+    ? taskId
+    : (childNamed(state, taskId, "running") ?? childNamed(state, taskId, "finished"));
   const child = id === undefined ? undefined : state.children[id];
-  if (child?.outcome === "running") child.outcome = "finished";
+  if (child === undefined || child.outcome === "stopped") return;
+  child.outcome = "finished";
+  // A queued notice keeps its enqueue time, so one read later may be stamped earlier: the finish is the latest.
+  if (child.finishedAt === null || Date.parse(at) > Date.parse(child.finishedAt)) {
+    child.finishedAt = at;
+  }
 }
 
-function finishTask(state: Activity, taskId: string): void {
+function finishTask(state: Activity, taskId: string, at: string): void {
   delete state.jobs[taskId];
-  finishChild(state, taskId);
+  finishChild(state, taskId, at);
 }
 
 // Claude Code resumes a finished teammate when it is sent a message, from its own transcript. A
@@ -300,6 +331,7 @@ function resumeChild(state: Activity, taskId: string, at: string): void {
   if (child?.outcome !== "finished") return;
   child.outcome = "running";
   child.since = at;
+  child.finishedAt = null;
 }
 
 // TaskStop takes a job id, an agentId, or the name given at spawn. An id this file never launched
@@ -318,6 +350,10 @@ function stopTask(state: Activity, taskId: string, at: string): void {
 // One line per content block, and only the message's last block carries the real stop_reason:
 // the others say null, which keeps the turn open until the final block says end_turn.
 function reduceAssistant(state: Activity, line: Record<string, unknown>, at: string): void {
+  if (state.runPending) {
+    state.runSince = at;
+    state.runPending = false;
+  }
   const message = record(line.message);
   state.turn = message?.stop_reason === "end_turn" ? "ended" : "open";
 
@@ -343,13 +379,14 @@ function reduceAssistant(state: Activity, line: Record<string, unknown>, at: str
 // A text arriving while a call is pending reached the agent before any result could: the call was
 // abandoned. Notices are not interruptions: they are queued and delivered between turns, one block
 // per text, and every one in a pure notice block counts (noticeIdsOf above).
-function reduceInjected(state: Activity, texts: string[]): void {
+function reduceInjected(state: Activity, texts: string[], at: string): void {
+  state.runPending = true;
   let notices = 0;
   for (const text of texts) {
     const tasks = noticeIdsOf(text);
     const idle = idleTeammatesOf(text);
-    for (const taskId of tasks) finishTask(state, taskId);
-    for (const name of idle) finishChild(state, name);
+    for (const taskId of tasks) finishTask(state, taskId, at);
+    for (const name of idle) finishChild(state, name, at);
     notices += tasks.length + idle.length;
   }
   if (notices === 0) state.pending = {};
@@ -392,6 +429,7 @@ function reduceResults(
       at,
       since: at,
       outcome: "running",
+      finishedAt: null,
     };
   }
 }
@@ -402,7 +440,7 @@ function reduceUser(state: Activity, line: Record<string, unknown>, at: string):
   state.turn = "open";
   const content = record(line.message)?.content;
   if (typeof content === "string") {
-    reduceInjected(state, [content]);
+    reduceInjected(state, [content], at);
     return;
   }
   if (!Array.isArray(content)) return;
@@ -414,12 +452,12 @@ function reduceUser(state: Activity, line: Record<string, unknown>, at: string):
   }
 
   const texts = parts.map((part) => (part?.type === "text" ? (str(part.text) ?? "") : ""));
-  reduceInjected(state, texts);
+  reduceInjected(state, texts, at);
 }
 
 // A subagent's file sees a notice only as a queued_command attachment. Every other attachment is
 // noise, and a prompt_snapshot spells the tag names, so nothing else is searched.
-function reduceAttachment(state: Activity, line: Record<string, unknown>): void {
+function reduceAttachment(state: Activity, line: Record<string, unknown>, at: string): void {
   const attachment = record(line.attachment);
   if (attachment?.type !== "queued_command" || attachment.commandMode !== "task-notification") {
     return;
@@ -427,7 +465,8 @@ function reduceAttachment(state: Activity, line: Record<string, unknown>): void 
 
   // A notice is the turn's input in this form as in the user-line form: the turn it lands in is open.
   state.turn = "open";
-  for (const taskId of noticeIdsOf(str(attachment.prompt) ?? "")) finishTask(state, taskId);
+  state.runPending = true;
+  for (const taskId of noticeIdsOf(str(attachment.prompt) ?? "")) finishTask(state, taskId, at);
 }
 
 /**
@@ -451,7 +490,7 @@ export function reduce(state: Activity, line: Record<string, unknown>): Activity
       reduceUser(state, line, at);
       break;
     case "attachment":
-      reduceAttachment(state, line);
+      reduceAttachment(state, line, at);
       break;
     default:
       break;
@@ -576,7 +615,13 @@ function normalizeChild(value: unknown): Child | null {
   const outcome = child?.outcome;
   if (child === null || at === null) return null;
   if (outcome !== "running" && outcome !== "finished" && outcome !== "stopped") return null;
-  return { name: str(child.name), at, since: str(child.since) ?? at, outcome };
+  return {
+    name: str(child.name),
+    at,
+    since: str(child.since) ?? at,
+    outcome,
+    finishedAt: str(child.finishedAt),
+  };
 }
 
 /** The saved named paths: the version before kept the paths alone, so each is named long ago; a shape no version wrote is empty. */
@@ -593,7 +638,7 @@ function normalizeNamed(value: unknown): Record<string, string> {
   );
 }
 
-/** A saved activity: `stops`, a child's `since`, and `named` came later and take their defaults; a shape no version wrote is null. */
+/** A saved activity: `stops`, a child's `since` and `finishedAt`, `runSince` and `runPending`, and `named` came later and take their defaults; a shape no version wrote is null. */
 export function normalizeActivity(value: unknown): Activity | null {
   const saved = record(value);
   if (saved === null) return null;
@@ -604,6 +649,8 @@ export function normalizeActivity(value: unknown): Activity | null {
   if (pending === null || jobs === null || children === null || stops === null) return null;
   return {
     lastMovedAt: str(saved.lastMovedAt),
+    runSince: str(saved.runSince),
+    runPending: saved.runPending === true,
     turn: saved.turn === "ended" ? "ended" : "open",
     pending,
     jobs,
@@ -624,11 +671,15 @@ export function normalizeTranscript(value: unknown): Transcript | null {
   if (cursor === null || offset === null || state === null) return null;
   // The version that added `stops` also stopped moving a resumed child's `at` to the message, so
   // an older activity's `at` values are not the spawn times the name lookup needs; the one that
-  // added a pending call's `timeoutMs` reads it off the call. Either older shape replays the file.
+  // added a pending call's `timeoutMs` reads it off the call; the ones that added `runSince`, then
+  // `runPending`, and a child's `finishedAt` read them off lines already consumed. Each older shape
+  // replays the file.
   const activity = record(saved?.state);
   const calls = Object.values(record(activity?.pending) ?? {});
   if (
     activity?.stops === undefined ||
+    activity.runSince === undefined ||
+    activity.runPending === undefined ||
     calls.some((call) => record(call)?.timeoutMs === undefined)
   ) {
     return initialTranscript();
