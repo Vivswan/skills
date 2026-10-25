@@ -1708,6 +1708,12 @@ describe("run-review.mts", () => {
       join(root, "beta", "SKILL.md"),
       "# Beta\n\n## Landing Review Criteria\n\n- a beta rule\n",
     );
+    // A page saved with CRLF endings: the heading still matches and the body comes through LF-normalised.
+    mkdirSync(join(root, "gamma"));
+    writeFileSync(
+      join(root, "gamma", "SKILL.md"),
+      "# Gamma\r\n\r\n## Review Criteria\r\n\r\n- a gamma rule\r\n- another\r\n\r\n## After\r\n",
+    );
     const copiedScripts = join(root, "rubber-duck-review", "scripts");
     // The stub checks the schema path the launcher passes, which is the copy's.
     const r = run(
@@ -1718,9 +1724,9 @@ describe("run-review.mts", () => {
       join(copiedScripts, "run-review.mts"),
     );
     expect(r.code).toBe(0);
-    expect(r.report().criteria).toEqual(["alpha"]);
+    expect(r.report().criteria).toEqual(["alpha", "gamma"]);
     expect(readFileSync(r.promptCopy, "utf-8")).toBe(
-      `${PROMPT.trimEnd()}\n\n## Companion review criteria\n\n### alpha\n\n- an alpha rule\n- another\n`,
+      `${PROMPT.trimEnd()}\n\n## Companion review criteria\n\n### alpha\n\n- an alpha rule\n- another\n\n### gamma\n\n- a gamma rule\n- another\n`,
     );
   });
 

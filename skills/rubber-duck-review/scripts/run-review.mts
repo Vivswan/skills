@@ -256,10 +256,11 @@ interface Rules {
   criteria: Criteria[];
 }
 
-/** The text under a page's top-level `## Review Criteria` heading, up to its next `## ` heading;
- * null when the page declares none (a `## <Context> Review Criteria` is not the heading). */
+/** The text under a page's top-level `## Review Criteria` heading, up to its next `## ` heading,
+ * its line endings normalised; null when the page declares none (a `## <Context> Review Criteria`
+ * is not the heading). */
 function criteriaSection(page: string): string | null {
-  const lines = page.split("\n");
+  const lines = page.split(/\r?\n/);
   const start = lines.indexOf(CRITERIA_HEADING);
   if (start === -1) return null;
 
