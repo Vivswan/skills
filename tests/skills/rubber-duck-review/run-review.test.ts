@@ -1658,11 +1658,15 @@ describe("run-review.mts", () => {
     for (const pid of stubPids(pidFile)) expectGone(pid);
   }, 40000);
 
-  test("--stall rejects a non-number and is refused on --extract: a silent default would hide a typo", () => {
-    expectFailure(run(["codex", promptFile, "--stall", "soon"]), {
-      code: 2,
-      stderr: "--stall requires a whole number of seconds, at least 1",
-    });
+  test("--stall rejects a non-number and a delay past the 32-bit timer limit, and is refused on --extract", () => {
+    // 2147484 s is 2147484000 ms, past the 32-bit limit, where a timer fires after 1 ms and
+    // would kill the reviewer at once.
+    for (const bad of ["soon", "2147484"]) {
+      expectFailure(run(["codex", promptFile, "--stall", bad]), {
+        code: 2,
+        stderr: "--stall requires a whole number of seconds, 1 to 2147483",
+      });
+    }
     expectFailure(run(["codex", "--extract", "--stall", "5", pendingCapture()]), {
       code: 2,
       stderr: "--stall applies only to a launch",
@@ -1766,7 +1770,7 @@ describe("run-review.mts", () => {
 
   test("--wait and --timeout outside --extract --wait, or a bad timeout, are usage errors: exit 2", () => {
     const outputFile = pendingCapture();
-    const badTimeout = "--timeout requires a whole number of seconds, at least 1";
+    const badTimeout = "--timeout requires a whole number of seconds, 1 to 2147483";
     for (const [id, args, message] of [
       ["wait-on-launch", ["codex", promptFile, "--wait"], "--wait applies only to --extract"],
       [

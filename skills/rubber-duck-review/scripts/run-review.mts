@@ -117,6 +117,9 @@ const WAIT_POLL_MS = 2000;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
 const DEFAULT_STALL_SECONDS = 900;
 const WHOLE_SECONDS = /^[1-9][0-9]*$/;
+
+// A timer's delay is a 32-bit count of milliseconds; past it the timer fires at once.
+const MAX_TIMER_SECONDS = 2147483;
 const STALL_STATUS = /^stalled: /;
 const MINT_MARKER = ".minted-by-run-review";
 const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -1044,8 +1047,8 @@ function extractRecorded(tool: Tool, outputFile: string): void {
 }
 
 function secondsArg(flag: string, value: string | undefined): number {
-  if (value === undefined || !WHOLE_SECONDS.test(value)) {
-    usageError(`${flag} requires a whole number of seconds, at least 1`);
+  if (value === undefined || !WHOLE_SECONDS.test(value) || Number(value) > MAX_TIMER_SECONDS) {
+    usageError(`${flag} requires a whole number of seconds, 1 to ${MAX_TIMER_SECONDS}`);
   }
   return Number(value);
 }
