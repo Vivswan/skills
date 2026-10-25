@@ -106,6 +106,7 @@ const USAGE = [
   "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
   "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
   "       run-review.mts prepare <section>",
+  "       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)",
   "the prompt gets a '## Companion review criteria' section: the '## Review Criteria' section of every installed skill declaring one (the siblings of this skill's directory);",
   "  --criteria <name>[,<name>] keeps the named skills' sections alone, --criteria none appends nothing; the report's criteria lists the names that went in",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
@@ -310,11 +311,28 @@ function selectCriteria(spec: string | null): Criteria[] {
   return installed.filter((criteria) => chosen.includes(criteria.name));
 }
 
-function withCriteria(prompt: string, criteria: Criteria[]): string {
-  if (criteria.length === 0) return prompt;
+/** The block a launch appends to the prompt; empty under `--criteria none`. */
+function companionBlock(criteria: Criteria[]): string {
+  if (criteria.length === 0) return "";
 
   const sections = criteria.map(({ name, body }) => `### ${name}\n\n${body}`);
-  return `${prompt.trimEnd()}\n\n${COMPANION_HEADING}\n\n${sections.join("\n\n")}\n`;
+  return `${COMPANION_HEADING}\n\n${sections.join("\n\n")}\n`;
+}
+
+function withCriteria(prompt: string, criteria: Criteria[]): string {
+  const block = companionBlock(criteria);
+  if (block === "") return prompt;
+  return `${prompt.trimEnd()}\n\n${block}`;
+}
+
+/** The `criteria` subcommand: the same block for a review run through a dedicated tool, which the
+ * launcher never sees, so that path cannot omit the companion criteria either. */
+function printCriteria(args: string[]): void {
+  let spec: string | null = null;
+  if (args.length === 2 && args[0] === "--criteria") spec = args[1] ?? null;
+  else if (args.length !== 0)
+    usageError("criteria takes at most --criteria <name>[,<name>] or none");
+  process.stdout.write(companionBlock(selectCriteria(spec)));
 }
 
 interface Delivery {
@@ -1206,6 +1224,10 @@ function main(): void {
     if (section === undefined || argv.length !== 2)
       usageError("prepare takes exactly one <section>");
     preparePrompt(section);
+    return;
+  }
+  if (argv[0] === "criteria") {
+    printCriteria(argv.slice(1));
     return;
   }
   const toolArg = argv[0];

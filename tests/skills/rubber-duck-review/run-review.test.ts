@@ -1664,6 +1664,32 @@ describe("run-review.mts", () => {
     expect(delivered).toBe(FULL_PROMPT);
   });
 
+  test("the criteria subcommand prints the block a launch appends, so a review through a dedicated tool pastes the same text", () => {
+    const launched = run(["codex", promptFile]);
+    expect(launched.code).toBe(0);
+    const delivered = readFileSync(launched.promptCopy, "utf-8");
+    const block = delivered.slice(`${PROMPT.trimEnd()}\n\n`.length);
+    expect(block.startsWith("## Companion review criteria\n")).toBe(true);
+    const printed = run(["criteria"]);
+    expect(printed.code).toBe(0);
+    expect(printed.stdout).toBe(block);
+    const none = run(["criteria", "--criteria", "none"]);
+    expect(none.code).toBe(0);
+    expect(none.stdout).toBe("");
+    const only = run(["criteria", "--criteria", "code-standards"]);
+    expect(only.code).toBe(0);
+    expect(only.stdout).toBe(
+      withCompanion(
+        "x",
+        declaringSkills(SKILLS_ROOT).filter((s) => s.name === "code-standards"),
+      ).slice(3),
+    );
+    expectFailure(run(["criteria", "--criteria", "rubber-duck-review"]), {
+      code: 2,
+      stderr: "--criteria: rubber-duck-review declares no ## Review Criteria",
+    });
+  });
+
   test("--criteria none sends the caller's prompt unchanged and reports an empty criteria list", () => {
     const r = run(["codex", promptFile, "--criteria", "none"]);
     expect(r.code).toBe(0);
