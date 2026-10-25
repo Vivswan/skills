@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   utimesSync,
   writeFileSync,
@@ -462,8 +463,9 @@ describe("self-building scripts", () => {
     ]);
   });
 
-  test("the source path touches no package: a recording bun sees install, build, and the bundle run before anything resolves", () => {
-    const root = copiedSkill("source-path");
+  test("the source path asks the registry for nothing: a recording bun sees install, build, and the bundle run, while a static import where the source runs asks for the package manifest", async () => {
+    // bun names paths as the kernel resolves them: on macOS the temp root is /private/var/..., not /var/....
+    const root = realpathSync(copiedSkill("source-path"));
     const binDir = join(scratch, "recording-bun");
     const log = join(scratch, "recording-bun.log");
     mkdirSync(binDir, { recursive: true });
@@ -474,24 +476,70 @@ describe("self-building scripts", () => {
     );
     chmodSync(join(binDir, "bun"), 0o755);
     const cache = join(scratch, "empty-package-cache");
-    const env = { PATH: `${binDir}:${process.env.PATH ?? ""}`, BUN_INSTALL_CACHE_DIR: cache };
 
-    expect(lint(root, env)).toEqual({ status: 0, stdout: "", stderr: "" });
-    expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual([
-      "install",
-      "build",
-      join(root, ".build", "architecture", "lint.js"),
-    ]);
-    expect(!existsSync(cache) || readdirSync(cache).length === 0).toBe(true);
-
-    // The empty cache is evidence only with its control: a static import where the source runs does fill it.
+    // Every registry request bun makes lands on this loopback server, so the proof needs no network and no
+    // publish on npm can change it. It is its own process: a server inside this one could not answer while
+    // spawnSync blocks it, and a request the source path must never make would hang, not fail.
+    const requests = join(scratch, "registry-requests.log");
     writeFileSync(
-      join(root, "scripts", "control.mts"),
-      'import { toString } from "mdast-util-to-string";\nconsole.log(typeof toString);\n',
+      join(scratch, "registry.ts"),
+      [
+        'import { appendFileSync } from "node:fs";',
+        "const server = Bun.serve({",
+        '  hostname: "127.0.0.1",',
+        "  port: 0,",
+        "  fetch(request) {",
+        `    appendFileSync(${JSON.stringify(requests)}, \`\${request.method} \${new URL(request.url).pathname}\\n\`);`,
+        '    return new Response("", { status: 404 });',
+        "  },",
+        "});",
+        "console.log(server.port);",
+        "",
+      ].join("\n"),
     );
-    const control = run(join(root, "scripts", "control.mts"), [], root, env);
-    expect([control.status, control.stdout]).toEqual([0, "function\n"]);
-    expect(readdirSync(cache).length).toBeGreaterThan(0);
+    const registry = Bun.spawn([process.execPath, join(scratch, "registry.ts")], {
+      stdout: "pipe",
+      stderr: "inherit",
+    });
+    const { value: portLine } = await registry.stdout.getReader().read();
+    const url = `http://127.0.0.1:${new TextDecoder().decode(portLine).trim()}`;
+    // The three names bun reads for the registry, each set, so none inherited from the shell sends a child to npm.
+    const env = {
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      BUN_INSTALL_CACHE_DIR: cache,
+      BUN_CONFIG_REGISTRY: url,
+      NPM_CONFIG_REGISTRY: url,
+      npm_config_registry: url,
+    };
+    const asked = () =>
+      existsSync(requests) ? readFileSync(requests, "utf8").split("\n").filter(Boolean) : [];
+
+    try {
+      expect(lint(root, env)).toEqual({ status: 0, stdout: "", stderr: "" });
+      expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual([
+        "install",
+        "build",
+        join(root, ".build", "architecture", "lint.js"),
+      ]);
+      expect(asked()).toEqual([]);
+      expect(!existsSync(cache) || readdirSync(cache).length === 0).toBe(true);
+
+      // The silence is evidence only with its control: a static import where the source runs does ask.
+      writeFileSync(
+        join(root, "scripts", "control.mts"),
+        'import { toString } from "mdast-util-to-string";\nconsole.log(typeof toString);\n',
+      );
+      const control = run(join(root, "scripts", "control.mts"), [], root, env);
+      expect([control.status, control.stdout, control.stderr.split("\n")[0]]).toEqual([
+        1,
+        "",
+        `error: Cannot find package 'mdast-util-to-string' from '${join(root, "scripts", "control.mts")}'`,
+      ]);
+      expect(asked()).toEqual(["GET /mdast-util-to-string"]);
+    } finally {
+      registry.kill();
+      await registry.exited;
+    }
   });
 
   test("a failing build exits 2 after bun's own error, leaving no bundle and no install behind", () => {
