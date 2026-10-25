@@ -21,8 +21,7 @@ In `biome.json`:
         "noNestedTernary": "error",
         "noUselessElse": "error",
         "noNegationElse": "error",
-        "noParameterAssign": "error",
-        "useBlockStatements": "error"
+        "noParameterAssign": "error"
       },
       "suspicious": {
         "noAssignInExpressions": "error",
@@ -40,6 +39,8 @@ In `biome.json`:
 A violation is split, or the threshold is raised in `biome.json` with its reason; never silenced with `biome-ignore`. A rule whose fix would change behaviour goes off in the same file the same way.
 
 Specimen: `useLiteralKeys` rewrites `record["name"]` to `record.name`, which `tsc` rejects under `noPropertyAccessFromIndexSignature`. The rule is off in `biome.json` with that comment, not ignored line by line.
+
+`useBlockStatements` is not in the floor: `if (ok) doThing();` reads better than the braced form when the consequence is one simple line, and biome has no single-line exception for the rule.
 
 ## Module order, read
 
@@ -178,10 +179,10 @@ The ugly-to-clear table of `../shape.md`, with each row as TypeScript writes it:
 | Ugly | Clear |
 | --- | --- |
 | `a ? b : c ? d : e` | an `if`/`else if` chain, or early returns |
-| `[...base, ...(flag ? extra : [])]` | `const items = [...base];` then `if (flag) { items.push(...extra); }` |
+| `[...base, ...(flag ? extra : [])]` | `const items = [...base];` then `if (flag) items.push(...extra);` |
 | `rows.find((r) => r.id === key)!` | a `Map` keyed by `id`, or a named `findRow` that handles the miss |
 | `if ((n = rows.length) > 3)` | `const count = rows.length;` on its own line |
-| `ok && doThing()` | `if (ok) { doThing(); }` |
+| `ok && doThing()` | `if (ok) doThing();` |
 | a guard's body wrapped in `else` | return early, the body follows unwrapped (`noUselessElse`) |
 | `f(0.0, 12.5, 0.2)` | `f({ start: 0.0, end: 12.5, pad: 0.2 })`, an options object once three values share a type |
 
