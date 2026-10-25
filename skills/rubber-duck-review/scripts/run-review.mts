@@ -12,6 +12,7 @@
  *   cp -a of the checkout        -> venvs and nested worktrees weigh gigabytes: snapshot HEAD, the refs, the index
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
  *   the stream goes silent       -> a stuck child held one run for hours: --stall kills the reviewer's process group
+ *   criteria pasted by hand      -> thirty rounds passed what the house rules forbid: the launcher appends every skill's section
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -41,6 +42,10 @@ import { fileURLToPath } from "node:url";
 import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
 
 const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), "verdict-schema.json");
+/** The installed skills: the siblings of this skill's directory, found through any install symlink. */
+const SKILLS_ROOT = dirname(dirname(dirname(realpathSync(fileURLToPath(import.meta.url)))));
+const CRITERIA_HEADING = "## Review Criteria";
+const COMPANION_HEADING = "## Companion review criteria";
 
 /** Read once at launch; a missing or malformed schema beside the script is a
  * broken install, not a review failure. */
@@ -96,11 +101,13 @@ const TOOL_ARGS: Record<Tool, (prompt: string, sandbox: CodexSandbox) => string[
 };
 
 const USAGE = [
-  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>]",
+  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>] [--criteria <names>|none]",
   "       run-review.mts <codex|claude|copilot> --extract <output-file>",
   "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
-  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>]  (internal)",
+  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
   "       run-review.mts prepare <section>",
+  "the prompt gets a '## Companion review criteria' section: the '## Review Criteria' section of every installed skill declaring one (the siblings of this skill's directory);",
+  "  --criteria <name>[,<name>] keeps the named skills' sections alone, --criteria none appends nothing; the report's criteria lists the names that went in",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
   "codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir",
   "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
@@ -236,6 +243,77 @@ function requireCaptureProvenance(tool: Tool, promptFile: string, captureDir: st
 
 function isEnoent(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
+}
+
+interface Criteria {
+  name: string;
+  body: string;
+}
+
+/** What the launch runs under beyond the sandbox: the stall clock and the criteria appended to the prompt. */
+interface Rules {
+  stallSeconds: number;
+  criteria: Criteria[];
+}
+
+/** The text under a page's top-level `## Review Criteria` heading, up to its next `## ` heading;
+ * null when the page declares none (a `## <Context> Review Criteria` is not the heading). */
+function criteriaSection(page: string): string | null {
+  const lines = page.split("\n");
+  const start = lines.indexOf(CRITERIA_HEADING);
+  if (start === -1) return null;
+
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.startsWith("## "));
+  return rest
+    .slice(0, end === -1 ? rest.length : end)
+    .join("\n")
+    .trim();
+}
+
+/** An entry with no SKILL.md (a file, a dangling link, a stray directory) is no skill; any other
+ * failure to read one is a broken install, since a skill silently dropped is a rule silently dropped. */
+function installedCriteria(): Criteria[] {
+  const found: Criteria[] = [];
+  for (const name of readdirSync(SKILLS_ROOT).sort()) {
+    const pagePath = join(SKILLS_ROOT, name, "SKILL.md");
+    let page: string;
+    try {
+      page = readFileSync(pagePath, "utf-8");
+    } catch (error) {
+      if (isEnoent(error) || (isRecord(error) && error.code === "ENOTDIR")) continue;
+      usageError(`cannot read ${pagePath}: ${String(error)}`);
+    }
+
+    const body = criteriaSection(page);
+    if (body !== null) found.push({ name, body });
+  }
+  return found;
+}
+
+/** The criteria a launch appends: every declaring skill by default, the named ones under
+ * `--criteria a,b`, none under `--criteria none`. A name that declares none is a usage error. */
+function selectCriteria(spec: string | null): Criteria[] {
+  const installed = installedCriteria();
+  if (spec === null) return installed;
+  if (spec === "none") return [];
+
+  const chosen = spec.split(",");
+  const declaring = installed.map((criteria) => criteria.name);
+  const unknown = chosen.filter((name) => !declaring.includes(name));
+  if (unknown.length > 0) {
+    usageError(
+      `--criteria: ${unknown.join(", ")} declares no ${CRITERIA_HEADING}; the installed skills that do: ${declaring.join(", ")}`,
+    );
+  }
+  return installed.filter((criteria) => chosen.includes(criteria.name));
+}
+
+function withCriteria(prompt: string, criteria: Criteria[]): string {
+  if (criteria.length === 0) return prompt;
+
+  const sections = criteria.map(({ name, body }) => `### ${name}\n\n${body}`);
+  return `${prompt.trimEnd()}\n\n${COMPANION_HEADING}\n\n${sections.join("\n\n")}\n`;
 }
 
 interface Delivery {
@@ -638,7 +716,12 @@ function failureReason(status: string, otherwise: string): string {
 
 // Exits go through process.exitCode + a natural event-loop drain, never
 // process.exit(): an explicit exit can truncate a large pending stream write.
-function reportVerdict(extraction: Extraction, outputFile: string, sandbox?: "copy"): void {
+function reportVerdict(
+  extraction: Extraction,
+  outputFile: string,
+  sandbox?: "copy",
+  criteria: string[] = [],
+): void {
   if (extraction.ok) {
     const { verdict, toolCalls, trajectory } = extraction.review;
     const report = {
@@ -646,6 +729,7 @@ function reportVerdict(extraction: Extraction, outputFile: string, sandbox?: "co
       tool_calls: toolCalls,
       capture: outputFile,
       ...(sandbox === undefined ? {} : { sandbox }),
+      criteria,
       trajectory,
     };
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -683,7 +767,7 @@ function scratchPaths(dir: string, tool: Tool): Scratch {
 function recordStatus(
   scratch: Scratch,
   tool: Tool,
-  fields: { status?: string; sandbox?: "copy" } = {},
+  fields: { criteria: string[]; status?: string; sandbox?: "copy" },
 ): void {
   // Write-then-rename: a concurrent --extract must never observe a truncated
   // record (writeFileSync truncates before writing).
@@ -693,6 +777,7 @@ function recordStatus(
     JSON.stringify({
       tool,
       output: basename(scratch.outFile),
+      criteria: fields.criteria,
       ...(fields.sandbox === undefined ? {} : { sandbox: fields.sandbox }),
       ...(fields.status === undefined ? {} : { status: fields.status }),
     }),
@@ -730,9 +815,11 @@ function runReviewer(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
-  stallSeconds: number,
+  rules: Rules,
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
+  const criteria = rules.criteria.map((entry) => entry.name);
+  const { stallSeconds } = rules;
   let stdinFd: number | null = null;
   if (delivery.stdinFile !== null) {
     try {
@@ -744,7 +831,7 @@ function runReviewer(
   const outFd = openSync(scratch.outFile, "w");
   const errFd = openSync(scratch.errFile, "w");
   const sandbox = launch.sandbox === "copy" ? "copy" : undefined;
-  recordStatus(scratch, tool, { sandbox });
+  recordStatus(scratch, tool, { criteria, sandbox });
   // A warning lands in review.err, which outlives the run and is named by a
   // failure, as well as on stderr (ignored for a detached monitor).
   const warn = (line: string) => {
@@ -857,7 +944,7 @@ function runReviewer(
       const status = stalled
         ? `stalled: no stream event for ${stallSeconds} s`
         : String(code ?? "signal");
-      recordStatus(scratch, tool, { status, sandbox });
+      recordStatus(scratch, tool, { criteria, status, sandbox });
       hooks.onDone(status);
     });
   });
@@ -869,9 +956,9 @@ function runForeground(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
-  stallSeconds: number,
+  rules: Rules,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, stallSeconds, {
+  return runReviewer(tool, launch, delivery, scratch, rules, {
     onLife: () => process.stderr.write("review stream alive\n"),
     onFallback: (message) => process.stderr.write(`${message}\n`),
     onSpawnError: (error) => {
@@ -899,7 +986,12 @@ function runForeground(
       }
       // The capture stays on success too: the printed report names it, so a
       // surprising verdict can be traced to the exact reviewer message.
-      reportVerdict(extraction, scratch.outFile, launch.sandbox === "copy" ? "copy" : undefined);
+      reportVerdict(
+        extraction,
+        scratch.outFile,
+        launch.sandbox === "copy" ? "copy" : undefined,
+        rules.criteria.map((entry) => entry.name),
+      );
     },
   });
 }
@@ -910,11 +1002,12 @@ function runCapture(
   launch: Launch,
   delivery: Delivery,
   scratch: Scratch,
-  stallSeconds: number,
+  rules: Rules,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, stallSeconds, {
+  return runReviewer(tool, launch, delivery, scratch, rules, {
     onSpawnError: (error) => {
       recordStatus(scratch, tool, {
+        criteria: rules.criteria.map((entry) => entry.name),
         status: isEnoent(error) ? "not-found" : `spawn failed: ${String(error)}`,
       });
     },
@@ -927,7 +1020,8 @@ function runBackground(
   launch: Launch,
   prompt: string,
   stdinPrompt: boolean,
-  stallSeconds: number,
+  rules: Rules,
+  criteriaSpec: string | null,
 ): void {
   const scratch = scratchPaths(mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
   // Snapshot the prompt: the caller's file may be edited or deleted before
@@ -936,7 +1030,11 @@ function runBackground(
   writeFileSync(promptSnapshot, prompt);
   // The launch record is what lets the monitor's --capture prove its
   // provenance (and what --extract reads while the run is still pending).
-  recordStatus(scratch, tool, { sandbox: launch.sandbox === "copy" ? "copy" : undefined });
+  recordStatus(scratch, tool, {
+    criteria: rules.criteria.map((entry) => entry.name),
+    sandbox: launch.sandbox === "copy" ? "copy" : undefined,
+  });
+  // The monitor re-reads the snapshot and appends the criteria itself, so it takes the same selection.
   const monitorArgs = [
     fileURLToPath(import.meta.url),
     tool,
@@ -944,8 +1042,9 @@ function runBackground(
     "--capture",
     scratch.dir,
     "--stall",
-    String(stallSeconds),
+    String(rules.stallSeconds),
   ];
+  if (criteriaSpec !== null) monitorArgs.push("--criteria", criteriaSpec);
   if (stdinPrompt) monitorArgs.push("--stdin-prompt");
   const monitor = spawn(process.execPath, monitorArgs, { detached: true, stdio: "ignore" });
   monitor.on("error", (error) => {
@@ -959,8 +1058,12 @@ function runBackground(
 }
 
 interface LaunchRecord {
+  /** The skills whose Review Criteria the launch appended to the prompt. */
+  criteria: string[];
+
   /** Absent until the monitor records the reviewer's exit. */
   status?: string;
+
   /** Present when the reviewer ran unsandboxed in a snapshot copy. */
   sandbox?: "copy";
 }
@@ -985,8 +1088,10 @@ function readLaunchRecord(tool: Tool, outputFile: string): LaunchRecord | null {
     notCapture();
   }
   if (!isRecord(parsed)) notCapture();
-  const { tool: recordedTool, output: recordedOutput, status, sandbox } = parsed;
+  // A record from before the launcher appended criteria carries none; its capture still reads.
+  const { tool: recordedTool, output: recordedOutput, status, sandbox, criteria = [] } = parsed;
   if (typeof recordedTool !== "string" || typeof recordedOutput !== "string") notCapture();
+  if (!Array.isArray(criteria) || criteria.some((name) => typeof name !== "string")) notCapture();
   if (recordedTool !== tool) {
     usageError(
       `this capture was launched with reviewer '${recordedTool}', not '${tool}'; extract with the same reviewer`,
@@ -998,7 +1103,7 @@ function readLaunchRecord(tool: Tool, outputFile: string): LaunchRecord | null {
   if ("sandbox" in parsed && sandbox !== "copy") {
     usageError(`unrecognized review.status beside ${outputFile}: unknown sandbox`);
   }
-  const record: LaunchRecord = sandbox === "copy" ? { sandbox } : {};
+  const record: LaunchRecord = sandbox === "copy" ? { criteria, sandbox } : { criteria };
   if (!("status" in parsed)) return record;
   if (typeof status !== "string") {
     usageError(`unrecognized review.status beside ${outputFile}: non-string status`);
@@ -1011,6 +1116,7 @@ function reportRecordedRun(
   outputFile: string,
   status: string,
   sandbox: "copy" | undefined,
+  criteria: string[],
 ): void {
   if (status === "not-found") {
     process.stderr.write(`reviewer binary not found: ${tool}\n`);
@@ -1029,7 +1135,7 @@ function reportRecordedRun(
     reportVerdict({ ok: false, reason: `cannot read output file: ${String(error)}` }, outputFile);
     return;
   }
-  reportVerdict(extractVerdict(tool, raw), outputFile, sandbox);
+  reportVerdict(extractVerdict(tool, raw), outputFile, sandbox, criteria);
 }
 
 function extractRecorded(tool: Tool, outputFile: string): void {
@@ -1043,7 +1149,7 @@ function extractRecorded(tool: Tool, outputFile: string): void {
     );
     return;
   }
-  reportRecordedRun(tool, outputFile, record.status, record.sandbox);
+  reportRecordedRun(tool, outputFile, record.status, record.sandbox, record.criteria);
 }
 
 function secondsArg(flag: string, value: string | undefined): number {
@@ -1085,7 +1191,7 @@ function extractAfterWait(tool: Tool, outputFile: string, timeoutSeconds: number
     sleepSync(Math.min(WAIT_POLL_MS, remaining));
     record = readLaunchRecord(tool, outputFile) ?? noRecord();
   }
-  reportRecordedRun(tool, outputFile, record.status, record.sandbox);
+  reportRecordedRun(tool, outputFile, record.status, record.sandbox, record.criteria);
 }
 
 function main(): void {
@@ -1118,8 +1224,9 @@ function main(): void {
       else if (arg === "--timeout") {
         i += 1;
         timeoutSeconds = secondsArg(arg, rest[i]);
-      } else if (arg === "--stall") usageError("--stall applies only to a launch");
-      else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
+      } else if (arg === "--stall" || arg === "--criteria") {
+        usageError(`${arg} applies only to a launch`);
+      } else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
       else files.push(arg);
     }
     if (timeoutSeconds !== null && !wait) usageError("--timeout applies only to --extract --wait");
@@ -1136,6 +1243,7 @@ function main(): void {
   let stdinPrompt = false;
   let captureDir: string | null = null;
   let stallSeconds = DEFAULT_STALL_SECONDS;
+  let criteriaSpec: string | null = null;
   const positional: string[] = [];
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i] as string;
@@ -1147,6 +1255,9 @@ function main(): void {
     } else if (arg === "--stall") {
       i += 1;
       stallSeconds = secondsArg(arg, rest[i]);
+    } else if (arg === "--criteria") {
+      i += 1;
+      criteriaSpec = rest[i] ?? usageError("--criteria requires <name>[,<name>] or none");
     } else if (arg === "--wait" || arg === "--timeout") {
       usageError(`${arg} applies only to --extract`);
     } else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
@@ -1168,6 +1279,8 @@ function main(): void {
     usageError(`cannot read prompt file ${promptFile}: ${String(error)}`);
   }
   if (prompt.trim() === "") usageError(`prompt file is empty: ${promptFile}`);
+  // Selected in the parent of a --background launch too, so an unknown name is its usage error.
+  const rules: Rules = { stallSeconds, criteria: selectCriteria(criteriaSpec) };
 
   // stdinDelivery owns the copilot rejection; validate up front (against the
   // caller's path) so a bad tool/flag combination is a parent-side usage
@@ -1183,21 +1296,24 @@ function main(): void {
   const launch = planLaunch(tool);
   if (captureDir === null) purgeStaleScratch();
   if (background) {
-    runBackground(tool, launch, prompt, stdinPrompt, stallSeconds);
+    runBackground(tool, launch, prompt, stdinPrompt, rules, criteriaSpec);
     return;
   }
   const scratch = scratchPaths(captureDir ?? mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
-  // Snapshot the prompt into the scratch dir (in capture mode this rewrites
-  // the snapshot the parent already made): everything the launcher writes,
-  // including any code excerpts in the prompt, lives and dies with the
-  // capture. The caller's own prompt file stays theirs.
+  // Snapshot the prompt, criteria appended, into the scratch dir (in capture
+  // mode this rewrites the snapshot the parent already made): everything the
+  // launcher writes, including any code excerpts in the prompt, lives and dies
+  // with the capture. The caller's own prompt file stays theirs.
+  const fullPrompt = withCriteria(prompt, rules.criteria);
   const promptSnapshot = join(scratch.dir, "prompt.txt");
-  writeFileSync(promptSnapshot, prompt);
-  const delivery = stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, prompt);
+  writeFileSync(promptSnapshot, fullPrompt);
+  const delivery = stdinPrompt
+    ? stdinDelivery(tool, promptSnapshot)
+    : argvDelivery(tool, fullPrompt);
   const child =
     captureDir !== null
-      ? runCapture(tool, launch, delivery, scratch, stallSeconds)
-      : runForeground(tool, launch, delivery, scratch, stallSeconds);
+      ? runCapture(tool, launch, delivery, scratch, rules)
+      : runForeground(tool, launch, delivery, scratch, rules);
   if (forwarded !== null) forwarded.child = child;
 }
 

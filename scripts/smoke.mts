@@ -714,16 +714,17 @@ function checkPlaceholderMarkersStillInTemplate(): void {
   }
 }
 
-// rubber-duck-review auto-discovers companions: every installed skill that
-// declares a '## Review Criteria' section joins the reviewer prompt, no
-// registry. Guard both halves: the SKILL.md must still state that rule, and
-// every declared section must actually contain criteria (an empty section
-// silently contributes nothing). Context-scoped criteria use a different
-// heading (e.g. '## Orchestration Review Criteria') and are exempt.
+// rubber-duck-review's launcher appends the '## Review Criteria' section of
+// every installed skill that declares one to the reviewer prompt, no registry.
+// Guard both halves: the SKILL.md must still state that rule, and every
+// declared section must actually contain criteria (an empty section silently
+// contributes nothing). Context-scoped criteria use a different heading
+// (e.g. '## Orchestration Review Criteria') and are exempt.
 function checkReviewCriteriaAutoDiscovery(dirs: readonly string[]): void {
   const skillMd = join(SKILLS_DIR, "rubber-duck-review", "SKILL.md");
   requireFile(skillMd);
-  const anchor = "for EVERY installed skill that declares a `## Review Criteria` section";
+  const anchor =
+    "holding the `## Review Criteria` section of every installed skill that declares one";
   if (!readFileSync(skillMd, "utf-8").includes(anchor)) {
     fail(
       `${rel(skillMd)}: missing the companion auto-discovery rule` +

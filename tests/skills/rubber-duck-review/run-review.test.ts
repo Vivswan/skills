@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   closeSync,
+  cpSync,
   existsSync,
   linkSync,
   lstatSync,
@@ -41,6 +42,42 @@ const SCHEMA = join(ROOT, "skills", "rubber-duck-review", "scripts", "verdict-sc
 
 // Prompt content that a shell would mangle: proves no shell ever sees it.
 const PROMPT = "Review only.\nRun `git --no-pager diff HEAD` and note $(hostname) stays literal.\n";
+
+const SKILLS_ROOT = join(ROOT, "skills");
+
+/** A page's `## Review Criteria` section up to its next `## ` heading, read the way a reader
+ * would, so the launcher's extraction is pinned to the files and never to a pasted copy. */
+function reviewCriteriaOf(page: string): string | null {
+  const lines = page.split("\n");
+  const start = lines.indexOf("## Review Criteria");
+  if (start === -1) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.startsWith("## "));
+  return rest
+    .slice(0, end === -1 ? rest.length : end)
+    .join("\n")
+    .trim();
+}
+
+/** The skills under `root` that declare the heading, in directory order, with their sections. */
+function declaringSkills(root: string): { name: string; body: string }[] {
+  const found: { name: string; body: string }[] = [];
+  for (const name of readdirSync(root).sort()) {
+    const page = join(root, name, "SKILL.md");
+    if (!existsSync(page)) continue;
+    const body = reviewCriteriaOf(readFileSync(page, "utf-8"));
+    if (body !== null) found.push({ name, body });
+  }
+  return found;
+}
+
+/** The prompt as the reviewer must receive it: the caller's text, then the companion section. */
+function withCompanion(prompt: string, skills = declaringSkills(SKILLS_ROOT)): string {
+  if (skills.length === 0) return prompt;
+  const sections = skills.map(({ name, body }) => `### ${name}\n\n${body}`);
+  return `${prompt.trimEnd()}\n\n## Companion review criteria\n\n${sections.join("\n\n")}\n`;
+}
+const FULL_PROMPT = withCompanion(PROMPT);
 
 const BIG_VERDICT_BYTES = 262144;
 
@@ -363,17 +400,24 @@ interface Report {
   tool_calls: number;
   capture: string;
   sandbox?: "copy";
+  criteria: string[];
   trajectory: { event: string; text?: string }[];
 }
 
 let scenario = 0;
-function run(args: string[], env: Record<string, string> = {}, path?: string, cwd?: string) {
+function run(
+  args: string[],
+  env: Record<string, string> = {},
+  path?: string,
+  cwd?: string,
+  script: string = SCRIPT,
+) {
   scenario += 1;
   const violations = join(binDir, `violations-${scenario}`);
   const promptCopy = join(binDir, `prompt-copy-${scenario}`);
   // process.execPath is absolute, so the script launches even when PATH is
   // reduced to the stub dir (the missing-binary scenario).
-  const result = Bun.spawnSync([process.execPath, SCRIPT, ...args], {
+  const result = Bun.spawnSync([process.execPath, script, ...args], {
     cwd,
     env: {
       ...process.env,
@@ -542,7 +586,7 @@ describe("run-review.mts", () => {
     expect(report.trajectory[3]?.event).toBe("agent_message");
     expect(report.trajectory[3]?.text).toMatch(/^\{"blocking":\[\].*\.\.\.$/);
     expect(report.trajectory).toHaveLength(4);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
     const statusLines = r.stderr.split("\n").filter(Boolean);
     expect(statusLines).toEqual(["review stream alive", "reviewer exited (status=0)"]);
   });
@@ -555,7 +599,7 @@ describe("run-review.mts", () => {
     // The StructuredOutput call delivers the answer; only Bash is a review step.
     expect(report.tool_calls).toBe(1);
     expect(report.trajectory.map((row) => row.event)).toEqual(["text", "tool_use", "result"]);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
   });
 
   test("claude: a result string carrying the object is the verdict when structured_output is absent", () => {
@@ -569,7 +613,7 @@ describe("run-review.mts", () => {
       const r = run(["copilot", promptFile], { STUB_MODE: mode });
       expect(r.code, mode).toBe(0);
       expect(r.report().verdict, mode).toEqual(COPILOT_VERDICT);
-      expect(readFileSync(r.promptCopy, "utf-8"), mode).toBe(PROMPT);
+      expect(readFileSync(r.promptCopy, "utf-8"), mode).toBe(FULL_PROMPT);
     }
   });
 
@@ -642,7 +686,7 @@ describe("run-review.mts", () => {
       const r = run([tool, promptFile, "--stdin-prompt"]);
       expect(r.code, tool).toBe(0);
       expect(r.report().verdict, tool).toEqual(verdict);
-      expect(readFileSync(r.promptCopy, "utf-8"), tool).toBe(PROMPT);
+      expect(readFileSync(r.promptCopy, "utf-8"), tool).toBe(FULL_PROMPT);
     }
   });
 
@@ -657,7 +701,7 @@ describe("run-review.mts", () => {
     writeFileSync(hugePrompt, hugeContent);
     const r = run(["codex", hugePrompt, "--stdin-prompt"]);
     expect(r.code).toBe(0);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(hugeContent);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(withCompanion(hugeContent));
   });
 
   test("a reviewer that ignores its stdin prompt file cannot hang or crash the run", () => {
@@ -1608,6 +1652,78 @@ describe("run-review.mts", () => {
     }
   });
 
+  test("the launcher appends every declaring skill's Review Criteria to the prompt, so a prompt cannot omit them", () => {
+    const declaring = declaringSkills(SKILLS_ROOT);
+    expect(declaring.map((skill) => skill.name)).toContain("code-standards");
+    expect(declaring.map((skill) => skill.name)).not.toContain("rubber-duck-review");
+    const r = run(["codex", promptFile]);
+    expect(r.code).toBe(0);
+    expect(r.report().criteria).toEqual(declaring.map((skill) => skill.name));
+    const delivered = readFileSync(r.promptCopy, "utf-8");
+    expect(delivered.startsWith(PROMPT.trimEnd())).toBe(true);
+    expect(delivered).toBe(FULL_PROMPT);
+  });
+
+  test("--criteria none sends the caller's prompt unchanged and reports an empty criteria list", () => {
+    const r = run(["codex", promptFile, "--criteria", "none"]);
+    expect(r.code).toBe(0);
+    expect(r.report().criteria).toEqual([]);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+  });
+
+  test("--criteria <name> keeps that skill's section alone, for the lens choice on someone else's PR", () => {
+    const only = declaringSkills(SKILLS_ROOT).filter((skill) => skill.name === "code-standards");
+    const r = run(["codex", promptFile, "--criteria", "code-standards"]);
+    expect(r.code).toBe(0);
+    expect(r.report().criteria).toEqual(["code-standards"]);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(withCompanion(PROMPT, only));
+  });
+
+  test("--criteria naming a skill that declares no section is a usage error that names the ones that do", () => {
+    const declaring = declaringSkills(SKILLS_ROOT).map((skill) => skill.name);
+    expectFailure(run(["codex", promptFile, "--criteria", "code-standards,rubber-duck-review"]), {
+      code: 2,
+      stderr: `--criteria: rubber-duck-review declares no ## Review Criteria; the installed skills that do: ${declaring.join(", ")}`,
+    });
+    expectFailure(run(["codex", "--extract", "--criteria", "none", pendingCapture()]), {
+      code: 2,
+      stderr: "--criteria applies only to a launch",
+    });
+  });
+
+  test("discovery reads the siblings of the script's own skill directory and skips a context-specific heading", () => {
+    // A scratch skills root: this skill copied whole (the script finds its root through its own
+    // real path), one sibling declaring the heading, one declaring a context-specific variant.
+    const root = temp.dir("run-review-skills-root-");
+    cpSync(join(SKILLS_ROOT, "rubber-duck-review"), join(root, "rubber-duck-review"), {
+      recursive: true,
+    });
+    mkdirSync(join(root, "alpha"));
+    writeFileSync(
+      join(root, "alpha", "SKILL.md"),
+      "# Alpha\n\n## Review Criteria\n\n- an alpha rule\n- another\n\n## After\n\nnot criteria\n",
+    );
+    mkdirSync(join(root, "beta"));
+    writeFileSync(
+      join(root, "beta", "SKILL.md"),
+      "# Beta\n\n## Landing Review Criteria\n\n- a beta rule\n",
+    );
+    const copiedScripts = join(root, "rubber-duck-review", "scripts");
+    // The stub checks the schema path the launcher passes, which is the copy's.
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SCHEMA: realpathSync(join(copiedScripts, "verdict-schema.json")) },
+      undefined,
+      undefined,
+      join(copiedScripts, "run-review.mts"),
+    );
+    expect(r.code).toBe(0);
+    expect(r.report().criteria).toEqual(["alpha"]);
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(
+      `${PROMPT.trimEnd()}\n\n## Companion review criteria\n\n### alpha\n\n- an alpha rule\n- another\n`,
+    );
+  });
+
   test("a reviewer silent past --stall is killed with its process group, the sleep it left behind included, and the run fails as a stall", () => {
     const pidFile = join(binDir, "stall-pids");
     const r = run(["codex", promptFile, "--stall", "1"], {
@@ -1689,7 +1805,8 @@ describe("run-review.mts", () => {
     expect(extracted.stderr).toBe("");
     expect(extracted.report().verdict).toEqual(CODEX_VERDICT);
     expect(extracted.report().capture).toBe(outputFile);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(PROMPT);
+    expect(extracted.report().criteria).toEqual(declaringSkills(SKILLS_ROOT).map((s) => s.name));
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
     rmSync(dirname(outputFile), { recursive: true, force: true });
   }, 15000);
 
