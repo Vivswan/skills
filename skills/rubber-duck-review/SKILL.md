@@ -38,7 +38,7 @@ Use this skill when someone asks for:
 
 - A single broad review of a big diff is shallower than several focused ones. Split the change into logical **sections** (each new command/module, each script, the CI/release config, a parity pair). Run one review per section in parallel, each scoped to its files.
 - **Run only as many at once as the machine and the reviewer backend handle without stalling.** About three is a safe start. Many simultaneous `codex exec` processes can saturate the backend and hang. A stalled batch gets smaller, never larger.
-- **Detect & recover from hangs.** With JSON streaming, compare each review's event count over ~30-60s. If one is flat while its siblings climb, it's hung. Stop it (the task runner's stop, or `kill <the pid the launch printed>`, never a kill by pattern) and relaunch just that one.
+- **A silent reviewer is killed by the launcher.** Every launch carries `--stall <seconds>` (default 900): a stream with no byte for that long gets its reviewer killed, process group included, and the review fails as `stalled: no stream event for 900 s`. Relaunch that one review once. Specimen: a codex round sat three hours behind a stuck browser-extension host it had spawned, silent, while a 3600 s wait ran.
 
 ### 3. Craft the prompt
 
@@ -89,16 +89,17 @@ This skill ships `scripts/run-review.mts` (the path is relative to the installed
 `bun "<skill-dir>/scripts/run-review.mts" --help`:
 
 ```text usage=skills/rubber-duck-review/scripts/run-review.mts
-usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt]
+usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>]
        run-review.mts <codex|claude|copilot> --extract <output-file>
        run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)
-       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir>  (internal)
+       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>]  (internal)
        run-review.mts prepare <section>
 scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones
 codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir
+a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s
 prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>
 exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);
-       1 review FAILED - relaunch: no usable verdict, whatever the cause, or --wait timed out; never a clean pass;
+       1 review FAILED - relaunch: no usable verdict, whatever the cause, a stall, or --wait timed out; never a clean pass;
        2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository
 ```
 
@@ -139,11 +140,12 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - `--stdin-prompt` (codex/claude only): add it if the environment rejects the prompt as a command argument, or the prompt is very large. The prompt file itself is served as the reviewer's stdin.
 
   A file fd is EOF-terminated, so it cannot hang. The stdin hang trap is an open pipe, not a used stdin.
+- `--stall <seconds>` (default 900): how long the captured stream may stay silent before the launcher kills the reviewer and its process group and fails the review as stalled. Every byte on stdout or stderr resets it, so a slow review that keeps talking is never a stall. Raise it for a reviewer that prints nothing until the end (copilot) on a very large change.
 - Foreground (the default) blocks until the reviewer exits, so give the tool call a generous explicit timeout. Subagents (worktree builders, spawned workers) run the launch foreground under one, or `--background` and then wait in bounded foreground calls (step 5): a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
 - `--background` prints exactly two lines, `output-file: <path>` and `pid: <n>`.
   - `output-file` is the captured stream. A detached monitor records the reviewer's exit status beside it.
   - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 5); a subagent uses it for a review that may outlast one foreground call, with step 5's bounded waits.
-  - Killing that PID cancels the review (the signal is forwarded to the reviewer).
+  - Killing that PID cancels the review (the signal is forwarded to the reviewer and its process group).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line; the codex copy mode adds its notice first). Silence in between is normal. A real review can take a while.
 - Runtime: `bun`. `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
 - Exit codes: the `exits:` lines of the usage block above. Step 5 says what to do on each.
@@ -159,7 +161,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - `capture`: the full reviewer stream, kept for 24 hours. Read it when a finding or the summary looks off and you want the exact reviewer message.
 - **Exit 1** (`review FAILED - relaunch`): that is no review at all, never a clean pass. Relaunch it.
 
-  It means the stream was empty, cut mid-turn, truncated on its final line, held a failed turn or an error with no verdict after it, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. While the captured stream still exists, the failure message names its path.
+  It means the reviewer was killed as stalled, the stream was empty, cut mid-turn, truncated on its final line, held a failed turn or an error with no verdict after it, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. While the captured stream still exists, the failure message names its path.
 - **Exit 2**: fix the invocation or install the missing reviewer binary. Nothing was reviewed.
 - After a `--background` launch, the wait for the verdict has two shapes, one per actor. They differ for one reason: a subagent that goes idle after one long call is never woken, while the lead's session is re-invoked when a background command ends.
 
@@ -181,6 +183,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   | --- | --- | --- |
   | the JSON report on stdout, exit 0 | the verdict | act on it, below |
   | `review FAILED - relaunch (--wait timed out: ...)` on stderr, exit 1 | no verdict yet | run the call again |
+  | `review FAILED - relaunch (stalled: no stream event for <n> s ...)` on stderr, exit 1 | the launcher killed a reviewer whose stream went silent | relaunch it once; a second stall is tooling trouble to report |
   | `review FAILED - relaunch (<any other reason>)` on stderr, exit 1 | the review failed | relaunch it |
   | `review stalled: ...`, exit 3 | the launch record is an hour old and still has no `status`: the block's own cap, not the launcher's | report the stall to the lead |
 
@@ -189,7 +192,8 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   For both shapes:
   - `<reviewer>` is the argument the review was launched with.
   - The lead's verdict lands in `verdict.out` inside that review's capture dir, so parallel reviews (step 2) never overwrite one another. It travels and is removed with the dir. A subagent's foreground call prints the verdict as the tool result.
-  - The script polls the launch record every 2 s until the monitor records the exit, then prints the same JSON report. When `--timeout <seconds>` (default 3600) passes first, it exits 1 with the reason `--wait timed out` on stderr and prints no report.
+  - The script polls the launch record every 2 s until the monitor records the exit, a stall included, then prints the same JSON report. When `--timeout <seconds>` (default 3600) passes first, it exits 1 with the reason `--wait timed out` on stderr and prints no report.
+  - The stall clock is the launch's: a silent reviewer fails at `--stall` seconds whatever the wait's `--timeout`. A shorter `--timeout` still returns first, as a timeout to run again.
   - It validates the reviewer and output file against what the launch recorded, so waiting on the wrong reviewer or file, or on a file with no launch record beside it, fails at once with exit 2.
   - The lead's single wait reads the same lines as the table above, with one difference: any `review FAILED - relaunch` line, the timeout included, means relaunch.
 - `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>` without `--wait` reads a finished run once: it exits 1 (`no exit status recorded`) while the reviewer is still running instead of blocking.
