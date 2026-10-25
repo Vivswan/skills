@@ -38,6 +38,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
 
 const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), "verdict-schema.json");
@@ -120,6 +121,19 @@ const WHOLE_SECONDS = /^[1-9][0-9]*$/;
 
 // A timer's delay is a 32-bit count of milliseconds; past it the timer fires at once.
 const MAX_TIMER_SECONDS = 2147483;
+
+// One table for both forms, so a flag of the other form is refused by name, never as unknown.
+const FLAGS = {
+  background: { type: "boolean" },
+  "stdin-prompt": { type: "boolean" },
+  capture: { type: "string" },
+  stall: { type: "string" },
+  wait: { type: "boolean" },
+  timeout: { type: "string" },
+} as const;
+
+const LAUNCH_FLAGS = ["background", "stdin-prompt", "capture", "stall"] as const;
+const EXTRACT_FLAGS = ["wait", "timeout"] as const;
 const STALL_STATUS = /^stalled: /;
 const MINT_MARKER = ".minted-by-run-review";
 const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -1053,6 +1067,35 @@ function secondsArg(flag: string, value: string | undefined): number {
   return Number(value);
 }
 
+/** The flags of one form, parsed by node. Its refusals come back as this tool's own usage errors,
+ * which the tests pin, with the flag read out of node's message. */
+function parseFlags(args: string[], form: "launch" | "extract") {
+  const foreign = form === "launch" ? EXTRACT_FLAGS : LAUNCH_FLAGS;
+  const belongsTo = form === "launch" ? "--extract" : "a launch";
+  const refuse = (flag: string): never => usageError(`--${flag} applies only to ${belongsTo}`);
+  const foreignFlag = (flag: string) => foreign.some((name) => `--${name}` === flag);
+
+  let parsed: ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>;
+  try {
+    parsed = parseArgs({ args, options: FLAGS, allowPositionals: true, strict: true });
+  } catch (error) {
+    const message = isRecord(error) ? String(error.message) : String(error);
+    const flag = /'(-[^ ']+)/.exec(message)?.[1] ?? "";
+    const code = isRecord(error) ? error.code : undefined;
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") usageError(`unknown flag: ${flag}`);
+    if (code !== "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") throw error;
+    if (foreignFlag(flag)) refuse(flag.slice(2));
+    if (flag === "--capture") usageError("--capture requires a directory");
+    if (flag === "--timeout" || flag === "--stall") secondsArg(flag, undefined);
+    usageError(message);
+  }
+
+  for (const flag of foreign) {
+    if (parsed.values[flag] !== undefined) refuse(flag);
+  }
+  return parsed;
+}
+
 /** Blocks the main thread; a timer callback could not route a usage error
  * through SilentExit, and the wait has nothing else to do. */
 function sleepSync(ms: number): void {
@@ -1109,22 +1152,14 @@ function main(): void {
   const rest = argv.slice(1);
 
   if (rest[0] === "--extract") {
-    let wait = false;
-    let timeoutSeconds: number | null = null;
-    const files: string[] = [];
-    for (let i = 1; i < rest.length; i += 1) {
-      const arg = rest[i] as string;
-      if (arg === "--wait") wait = true;
-      else if (arg === "--timeout") {
-        i += 1;
-        timeoutSeconds = secondsArg(arg, rest[i]);
-      } else if (arg === "--stall") usageError("--stall applies only to a launch");
-      else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
-      else files.push(arg);
-    }
+    const { values, positionals } = parseFlags(rest.slice(1), "extract");
+    const wait = values.wait === true;
+    const timeoutSeconds =
+      values.timeout === undefined ? null : secondsArg("--timeout", values.timeout);
     if (timeoutSeconds !== null && !wait) usageError("--timeout applies only to --extract --wait");
-    const outputFile = files[0];
-    if (outputFile === undefined || files.length !== 1) {
+
+    const outputFile = positionals[0];
+    if (outputFile === undefined || positionals.length !== 1) {
       usageError("--extract takes exactly one <output-file>");
     }
     if (wait) extractAfterWait(tool, outputFile, timeoutSeconds ?? DEFAULT_WAIT_TIMEOUT_SECONDS);
@@ -1132,31 +1167,18 @@ function main(): void {
     return;
   }
 
-  let background = false;
-  let stdinPrompt = false;
-  let captureDir: string | null = null;
-  let stallSeconds = DEFAULT_STALL_SECONDS;
-  const positional: string[] = [];
-  for (let i = 0; i < rest.length; i += 1) {
-    const arg = rest[i] as string;
-    if (arg === "--background") background = true;
-    else if (arg === "--stdin-prompt") stdinPrompt = true;
-    else if (arg === "--capture") {
-      i += 1;
-      captureDir = rest[i] ?? usageError("--capture requires a directory");
-    } else if (arg === "--stall") {
-      i += 1;
-      stallSeconds = secondsArg(arg, rest[i]);
-    } else if (arg === "--wait" || arg === "--timeout") {
-      usageError(`${arg} applies only to --extract`);
-    } else if (arg.startsWith("--")) usageError(`unknown flag: ${arg}`);
-    else positional.push(arg);
-  }
+  const { values, positionals } = parseFlags(rest, "launch");
+  const background = values.background === true;
+  const stdinPrompt = values["stdin-prompt"] === true;
+  const captureDir = values.capture ?? null;
+  const stallSeconds =
+    values.stall === undefined ? DEFAULT_STALL_SECONDS : secondsArg("--stall", values.stall);
   if (background && captureDir !== null) {
     usageError("--background and --capture are mutually exclusive");
   }
-  const promptFile = positional[0];
-  if (promptFile === undefined || positional.length !== 1) {
+
+  const promptFile = positionals[0];
+  if (promptFile === undefined || positionals.length !== 1) {
     usageError("expected exactly one <prompt-file>");
   }
   if (captureDir === null) requireMintedPrompt(promptFile);
