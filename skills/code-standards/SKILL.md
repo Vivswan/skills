@@ -54,7 +54,7 @@ The reason a choice was made, an invariant another file relies on, an external s
 
 Tell first, in one or two sentences, then show (aligned rows, an arrow flow) only when a block is faster. Never pack prose to fit a cap: cut honestly. Before writing or keeping one: what does this say that the code does not, and could a tired human read it in one pass?
 
-On a variable, a field, or a constant, the comment is one line above the item, never more; what needs more goes into the name or a short tell above the group. Once one field of a record or one constant of a block carries a comment, every one does. Specimen: a record with one three-line comment over three fields and four fields bare. Specimens, the TODO ban: `references/comments.md`.
+Where a variable, a field, or a constant needs a comment at all, it is one line above the item, never more; what needs more goes into the name or a short tell above the group. Once one field of a record or one constant of a block carries a comment, every field or constant does, so it reads uniform. Specimens, the TODO ban: `references/comments.md`.
 
 ### Heal at the boundary, or refuse there
 

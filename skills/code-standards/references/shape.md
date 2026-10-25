@@ -21,10 +21,7 @@ from pathlib import Path
 
 __all__ = ["transcribe"]
 
-# Shared with the asr command line, which prunes it; nothing here deletes.
 CACHE_DIR = Path.home() / ".cache" / "asr"
-
-# The one process-wide cache, keyed by video and model.
 SEGMENTS: dict[tuple[str, str], list[str]] = {}
 
 Window = tuple[float, float]
@@ -184,7 +181,7 @@ Readability and beauty come first: this rule yields where following it would rea
 ## Members stand alone
 
 - **A blank line between every member of a record** (an interface, a class, a struct, a dataclass) once its members carry comments: field or method, commented or not. A comment interrupts the reading, and the blank lines give each member back its own place. Bare members that read whole in one pass stay together: `type Window struct{ Start, End float64 }`, a dataclass of two fields.
-- **A commented constant or variable stands alone:** a blank line before its comment and after its declaration. Bare constants may run together; the comment is what sets an item apart.
+- **A commented constant or variable stands alone:** a blank line before its comment and after its declaration. Bare constants may run together, as the layout example above does; the comment is what sets an item apart.
 - **The comment itself** follows `comments.md`, On a variable, field, or constant, which holds the specimen that set all of this.
 
 Readability and beauty come first: this rule yields where following it would read worse, and the deviation is said in a line.

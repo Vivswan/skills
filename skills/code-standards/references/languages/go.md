@@ -54,10 +54,8 @@ import (
 	"sync"
 )
 
-// Shared with the asr command line, which prunes it; nothing here deletes.
 const cacheDirName = ".cache/asr"
 
-// The one process-wide cache, keyed by video and model, and the mutex every reader and writer takes.
 var (
 	segments   = map[cacheKey][]Segment{}
 	segmentsMu sync.Mutex

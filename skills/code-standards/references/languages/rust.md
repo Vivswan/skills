@@ -51,10 +51,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-// Shared with the asr command line, which prunes it; nothing here deletes.
 const CACHE_DIR: &str = ".cache/asr";
-
-// The one process-wide cache, keyed by video, audio signature, and model.
 static SEGMENTS: LazyLock<Mutex<HashMap<CacheKey, Vec<Segment>>>> = LazyLock::new(Default::default);
 
 type Window = (f64, f64);
@@ -192,9 +189,7 @@ The ugly-to-clear table of `../shape.md`, with each row as Rust writes it:
 `Drop` binds cleanup to the value, so every return path, `?` included, releases it. The standard library and the usual crates already own the common resources: `File`, `MutexGuard`, `tempfile::TempDir`. A manual cleanup call that every return path must remember is the finding, and so is a hand-written guard for a resource a crate already owns (the library rule).
 
 ```rust
-// Removed on every path out of this function.
 let work = tempfile::tempdir()?;
-
 let wav = full_audio_wav(video, work.path())?;
 ```
 

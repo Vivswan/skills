@@ -28,9 +28,11 @@ Never a comment: what the code does, its types, its control flow, its history, t
 
 ## On a variable, field, or constant
 
+Most variables, fields, and constants carry no comment at all: the first rule of this page decides whether one exists. These rules decide its shape once it does.
+
 The comment on a variable, a field, or a constant is one line above the item, never more. What needs a second line goes into the name, or into a short tell above the group the item belongs to.
 
-Commented all or none: once one field of a record (an interface, a class, a struct, a dataclass) or one constant of a block carries a comment, every field of that record and every constant of that block carries one. No half-commented records.
+Commented all or none: once one field of a record (an interface, a class, a struct, a dataclass) or one constant of a block carries a comment, every field of that record and every constant of that block carries one. A half-commented record reads as a hodgepodge; uniform, it reads once.
 
 How the item is spaced is the shape rule in `shape.md`, Members stand alone. A method's doc comment is a function's: `shape.md`, Typed, documented, public.
 
