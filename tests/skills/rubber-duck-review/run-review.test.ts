@@ -9,6 +9,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -226,6 +227,16 @@ case "\${STUB_MODE:-ok}" in
     big="$(head -c ${BIG_VERDICT_BYTES} /dev/zero | tr '\\0' 'x')"
     echo '${CODEX_TOOL_LINE}'
     printf '%s%s%s\\n' '${bigOpen}' "$big" '${bigClose}'
+    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    ;;
+  stall)
+    echo '${CODEX_TOOL_LINE}'
+    sleep 300 & echo "$$ $!" > "\${STUB_PID_FILE}"; wait
+    ;;
+  trickle)
+    for _ in 1 2 3 4 5 6; do echo '{"type":"item.completed","item":{"type":"reasoning","text":"still reading"}}'; sleep 0.3; done
+    echo '${CODEX_TOOL_LINE}'
+    echo '${CODEX_VERDICT_LINE}'
     echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
     ;;
   empty) ;;
@@ -450,6 +461,24 @@ function waitForStatus(outputFile: string): string {
     Bun.sleepSync(50);
   }
   throw new Error(`no completed ${statusFile} after 5s`);
+}
+
+/** The pids a stalled stub wrote: its shell and the sleep it left in the background. */
+function stubPids(pidFile: string): number[] {
+  return readFileSync(pidFile, "utf-8").trim().split(" ").map(Number);
+}
+
+/** A killed process answers signal 0 until it is reaped; an orphan is reaped by init within moments. */
+function expectGone(pid: number): void {
+  for (let i = 0; i < 40; i += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    Bun.sleepSync(50);
+  }
+  throw new Error(`pid ${pid} is still alive 2 s after the review ended`);
 }
 
 function backgroundOutputFile(stdout: string): string {
@@ -1359,7 +1388,8 @@ describe("run-review.mts", () => {
   });
 
   test("codex whose sandbox cannot start, outside a git repository, is a usage error: exit 2", () => {
-    const bare = temp.dir("run-review-norepo-");
+    // The launcher names the resolved path (on macOS the temp root is a symlink under /private).
+    const bare = realpathSync(temp.dir("run-review-norepo-"));
     const r = run(["codex", promptFile], { STUB_SANDBOX: "bwrap" }, undefined, bare);
     expectFailure(r, {
       code: 2,
@@ -1411,7 +1441,9 @@ describe("run-review.mts", () => {
     expect(launched.code).toBe(0);
     const outputFile = backgroundOutputFile(launched.stdout);
     const status = waitForStatus(outputFile);
-    expect(status).toContain(`spawn failed: Error: snapshot of ${repo} failed: git checkout-index`);
+    expect(status).toContain(
+      `spawn failed: Error: snapshot of ${realpathSync(repo)} failed: git checkout-index`,
+    );
     expect(status).toContain(": fatal: disk full");
     expect(existsSync(join(dirname(outputFile), "repo"))).toBe(false);
     rmSync(dirname(outputFile), { recursive: true, force: true });
@@ -1574,6 +1606,67 @@ describe("run-review.mts", () => {
       else writeFileSync(join(scratch, "review.status"), record);
       expectFailure(run(["codex", prompt, "--capture", scratch]), refused, id);
     }
+  });
+
+  test("a reviewer silent past --stall is killed with its process group, the sleep it left behind included, and the run fails as a stall", () => {
+    const pidFile = join(binDir, "stall-pids");
+    const r = run(["codex", promptFile, "--stall", "1"], {
+      STUB_MODE: "stall",
+      STUB_PID_FILE: pidFile,
+    });
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (stalled: no stream event for 1 s",
+    });
+    expect(r.stderr).toContain(
+      "review stalled: no stream event for 1 s; killing the reviewer (pid ",
+    );
+    expect(r.captureKept).toBe(true);
+    const pids = stubPids(pidFile);
+    expect(pids).toHaveLength(2);
+    for (const pid of pids) expectGone(pid);
+  }, 15000);
+
+  test("a reviewer that keeps streaming past --stall is never a stall: each byte winds the clock again", () => {
+    const r = run(["codex", promptFile, "--stall", "1"], { STUB_MODE: "trickle" });
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain("stalled");
+    expect(r.report().verdict).toEqual(CODEX_VERDICT);
+  }, 15000);
+
+  test("--background records a stall as the run's status, so --extract --wait fails at once instead of waiting out --timeout", () => {
+    const pidFile = join(binDir, "stall-bg-pids");
+    const launch = run(["codex", promptFile, "--background", "--stall", "1"], {
+      STUB_MODE: "stall",
+      STUB_PID_FILE: pidFile,
+    });
+    expect(launch.code).toBe(0);
+    const started = Date.now();
+    const r = run([
+      "codex",
+      "--extract",
+      "--wait",
+      backgroundOutputFile(launch.stdout),
+      "--timeout",
+      "600",
+    ]);
+    expect(Date.now() - started).toBeLessThan(30000);
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (stalled: no stream event for 1 s",
+    });
+    for (const pid of stubPids(pidFile)) expectGone(pid);
+  }, 40000);
+
+  test("--stall rejects a non-number and is refused on --extract: a silent default would hide a typo", () => {
+    expectFailure(run(["codex", promptFile, "--stall", "soon"]), {
+      code: 2,
+      stderr: "--stall requires a whole number of seconds, at least 1",
+    });
+    expectFailure(run(["codex", "--extract", "--stall", "5", pendingCapture()]), {
+      code: 2,
+      stderr: "--stall applies only to a launch",
+    });
   });
 
   test("--background prints output-file and pid; --extract --wait returns the verdict once the monitor records the exit", () => {
