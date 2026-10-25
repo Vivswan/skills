@@ -33,7 +33,6 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -723,22 +722,6 @@ interface ReviewerHooks {
   onDone: (status: string) => void;
 }
 
-/** writeSync may write FEWER bytes than asked (pipes and signal interruption
- * make short writes legal); dropping the remainder would tear the captured
- * stream, and a torn error line can then parse as a clean review. Loop until
- * every byte lands. The injectable `write` exists for the unit test, which
- * cannot force a real partial write deterministically. */
-export function writeAllSync(
-  fd: number,
-  chunk: Buffer,
-  write: (fd: number, chunk: Buffer, offset: number, length: number) => number = writeSync,
-): void {
-  let offset = 0;
-  while (offset < chunk.length) {
-    offset += write(fd, chunk, offset, chunk.length - offset);
-  }
-}
-
 function runReviewer(
   tool: Tool,
   launch: Launch,
@@ -762,7 +745,7 @@ function runReviewer(
   // A warning lands in review.err, which outlives the run and is named by a
   // failure, as well as on stderr (ignored for a detached monitor).
   const warn = (line: string) => {
-    writeAllSync(errFd, Buffer.from(`${line}\n`));
+    writeFileSync(errFd, `${line}\n`);
     process.stderr.write(`${line}\n`);
   };
   // The copy and the scratch codex home, when there are any, die with the
@@ -848,11 +831,11 @@ function runReviewer(
       hooks.onLife?.();
     }
     windStallClock();
-    writeAllSync(outFd, chunk);
+    writeFileSync(outFd, chunk);
   });
   child.stderr!.on("data", (chunk: Buffer) => {
     windStallClock();
-    writeAllSync(errFd, chunk);
+    writeFileSync(errFd, chunk);
   });
   // A spawn failure emits 'error' and may still emit 'close'; settle once.
   let settled = false;
@@ -1223,11 +1206,8 @@ function main(): void {
   if (forwarded !== null) forwarded.child = child;
 }
 
-// Guarded so importing the exported helpers (unit tests) runs nothing.
-if (import.meta.main) {
-  try {
-    main();
-  } catch (error) {
-    if (!(error instanceof SilentExit)) throw error;
-  }
+try {
+  main();
+} catch (error) {
+  if (!(error instanceof SilentExit)) throw error;
 }
