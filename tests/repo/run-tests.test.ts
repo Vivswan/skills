@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { lstatSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import {
+  SCRATCH_PREFIX,
+  SOCKET_PATH_MAX,
+  scratchParent,
+  TEST_SOCKET_ALLOWANCE,
+} from "../../scripts/hermetic-git-env.mts";
 import { ROOT } from "../../scripts/lib.mts";
 import { tempDirs } from "../helpers/temp-dirs";
 
@@ -20,6 +26,28 @@ const TARGET = join("tests", "repo", "lib.test.ts");
 
 function run(...args: string[]) {
   return runWithEnv({}, ...args);
+}
+
+/** A test that leaks a fixture without cleaning up, as a leaky suite would, and reports where it landed. */
+function leakProbe(): string {
+  const probe = join(temp.dir("launcher-tmpdir-probe-"), "probe.test.ts");
+  writeFileSync(
+    probe,
+    [
+      'import { test } from "bun:test";',
+      'import { mkdtempSync, realpathSync } from "node:fs";',
+      'import { tmpdir } from "node:os";',
+      'import { join } from "node:path";',
+      "// realpath throughout: process.cwd() is symlink-resolved (macOS /private/tmp).",
+      'test("leak", () => {',
+      '  console.error("TMPDIR=" + realpathSync(tmpdir()));',
+      '  console.error("CWD=" + process.cwd());',
+      '  console.error("FIXTURE=" + realpathSync(mkdtempSync(join(tmpdir(), "leaked-"))));',
+      "});",
+      "",
+    ].join("\n"),
+  );
+  return probe;
 }
 
 function runWithEnv(env: Record<string, string>, ...args: string[]) {
@@ -70,27 +98,7 @@ describe("run-tests zero-test guard", () => {
   });
 
   test("fixture temp dirs live in the launcher's scratch and die with the run", () => {
-    // A test that leaks a fixture without cleaning up, exactly like a leaky
-    // suite would, and reports where it landed.
-    const dir = temp.dir("launcher-tmpdir-probe-");
-    const probe = join(dir, "probe.test.ts");
-    writeFileSync(
-      probe,
-      [
-        'import { test } from "bun:test";',
-        'import { mkdtempSync, realpathSync } from "node:fs";',
-        'import { tmpdir } from "node:os";',
-        'import { join } from "node:path";',
-        "// realpath throughout: process.cwd() is symlink-resolved (macOS /private/tmp).",
-        'test("leak", () => {',
-        '  console.error("TMPDIR=" + realpathSync(tmpdir()));',
-        '  console.error("CWD=" + process.cwd());',
-        '  console.error("FIXTURE=" + realpathSync(mkdtempSync(join(tmpdir(), "leaked-"))));',
-        "});",
-        "",
-      ].join("\n"),
-    );
-    const r = run(probe);
+    const r = run(leakProbe());
     expect(r.code).toBe(0);
     const seen = Object.fromEntries(
       [...r.stderr.matchAll(/^(TMPDIR|CWD|FIXTURE)=(.+)$/gm)].map((m) => [m[1], m[2]]),
@@ -102,6 +110,29 @@ describe("run-tests zero-test guard", () => {
     expect(dirname(seen.CWD as string)).toBe(seen.TMPDIR);
     expect(dirname(seen.FIXTURE as string)).toBe(seen.TMPDIR);
     expect(() => lstatSync(seen.TMPDIR as string)).toThrow(/ENOENT/);
+  });
+
+  test("the scratch leaves a test room for a Unix socket path, whatever TMPDIR the launcher inherits", () => {
+    // macOS keeps TMPDIR under /var/folders/<xx>/<long>/T, and the fleet-events scenarios' daemon
+    // sockets under the scratch there passed the 104 bytes a socket path allows: every case exited 2.
+    // The deepest shape a test composes: the scenario helper's prefix, the longest scenario name in
+    // use, mkdtemp's six characters, a seven-digit pid, and the longest source name.
+    const deepest = "/session-events-merged-unreadable-XXXXXX/1234567.github-events.sock";
+    expect(TEST_SOCKET_ALLOWANCE).toBeGreaterThanOrEqual(deepest.length);
+
+    const deep = temp.dir(`${"x".repeat(SOCKET_PATH_MAX)}-`);
+    for (const inherited of [deep, tmpdir()]) {
+      const r = runWithEnv({ TMPDIR: inherited }, leakProbe());
+      expect(r.code).toBe(0);
+      const scratch = /^TMPDIR=(.+)$/m.exec(r.stderr)?.[1] as string;
+      expect(basename(scratch)).toStartWith(SCRATCH_PREFIX);
+      expect(Buffer.byteLength(scratch) + TEST_SOCKET_ALLOWANCE).toBeLessThanOrEqual(
+        SOCKET_PATH_MAX,
+      );
+    }
+
+    expect(scratchParent(["/tmp"])).toBe(realpathSync("/tmp"));
+    expect(() => scratchParent([deep])).toThrow(/set TMPDIR to a shorter directory/);
   });
 
   test("a forced-color summary still counts: ANSI codes cannot hide a real run", () => {

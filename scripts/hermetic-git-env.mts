@@ -25,6 +25,34 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { ROOT } from "./lib.mts";
 
+/** Linux allows 108 bytes for a Unix socket path and macOS 104; a longer one fails at bind. */
+export const SOCKET_PATH_MAX = 104;
+
+/** The launcher's scratch is a mkdtemp of this prefix under the parent scratchParent() picks. */
+export const SCRATCH_PREFIX = "hermetic-tests-";
+
+/** What a test adds below its TMPDIR for a daemon socket: a scenario directory and the socket file. */
+export const TEST_SOCKET_ALLOWANCE = 68;
+
+/**
+ * Returns the directory the launcher's scratch is made under: the first candidate whose scratch
+ * still leaves a test room for a daemon socket, the OS temp dir then /tmp by default. macOS keeps
+ * the OS temp dir under /var/folders/<xx>/<long>/T, which leaves none.
+ * @throws when no candidate is short enough; the message names each length and the remedy.
+ */
+export function scratchParent(candidates: string[] = [tmpdir(), "/tmp"]): string {
+  const room = SOCKET_PATH_MAX - TEST_SOCKET_ALLOWANCE - `/${SCRATCH_PREFIX}XXXXXX`.length;
+  const measured = candidates.map((dir) => realpathSync(dir));
+
+  const fit = measured.find((dir) => Buffer.byteLength(dir) <= room);
+  if (fit !== undefined) return fit;
+
+  const lengths = measured.map((dir) => `${dir} (${Buffer.byteLength(dir)} bytes)`).join(", ");
+  throw new Error(
+    `no temp directory short enough for a Unix socket path under the test scratch: ${lengths}, ${room} allowed; set TMPDIR to a shorter directory`,
+  );
+}
+
 /** Pure: builds a child environment from a base; never mutates the input. */
 export function hermeticGitEnv(base: NodeJS.ProcessEnv): Record<string, string> {
   const env: Record<string, string> = {};
