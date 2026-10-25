@@ -729,7 +729,8 @@ describe("fleet-events.mts", () => {
   }, 30000);
 
   test("a fork whose transcript leaves its last turn open while the lead holds its notice is ended, report received, never stuck: " +
-    "the harness omits the final stop reason when a hook closes the turn; the same shape with no notice is the stall it reads as", async () => {
+    "the harness omits the final stop reason when a hook closes the turn; the same shape with no notice is the stall it reads as, " +
+    "and so is a finished fork a sibling's message resumed, since the finish closed the run before that input", async () => {
     const s = new Scenario(PROGRAM, "finished-open");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
@@ -750,6 +751,15 @@ describe("fleet-events.mts", () => {
       { description: "build it", agentType: "fork" },
       openEnd(B),
     );
+    // C finished an hour ago and the lead holds that notice; a sibling's message then resumed it in
+    // its own transcript alone, and its new turn has been quiet since.
+    const pathC = writeAgent(session, C, { description: "check it", agentType: "fork" }, [
+      ...exchange(ago(70), "toolu_c0", C),
+      said(ago(61), "end_turn", C),
+      userText(ago(14), "also check the footer", C),
+      ...exchange(ago(13), "toolu_c1", C),
+      said(ago(13), null, C),
+    ]);
     const launched = (id: string, agentId: string, description: string): Line[] => [
       toolUse(ago(30), id, "Agent", { description, subagent_type: "fork", prompt: "go" }, null),
       toolResult(ago(30), id, {
@@ -757,10 +767,12 @@ describe("fleet-events.mts", () => {
         agentId: null,
       }),
     ];
-    // The lead holds A's notice and nothing of B's.
+    // The lead holds A's notice and C's, and nothing of B's.
     appendLines(session.sessionFile, [
       ...launched("toolu_spawn_a", A, "audit it"),
       ...launched("toolu_spawn_b", B, "build it"),
+      ...launched("toolu_spawn_c", C, "check it"),
+      userText(ago(60), notice(C), null),
       userText(ago(11), notice(A), null),
     ]);
     await s.start({ inbox: box.path });
@@ -769,13 +781,15 @@ describe("fleet-events.mts", () => {
     expect(rows(s)).toEqual([
       ["note", "agent audit it: ended 12 min ago, report received", fileUrl(pathA)],
       ["alert", "agent build it: stuck 12 min mid-turn, nothing pending", fileUrl(pathB)],
+      ["alert", "agent check it: stuck 13 min mid-turn, nothing pending", fileUrl(pathC)],
     ]);
     expect(standing(s, box.path)).toEqual([
       "agent build it: stuck 12 min mid-turn, nothing pending",
+      "agent check it: stuck 13 min mid-turn, nothing pending",
     ]);
     // Nothing more is said of the finished fork as it ages: no 20-minute repeat.
     expect(polled(s, box.path)).toBe(0);
-    expect(rows(s)).toHaveLength(2);
+    expect(rows(s)).toHaveLength(3);
     s.stop({ inbox: box.path });
   }, 30000);
 

@@ -131,9 +131,11 @@ function fold(lines: Line[]): Activity {
   return lines.reduce(reduce, initialTranscript().state);
 }
 
+/** Every fixture opens with an assistant line at `at(0)`, so the newest run begins there until an input resets it. */
 function activity(overrides: Partial<Activity>): Activity {
   return {
     lastMovedAt: null,
+    runSince: at(0),
     turn: "open",
     pending: {},
     jobs: {},
@@ -211,7 +213,12 @@ describe("the transcript reducer", () => {
       userText(at(2), "stop, change of plan"),
     ];
     expect(fold(lines)).toEqual(
-      activity({ lastMovedAt: at(2), named: { "/home/user/repo/README.md": at(0, 1) }, lines: 3 }),
+      activity({
+        lastMovedAt: at(2),
+        runSince: null,
+        named: { "/home/user/repo/README.md": at(0, 1) },
+        lines: 3,
+      }),
     );
   });
 
@@ -225,7 +232,12 @@ describe("the transcript reducer", () => {
       message: { role: "user", content: texts.map((text) => ({ type: "text", text })) },
     });
     expect(fold([...pending, blocks("stop,", "change of plan")])).toEqual(
-      activity({ lastMovedAt: at(2), named: { "/home/user/repo/README.md": at(0, 1) }, lines: 3 }),
+      activity({
+        lastMovedAt: at(2),
+        runSince: null,
+        named: { "/home/user/repo/README.md": at(0, 1) },
+        lines: 3,
+      }),
     );
     const mixed: Line = {
       ...envelope("user", at(2)),
@@ -257,6 +269,7 @@ describe("the transcript reducer", () => {
       at: at(2, 1),
       since: at(2, 1),
       outcome: "finished",
+      finishedAt: at(10),
     });
   });
 
@@ -272,7 +285,7 @@ describe("the transcript reducer", () => {
     expect(fold(lines.slice(0, 4))).toEqual(
       activity({ lastMovedAt: at(3, 1), turn: "ended", lines: 4 }),
     );
-    expect(fold(lines)).toEqual(activity({ lastMovedAt: at(9), lines: 5 }));
+    expect(fold(lines)).toEqual(activity({ lastMovedAt: at(9), runSince: null, lines: 5 }));
     expect(fold([said(at(0), "stop_sequence")])).toEqual(
       activity({ lastMovedAt: at(0), lines: 1 }),
     );
@@ -299,7 +312,7 @@ describe("the transcript reducer", () => {
       prompt: notice("b9z8y7x6w", "failed"),
     });
     expect(fold([...launch, ...movedOut, formA, formB])).toEqual(
-      activity({ lastMovedAt: at(6), lines: 6 }),
+      activity({ lastMovedAt: at(6), runSince: null, lines: 6 }),
     );
   });
 
@@ -311,9 +324,13 @@ describe("the transcript reducer", () => {
       commandMode: "task-notification",
       prompt: notice("b1a2b3c4d"),
     });
-    expect(fold([...ended, formB])).toEqual(activity({ lastMovedAt: at(6), lines: 4 }));
+    expect(fold([...ended, formB])).toEqual(
+      activity({ lastMovedAt: at(6), runSince: null, lines: 4 }),
+    );
     const formA = userText(at(6), notice("b1a2b3c4d"), { kind: "task-notification" });
-    expect(fold([...ended, formA])).toEqual(activity({ lastMovedAt: at(6), lines: 4 }));
+    expect(fold([...ended, formA])).toEqual(
+      activity({ lastMovedAt: at(6), runSince: null, lines: 4 }),
+    );
   });
 
   test("a prompt_snapshot or any other attachment spelling the notification tags is noise, never a notice: the job it names stays", () => {
@@ -336,9 +353,27 @@ describe("the transcript reducer", () => {
     const running = activity({
       lastMovedAt: at(2, 1),
       children: {
-        [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
-        [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "running" },
-        [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "running" },
+        [CHILD_A]: {
+          name: null,
+          at: at(0, 1),
+          since: at(0, 1),
+          outcome: "running",
+          finishedAt: null,
+        },
+        [CHILD_B]: {
+          name: "builder-b",
+          at: at(1, 1),
+          since: at(1, 1),
+          outcome: "running",
+          finishedAt: null,
+        },
+        [CHILD_C]: {
+          name: "reviewer",
+          at: at(2, 1),
+          since: at(2, 1),
+          outcome: "running",
+          finishedAt: null,
+        },
       },
       lines: 6,
     });
@@ -357,13 +392,32 @@ describe("the transcript reducer", () => {
     expect(fold(stopping)).toEqual(
       activity({
         lastMovedAt: at(12),
+        runSince: at(12),
         pending: {
           toolu_04: { tool: "TaskStop", at: at(12), taskId: "reviewer", timeoutMs: null },
         },
         children: {
-          [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "finished" },
-          [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "finished" },
-          [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "running" },
+          [CHILD_A]: {
+            name: null,
+            at: at(0, 1),
+            since: at(0, 1),
+            outcome: "finished",
+            finishedAt: at(10),
+          },
+          [CHILD_B]: {
+            name: "builder-b",
+            at: at(1, 1),
+            since: at(1, 1),
+            outcome: "finished",
+            finishedAt: at(11),
+          },
+          [CHILD_C]: {
+            name: "reviewer",
+            at: at(2, 1),
+            since: at(2, 1),
+            outcome: "running",
+            finishedAt: null,
+          },
         },
         lines: 9,
       }),
@@ -379,10 +433,29 @@ describe("the transcript reducer", () => {
     expect(state).toEqual(
       activity({
         lastMovedAt: at(14, 1),
+        runSince: at(12),
         children: {
-          [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "finished" },
-          [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "finished" },
-          [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "stopped" },
+          [CHILD_A]: {
+            name: null,
+            at: at(0, 1),
+            since: at(0, 1),
+            outcome: "finished",
+            finishedAt: at(10),
+          },
+          [CHILD_B]: {
+            name: "builder-b",
+            at: at(1, 1),
+            since: at(1, 1),
+            outcome: "finished",
+            finishedAt: at(11),
+          },
+          [CHILD_C]: {
+            name: "reviewer",
+            at: at(2, 1),
+            since: at(2, 1),
+            outcome: "stopped",
+            finishedAt: null,
+          },
         },
         stops: { [UNKNOWN]: at(13, 1) },
         lines: 14,
@@ -417,10 +490,34 @@ describe("the transcript reducer", () => {
     ];
     const rebound = fold(lines);
     expect(rebound.children).toEqual({
-      [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
-      [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "running" },
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "stopped" },
-      [REBORN]: { name: "reviewer", at: at(20, 1), since: at(20, 1), outcome: "running" },
+      [CHILD_A]: {
+        name: null,
+        at: at(0, 1),
+        since: at(0, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
+      [CHILD_B]: {
+        name: "builder-b",
+        at: at(1, 1),
+        since: at(1, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
+      [CHILD_C]: {
+        name: "reviewer",
+        at: at(2, 1),
+        since: at(2, 1),
+        outcome: "stopped",
+        finishedAt: null,
+      },
+      [REBORN]: {
+        name: "reviewer",
+        at: at(20, 1),
+        since: at(20, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
     });
     expect(isStopped(rebound, REBORN, "reviewer")).toBe(false);
     expect(isStopped(rebound, CHILD_C, "reviewer")).toBe(true);
@@ -449,13 +546,37 @@ describe("the transcript reducer", () => {
         .join("\n");
     const idleReviewer = '{"type":"idle_notification","agent":"reviewer"}';
     const running: Activity["children"] = {
-      [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
-      [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "running" },
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "running" },
+      [CHILD_A]: {
+        name: null,
+        at: at(0, 1),
+        since: at(0, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
+      [CHILD_B]: {
+        name: "builder-b",
+        at: at(1, 1),
+        since: at(1, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
+      [CHILD_C]: {
+        name: "reviewer",
+        at: at(2, 1),
+        since: at(2, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
     };
     const reviewerDone: Activity["children"] = {
       ...running,
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "finished" },
+      [CHILD_C]: {
+        name: "reviewer",
+        at: at(2, 1),
+        since: at(2, 1),
+        outcome: "finished",
+        finishedAt: at(10),
+      },
     };
     const line = (...parts: Array<[string, string]>) => userText(at(10), batch(...parts));
     expect(
@@ -501,7 +622,7 @@ describe("the transcript reducer", () => {
       ];
       const both = `${notice("b1a2b3c4d")}\n${notice("b9z8y7x6w", "failed")}`;
       expect(fold([...twoJobs, userText(at(5), both)])).toEqual(
-        activity({ lastMovedAt: at(5), lines: 5 }),
+        activity({ lastMovedAt: at(5), runSince: null, lines: 5 }),
       );
       const blocks: Line = {
         ...envelope("user", at(5)),
@@ -513,7 +634,9 @@ describe("the transcript reducer", () => {
           ],
         },
       };
-      expect(fold([...twoJobs, blocks])).toEqual(activity({ lastMovedAt: at(5), lines: 5 }));
+      expect(fold([...twoJobs, blocks])).toEqual(
+        activity({ lastMovedAt: at(5), runSince: null, lines: 5 }),
+      );
       // The harness writes each queued item as its own block, so a notice beside an envelope is a
       // teammate's words: the idle envelope still finishes its sender, the notice counts for nothing.
       const idleReviewer =
@@ -537,6 +660,7 @@ describe("the transcript reducer", () => {
       expect(interrupted).toEqual(
         activity({
           lastMovedAt: at(3),
+          runSince: null,
           jobs: { b1a2b3c4d: { at: at(0, 1) } },
           named: { "/home/user/repo/README.md": at(2) },
           lines: 4,
@@ -547,6 +671,7 @@ describe("the transcript reducer", () => {
       expect(fold([...twoJobs, userText(at(5), `${notice("b1a2b3c4d")}\n${quotedB}`)])).toEqual(
         activity({
           lastMovedAt: at(5),
+          runSince: null,
           jobs: { b1a2b3c4d: { at: at(0, 1) }, b9z8y7x6w: { at: at(1, 1) } },
           lines: 5,
         }),
@@ -720,7 +845,7 @@ describe("the transcript reducer", () => {
 
   test("a saved transcript without `stops` is replayed from its start, since its children's `at` may be resume times; one with `stops` keeps its cursor, a cursor without `size` taking its offset; a map that is not an object is no transcript", () => {
     const children = {
-      [CHILD_B]: { name: "reviewer", at: at(20, 1), outcome: "running" },
+      [CHILD_B]: { name: "reviewer", at: at(20, 1), outcome: "running", finishedAt: null },
       [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "finished" },
     };
     const saved = {
@@ -735,6 +860,9 @@ describe("the transcript reducer", () => {
       pending: { toolu_01: { tool: "Bash", at: at(3), taskId: null } },
     };
     expect(normalizeTranscript({ ...saved, state: withoutTimeout })).toEqual(initialTranscript());
+    // An activity saved before `runSince` cannot say whether a finished child ran again: replayed too.
+    const { runSince: _runSince, ...withoutRun } = saved.state;
+    expect(normalizeTranscript({ ...saved, state: withoutRun })).toEqual(initialTranscript());
 
     const kept = normalizeTranscript({
       cursor: { offset: 4096 },
@@ -749,7 +877,13 @@ describe("the transcript reducer", () => {
     });
     expect(pathsAlone?.state.named).toEqual({ "/repo/.worktrees/x": "1970-01-01T00:00:00.000Z" });
     expect(kept?.state.children).toEqual({
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "finished" },
+      [CHILD_C]: {
+        name: "reviewer",
+        at: at(2, 1),
+        since: at(2, 1),
+        outcome: "finished",
+        finishedAt: null,
+      },
     });
 
     expect(normalizeTranscript({ ...saved, state: { ...saved.state, children: 5 } })).toBeNull();
@@ -779,9 +913,27 @@ describe("the transcript reducer", () => {
       toolResult(at(19, 3), "toolu_m3"),
     ]);
     expect(untouched.children).toEqual({
-      [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
-      [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "stopped" },
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(2, 1), outcome: "finished" },
+      [CHILD_A]: {
+        name: null,
+        at: at(0, 1),
+        since: at(0, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
+      [CHILD_B]: {
+        name: "builder-b",
+        at: at(1, 1),
+        since: at(1, 1),
+        outcome: "stopped",
+        finishedAt: null,
+      },
+      [CHILD_C]: {
+        name: "reviewer",
+        at: at(2, 1),
+        since: at(2, 1),
+        outcome: "finished",
+        finishedAt: at(10),
+      },
     });
     const resumed = fold([
       ...finished,
@@ -791,11 +943,49 @@ describe("the transcript reducer", () => {
       toolResult(at(21, 1), "toolu_m2"),
     ]);
     expect(resumed.children).toEqual({
-      [CHILD_A]: { name: null, at: at(0, 1), since: at(0, 1), outcome: "running" },
-      [CHILD_B]: { name: "builder-b", at: at(1, 1), since: at(1, 1), outcome: "stopped" },
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), since: at(20, 1), outcome: "running" },
+      [CHILD_A]: {
+        name: null,
+        at: at(0, 1),
+        since: at(0, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
+      [CHILD_B]: {
+        name: "builder-b",
+        at: at(1, 1),
+        since: at(1, 1),
+        outcome: "stopped",
+        finishedAt: null,
+      },
+      [CHILD_C]: {
+        name: "reviewer",
+        at: at(2, 1),
+        since: at(20, 1),
+        outcome: "running",
+        finishedAt: null,
+      },
     });
     expect(resumed.pending).toEqual({});
+  });
+
+  test("a newer notice for a finished child refreshes its finish time, so a child a sibling resumed and that finished again is finished as of the newer notice; a stopped child takes no notice", () => {
+    const finishedTwice = fold([
+      ...spawns,
+      attachment(at(10), {
+        type: "queued_command",
+        commandMode: "task-notification",
+        prompt: notice(CHILD_C),
+      }),
+      toolUse(at(11), "toolu_stop", "TaskStop", { task_id: "builder-b" }),
+      toolResult(at(11, 1), "toolu_stop"),
+      userText(at(22), notice(CHILD_C)),
+      userText(at(23), idle("builder-b")),
+    ]);
+    expect(finishedTwice.children[CHILD_C]).toMatchObject({
+      outcome: "finished",
+      finishedAt: at(22),
+    });
+    expect(finishedTwice.children[CHILD_B]).toMatchObject({ outcome: "stopped", finishedAt: null });
   });
 
   test("timestamps are not monotonic (a queued attachment keeps its enqueue time), and lastMovedAt never moves backwards", () => {
@@ -805,8 +995,12 @@ describe("the transcript reducer", () => {
       attachment(at(0), { type: "total_tokens_reminder", content: "n tokens left" }),
       said(at(31, 5), "end_turn"),
     ];
-    expect(fold(lines.slice(0, 3))).toEqual(activity({ lastMovedAt: at(31), lines: 3 }));
-    expect(fold(lines)).toEqual(activity({ lastMovedAt: at(31, 5), turn: "ended", lines: 4 }));
+    expect(fold(lines.slice(0, 3))).toEqual(
+      activity({ lastMovedAt: at(31), runSince: at(30), lines: 3 }),
+    );
+    expect(fold(lines)).toEqual(
+      activity({ lastMovedAt: at(31, 5), runSince: at(30), turn: "ended", lines: 4 }),
+    );
   });
 
   test("the state carries ids, names, tool names, and times only: a marker planted in a tool_result body (string and array forms), in toolUseResult, in a call's input, in a prompt, and in a prompt_snapshot reaches no field", () => {
@@ -834,7 +1028,16 @@ describe("the transcript reducer", () => {
     expect(state).toEqual(
       activity({
         lastMovedAt: at(4, 1),
-        children: { [CHILD_A]: { name: null, at: at(4, 1), since: at(4, 1), outcome: "running" } },
+        runSince: at(4),
+        children: {
+          [CHILD_A]: {
+            name: null,
+            at: at(4, 1),
+            since: at(4, 1),
+            outcome: "running",
+            finishedAt: null,
+          },
+        },
         lines: 7,
       }),
     );
@@ -889,7 +1092,7 @@ describe("the incremental reader", () => {
     expect(readTranscript(transcript, file)).toBe(true);
     expect(transcript).toEqual({
       cursor: cursor(Buffer.byteLength(fresh) + 1),
-      state: activity({ lastMovedAt: at(40), turn: "ended", lines: 1 }),
+      state: activity({ lastMovedAt: at(40), runSince: at(40), turn: "ended", lines: 1 }),
     });
 
     // Replaced by a longer file under the same name: another inode, so the old offset means nothing.
@@ -905,6 +1108,7 @@ describe("the incremental reader", () => {
       cursor: cursor(Buffer.byteLength(swapped) + 1),
       state: activity({
         lastMovedAt: at(50),
+        runSince: at(50),
         pending: { toolu_09: { tool: "Bash", at: at(50), taskId: null, timeoutMs: null } },
         lines: 1,
       }),
@@ -926,6 +1130,7 @@ describe("the incremental reader", () => {
       cursor: cursor(Buffer.byteLength(other) + 1),
       state: activity({
         lastMovedAt: at(59),
+        runSince: at(59),
         pending: { toolu_12: { tool: "Bash", at: at(59), taskId: null, timeoutMs: null } },
         lines: 1,
       }),

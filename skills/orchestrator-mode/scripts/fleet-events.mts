@@ -24,6 +24,7 @@ import { attributeProcesses, type ProcessRow } from "./fleet/processes.mts";
 import { readTail } from "./fleet/transcript-tail.mts";
 import {
   type Activity,
+  type Child,
   displayName,
   initialTranscript,
   isStopped,
@@ -354,16 +355,27 @@ function jobEnded(path: string, io: Io): boolean {
   }
 }
 
+// A finish closes the run it reached the parent in. A message from a sibling resumes the agent in
+// its own transcript alone (the sender's map moves, the parent's does not), so a run begun after
+// the finish is judged on its own. The run's start is its first assistant line, stamped when
+// written; an input's own stamp can be its enqueue time, well behind.
+function finishHolds(child: Child, state: Activity): boolean {
+  if (child.outcome !== "finished") return false;
+  if (child.finishedAt === null || state.runSince === null) return true;
+  return Date.parse(state.runSince) <= Date.parse(child.finishedAt);
+}
+
 /**
  * Whether the agent's finish reached the one waiting on it: a spawned child is finished in its
- * parent's child map (an idle notification, a task notice); a foreground child's result closed the
- * parent's call that spawned it. Nothing read of the parent is no signal.
+ * parent's child map (an idle notification, a task notice) with no newer input of its own; a
+ * foreground child's result closed the parent's call that spawned it. Nothing read of the parent
+ * is no signal.
  */
 function signalReached(target: Target, agentId: string, entry: AgentEntry): boolean {
   const waiting = parentState(target, entry);
   if (waiting === undefined) return false;
   const child = waiting.children[agentId];
-  if (child !== undefined) return child.outcome === "finished";
+  if (child !== undefined) return finishHolds(child, entry.state);
   const call = entry.sidecar?.toolUseId ?? null;
   return call !== null && !Object.hasOwn(waiting.pending, call);
 }
