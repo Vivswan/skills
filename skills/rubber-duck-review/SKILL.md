@@ -66,6 +66,7 @@ Use this skill when someone asks for:
     In a repository with outside users or a hostile-input surface (a published package, a public service), or when the user asks, it is instead surfaced to the user and built only after they confirm (step 6). A small, obvious hardening that rides along in the change under review (an exit-code check beside a version check) is fine to keep. The reviewer must not propose a wider one to replace it.
 - **Companion skills' criteria ride in by the script, never from memory.** A launch through `scripts/run-review.mts` appends a `## Companion review criteria` section holding the `## Review Criteria` section of every installed skill that declares one, each under a `### <skill>` heading. Triage the resulting findings with that skill's own workflow.
   - A review through a dedicated tool (step 1) never passes the launcher, so its prompt gets the same block pasted from `bun "<skill-dir>/scripts/run-review.mts" criteria`.
+  - A skill marked user-invoke-only (`disable-model-invocation: true` in its frontmatter) is never appended by default, since automatic folding is a model invocation; it rides in only when `--criteria` names it.
 
   Specimen: a lead's fifteen briefs pointed builders at the prompt template and never said "expand code-standards"; about thirty rounds in one day passed closure factories and paragraph comments the house rules forbid.
   - There is no registry. The installed skills are the siblings of this skill's directory (found through its install symlink), and declaring the top-level heading is what makes one part of the review. A context-specific `## <Context> Review Criteria` is not picked up: that skill folds its own criteria into the reviews it launches itself.
@@ -98,7 +99,8 @@ usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--std
        run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)
        run-review.mts prepare <section>
        run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)
-the prompt gets a '## Companion review criteria' section: the '## Review Criteria' section of every installed skill declaring one (the siblings of this skill's directory);
+the prompt gets a '## Companion review criteria' section: the '## Review Criteria' section of every installed skill declaring one (the siblings of this skill's directory),
+  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;
   --criteria <name>[,<name>] keeps the named skills' sections alone, --criteria none appends nothing; the report's criteria lists the names that went in
 scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones
 codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir
@@ -154,7 +156,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 5); a subagent uses it for a review that may outlast one foreground call, with step 5's bounded waits.
   - Killing that PID cancels the review (the signal is forwarded to the reviewer and its process group).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line; the codex copy mode adds its notice first). Silence in between is normal. A real review can take a while.
-- Runtime: `bun`. `node` 24+ also works (`node "<skill-dir>/scripts/run-review.mts" ...`).
+- Runtime: `bun` (the frontmatter read uses its YAML parser).
 - Exit codes: the `exits:` lines of the usage block above. Step 5 says what to do on each.
 - The shipped script and these citations (the reviewer invocations, the flags, the failure verdict) are kept in sync upstream, and the usage block is held equal to the script by a test there. Where they disagree, trust the script and report the drift.
 

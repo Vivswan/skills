@@ -107,7 +107,8 @@ const USAGE = [
   "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
   "       run-review.mts prepare <section>",
   "       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)",
-  "the prompt gets a '## Companion review criteria' section: the '## Review Criteria' section of every installed skill declaring one (the siblings of this skill's directory);",
+  "the prompt gets a '## Companion review criteria' section: the '## Review Criteria' section of every installed skill declaring one (the siblings of this skill's directory),",
+  "  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;",
   "  --criteria <name>[,<name>] keeps the named skills' sections alone, --criteria none appends nothing; the report's criteria lists the names that went in",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
   "codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir",
@@ -248,7 +249,30 @@ function isEnoent(error: unknown): boolean {
 
 interface Criteria {
   name: string;
+
   body: string;
+
+  /** The skill is user-invoke-only, so it is folded in only when `--criteria` names it. */
+  userOnly: boolean;
+}
+
+/** Whether the page's frontmatter carries `disable-model-invocation: true`: automatic folding is a
+ * model invocation, which such a skill forbids. Frontmatter that does not parse is a usage error,
+ * since the silent reading would be an unwanted invocation. */
+function userInvokeOnly(page: string, pagePath: string): boolean {
+  const lines = page.split(/\r?\n/);
+  if (lines[0] !== "---") return false;
+
+  const end = lines.indexOf("---", 1);
+  if (end === -1) return false;
+
+  let frontmatter: unknown;
+  try {
+    frontmatter = Bun.YAML.parse(lines.slice(1, end).join("\n"));
+  } catch (error) {
+    usageError(`cannot parse the frontmatter of ${pagePath}: ${String(error)}`);
+  }
+  return isRecord(frontmatter) && frontmatter["disable-model-invocation"] === true;
 }
 
 /** What the launch runs under beyond the sandbox: the stall clock and the criteria appended to the prompt. */
@@ -288,16 +312,17 @@ function installedCriteria(): Criteria[] {
     }
 
     const body = criteriaSection(page);
-    if (body !== null) found.push({ name, body });
+    if (body !== null) found.push({ name, body, userOnly: userInvokeOnly(page, pagePath) });
   }
   return found;
 }
 
-/** The criteria a launch appends: every declaring skill by default, the named ones under
- * `--criteria a,b`, none under `--criteria none`. A name that declares none is a usage error. */
+/** The criteria a launch appends: every declaring skill that allows model invocation by default,
+ * the named ones (user-only included) under `--criteria a,b`, none under `--criteria none`. A name
+ * that declares none is a usage error. */
 function selectCriteria(spec: string | null): Criteria[] {
   const installed = installedCriteria();
-  if (spec === null) return installed;
+  if (spec === null) return installed.filter((criteria) => !criteria.userOnly);
   if (spec === "none") return [];
 
   const chosen = spec.split(",");

@@ -1717,7 +1717,7 @@ describe("run-review.mts", () => {
     });
   });
 
-  test("discovery reads the siblings of the script's own skill directory and skips a context-specific heading", () => {
+  test("discovery reads the siblings of the script's own skill directory, skips a context-specific heading, and folds a user-invoke-only skill in only when named", () => {
     // A scratch skills root: this skill copied whole (the script finds its root through its own
     // real path), one sibling declaring the heading, one declaring a context-specific variant.
     const root = temp.dir("run-review-skills-root-");
@@ -1740,6 +1740,13 @@ describe("run-review.mts", () => {
       join(root, "gamma", "SKILL.md"),
       "# Gamma\r\n\r\n## Review Criteria\r\n\r\n- a gamma rule\r\n- another\r\n\r\n## After\r\n",
     );
+    // A user-invoke-only declaring sibling: automatic folding is a model invocation, so it rides
+    // in only when named. The marker is written in a YAML form a line regex would miss.
+    mkdirSync(join(root, "delta"));
+    writeFileSync(
+      join(root, "delta", "SKILL.md"),
+      "---\nname: delta\ndescription: Use when asked by name.\ndisable-model-invocation : true # explicit only\n---\n\n# Delta\n\n## Review Criteria\n\n- a delta rule\n",
+    );
     const copiedScripts = join(root, "rubber-duck-review", "scripts");
     // The stub checks the schema path the launcher passes, which is the copy's.
     const r = run(
@@ -1751,9 +1758,25 @@ describe("run-review.mts", () => {
     );
     expect(r.code).toBe(0);
     expect(r.report().criteria).toEqual(["alpha", "gamma"]);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(
-      `${PROMPT.trimEnd()}\n\n## Companion review criteria\n\n### alpha\n\n- an alpha rule\n- another\n\n### gamma\n\n- a gamma rule\n- another\n`,
+    const block = `## Companion review criteria\n\n### alpha\n\n- an alpha rule\n- another\n\n### gamma\n\n- a gamma rule\n- another\n`;
+    expect(readFileSync(r.promptCopy, "utf-8")).toBe(`${PROMPT.trimEnd()}\n\n${block}`);
+    const copiedScript = join(copiedScripts, "run-review.mts");
+    expect(run(["criteria"], {}, undefined, undefined, copiedScript).stdout).toBe(block);
+
+    const named = run(
+      ["codex", promptFile, "--criteria", "delta"],
+      { STUB_SCHEMA: realpathSync(join(copiedScripts, "verdict-schema.json")) },
+      undefined,
+      undefined,
+      copiedScript,
     );
+    expect(named.code).toBe(0);
+    expect(named.report().criteria).toEqual(["delta"]);
+    const deltaBlock = "## Companion review criteria\n\n### delta\n\n- a delta rule\n";
+    expect(readFileSync(named.promptCopy, "utf-8")).toBe(`${PROMPT.trimEnd()}\n\n${deltaBlock}`);
+    expect(
+      run(["criteria", "--criteria", "delta"], {}, undefined, undefined, copiedScript).stdout,
+    ).toBe(deltaBlock);
   });
 
   test("a reviewer silent past --stall is killed with its process group, the sleep it left behind included, and the run fails as a stall", () => {
