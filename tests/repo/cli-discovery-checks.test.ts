@@ -12,9 +12,10 @@ import { CheckFailure } from "../../scripts/lib.mts";
 // by any mention. These fixtures replay each flaw against the row-based
 // checks.
 
+// ESC and the gutter glyph (U+2502, box drawings light vertical) are built from their code points, so
+// neither a raw control character nor a look-alike unicode glyph lands in this file.
+
 const ESC = String.fromCharCode(27);
-// The CLI draws its listing gutter with U+2502 (box drawings light vertical);
-// built from the code point so no look-alike unicode lands in this file.
 const GUTTER = String.fromCharCode(0x2502);
 
 const GROUP = "Vivswan Skills";
@@ -38,6 +39,7 @@ function listing(entries: readonly Entry[], group = GROUP): string {
 
 // watch-github has NO row here, but no-sleep's description names it -
 // the exact shape of the reproduced silent vanish.
+
 const VANISHED = listing([
   { name: "code-standards", description: "Use when writing code changes." },
   {

@@ -18,31 +18,39 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
-// The harness writes each queued notice as its own block, so a block that is nothing but
-// `<task-notification>` elements is notices, every one of them; a block carrying anything else (a
-// teammate's envelope, prose) is a teammate's words, and a notice quoted inside it is not one. The
-// envelope text escapes nothing, so a span rule could never tell a quoted envelope from a real one.
+// The harness writes each queued notice as its own block of these elements; one quoted inside a teammate's envelope is text, not a notice.
 const NOTICE_OPEN = "<task-notification>";
+
+// The envelope text escapes nothing, so a block is read element by element from these tags, never by a span rule over the whole.
 const NOTICE_CLOSE = "</task-notification>";
+
+// A notice's body carries its task id in this element, as the harness writes it: one word, no nested tag.
 const TASK_ID_OPEN = "<task-id>";
+
+// A body without the close names no task, so nothing is finished for it.
 const TASK_ID_CLOSE = "</task-id>";
-// An absolute path inside a command or a prompt: quoted whole (a space inside stays), or bare
-// after a separator; a drive letter and colon before the slash (`C:/x`) is no POSIX path. A
-// path-valued field (`file_path`, `path`, `cwd`) is taken whole instead, so a space never cuts a
-// path into a sibling worktree's root.
+
+// An absolute path inside a command or a prompt: quoted whole (a space inside stays), or bare after a separator; a drive letter and colon before the slash (`C:/x`) is no POSIX path.
 const ABSOLUTE_PATH =
   /"(\/[^"]+)"|'(\/[^']+)'|`(\/[^`]+)`|(?<![^\s=(,:]|\b[A-Za-z]:)\/[^\s"'`;|&<>()]+/g;
+
+// A path-valued field (`file_path`, `path`, `cwd`) is taken whole instead, so a space never cuts a path into a sibling worktree's root.
 const PATH_FIELD = /path|dir|cwd/i;
-// Distinct paths an agent named, the least recently named dropped past this: bounded state for a
-// long transcript, and a path in current use never lapses.
+
+// Distinct paths an agent named, the least recently named dropped past this: bounded state for a long transcript, and a path in current use never lapses.
 const MAX_NAMED_PATHS = 1000;
+
 // The time a path saved before times were kept was named: long ago, so no lead claim rests on it.
 const LONG_AGO = new Date(0).toISOString();
-// Each teammate envelope with its body: the regex locates, the parsed body decides. A body with a
-// tag inside is text, never a notice, so it is not captured.
+
+// Each teammate envelope with its body: the regex locates, the parsed body decides; a body with a tag inside is text, never a notice, so it is not captured.
 const TEAMMATE_ENVELOPE =
   /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>([^<]*)<\\?\/teammate-message>/g;
+
+// The `status` a toolUseResult carries for an agent spawned to run beside its parent: a background task, or a teammate.
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
+
+// `\n` as a byte, for the search over the raw buffer before it is decoded.
 const NEWLINE = 0x0a;
 
 /**
@@ -62,36 +70,56 @@ export interface Job {
   at: string;
 }
 
-/**
- * An agent this one spawned, keyed by agentId, kept after it finished so a later poll still sees a
- * stop. `at` is the spawn and never moves, since a name resolves to the latest spawn; `since` is
- * when its current run began: the spawn, or the message that resumed it.
- */
+/** An agent this one spawned, keyed by agentId, kept after it finished so a later poll still sees a stop. */
 export interface Child {
+  /** The name its Agent call gave, what a later TaskStop or SendMessage names it by; null when none was given. */
   name: string | null;
+
+  /** The spawn; it never moves, since a name resolves to the latest spawn. */
   readonly at: string;
+
+  /** When its current run began: the spawn, or the message that resumed it. */
   since: string;
+
+  /** Stopped is final (TaskStop); a finished child runs again when this agent messages it. */
   outcome: "running" | "finished" | "stopped";
+
   /** When the finish reached this agent; null while the child runs, and for a finish saved before the time was kept. */
   finishedAt: string | null;
 }
 
-/** What an agent's transcript says it is doing. `lastMovedAt` is the newest timestamp seen, floored by the file's mtime once read from disk. */
+/** What an agent's transcript says it is doing. */
 export interface Activity {
+  /** The newest timestamp seen, floored by the file's mtime once read from disk. */
   lastMovedAt: string | null;
+
   /** When the newest run began: the first assistant line after an input (a user text, a queued notice); null before any assistant line. */
   runSince: string | null;
+
   /** Whether an input arrived with no assistant line after it yet: the next one begins a new run. */
   runPending: boolean;
+
+  /** Open until a message's last block says end_turn; a user line or a notice opens it again. */
   turn: "open" | "ended";
+
+  /** Tool calls with no result yet, by tool_use_id; an injected text that is no notice clears them all, since it reached the agent before any result could. */
   pending: Record<string, PendingCall>;
+
+  /** Background jobs launched here, by task id, until the notice naming each arrives. */
   jobs: Record<string, Job>;
+
+  /** Agents spawned here, by agentId; a finished one stays, so a later poll still sees a stop. */
   children: Record<string, Child>;
+
   /** Successful TaskStops on a task id that is no job and no child here, by that exact id: a nested agent another agent spawned, stopped by the lead. */
   stops: Record<string, string>;
+
   /** Absolute paths named in this agent's tool-call inputs (never a result or a user text), resolved, each with the time of the newest call naming it, least recently named first: the worktrees it works in by its own commands. */
   named: Record<string, string>;
+
+  /** Lines folded in; with `skipped`, every line read so far. */
   lines: number;
+
   /** Lines that were not a JSON object with a timestamp: counted, never fatal. */
   skipped: number;
 }
@@ -111,10 +139,18 @@ export interface Transcript {
 
 /** What one read of a transcript returned: the complete new lines and where the next read starts. */
 export interface Increment {
+  /** The complete lines since the cursor that parsed as a JSON object, in file order. */
   lines: Record<string, unknown>[];
+
+  /** The complete lines since the cursor that were not a JSON object. */
   skipped: number;
+
+  /** Past the last newline read, so an unfinished tail is read again. */
   cursor: Cursor;
+
+  /** The file's mtime at the read; it floors `lastMovedAt`, so a transcript mid-write counts as moving. */
   mtimeMs: number;
+
   /** Another inode, or smaller than the size seen: replaced, truncated, or rotated, so the read started over. */
   restarted: boolean;
 }
@@ -392,32 +428,32 @@ function reduceInjected(state: Activity, texts: string[], at: string): void {
   if (notices === 0) state.pending = {};
 }
 
-function reduceResults(
+/**
+ * Closes the pending call a tool_result answers, counting a confirmed stop or resume. Returns the
+ * child name an Agent call gave, for the spawn the line's toolUseResult reports; null otherwise.
+ */
+function closeCall(state: Activity, item: Record<string, unknown>, at: string): string | null {
+  const id = str(item.tool_use_id);
+  if (id === null) return null;
+  const call = state.pending[id];
+  delete state.pending[id];
+  if (call === undefined || call.taskId === null) return null;
+
+  // A stop or a resume counts once its result confirms it: an errored TaskStop (no such task)
+  // stopped nothing, an errored SendMessage reached nobody.
+  const confirmed = item.is_error !== true;
+  if (confirmed && call.tool === "TaskStop") stopTask(state, call.taskId, at);
+  if (confirmed && call.tool === "SendMessage") resumeChild(state, call.taskId, at);
+  return call.tool === "Agent" ? call.taskId : null;
+}
+
+/** What the line's toolUseResult launched: a background job by its task id, a spawned agent by its agentId under the name its Agent call gave. */
+function recordLaunch(
   state: Activity,
-  line: Record<string, unknown>,
+  result: Record<string, unknown>,
   at: string,
-  parts: unknown[],
+  spawning: string | null,
 ): void {
-  let spawning: string | null = null;
-  for (const part of parts) {
-    const item = record(part);
-    if (item?.type !== "tool_result") continue;
-    const id = str(item.tool_use_id);
-    if (id === null) continue;
-    const call = state.pending[id];
-    delete state.pending[id];
-    if (call === undefined || call.taskId === null) continue;
-    if (call.tool === "Agent") spawning = call.taskId;
-    // A stop or a resume counts once its result confirms it: an errored TaskStop (no such task)
-    // stopped nothing, an errored SendMessage reached nobody.
-    if (item.is_error === true) continue;
-    if (call.tool === "TaskStop") stopTask(state, call.taskId, at);
-    if (call.tool === "SendMessage") resumeChild(state, call.taskId, at);
-  }
-
-  const result = record(line.toolUseResult);
-  if (result === null) return;
-
   // A job also when a foreground command timed out and was moved to the background.
   const job = str(result.backgroundTaskId);
   if (job !== null) state.jobs[job] = { at };
@@ -432,6 +468,25 @@ function reduceResults(
       finishedAt: null,
     };
   }
+}
+
+function reduceResults(
+  state: Activity,
+  line: Record<string, unknown>,
+  at: string,
+  parts: unknown[],
+): void {
+  let spawning: string | null = null;
+  for (const part of parts) {
+    const item = record(part);
+    if (item?.type !== "tool_result") continue;
+    const spawned = closeCall(state, item, at);
+    if (spawned !== null) spawning = spawned;
+  }
+
+  const result = record(line.toolUseResult);
+  if (result === null) return;
+  recordLaunch(state, result, at, spawning);
 }
 
 // A user line with no tool_result block is injected input whatever its form: each text block of an

@@ -27,13 +27,14 @@ const SKIPPED_DIRS = new Set(["node_modules", "venv", "__pycache__"]);
 const REFRAIN =
   "python-order: a finding is a place to look; readability and beauty come first, and the order yields where it would read worse";
 
-// The analysis, as Python: file paths arrive one per line on stdin, findings leave as JSON lines.
-// symtable decides what a function reads from the module, through every scope nested in it, so a
-// comprehension variable, a local import, or a parameter of the same name is not a reference to a
-// later def. A finding sits at the function's own def line: hunting the use's line through the ast
-// re-derives Python's scope rules, and review kept finding a scope that walk resolved wrongly.
-// A generic def's table sits inside a type-parameter table, whose type name differs across Python versions.
 const ANALYSIS = `
+"""The analysis: file paths arrive one per line on stdin, findings leave as JSON lines.
+
+symtable decides what a function reads from the module, through every scope nested in it, so a
+comprehension variable, a local import, or a parameter of the same name is not a reference to a
+later def. A finding sits at the function's own def line: hunting the use's line through the ast
+re-derives Python's scope rules, and review kept finding a scope that walk resolved wrongly.
+"""
 import ast, json, symtable, sys, tokenize
 
 DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -91,6 +92,7 @@ def late_assignments(statements, functions):
 
 
 def function_table(children, name, lineno):
+    # A generic def's table sits inside a type-parameter table, whose type name differs across Python versions.
     for child in children:
         if child.get_lineno() != lineno or child.get_name() != name:
             continue
@@ -177,9 +179,9 @@ export function pythonFiles(paths: readonly string[]): string[] {
   return [...out].sort();
 }
 
+/** The findings, and the files Python could not parse: for those the message is the syntax error, at its line. */
 export interface Report {
   readonly findings: Finding[];
-  /** Files Python could not parse: the syntax error, at its line. */
   readonly unreadable: Finding[];
 }
 
@@ -202,10 +204,10 @@ export function checkFiles(files: readonly string[], python = "python3"): Report
       message?: string;
       unreadable?: string;
     };
-    if (row.unreadable !== undefined) {
-      unreadable.push({ file: row.file, line: row.line, message: row.unreadable });
-    } else {
+    if (row.unreadable === undefined) {
       findings.push({ file: row.file, line: row.line, message: row.message ?? "" });
+    } else {
+      unreadable.push({ file: row.file, line: row.line, message: row.unreadable });
     }
   }
   return { findings, unreadable };
@@ -222,6 +224,13 @@ function readArgs(argv: readonly string[]): { python: string; paths: string[] } 
   return { python: values.python, paths: positionals };
 }
 
+/** A file Python could not parse outranks the findings: the run is incomplete. */
+function exitStatus(report: Report): number {
+  if (report.unreadable.length > 0) return 2;
+  if (report.findings.length > 0) return 1;
+  return 0;
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args[0] === "--help" || args[0] === "-h") {
@@ -236,7 +245,7 @@ if (import.meta.main) {
     for (const f of report.findings) console.log(show(f));
     for (const f of report.unreadable) console.error(`unreadable: ${show(f)}`);
     if (report.findings.length > 0) console.error(REFRAIN);
-    process.exit(report.unreadable.length > 0 ? 2 : report.findings.length > 0 ? 1 : 0);
+    process.exit(exitStatus(report));
   } catch (error) {
     console.error(`${SELF}: ${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`);
     process.exit(2);

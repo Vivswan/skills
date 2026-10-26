@@ -24,23 +24,31 @@ import {
 } from "./readers.mts";
 
 export type Registry = {
+  /** check-name.mts runs the taken control on every column of this kind. */
   kind: "registry";
+
   /** The column name, and the id `--registries` selects by. */
   id: string;
+
+  /** The human name, shown by `--list-registries` alone; the TSV header and the JSON use the id. */
   label: string;
+
   /** A name known to be taken there: the row that proves the column reads before a free is trusted. */
   takenControl: string;
+
   /** What the control must read; any taken cell unless the column exists to see something finer. */
   controlHolds?: (cell: Cell) => boolean;
+
   /** Runs on every name whatever `--registries` selects: the page's gates read these columns. */
   gate?: true;
+
+  /** The reader; `claimed` is the typosquat column's, and every other reader ignores it. */
   lookup: (io: Io, name: string, claimed: Claimed) => Promise<Cell>;
 };
 
-/** One column per top-level domain the run asks for, each its own registry. */
+/** One column per top-level domain the run asks for, each its own registry; `id` is the pattern `--list-registries` shows, and each generated column is `dns-<tld>`. */
 export type DomainFamily = {
   kind: "domains";
-  /** The id pattern, for `--list-registries`; each generated column is `dns-<tld>`. */
   id: string;
   label: string;
   takenControl: string;
@@ -60,10 +68,15 @@ export type Column = Registry | NoteColumn;
 
 export type RegistryEntry = Registry | DomainFamily | NoteColumn;
 
+/** arXiv's export API asks for one request every three seconds. */
 export const ARXIV_GAP_MS = 3_000;
-/** GitHub's search limit is 30 a minute with a token and 10 without. */
+
+/** GitHub's search limit is 30 a minute with a token. */
 export const GITHUB_SEARCH_GAP_MS = 2_000;
+
+/** GitHub's search limit is 10 a minute without a token. */
 export const GITHUB_SEARCH_GAP_ANONYMOUS_MS = 6_000;
+
 /** crates.io's crawler policy: one request a second. */
 export const CRATES_GAP_MS = 1_000;
 
@@ -83,8 +96,7 @@ function packageRegistry(
   };
 }
 
-/** The taken controls are names that were taken on the day each entry was written; a registry that
- * drops one shows up as a failed instrument, and the entry gets a new control. */
+/** The taken controls were taken on the day each entry was written; a registry that drops one shows up as a failed instrument, and the entry gets a new control. */
 export const REGISTRIES: readonly RegistryEntry[] = [
   packageRegistry(
     "pypi",

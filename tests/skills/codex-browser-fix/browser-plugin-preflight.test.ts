@@ -1,3 +1,11 @@
+/**
+ * Behavioral coverage for browser-plugin-preflight.mts against a fixture app
+ * bundle and codex home: the stale-cache and stale-config repair, the
+ * read-only --check refusal, and the required-config gate. The codex home is
+ * injected through CODEX_HOME and the bundle through --plugin-dir, so the real
+ * ~/.codex is never touched.
+ */
+
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -6,14 +14,6 @@ import { browserAuthLauncher } from "../../../skills/codex-browser-fix/scripts/b
 import { tempDirs } from "../../helpers/temp-dirs";
 
 const temp = tempDirs();
-
-/**
- * Behavioral coverage for browser-plugin-preflight.mts against a fixture app
- * bundle and codex home: the stale-cache and stale-config repair, the
- * read-only --check refusal, and the required-config gate. The codex home is
- * injected through CODEX_HOME and the bundle through --plugin-dir, so the real
- * ~/.codex is never touched.
- */
 
 const SCRIPT = path.join(
   import.meta.dir,

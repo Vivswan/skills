@@ -55,14 +55,15 @@ for (let index = 0; index < args.length; index += 1) {
     pluginDirOverride = args[index];
   } else usage();
 }
+
+// The codex home is made absolute: it is persisted into config values and the launcher path, which the helper later resolves from its own cwd.
+
 const appPluginCandidates = pluginDirOverride
   ? [pluginDirOverride]
   : [
       "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/chrome",
       "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled/plugins/chrome",
     ];
-// Absolute: the home is persisted into config values and the launcher path,
-// which the helper later resolves from its own cwd.
 const codexHome = path.resolve(process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
 const cacheRoot = path.join(codexHome, "plugins", "cache", "openai-bundled", "chrome");
 const rollbackRoot = path.join(codexHome, "plugin-rollbacks", "openai-bundled", "chrome");
@@ -228,7 +229,9 @@ async function ensureSymlink(
 
   if (await exists(linkPath)) {
     const stat = await fs.lstat(linkPath);
-    if (!stat.isSymbolicLink()) {
+    if (stat.isSymbolicLink()) {
+      await fs.unlink(linkPath);
+    } else {
       const rollbackPath = rollbackPathFor(linkPath, rollbackBase);
       if (await exists(rollbackPath)) {
         throw new Error(
@@ -236,8 +239,6 @@ async function ensureSymlink(
         );
       }
       await fs.rename(linkPath, rollbackPath);
-    } else {
-      await fs.unlink(linkPath);
     }
   }
   await fs.symlink(targetPath, linkPath, "dir");
@@ -399,11 +400,11 @@ async function main(): Promise<void> {
   }
 
   const currentVersionPath = path.join(cacheRoot, sourceManifest.version);
-  if (!(await exists(currentVersionPath))) {
+  if (await exists(currentVersionPath)) {
+    await syncPinnedDirectory(sourceDir, currentVersionPath);
+  } else {
     if (checkOnly) throw new Error(`Missing current-version link: ${currentVersionPath}`);
     await fs.symlink(sourceDir, currentVersionPath, "dir");
-  } else {
-    await syncPinnedDirectory(sourceDir, currentVersionPath);
   }
 
   await ensureSymlink(path.join(cacheRoot, "latest"), sourceDir);

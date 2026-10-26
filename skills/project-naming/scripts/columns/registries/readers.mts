@@ -73,6 +73,7 @@ export async function githubUser(io: Io, name: string): Promise<Cell> {
 
 /** Stars at or above which an exact-name GitHub repository counts as taken. */
 export const GITHUB_STARS_TAKEN = 20;
+
 /** GitHub search serves at most 1000 results; past that an exact-name hit cannot be ruled out. */
 const GITHUB_SEARCH_PAGES = 10;
 
@@ -144,12 +145,11 @@ export async function githubRepo(io: Io, name: string): Promise<Cell> {
 /** The indexes are tens of megabytes where every other reply is one name's. */
 const BREW_INDEX_TIMEOUT_MS = 120_000;
 
+/** One brew index: `nameKey` is the field holding an entry's own name, and `via` maps each list of other names an entry goes by to how the cell says so. */
 type BrewIndex = {
   kind: "formula" | "cask";
   url: string;
-  /** The key of an entry's own name. */
   nameKey: string;
-  /** Keys of the lists of other names an entry goes by, each with how the cell says so. */
   via: Record<string, string>;
 };
 
@@ -236,9 +236,10 @@ export async function dockerHub(io: Io, name: string): Promise<Cell> {
 
 type SolrReply = { response?: { numFound?: number } };
 
-/** search.maven.org answers in under a second or holds the request for 30 seconds and more, at
- * random and more often after a burst. So the lookups run one at a time, and a held request is
- * abandoned early and asked again, up to MAVEN_ATTEMPTS times, before the cell is unknown. */
+// search.maven.org answers in under a second or holds the request for 30 seconds and more, at
+// random and more often after a burst. So the lookups run one at a time, and a held request is
+// abandoned early and asked again, up to MAVEN_ATTEMPTS times, before the cell is unknown.
+
 const MAVEN_ATTEMPT_MS = 5_000;
 const MAVEN_ATTEMPTS = 3;
 
@@ -325,10 +326,11 @@ async function arxivLookup(io: Io, name: string): Promise<Cell> {
   }
 }
 
-/** The zone apex, in zone-file notation, which no candidate spells (a name starts with a
- * letter). No host under an arbitrary zone is guaranteed an address (nic.uk and nic.ca have none,
- * nic.co.uk does not exist), where a zone a registry delegates has name servers by definition,
- * and a name server has an address. */
+// The DNS control is the zone itself, not a host under it: no host under an arbitrary zone is
+// guaranteed an address (nic.uk and nic.ca have none, nic.co.uk does not exist), where a zone a
+// registry delegates has name servers by definition, and a name server has an address.
+
+/** The zone apex, in zone-file notation, which no candidate spells (a name starts with a letter). */
 export const DNS_TAKEN_CONTROL = "@";
 
 export async function domain(io: Io, name: string, tld: string): Promise<Cell> {

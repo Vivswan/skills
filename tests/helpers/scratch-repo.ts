@@ -42,8 +42,10 @@ export function git(cwd: string, ...args: string[]): string {
 export interface ScratchRepo<Name extends string> {
   /** The canonical temp root, as git and the daemon report paths: a temp dir can sit behind a symlink. */
   base: string;
+
   /** The repository: six tracked files on `main`, one commit. */
   repo: string;
+
   /** Each worktree's path by its directory name, under `base`. */
   worktrees: Record<Name, string>;
 }

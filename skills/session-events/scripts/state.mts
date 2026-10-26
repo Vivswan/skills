@@ -45,9 +45,15 @@ export interface State<Target> {
  * it, or a named file sink (`--id`) a non-Claude agent reads with `wait`, ended by `--pid` or `stop`.
  */
 export interface Owner {
+  /** A file sink's name from `--id`; null for a session. */
   id: string | null;
+
+  /** The session's inbox socket, where the alerts go; null for a file sink. */
   inbox: string | null;
+
+  /** The process whose end ends the daemon: the session's, or a file sink's `--pid`; null when nothing does. */
   pid: number | null;
+
   /** The session's start token: with the pid it names one session, since pids are reused. */
   start: string | null;
 }
@@ -77,14 +83,8 @@ export function ownerFiles(dir: string, owner: Owner, source: string): Files {
 
 export class RuntimeDirError extends Error {}
 
-/**
- * One private directory per user, the ladder Claude Code uses for its own sockets. A candidate that
- * exists but belongs to someone else is skipped, never shared: the sockets inside it are open inboxes.
- * The override must be absolute: the daemon and the CLI are started from different directories,
- * and a relative one would name two sockets.
- */
-export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
-  const uid = process.getuid?.() ?? 0;
+/** The ladder of candidates, the override first; a relative or multi-line override is refused outright. */
+function runtimeDirCandidates(env: NodeJS.ProcessEnv, uid: number): string[] {
   const candidates: string[] = [];
   if (env.SESSION_EVENTS_DIR) {
     if (!isAbsolute(env.SESSION_EVENTS_DIR) || /[\r\n]/.test(env.SESSION_EVENTS_DIR)) {
@@ -100,21 +100,41 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
     candidates.push(join(env.CLAUDE_CODE_TMPDIR, `session-events-${uid}`));
   }
   candidates.push(join(tmpdir(), `session-events-${uid}`), `/tmp/session-events-${uid}`);
-  const refused: string[] = [];
-  for (const dir of candidates) {
-    try {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const stat = lstatSync(dir);
-      if (!stat.isDirectory() || stat.uid !== uid) {
-        refused.push(`${dir}: not a directory owned by uid ${uid}`);
-        continue;
-      }
-      if ((stat.mode & 0o077) !== 0) chmodSync(dir, 0o700);
-      return dir;
-    } catch (error) {
-      refused.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
+  return candidates;
+}
+
+/** Makes `dir` this user's private directory, or says why it cannot be one. */
+function claimPrivateDir(dir: string, uid: number): string | null {
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stat = lstatSync(dir);
+    if (!stat.isDirectory() || stat.uid !== uid) {
+      return `${dir}: not a directory owned by uid ${uid}`;
     }
+
+    if ((stat.mode & 0o077) !== 0) chmodSync(dir, 0o700);
+    return null;
+  } catch (error) {
+    return `${dir}: ${error instanceof Error ? error.message : String(error)}`;
   }
+}
+
+/**
+ * One private directory per user, the ladder Claude Code uses for its own sockets. A candidate that
+ * exists but belongs to someone else is skipped, never shared: the sockets inside it are open inboxes.
+ * The override must be absolute: the daemon and the CLI are started from different directories,
+ * and a relative one would name two sockets.
+ */
+export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
+  const uid = process.getuid?.() ?? 0;
+  const refused: string[] = [];
+
+  for (const dir of runtimeDirCandidates(env, uid)) {
+    const refusal = claimPrivateDir(dir, uid);
+    if (refusal === null) return dir;
+    refused.push(refusal);
+  }
+
   throw new RuntimeDirError(
     `no usable runtime directory; set SESSION_EVENTS_DIR to a private directory\n  ${refused.join("\n  ")}`,
   );

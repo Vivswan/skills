@@ -18,24 +18,22 @@ import { stripVTControlCharacters } from "node:util";
 import { fail, KEBAB_CASE } from "./lib.mts";
 
 export interface ListingRow {
+  /** The skill name the row holds: one bare kebab-case word, as the CLI prints it. */
   readonly name: string;
+
   /** The nearest group heading above the row ("" before any heading). */
   readonly group: string;
 }
 
 // KEBAB_CASE without its anchors, for embedding in the row pattern.
 const KEBAB = KEBAB_CASE.source.replace(/^\^/, "").replace(/\$$/, "");
-// The CLI's listing gutter: U+2502 (box drawings light vertical), built from
-// the code point so no look-alike unicode lands in this file.
+
+// The CLI's listing gutter, U+2502 (box drawings light vertical), built from the code point so no look-alike unicode lands in this file.
 const GUTTER = String.fromCharCode(0x2502);
-// A listing row exactly as the CLI prints one: the gutter glyph, the 4-space
-// row indent (descriptions and their wrap continuations are indented
-// deeper), then one bare kebab-case name and nothing else. The prefix is
-// required, so neither a deeper-indented wrapped description line nor a
-// chrome line holding a lone name can impersonate a row; a rendering change
-// breaks this loudly (rows drop, assertions fail) instead of passing on
-// free text.
+
+// A row exactly as the CLI prints one: descriptions and their wrap continuations are indented deeper, and a chrome line holding a lone name lacks the gutter, so neither matches.
 const ROW = new RegExp(`^${GUTTER} {4}(${KEBAB}) *$`);
+
 // An undecorated flush-left plain-ASCII line: how the CLI prints headings.
 const HEADING = /^[!-~][ -~]*$/;
 

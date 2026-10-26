@@ -111,16 +111,19 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
 const { DEFAULT_CONFIG, readArchitecture, renderArchitectureMermaid } = await import(
   "./declaration.mts"
 );
 const { readPage } = await import("./page.mts");
 const { pathLabel } = await import("./paths.mts");
 
-// A marker name is one token to the page reader, so a name with whitespace or markup could never be found; refusing it names the fix.
 const REGION_NAME = /^[a-z0-9-]+$/;
 
-/** Exactly one BEGIN then one END for `name`, else a throw naming the counts: a second marker pair would splice into the wrong one silently. */
+/**
+ * Exactly one BEGIN then one END for `name`, else a throw naming the counts: a second marker pair would splice into the wrong one silently.
+ * A name outside REGION_NAME is refused first: a marker name is one token to the page reader, so a name with whitespace or markup could never be found, and the message names the fix.
+ */
 export function regionBounds(text: string, name: string): { bodyStart: number; bodyEnd: number } {
   if (!REGION_NAME.test(name)) {
     throw new Error(`a region name is lowercase letters, digits, and dashes; got "${name}"`);

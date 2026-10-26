@@ -27,6 +27,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { Fence, Marker, Page } from "./page.mts";
+import type { ExportEntry } from "./sources.mts";
 
 const USAGE = [
   "usage: check-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expect-diagrams <n>]",
@@ -118,14 +119,48 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
 const { DEMONSTRATED, readPage } = await import("./page.mts");
 const { pathLabel, withinRoot } = await import("./paths.mts");
 const { parseModule, resolveImport, SOURCE_EXTENSIONS } = await import("./sources.mts");
 
-// An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
-const SYMBOL_TOKEN = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*(?:\(\))?$/u;
-
 const exportOriginsByFile = new Map<string, ReadonlyMap<string, string>>();
+
+function isRelative(request: string): boolean {
+  return /^\.\.?\//.test(request);
+}
+
+/**
+ * The binding behind one export, through exportOrigins below when it is another module's:
+ * `export { x as y } from "./m"`, and `import { x } from "./m"; export { x as y }`, keep the binding
+ * of ./m, not a new one here; a name bound in this file, a default export included, is this file's.
+ */
+function originOf(file: string, entry: ExportEntry, visiting: ReadonlySet<string>): string {
+  if (entry.from === undefined || !isRelative(entry.from.request)) return `${file}#${entry.name}`;
+  const target = resolveImport(file, entry.from.request);
+  return (
+    exportOrigins(target, visiting).get(entry.from.imported) ?? `${target}#${entry.from.imported}`
+  );
+}
+
+/** The names the star re-exports bring, each with every binding it reaches; `default` stays behind, as in the language. */
+function starredOrigins(
+  file: string,
+  stars: readonly string[],
+  visiting: ReadonlySet<string>,
+): Map<string, Set<string>> {
+  const starred = new Map<string, Set<string>>();
+  for (const request of stars) {
+    if (!isRelative(request)) continue;
+    for (const [name, origin] of exportOrigins(resolveImport(file, request), visiting)) {
+      if (name === "default") continue;
+      const origins = starred.get(name) ?? new Set<string>();
+      origins.add(origin);
+      starred.set(name, origins);
+    }
+  }
+  return starred;
+}
 
 /**
  * The names `file` exports, each with the module that declares its binding: `export { a as b }`
@@ -144,33 +179,9 @@ export function exportOrigins(
   if (visiting.has(file)) return new Map();
   const inner = new Set([...visiting, file]);
   const { exports, stars } = parseModule(file, readFileSync(file, "utf8"));
-  const isRelative = (request: string): boolean => /^\.\.?\//.test(request);
-  const direct = new Map<string, string>();
-  const starred = new Map<string, Set<string>>();
-  for (const entry of exports) {
-    // `export { x as y } from "./m"`, and `import { x } from "./m"; export { x as y }`, keep the binding of ./m,
-    // not a new one here; a name bound in this file, a default export included, is this file's.
-    const from =
-      entry.from !== undefined && isRelative(entry.from.request) ? entry.from : undefined;
-    const origin =
-      from === undefined
-        ? `${file}#${entry.name}`
-        : (exportOrigins(resolveImport(file, from.request), inner).get(from.imported) ??
-          `${resolveImport(file, from.request)}#${from.imported}`);
-    direct.set(entry.name, origin);
-  }
-  for (const request of stars) {
-    if (!isRelative(request)) continue;
-    const target = resolveImport(file, request);
-    for (const [name, origin] of exportOrigins(target, inner)) {
-      if (name === "default") continue;
-      const origins = starred.get(name) ?? new Set<string>();
-      origins.add(origin);
-      starred.set(name, origins);
-    }
-  }
-  const names = new Map(direct);
-  for (const [name, origins] of starred) {
+  const names = new Map<string, string>();
+  for (const entry of exports) names.set(entry.name, originOf(file, entry, inner));
+  for (const [name, origins] of starredOrigins(file, stars, inner)) {
     if (!names.has(name) && origins.size === 1) names.set(name, [...origins][0] as string);
   }
   if (visiting.size === 0) exportOriginsByFile.set(file, names);
@@ -181,12 +192,18 @@ export function exportedNames(file: string): ReadonlySet<string> {
   return new Set(exportOrigins(file).keys());
 }
 
+// An ECMAScript identifier name, so `$run` and a Unicode-letter export are symbols too.
+const SYMBOL_TOKEN = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*(?:\(\))?$/u;
+
 // A node definition wherever it sits: an id, an opening shape run (`[`, `((`, `{{`, `[/`, `[\`, `>` ...), and what follows it.
 const NODE_DEFINITION = /(?<![\w"-])([A-Za-z_][\w-]*)([[({>]+[/\\]?)(?![-|])/g;
+
+// The quoted label after a node's opening shape run, with the run that closes it; an unquoted one is the problem nodeLabels reports.
 const QUOTED_LABEL = /^"([^"]*)"[/\\]?[\])}]+/;
-// Edge-label text is not a node: `-->|run()|`, `-- run() -->`, `== run() ==>`, `-. run() .->`.
-// Text-form label text holds no node or arrow character, so `a --- b["x"] --> c` is two bare links, not one label.
+
+// Edge-label text is not a node: `-->|run()|`, `-- run() -->`, `== run() ==>`, `-. run() .->`. Text-form label text holds no node or arrow character, so `a --- b["x"] --> c` is two bare links, not one label.
 const EDGE_LABEL = /\|[^|\n]*\||(?:--|==|-\.)\s[^\n[\](){}|>=.-]+\s(?:-->|---|==>|===|\.->|\.-)/g;
+
 // The flowchart header alone is dropped, not its whole line: `flowchart LR; a["x"]` defines a node.
 const FLOWCHART_HEADER = /^\s*(?:flowchart|graph)(?:\s+(?:TB|TD|BT|LR|RL))?\b\s*;?/;
 
@@ -248,13 +265,24 @@ export function nodeLabels(mermaid: string): { labels: string[]; problems: strin
 export interface PageCheckOptions {
   /** The repository root the label paths are relative to. */
   root: string;
+
   /** The top-level directories a label path may start with (default: the directories under root). */
   pathRoots?: readonly string[];
+
   /** The URL prefix an absolute demonstration link must carry to map onto a repository file. */
   repoUrl?: string;
+
   /** The page's own path, for resolving relative demonstration links. */
   pagePath?: string;
 }
+
+interface CodeSegment {
+  path: string;
+  symbols: string[];
+}
+
+/** One `<br>` segment of a label as the grammar in the file header reads it. */
+type LabelSegment = CodeSegment | { caption: string };
 
 function defaultPathRoots(root: string): string[] {
   return readdirSync(root, { withFileTypes: true })
@@ -267,19 +295,14 @@ function escapeRe(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Problems with one label, as `"label": problem`. */
-export function labelProblems(
-  label: string,
-  root: string,
-  pathRoots: readonly string[] = defaultPathRoots(root),
-): string[] {
-  // A path starts under a top-level directory, or is a root-level file with a source or document extension (main.ts, README.md).
+/** A path starts under a top-level directory, or is a root-level file with a source or document extension (main.ts, README.md). */
+function pathTokenPattern(pathRoots: readonly string[]): RegExp {
   const rootFile = `[\\w.-]+(?:${[...SOURCE_EXTENSIONS, ".md", ".yml", ".yaml", ".json"].map(escapeRe).join("|")})`;
-  const pathToken = new RegExp(
-    `^(?:(?:${pathRoots.map(escapeRe).join("|")})/[\\w./-]*|${rootFile})$`,
-  );
-  const problems: string[] = [];
-  const missing = new Set<string>();
+  return new RegExp(`^(?:(?:${pathRoots.map(escapeRe).join("|")})/[\\w./-]*|${rootFile})$`);
+}
+
+function readLabel(label: string, pathToken: RegExp): LabelSegment[] {
+  const segments: LabelSegment[] = [];
   let bound: string | undefined;
   for (const segment of label.split("<br>")) {
     const tokens = segment
@@ -287,49 +310,71 @@ export function labelProblems(
       .split(/[\s,]+/)
       .filter((token) => token !== "");
     const [head] = tokens;
-    let path: string;
-    let symbols: string[];
     if (head !== undefined && pathToken.test(head)) {
-      path = head;
-      symbols = tokens.slice(1);
-    } else if (bound !== undefined) {
-      path = bound;
-      symbols = tokens;
+      bound = head;
+      segments.push({ path: head, symbols: tokens.slice(1) });
+    } else if (bound === undefined) {
+      segments.push({ caption: segment });
     } else {
-      if (segment.includes("/") || segment.includes("()")) {
+      segments.push({ path: bound, symbols: tokens });
+    }
+  }
+  return segments;
+}
+
+/** A missing path is reported once per label, so the symbols listed after it in later segments add nothing. */
+function codeProblems(
+  label: string,
+  segment: CodeSegment,
+  root: string,
+  missing: Set<string>,
+): string[] {
+  const file = resolve(root, segment.path);
+  if (segment.path.split("/").includes("..") || !withinRoot(root, file)) {
+    return [`"${label}": ${segment.path} escapes the repository`];
+  }
+  if (!existsSync(file)) {
+    if (missing.has(segment.path)) return [];
+    missing.add(segment.path);
+    return [`"${label}": ${segment.path} does not exist`];
+  }
+  const problems: string[] = [];
+  for (const symbol of segment.symbols) {
+    if (!SYMBOL_TOKEN.test(symbol)) {
+      problems.push(
+        `"${label}": "${symbol}" is neither a symbol nor a path; after a path, a label lists only exported symbols`,
+      );
+      continue;
+    }
+    const name = symbol.replace(/\(\)$/, "");
+    if (segment.path.endsWith("/") || statSync(file).isDirectory()) {
+      problems.push(`"${label}": ${segment.path} is a directory, so it exports no ${name}`);
+    } else if (!exportedNames(file).has(name)) {
+      problems.push(`"${label}": ${segment.path} exports no ${name}`);
+    }
+  }
+  return problems;
+}
+
+/** Problems with one label, as `"label": problem`. */
+export function labelProblems(
+  label: string,
+  root: string,
+  pathRoots: readonly string[] = defaultPathRoots(root),
+): string[] {
+  const pathToken = pathTokenPattern(pathRoots);
+  const problems: string[] = [];
+  const missing = new Set<string>();
+  for (const segment of readLabel(label, pathToken)) {
+    if ("caption" in segment) {
+      if (segment.caption.includes("/") || segment.caption.includes("()")) {
         problems.push(
-          `"${label}": "${segment.trim()}" looks like code but reads as a caption; a code segment starts with a path under ${pathRoots.join(", ")}`,
+          `"${label}": "${segment.caption.trim()}" looks like code but reads as a caption; a code segment starts with a path under ${pathRoots.join(", ")}`,
         );
       }
       continue;
     }
-    bound = path;
-    const file = resolve(root, path);
-    if (path.split("/").includes("..") || !withinRoot(root, file)) {
-      problems.push(`"${label}": ${path} escapes the repository`);
-      continue;
-    }
-    if (!existsSync(file)) {
-      if (!missing.has(path)) {
-        missing.add(path);
-        problems.push(`"${label}": ${path} does not exist`);
-      }
-      continue;
-    }
-    for (const symbol of symbols) {
-      if (!SYMBOL_TOKEN.test(symbol)) {
-        problems.push(
-          `"${label}": "${symbol}" is neither a symbol nor a path; after a path, a label lists only exported symbols`,
-        );
-        continue;
-      }
-      const name = symbol.replace(/\(\)$/, "");
-      if (path.endsWith("/") || statSync(file).isDirectory()) {
-        problems.push(`"${label}": ${path} is a directory, so it exports no ${name}`);
-      } else if (!exportedNames(file).has(name)) {
-        problems.push(`"${label}": ${path} exports no ${name}`);
-      }
-    }
+    problems.push(...codeProblems(label, segment, root, missing));
   }
   return problems;
 }
@@ -404,24 +449,36 @@ function conceptFences(page: Page): Fence[] {
   return page.fences.filter((fence) => fence.mermaid && !fence.generated);
 }
 
-/**
- * Every problem in one page: a node naming a missing path or an unexported
- * symbol, a concept diagram without its "Demonstrated by:" line before the
- * next heading, or a demonstration link that does not resolve to a file.
- */
-export function diagramProblems(markdown: string, options: PageCheckOptions): string[] {
-  const pathRoots = options.pathRoots ?? defaultPathRoots(options.root);
+function nodeProblems(page: Page, root: string, pathRoots: readonly string[]): string[] {
   const problems: string[] = [];
-  const page = readPage(markdown);
-  problems.push(...regionProblems(page.markers));
   for (const fence of page.fences) {
     if (!fence.mermaid) continue;
     const nodes = nodeLabels(fence.body);
     problems.push(...nodes.problems);
     for (const label of nodes.labels) {
-      problems.push(...labelProblems(label, options.root, pathRoots));
+      problems.push(...labelProblems(label, root, pathRoots));
     }
   }
+  return problems;
+}
+
+function linkProblems(at: string, links: readonly string[], options: PageCheckOptions): string[] {
+  const problems: string[] = [];
+  for (const link of links) {
+    const resolved = resolveLink(link, options);
+    if ("problem" in resolved) {
+      problems.push(`${at}: ${resolved.problem}`);
+    } else if (!existsSync(resolved.file)) {
+      problems.push(`${at}: "${link}" names a file that does not exist`);
+    } else if (statSync(resolved.file).isDirectory()) {
+      problems.push(`${at}: "${link}" names a directory, not a test or scenario file`);
+    }
+  }
+  return problems;
+}
+
+function demonstrationProblems(page: Page, options: PageCheckOptions): string[] {
+  const problems: string[] = [];
   // One demonstration line proves one diagram: two fences under one heading need two lines.
   const claimed = new Set<number>();
   for (const fence of conceptFences(page)) {
@@ -429,27 +486,33 @@ export function diagramProblems(markdown: string, options: PageCheckOptions): st
     const demo = page.demonstrations.find(
       ({ line }) => line > fence.end && line < sectionEnd && !claimed.has(line),
     );
-    if (demo !== undefined) claimed.add(demo.line);
     const at = `line ${fence.line}`;
     if (demo === undefined) {
       problems.push(`${at}: the diagram has no "${DEMONSTRATED}" line before the next heading`);
       continue;
     }
+    claimed.add(demo.line);
     if (demo.links.length === 0) {
       problems.push(`${at}: the "${DEMONSTRATED}" line links nothing`);
     }
-    for (const link of demo.links) {
-      const resolved = resolveLink(link, options);
-      if ("problem" in resolved) {
-        problems.push(`${at}: ${resolved.problem}`);
-      } else if (!existsSync(resolved.file)) {
-        problems.push(`${at}: "${link}" names a file that does not exist`);
-      } else if (statSync(resolved.file).isDirectory()) {
-        problems.push(`${at}: "${link}" names a directory, not a test or scenario file`);
-      }
-    }
+    problems.push(...linkProblems(at, demo.links, options));
   }
   return problems;
+}
+
+/**
+ * Every problem in one page: a node naming a missing path or an unexported
+ * symbol, a concept diagram without its "Demonstrated by:" line before the
+ * next heading, or a demonstration link that does not resolve to a file.
+ */
+export function diagramProblems(markdown: string, options: PageCheckOptions): string[] {
+  const pathRoots = options.pathRoots ?? defaultPathRoots(options.root);
+  const page = readPage(markdown);
+  return [
+    ...regionProblems(page.markers),
+    ...nodeProblems(page, options.root, pathRoots),
+    ...demonstrationProblems(page, options),
+  ];
 }
 
 /** The concept diagrams and demonstration lines a page carries. */

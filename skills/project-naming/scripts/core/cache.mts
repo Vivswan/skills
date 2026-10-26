@@ -20,15 +20,19 @@ export const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export type Loaded<T> = { value: T } | { error: string };
 
 export type CacheSource<T> = {
+  /** Fetched once per process and per day on disk: the URL is the cache key. */
   url: string;
+
   /** The reply's body to the value kept; throws on a body that is not what it should be. */
   extract: (text: string) => T;
+
   /** The value back from its JSON on disk, or null for a file an older layout wrote. */
   revive: (stored: unknown) => T | null;
+
   /** The request's bound, where the body is too large for the Io's one-name bound. */
   timeoutMs?: number;
-  /** The queue the request goes through, body included, for a host that wants its requests one
-   * at a time; a value read from disk goes through nothing. */
+
+  /** The queue the request goes through, body included, for a host that wants its requests one at a time; a value read from disk goes through nothing. */
   through?: <T>(work: () => Promise<T>) => Promise<T>;
 };
 
@@ -85,11 +89,11 @@ async function load<T>(io: Io, source: CacheSource<T>): Promise<Loaded<T>> {
 }
 
 const LOCK_POLL_MS = 100;
-
-/** The lock files this process holds, released at exit as well as in place: a process that ends
- * past its finally (an unhandled rejection, process.exit) would otherwise leave them for the
- * next waiter's dead-pid rule. */
 const held = new Set<string>();
+
+// The lock files this process holds are released at exit as well as in place: a process that ends
+// past its finally (an unhandled rejection, process.exit) would otherwise leave them for the next
+// waiter's dead-pid rule.
 process.on("exit", () => {
   for (const path of held) {
     try {

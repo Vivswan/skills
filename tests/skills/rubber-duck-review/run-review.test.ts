@@ -1,3 +1,14 @@
+// Contract tests for the run-review helper: stub reviewer binaries on PATH
+// drive every exit path, pinning the traps the script encapsulates - the
+// prompt travels as one argv element (backticks and $() stay literal), stdin
+// is closed so a reviewer that reads it cannot hang, the verdict is the LAST
+// codex agent_message / the final claude result and must be the schema
+// object with at least one tool call before it, and an empty, cut, blank,
+// prose-only, preamble-only, or errored stream exits 1 (never a clean pass),
+// and --extract --wait blocks on the launch record until the monitor records
+// the exit instead of leaving the caller to poll by hand.
+// gh-style violations files catch any drift in the exact reviewer invocations.
+
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
@@ -23,23 +34,9 @@ import { tempDirs } from "../../helpers/temp-dirs";
 
 const temp = tempDirs();
 
-// Contract tests for the run-review helper: stub reviewer binaries on PATH
-// drive every exit path, pinning the traps the script encapsulates - the
-// prompt travels as one argv element (backticks and $() stay literal), stdin
-// is closed so a reviewer that reads it cannot hang, the verdict is the LAST
-// codex agent_message / the final claude result and must be the schema
-// object with at least one tool call before it, and an empty, cut, blank,
-// prose-only, preamble-only, or errored stream exits 1 (never a clean pass),
-// and --extract --wait blocks on the launch record until the monitor records
-// the exit instead of leaving the caller to poll by hand.
-// gh-style violations files catch any drift in the exact reviewer invocations.
-
 const SCRIPT = join(ROOT, "skills", "rubber-duck-review", "scripts", "run-review.mts");
 const SCHEMA = join(ROOT, "skills", "rubber-duck-review", "scripts", "verdict-schema.json");
-
-// Prompt content that a shell would mangle: proves no shell ever sees it.
 const PROMPT = "Review only.\nRun `git --no-pager diff HEAD` and note $(hostname) stays literal.\n";
-
 const SKILLS_ROOT = join(ROOT, "skills");
 
 /** The skills under `root` whose page carries the `## Review Criteria` heading, in directory
@@ -93,8 +90,6 @@ function codexMessage(text: string): string {
   return JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
 }
 const CODEX_VERDICT_LINE = codexMessage(JSON.stringify(CODEX_VERDICT));
-/** The big-verdict line split around its summary, so the stub can splice in
- * a summary larger than any pipe buffer. */
 const [bigOpen, bigClose] = codexMessage(
   JSON.stringify({ blocking: [], non_blocking: [], recorded_not_built: [], summary: "@BIG@" }),
 ).split("@BIG@") as [string, string];
@@ -344,11 +339,11 @@ esac
 exit "\${STUB_EXIT:-0}"
 `;
 
-/** The snapshot runs git through PATH, so this stub can fail the subcommand STUB_GIT_FAIL names
- * midway; every other call goes to the machine's git. */
 const REAL_GIT = Bun.which("git");
 if (REAL_GIT === null) throw new Error("git is not installed");
 const FAKE_GIT = `#!/usr/bin/env bash
+# The snapshot runs git through PATH, so this stub can fail the subcommand STUB_GIT_FAIL names
+# midway; every other call goes to the machine's git.
 for arg in "$@"; do
   if [ -n "\${STUB_GIT_FAIL:-}" ] && [ "$arg" = "\${STUB_GIT_FAIL}" ]; then echo "fatal: disk full" >&2; exit 128; fi
 done
@@ -522,7 +517,6 @@ function backgroundOutputFile(stdout: string): string {
   return line.slice("output-file: ".length);
 }
 
-/** A complete codex stream whose verdict extracts cleanly once a status lands. */
 const COMPLETE_CODEX_STREAM = `${CODEX_TOOL_LINE}\n${CODEX_VERDICT_LINE}\n{"type":"turn.completed"}\n`;
 const LAUNCH_RECORD = '{"tool":"codex","output":"review.jsonl"}';
 

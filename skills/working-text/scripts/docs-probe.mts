@@ -32,9 +32,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import type { List, Nodes, RootContent } from "mdast";
 import type { Position } from "unist";
 
-// The bundle in .build/ is <name>.js built from <name>.mts; a vendored copy under another name prints that name,
-// an importer never its own.
+// The bundle in .build/ is <name>.js built from <name>.mts; a vendored copy under another name prints that name, an importer never its own.
 const SELF = basename(import.meta.path).replace(/\.js$/, ".mts");
+
+// `--help` prints this block, and tests/repo/usage-blocks.test.ts holds the fence on SKILL.md equal to it.
 const USAGE = [
   `usage: ${SELF} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] <page.md>...`,
   "  --root        the repository root paths resolve against (default: cwd)",
@@ -124,6 +125,7 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
 const { fromMarkdown } = await import("mdast-util-from-markdown");
 const { gfmFromMarkdown } = await import("mdast-util-gfm");
 const { gfm } = await import("micromark-extension-gfm");
@@ -132,25 +134,37 @@ const { visit } = await import("unist-util-visit");
 export const DEFAULT_MAX_WORDS = 70;
 
 export interface Finding {
+  /** The page's path under the root: a finding prints it, and the page's directory is where its paths resolve from. */
   readonly file: string;
+
   /** One-based line where the unit or token starts. */
   readonly line: number;
+
+  /** What is wrong, without the location; the CLI prints it after `file:line: `. */
   readonly message: string;
 }
 
 export interface ProbeOptions {
   /** Repository root every slash path resolves against. */
   readonly root: string;
+
+  /** Words a paragraph or list item may reach; one more is a finding. */
   readonly maxWords: number;
+
   /** false: word counts only, for pages that describe another repository's files. */
   readonly paths: boolean;
+
   /** Extra directories a slash path also resolves against: a shipped tree that mirrors the layout the page describes. */
   readonly bases?: readonly string[];
 }
 
 export interface Unit {
+  /** "item" for a tight list's item; a loose list's items render as paragraphs and are read as such. */
   readonly kind: "paragraph" | "item";
+
+  /** One-based line where the unit starts. */
   readonly line: number;
+
   /** The prose as the reader sees it: link labels and code spans kept, markup gone. */
   readonly text: string;
 }
@@ -190,8 +204,8 @@ function withoutGenerated(blocks: readonly RootContent[]): RootContent[] {
     const name = markerName(block, "BEGIN");
     const close =
       name === undefined ? -1 : blocks.findIndex((n, j) => j > i && markerName(n, "END") === name);
-    if (close !== -1) i = close;
-    else kept.push(block);
+    if (close === -1) kept.push(block);
+    else i = close;
   }
   return kept;
 }
@@ -219,6 +233,28 @@ function visibleText(node: Nodes): string {
   return "children" in node ? node.children.map(visibleText).join("") : "";
 }
 
+function noteNode(
+  scan: Scan,
+  node: RootContent,
+  itemText: boolean,
+  definitions: ReadonlyMap<string, string>,
+): void {
+  const line = startLine(node);
+  if (node.type === "paragraph") {
+    const prose = visibleText(node);
+    if (prose.trim() !== "") {
+      scan.units.push({ kind: itemText ? "item" : "paragraph", line, text: prose });
+    }
+  } else if (node.type === "inlineCode") {
+    scan.codespans.push({ text: node.value, line });
+  } else if (node.type === "link") {
+    scan.links.push({ href: node.url, line });
+  } else if (node.type === "linkReference") {
+    const href = definitions.get(node.identifier);
+    if (href !== undefined) scan.links.push({ href, line });
+  }
+}
+
 export function scanPage(text: string): Scan {
   const tree = fromMarkdown(blankFrontMatter(text).join("\n"), {
     extensions: [gfm()],
@@ -232,20 +268,7 @@ export function scanPage(text: string): Scan {
   const scan: Scan = { units: [], codespans: [], links: [] };
   const walk = (nodes: readonly RootContent[], itemText: boolean) => {
     for (const node of nodes) {
-      const line = startLine(node);
-      if (node.type === "paragraph") {
-        const prose = visibleText(node);
-        if (prose.trim() !== "") {
-          scan.units.push({ kind: itemText ? "item" : "paragraph", line, text: prose });
-        }
-      } else if (node.type === "inlineCode") {
-        scan.codespans.push({ text: node.value, line });
-      } else if (node.type === "link") {
-        scan.links.push({ href: node.url, line });
-      } else if (node.type === "linkReference") {
-        const href = definitions.get(node.identifier);
-        if (href !== undefined) scan.links.push({ href, line });
-      }
+      noteNode(scan, node, itemText, definitions);
       if (!("children" in node)) continue;
       const tight = node.type === "list" ? isTight(node) : node.type === "listItem" && itemText;
       walk(node.children, tight);
@@ -329,30 +352,47 @@ function linkPath(href: string): string {
   }
 }
 
-export function probePage(text: string, file: string, options: ProbeOptions): Finding[] {
+function overlongUnits(units: readonly Unit[], file: string, maxWords: number): Finding[] {
   const findings: Finding[] = [];
-  const pageDir = dirname(resolve(options.root, file));
-  const scan = scanPage(text);
-  for (const unit of scan.units) {
+  for (const unit of units) {
     const words = wordCount(unit.text);
-    if (words > options.maxWords) {
+    if (words > maxWords) {
       const noun = unit.kind === "item" ? "list item" : "paragraph";
       findings.push({
         file,
         line: unit.line,
-        message: `${noun} of ${words} words; the cap is ${options.maxWords}. Split it, or turn its facts into bullets, a table, or numbered steps`,
+        message: `${noun} of ${words} words; the cap is ${maxWords}. Split it, or turn its facts into bullets, a table, or numbered steps`,
       });
     }
   }
-  if (!options.paths) return findings;
-  for (const { text: code, line } of scan.codespans) {
+  return findings;
+}
+
+function pathFindings(
+  codespans: Scan["codespans"],
+  file: string,
+  pageDir: string,
+  options: ProbeOptions,
+): Finding[] {
+  const findings: Finding[] = [];
+  for (const { text: code, line } of codespans) {
     const path = pathCandidate(code);
     const state = path ? verdict(options.root, pageDir, options.bases ?? [], path) : "foreign";
     if (state === "missing") findings.push({ file, line, message: `\`${path}\` does not exist` });
     if (state === "outside")
       findings.push({ file, line, message: `\`${path}\` escapes the repository` });
   }
-  for (const { href, line } of scan.links) {
+  return findings;
+}
+
+function linkFindings(
+  links: Scan["links"],
+  file: string,
+  pageDir: string,
+  options: ProbeOptions,
+): Finding[] {
+  const findings: Finding[] = [];
+  for (const { href, line } of links) {
     const target = linkPath(href);
     if (target === "" || SCHEME.test(target) || isAbsolute(target)) continue;
     const resolved = resolve(pageDir, target);
@@ -362,6 +402,16 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
       findings.push({ file, line, message: `link target ${target} does not exist` });
     }
   }
+  return findings;
+}
+
+export function probePage(text: string, file: string, options: ProbeOptions): Finding[] {
+  const pageDir = dirname(resolve(options.root, file));
+  const scan = scanPage(text);
+  const findings = overlongUnits(scan.units, file, options.maxWords);
+  if (!options.paths) return findings;
+  findings.push(...pathFindings(scan.codespans, file, pageDir, options));
+  findings.push(...linkFindings(scan.links, file, pageDir, options));
   return findings.sort((a, b) => a.line - b.line);
 }
 
@@ -379,6 +429,30 @@ function realpath(path: string): string {
   return existsSync(absolute) ? realpathSync.native(absolute) : absolute;
 }
 
+function realDirectory(flag: string, path: string): string {
+  const directory = realpath(path);
+  if (!statSync(directory, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`${flag} ${directory} is not a directory`);
+  }
+  return directory;
+}
+
+function resolveBases(root: string, baseArgs: readonly string[]): string[] {
+  return baseArgs.map((arg) => {
+    const base = realDirectory("--base", resolve(root, arg));
+    if (!withinRoot(root, base)) throw new Error(`--base ${base} is outside the root ${root}`);
+    return base;
+  });
+}
+
+function parseMaxWords(text: string): number {
+  const maxWords = Number(text);
+  if (!Number.isInteger(maxWords) || maxWords < 1) {
+    throw new Error(`--max-words needs a positive integer\n${USAGE}`);
+  }
+  return maxWords;
+}
+
 export function parseArgs(argv: readonly string[]): CliOptions {
   let root = realpath(process.cwd());
   let maxWords = DEFAULT_MAX_WORDS;
@@ -393,28 +467,18 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       return next;
     };
     if (arg === "--root") {
-      root = realpath(value());
-      if (!statSync(root, { throwIfNoEntry: false })?.isDirectory())
-        throw new Error(`--root ${root} is not a directory`);
+      root = realDirectory("--root", value());
     } else if (arg === "--base") {
       baseArgs.push(value());
     } else if (arg === "--max-words") {
-      maxWords = Number(value());
-      if (!Number.isInteger(maxWords) || maxWords < 1)
-        throw new Error(`--max-words needs a positive integer\n${USAGE}`);
+      maxWords = parseMaxWords(value());
     } else if (arg === "--shape-only") paths = false;
     else if (arg.startsWith("-")) throw new Error(`unknown option ${arg}\n${USAGE}`);
     else pages.push(arg);
   }
   if (pages.length === 0) throw new Error(USAGE);
   // Resolved after the loop so a --root given later still governs every --base.
-  const bases = baseArgs.map((arg) => {
-    const base = realpath(resolve(root, arg));
-    if (!statSync(base, { throwIfNoEntry: false })?.isDirectory())
-      throw new Error(`--base ${base} is not a directory`);
-    if (!withinRoot(root, base)) throw new Error(`--base ${base} is outside the root ${root}`);
-    return base;
-  });
+  const bases = resolveBases(root, baseArgs);
   return { root, bases, maxWords, paths, pages };
 }
 

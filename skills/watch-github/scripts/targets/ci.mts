@@ -1,12 +1,21 @@
 // The CI judgment over one head, shared by the PR and branch targets: the verdict kinds, the
 // green, red, missing, and none rules over a rollup and the runs read for the head
 // (../github/check-suites.mts), and the verdict as the event line a target delivers. Pure over read
-// data, except the failed-jobs read a red makes once to name its jobs.
+// data, except the reads judgeCi makes: the whole run list of a head past one page of suites, and
+// the failed jobs a red names once.
 
-import { type FailedJob, type Run, readFailedJobs } from "../github/check-suites.mts";
+import {
+  discoverRuns,
+  type FailedJob,
+  type Run,
+  readFailedJobs,
+  type Suites,
+} from "../github/check-suites.mts";
 import { GhError } from "../github/gh.mts";
 
+// GitHub's settled rollup states; EXPECTED and PENDING are still moving, and null is no checks at all.
 const TERMINAL_ROLLUPS = new Set(["SUCCESS", "FAILURE", "ERROR"]);
+
 /** Polls a head may show no checks at all (no rollup) before a named gate is called missing; a run can register seconds after a push. */
 export const NO_RUN_POLLS = 2;
 
@@ -53,6 +62,15 @@ export type Verdict =
   /** No checks at all and no gate named: a head nothing runs on, with nothing to judge and nothing to say. */
   | { kind: "none" };
 
+function judgeRollup(rollup: string | null, latest: Run[]): Verdict {
+  if (rollup === "SUCCESS") return { kind: "green", latest, bystanders: [] };
+  if (TERMINAL_ROLLUPS.has(rollup ?? "")) {
+    return { kind: "red", latest, failed: latest.filter(isFailed), missing: [] };
+  }
+  if (rollup === null) return { kind: "none" };
+  return { kind: "pending" };
+}
+
 /**
  * Green is every named gate's latest run passed, or, with no gate named, the aggregate rollup
  * SUCCESS. Red is any named gate's latest run failed, or the rollup FAILURE or ERROR with no gate.
@@ -69,13 +87,9 @@ export function judgeHead(
   waited = false,
 ): Verdict {
   const latest = selectLatest(runs);
+  if (gates.length === 0) return judgeRollup(rollup, latest);
+
   const settled = TERMINAL_ROLLUPS.has(rollup ?? "");
-  if (gates.length === 0) {
-    if (rollup === "SUCCESS") return { kind: "green", latest, bystanders: [] };
-    if (settled) return { kind: "red", latest, failed: latest.filter(isFailed), missing: [] };
-    if (rollup === null) return { kind: "none" };
-    return { kind: "pending" };
-  }
   // Two workflow files can share a name: every latest run under a gate's name is that gate's.
   const gateRuns = latest.filter((run) => gates.includes(run.name));
   const failed = gateRuns.filter(isFailed);
@@ -135,6 +149,43 @@ export function verdictKey(verdict: Verdict): string | null {
   }
 }
 
+function failedJobsOf(failed: Run[], short: string, log: (line: string) => void): FailedJob[] {
+  if (failed.length === 0) return [];
+
+  try {
+    return readFailedJobs(failed);
+  } catch (error) {
+    if (!(error instanceof GhError)) throw error;
+    log(`failed jobs of ${short}: ${error.message}`);
+    return [];
+  }
+}
+
+function describeRed(
+  label: string,
+  short: string,
+  verdict: Extract<Verdict, { kind: "red" }>,
+  checksUrl: string,
+  log: (line: string) => void,
+): CiEvent {
+  const jobs = failedJobsOf(verdict.failed, short, log);
+  // A failed run the read returned no job for (a failure outside a job, or a read that failed)
+  // is still named, after the jobs, so one workflow's job rows never hide another's failure.
+  const parts = jobs.map(
+    (job) => `${job.workflow} / ${job.job}${job.step === null ? "" : ` / ${job.step}`}`,
+  );
+  for (const run of verdict.failed) {
+    if (!jobs.some((job) => job.suiteId === run.suiteId)) parts.push(run.name);
+  }
+  const missing = verdict.missing.length > 0 ? `; no run of ${verdict.missing.join(", ")}` : "";
+  return {
+    kind: "ci",
+    state: "red",
+    text: `${label}: CI red on ${short}: ${parts.length > 0 ? parts.join(", ") : "a check outside Actions"}${missing}`,
+    url: verdict.failed[0]?.url ?? checksUrl,
+  };
+}
+
 /**
  * The verdict as the event line says it, for a head labelled `label`. A red names each failed
  * job's workflow, job, and first failed step from one more read; when that read fails, the
@@ -171,31 +222,65 @@ export function describeVerdict(
           : `${label}: no checks on ${short} after ${NO_RUN_POLLS} polls, so no run of ${verdict.gates.join(", ")}; check the workflow name`,
         url: checksUrl,
       };
-    case "red": {
-      let jobs: FailedJob[] = [];
-      if (verdict.failed.length > 0) {
-        try {
-          jobs = readFailedJobs(verdict.failed);
-        } catch (error) {
-          if (!(error instanceof GhError)) throw error;
-          log(`failed jobs of ${short}: ${error.message}`);
-        }
-      }
-      // A failed run the read returned no job for (a failure outside a job, or a read that failed)
-      // is still named, after the jobs, so one workflow's job rows never hide another's failure.
-      const parts = jobs.map(
-        (job) => `${job.workflow} / ${job.job}${job.step === null ? "" : ` / ${job.step}`}`,
-      );
-      for (const run of verdict.failed) {
-        if (!jobs.some((job) => job.suiteId === run.suiteId)) parts.push(run.name);
-      }
-      const missing = verdict.missing.length > 0 ? `; no run of ${verdict.missing.join(", ")}` : "";
-      return {
-        kind: "ci",
-        state: "red",
-        text: `${label}: CI red on ${short}: ${parts.length > 0 ? parts.join(", ") : "a check outside Actions"}${missing}`,
-        url: verdict.failed[0]?.url ?? checksUrl,
-      };
-    }
+    case "red":
+      return describeRed(label, short, verdict, checksUrl, log);
   }
+}
+
+/** What a target keeps of a head's CI between polls: where the judgment stands, the verdict last delivered (verdictKey), and the polls the head showed no checks at all. */
+export interface CiCursor {
+  ci: CiState;
+  verdict: string | null;
+  noRuns: number;
+}
+
+/** One head as a poll judges it: the suites page the repository read embedded (null while its CI is not read), the gates named on it, and what the verdict line needs. */
+export interface CiHead {
+  label: string;
+  repo: string;
+  sha: string;
+  rollupState: string | null;
+  suites: Suites | null;
+  gates: string[];
+  checksUrl: string;
+}
+
+/**
+ * The CI cursor a poll starts from. A new head has no verdict, so its first verdict is news; a
+ * rollup that moves after a verdict is judged again, and the same verdict stays silent.
+ */
+export function carriedCi(
+  previous: CiCursor | null,
+  headMoved: boolean,
+  rollupMoved: boolean,
+): CiCursor {
+  if (previous === null || headMoved) return { ci: "pending", verdict: null, noRuns: 0 };
+
+  const ci = rollupMoved ? "pending" : previous.ci;
+  return { ci, verdict: previous.verdict, noRuns: previous.noRuns };
+}
+
+/**
+ * The cursor after judging a head's suites this poll, and the verdict as an event when it is news:
+ * a verdict is described (a red reads its failed jobs) only when its key differs from the last
+ * delivered. A head whose suites were not read keeps its cursor; one past a page of suites is
+ * read whole first.
+ */
+export function judgeCi(
+  cursor: CiCursor,
+  head: CiHead,
+  log: (line: string) => void,
+): { cursor: CiCursor; event: CiEvent | null } {
+  if (head.suites === null) return { cursor, event: null };
+
+  const runs = head.suites.complete ? head.suites.runs : discoverRuns(head.repo, head.sha);
+  const noRuns = head.rollupState === null ? cursor.noRuns + 1 : 0;
+  const judged = judgeHead(head.rollupState, runs, head.gates, noRuns >= NO_RUN_POLLS);
+  const key = verdictKey(judged);
+  if (key === null || key === cursor.verdict) {
+    return { cursor: { ci: judged.kind, verdict: cursor.verdict, noRuns }, event: null };
+  }
+
+  const event = describeVerdict(head.label, head.sha, judged, head.checksUrl, log);
+  return { cursor: { ci: judged.kind, verdict: key, noRuns }, event };
 }

@@ -46,8 +46,7 @@ export function envelope(from: string, fromName: string, mode: Mode, text: strin
   return `<cross-session-message from="${attribute(from)}" from-name="${attribute(fromName)}" from-mode="${mode}">\n${body}\n${CLOSER}`;
 }
 
-// A delivery is complete once the line is flushed and the write side closed; whether the receiver
-// reads it is its own business. The timeout only bounds a connect or flush that never returns.
+// Bounds a connect or flush that never returns; whether the receiver reads the flushed line is its own business.
 const DELIVER_TIMEOUT_MS = 5_000;
 
 export async function deliver(socketPath: string, frame: InboxFrame): Promise<void> {

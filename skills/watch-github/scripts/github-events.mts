@@ -14,14 +14,13 @@ import { type RepoRead, type RepoReply, readRepository } from "./github/reposito
 import {
   type BranchTarget,
   branchLabel,
+  type Outcome,
   parseBranchTarget,
   processBranch,
 } from "./targets/branch.mts";
 import { type PrTarget, parsePrTarget, prLabel, processPr } from "./targets/pr.mts";
 
 const INSTALL = "npx skills add Vivswan/skills -g --skill session-events";
-// Reads of one target failing this many polls in a row (its detail, its paged suites) are one
-// trouble event for that target; the repository read failing is the whole poll's failure.
 const READ_FAILURES = 3;
 
 type Target = PrTarget | BranchTarget;
@@ -85,6 +84,35 @@ function readAll(targets: Record<string, Target>): Map<string, RepoReply> {
   return replies;
 }
 
+function readFailuresEvent(target: Target): EventInput {
+  const why = `${READ_FAILURES} reads failed; read the daemon log`;
+  if (target.form === "pr") {
+    return {
+      repo: target.repo,
+      pr: target.number,
+      sha: null,
+      kind: "trouble",
+      text: `${prLabel(target)}: ${why}`,
+      url: `https://github.com/${target.repo}/pull/${target.number}`,
+    };
+  }
+
+  return {
+    repo: target.repo,
+    branch: target.branch,
+    sha: null,
+    kind: "trouble",
+    text: `${branchLabel(target)}: ${why}`,
+    url: `https://github.com/${target.repo}/tree/${target.branch}`,
+  };
+}
+
+function processTarget(target: Target, reply: RepoReply, io: Io): Outcome {
+  if (target.form === "pr") return processPr(target, reply.rows.get(target.number) ?? null, io);
+
+  return processBranch(target, reply.tips.get(target.branch) ?? null, io);
+}
+
 async function poll(targets: Record<string, Target>, io: Io) {
   // Every read first, then every judgment: a failed repository read fails the poll before any
   // cursor has moved. A failed detail read leaves its one target as it was, to retry next poll.
@@ -94,10 +122,7 @@ async function poll(targets: Record<string, Target>, io: Io) {
   for (const [key, target] of Object.entries(targets)) {
     const reply = replies.get(target.repo) as RepoReply;
     try {
-      const outcome =
-        target.form === "pr"
-          ? processPr(target, reply.rows.get(target.number) ?? null, io)
-          : processBranch(target, reply.tips.get(target.branch) ?? null, io);
+      const outcome = processTarget(target, reply, io);
       events.push(...outcome.events);
       busy ||= outcome.busy;
       if (outcome.done) delete targets[key];
@@ -107,20 +132,7 @@ async function poll(targets: Record<string, Target>, io: Io) {
       io.log(`${key}: ${error.message}`);
       busy = true;
       target.readFailures = (target.readFailures ?? 0) + 1;
-      if (target.readFailures === READ_FAILURES) {
-        const label = target.form === "pr" ? prLabel(target) : branchLabel(target);
-        events.push({
-          repo: target.repo,
-          ...(target.form === "pr" ? { pr: target.number } : { branch: target.branch }),
-          sha: null,
-          kind: "trouble",
-          text: `${label}: ${READ_FAILURES} reads failed; read the daemon log`,
-          url:
-            target.form === "pr"
-              ? `https://github.com/${target.repo}/pull/${target.number}`
-              : `https://github.com/${target.repo}/tree/${target.branch}`,
-        });
-      }
+      if (target.readFailures === READ_FAILURES) events.push(readFailuresEvent(target));
     }
   }
   return { events, busy };

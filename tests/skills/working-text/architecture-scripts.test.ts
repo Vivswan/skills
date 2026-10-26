@@ -1,3 +1,9 @@
+// Contract tests for the architecture-page scripts of /working-text against a small fixture
+// tree. Every CLI case asserts the whole outcome (exit code, full stdout, full
+// stderr), so a message the SKILL.md quotes cannot drift unseen; each way the
+// declaration or the page can be wrong is seen failing, and the matching tree
+// and page are seen passing.
+
 import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
@@ -22,19 +28,13 @@ import { tempDirs } from "../../helpers/temp-dirs";
 
 const temp = tempDirs();
 
-// Contract tests for the architecture-page scripts of /working-text against a small fixture
-// tree. Every CLI case asserts the whole outcome (exit code, full stdout, full
-// stderr), so a message the SKILL.md quotes cannot drift unseen; each way the
-// declaration or the page can be wrong is seen failing, and the matching tree
-// and page are seen passing.
-
 const SCRIPTS = join(ROOT, "skills", "working-text", "scripts", "architecture");
 const ARCH_LINT = join(SCRIPTS, "lint.mts");
 const RENDER = join(SCRIPTS, "render-map.mts");
 const CHECK_PAGE = join(SCRIPTS, "check-page.mts");
+const CLI_TIMEOUT = 60_000;
 // Nearly every case spawns a script, and the first spawn of a cold checkout installs and bundles, which
 // passes bun's 5 s default under a loaded machine: the file's default is what the suite gives its CLIs.
-const CLI_TIMEOUT = 60_000;
 setDefaultTimeout(CLI_TIMEOUT);
 
 const CONFIG = `layers:

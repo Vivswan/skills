@@ -41,23 +41,30 @@ export type Row = { name: string; cells: Record<string, Cell> };
 export const REQUEST_TIMEOUT_MS = 20_000;
 
 export type Options = {
+  /** REGISTRIES in a run; a test passes a table of its own. */
   table: readonly RegistryEntry[];
+
   /** The zones `tlds` returns, so each names a distinct column. */
   domains: string[];
+
+  /** False under `--no-arxiv`, which drops the arxiv column from the run. */
   arxiv: boolean;
+
   /** The column ids to run, or null for every column. */
   registries: string[] | null;
 };
 
-/** Letters, digits, dashes, and dots, the Unicode full stops that IDNA maps to a dot included.
- * Anything else names no zone: a space, a comma that `--registries` splits on, or a slash,
- * which the host parser would silently drop together with everything after it. */
+// A `--domain` spelling is screened before the host parser sees it, and the canonical zone after
+// it: the parser silently drops a slash together with everything after it, and makes an IPv4
+// address of a hex or decimal last label.
+
+/** Letters, digits, dashes, and dots, the Unicode full stops that IDNA maps to a dot included; a space, a comma that `--registries` splits on, or a slash names no zone. */
 const ZONE_SPELLING = /^[\p{L}\p{M}\p{N}\p{Pd}.\u3002\uFF0E\uFF61]+$/u;
-/** What a spelling must be once canonical: dot-separated labels of up to 63 letters, digits,
- * and inner dashes, the last with a letter in it, since a top-level domain is never all digits
- * and the host parser makes an IPv4 address of a hex or decimal spelling. */
+
+/** What a spelling must be once canonical: dot-separated labels of up to 63 letters, digits, and inner dashes, the last with a letter in it, since a top-level domain is never all digits. */
 const ZONE =
   /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*(?=[a-z0-9-]*[a-z])[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
 /** A host name is at most 253 characters and a name at most 39, so this leaves room for any. */
 const ZONE_MAX = 213;
 
@@ -187,12 +194,64 @@ function githubTokenFromEnvironment(): string | null {
   return null;
 }
 
+function liveIo(): Io {
+  const githubToken = githubTokenFromEnvironment();
+  return {
+    fetch: (url, init) => fetch(url, init),
+    resolve: (host) => dns.lookup(host),
+    resolveNs: (zone) => dns.resolveNs(zone),
+    githubToken,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    arxivGapMs: ARXIV_GAP_MS,
+    githubSearchGapMs: githubToken ? GITHUB_SEARCH_GAP_MS : GITHUB_SEARCH_GAP_ANONYMOUS_MS,
+    cratesGapMs: CRATES_GAP_MS,
+    cacheDir: join(tmpdir(), "check-name-cache"),
+  };
+}
+
+type Flags = ReturnType<typeof parseArgs>["values"];
+
+/** The Options the flags name, or the usage error that stops the run: a `--domain` spelling that
+ * names no zone, a `--registries` id no column has, or a selection `--no-arxiv` leaves empty. */
+function optionsFrom(flags: Flags): { options: Options } | { error: string } {
+  const spellings = (flags.domain as string[] | undefined) ?? ["com", "ai", "dev"];
+  const { zones: domains, rejected } = tlds(spellings);
+  if (rejected.length > 0) {
+    const quoted = rejected.map((spelling) => JSON.stringify(spelling)).join(", ");
+    return { error: `--domain: not a top-level domain: ${quoted}` };
+  }
+
+  const selected =
+    (flags.registries as string | undefined)?.split(",").map((id) => id.trim()) ?? null;
+  const known = allColumns(REGISTRIES, domains).map((column) => column.id);
+  const bad = (selected ?? []).filter((id) => !known.includes(id));
+  if (bad.length > 0) {
+    const quoted = bad.map((id) => JSON.stringify(id)).join(", ");
+    return {
+      error: `--registries: no column ${quoted}; the columns for these domains are ${known.join(", ")}`,
+    };
+  }
+
+  const options: Options = {
+    table: REGISTRIES,
+    domains,
+    arxiv: !(flags["no-arxiv"] as boolean | undefined),
+    registries: selected,
+  };
+  if (selected && !columns(options).some((column) => selected.includes(column.id))) {
+    return { error: "--registries and --no-arxiv together leave no column of the selection" };
+  }
+
+  return { options };
+}
+
 async function main(): Promise<number> {
   const first = process.argv[2];
   if (first === "--help" || first === "-h") {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
+
   let parsed: ReturnType<typeof parseArgs>;
   try {
     parsed = parseArgs({
@@ -210,15 +269,18 @@ async function main(): Promise<number> {
     process.stderr.write(`${String(error)}\n${USAGE}\n`);
     return 2;
   }
+
   if (parsed.values["list-registries"]) {
     process.stdout.write(renderRegistries(REGISTRIES));
     return 0;
   }
+
   const names = parsed.positionals;
   if (names.length === 0) {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
+
   // The strictest common rule, GitHub's handle: letters and digits, single dashes between them,
   // 39 characters at most. A name outside it reads free on a registry that would refuse it.
   const bad = names.find((name) => !/^[A-Za-z](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/.test(name));
@@ -228,55 +290,20 @@ async function main(): Promise<number> {
     );
     return 2;
   }
-  const { zones: domains, rejected } = tlds(
-    (parsed.values.domain as string[] | undefined) ?? ["com", "ai", "dev"],
-  );
-  if (rejected.length > 0) {
-    process.stderr.write(
-      `--domain: not a top-level domain: ${rejected.map((spelling) => JSON.stringify(spelling)).join(", ")}\n`,
-    );
+
+  const read = optionsFrom(parsed.values);
+  if ("error" in read) {
+    process.stderr.write(`${read.error}\n`);
     return 2;
   }
-  const selected =
-    (parsed.values.registries as string | undefined)?.split(",").map((id) => id.trim()) ?? null;
-  if (selected) {
-    const known = allColumns(REGISTRIES, domains).map((column) => column.id);
-    const bad = selected.filter((id) => !known.includes(id));
-    if (bad.length > 0) {
-      process.stderr.write(
-        `--registries: no column ${bad.map((id) => JSON.stringify(id)).join(", ")}; the columns for these domains are ${known.join(", ")}\n`,
-      );
-      return 2;
-    }
-  }
-  const options: Options = {
-    table: REGISTRIES,
-    domains,
-    arxiv: !(parsed.values["no-arxiv"] as boolean | undefined),
-    registries: selected,
-  };
-  if (selected && !columns(options).some((column) => selected.includes(column.id))) {
-    process.stderr.write("--registries and --no-arxiv together leave no column of the selection\n");
-    return 2;
-  }
-  const githubToken = githubTokenFromEnvironment();
-  const io: Io = {
-    fetch: (url, init) => fetch(url, init),
-    resolve: (host) => dns.lookup(host),
-    resolveNs: (zone) => dns.resolveNs(zone),
-    githubToken,
-    timeoutMs: REQUEST_TIMEOUT_MS,
-    arxivGapMs: ARXIV_GAP_MS,
-    githubSearchGapMs: githubToken ? GITHUB_SEARCH_GAP_MS : GITHUB_SEARCH_GAP_ANONYMOUS_MS,
-    cratesGapMs: CRATES_GAP_MS,
-    cacheDir: join(tmpdir(), "check-name-cache"),
-  };
-  const result = await run(io, options, names);
+
+  const result = await run(liveIo(), read.options, names);
   if (parsed.values.json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {
-    process.stdout.write(renderTsv(options, result.rows));
+    process.stdout.write(renderTsv(read.options, result.rows));
   }
+
   for (const failure of result.failures) {
     process.stderr.write(
       `instrument failed: ${failure.column} read ${renderCell(failure.got)} for ${failure.control}, expected ${failure.expected}; do not trust that column\n`,

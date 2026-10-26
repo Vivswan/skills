@@ -8,6 +8,7 @@ import { ROOT } from "../../scripts/lib.mts";
 // package.json carries any of these six names, so `npx -y github:Vivswan/skills` would fetch biome and typescript
 // and need bun before bin/install.mjs prints a line. Nothing else enforces their absence; the hook wiring is the
 // plain `hooks` script instead.
+
 const LIFECYCLE_NAMES = ["preinstall", "install", "postinstall", "prepare", "prepack", "build"];
 
 test("package.json carries none of the six script names that make npm's git fetcher install devDependencies for npx github:", () => {

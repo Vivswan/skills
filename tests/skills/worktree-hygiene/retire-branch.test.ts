@@ -18,7 +18,6 @@ import { tempDirs } from "../../helpers/temp-dirs";
 // independent (own repository under the launcher's TMPDIR) and run in a pool.
 
 const SCRIPT = join(ROOT, "skills", "worktree-hygiene", "scripts", "retire-branch.mts");
-// The entry plus the two modules it imports: the whole program the discipline checks scan.
 const MODULES = [
   SCRIPT,
   join(dirname(SCRIPT), "retire", "read.mts"),
@@ -169,9 +168,12 @@ async function tip(repo: string, branch: string): Promise<string> {
 // --- the outcome ------------------------------------------------------------
 
 interface Site {
+  /** The repository `tip` reads the watched branch in, before and after the run. */
   readonly repo: string;
+
   /** The branch whose tip is watched across the run (default: topic). */
   readonly branch?: string;
+
   /** The worktree whose survival is watched across the run. */
   readonly tree?: string;
 }
@@ -202,6 +204,18 @@ function normalize(text: string, ws: string, numbered = new Map<string, string>(
     .trimEnd();
 }
 
+function branchFate(before: string, after: string): Outcome["branch"] {
+  if (after === "absent") return "absent";
+  if (after === before) return "unchanged";
+  return "moved";
+}
+
+function treeFate(tree: string | undefined): Outcome["tree"] {
+  if (tree === undefined) return "none";
+  if (existsSync(tree)) return "present";
+  return "absent";
+}
+
 /** The one assertion shape: exit code, complete transcript, and what the run did to the repository. */
 async function retire(
   ws: string,
@@ -222,10 +236,12 @@ async function retire(
     status: result.status,
     stdout: normalize(result.stdout, ws, numbered),
     stderr: normalize(result.stderr, ws, numbered),
-    branch: after === "absent" ? "absent" : after === before ? "unchanged" : "moved",
-    tree: site.tree === undefined ? "none" : existsSync(site.tree) ? "present" : "absent",
+    branch: branchFate(before, after),
+    tree: treeFate(site.tree),
   };
 }
+
+// Placeholders name commits by first appearance: <sha1> the fetched mainline, <sha2> the branch tip.
 
 const lines = (...text: string[]): string => text.join("\n");
 const FETCH = "[fetch] origin/main -> <sha1> (the remote-tracking ref was already current)";
@@ -245,7 +261,6 @@ const ALLOW_NO_TREE = lines(FETCH, BRANCH, LANDED, NO_TREE, HELD, DELETED, RETIR
 
 const landedByMerge = (label = "topic"): string =>
   `[landed] by three-way merge: ${label} merges into <sha1> without changing its tree`;
-/** Placeholders name commits by first appearance: <sha1> the fetched mainline, <sha2> the branch tip. */
 const notContained = (label = "topic", subject = "<sha2>", reference = "<sha1>"): string =>
   `${label} (${subject}) is NOT contained in the mainline tip (${reference})`;
 const differs = (
@@ -2158,6 +2173,19 @@ describe("retire-branch.mts usage", () => {
   }
 });
 
+/** The offset just past the `)` closing a call whose arguments open at `start`. */
+function closeOfCall(code: string, start: number): number {
+  let depth = 1;
+  let end = start;
+  while (end < code.length && depth > 0) {
+    const char = code[end];
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    end += 1;
+  }
+  return end;
+}
+
 describe("retire-branch.mts process discipline", () => {
   const source = MODULES.map((file) => readFileSync(file, "utf-8")).join("\n");
   // Whole-line comments are dropped first: the script explains the `jobs -p`
@@ -2185,14 +2213,7 @@ describe("retire-branch.mts process discipline", () => {
     const unbounded: number[] = [];
     for (const site of sites) {
       const start = (site.index ?? 0) + site[0].length;
-      let depth = 1;
-      let end = start;
-      while (end < code.length && depth > 0) {
-        const char = code[end];
-        if (char === "(") depth += 1;
-        else if (char === ")") depth -= 1;
-        end += 1;
-      }
+      const end = closeOfCall(code, start);
       if (!code.slice(start, end).includes("timeout:")) {
         unbounded.push(code.slice(0, site.index ?? 0).split("\n").length);
       }

@@ -36,6 +36,7 @@ function refuse(reason: string): never {
 // covers every leak shape at once: an inherited GIT_DIR redirect, a starting
 // directory inside a repository (GIT_CEILING_DIRECTORIES never protects the
 // start directory itself), and a missing ceiling.
+
 const discovery = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
   stdout: "pipe",
   stderr: "pipe",
@@ -54,6 +55,7 @@ if (discovery.exitCode === 0) {
 // in the real file). Measured by a Bun child reporting its own birth
 // environment as JSON - portable where `env -0` is not (BSD env) - and
 // fail-closed on any probe failure.
+
 const dump = Bun.spawnSync(
   [process.execPath, "-e", "process.stdout.write(JSON.stringify(process.env))"],
   { stdout: "pipe", stderr: "pipe" },

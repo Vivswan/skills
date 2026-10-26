@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
 import { tempDirs } from "../../helpers/temp-dirs";
 
-const temp = tempDirs();
-
 // Contract tests for the orchestrator-mode session ledger. Each test drives
 // the real script as a child process against a throwaway ledger file, pinning
 // the CLI shapes and the exit matrix: 0 ok, 1 refused/not found/corrupt, 2 usage.
+
+const temp = tempDirs();
 
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "ledger.mts");
 
