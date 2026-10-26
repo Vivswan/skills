@@ -30,7 +30,21 @@ max-returns = 6
 convention = "google"
 ```
 
-A violation is split, never silenced with `noqa`. A threshold too tight for one nameable concept is raised in this file with its reason, none is set tighter than the block above, and a rule whose fix would change behaviour goes off here in the `ignore` list the same way, never inline. Without that exit, an agent re-implements a library's semantics to satisfy a lint.
+`C901` and the pylint counts (`PLR0904`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0914`, `PLR0915`, `PLR0916`, `PLR0917`) are advisory: a threshold is a hint about readability, and a forced split can read worse. Ruff has no per-rule severity, so a gate runs them as a separate exit-zero pass (the fleet's does), and the other families block:
+
+```bash
+ruff check . --select C901,PLR0904,PLR0911,PLR0912,PLR0913,PLR0914,PLR0915,PLR0916,PLR0917 --exit-zero   # the thresholds: findings print, the job stays green
+ruff check . --ignore C901,PLR0904,PLR0911,PLR0912,PLR0913,PLR0914,PLR0915,PLR0916,PLR0917               # everything else blocks
+```
+
+`PLR0904`, `PLR0914`, and `PLR0916` are preview rules, so they fire only under `preview = true`. A threshold finding is read, then the function is split, or the known case is a scoped `per-file-ignores` entry here with its reason. The thresholds in the block are the numbers, none set tighter:
+
+```toml
+[tool.ruff.lint.per-file-ignores]
+"src/train.py" = ["PLR0915"]  # train is one concept, and it is long
+```
+
+A blocking violation is fixed, never silenced with `noqa`. A rule whose fix would change behaviour goes off here in the `ignore` list with its reason, never inline. Without that exit, an agent re-implements a library's semantics to satisfy a lint.
 
 Specimen: `PTH207` asks for `Path.glob` in place of `glob.glob`, but `glob.glob` accepts absolute patterns and skips dotfiles and `Path.glob` does neither, so the rule is ignored in `pyproject.toml` with that comment.
 

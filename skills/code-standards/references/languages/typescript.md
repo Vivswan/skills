@@ -13,9 +13,9 @@ In `biome.json`:
   "linter": {
     "rules": {
       "complexity": {
-        "noExcessiveCognitiveComplexity": { "level": "error", "options": { "maxAllowedComplexity": 15 } },
-        "noExcessiveLinesPerFunction": { "level": "error", "options": { "maxLines": 80 } },
-        "useMaxParams": { "level": "error", "options": { "max": 6 } }
+        "noExcessiveCognitiveComplexity": { "level": "warn", "options": { "maxAllowedComplexity": 15 } },
+        "noExcessiveLinesPerFunction": { "level": "warn", "options": { "maxLines": 80 } },
+        "useMaxParams": { "level": "warn", "options": { "max": 6 } }
       },
       "style": {
         "noNestedTernary": "error",
@@ -36,7 +36,16 @@ In `biome.json`:
 }
 ```
 
-A violation is split, or the threshold is raised in `biome.json` with its reason; never silenced with `biome-ignore`. A rule whose fix would change behaviour goes off in the same file the same way.
+The three threshold rules warn and never block: a threshold is a hint about readability, and a forced split can read worse. A finding is read, then the function is split, or the case is carried with a per-path `overrides` entry in the repository's own biome layer with its reason, never an inline `biome-ignore`:
+
+```jsonc
+"overrides": [
+  // train is one concept, and it is long
+  { "includes": ["src/train.ts"], "linter": { "rules": { "complexity": { "noExcessiveLinesPerFunction": "off" } } } }
+]
+```
+
+The other rules block: a violation is fixed, and a rule whose fix would change behaviour goes off in `biome.json` with its reason.
 
 Specimen: `useLiteralKeys` rewrites `record["name"]` to `record.name`, which `tsc` rejects under `noPropertyAccessFromIndexSignature`. The rule is off in `biome.json` with that comment, not ignored line by line.
 
