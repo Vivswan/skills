@@ -5,8 +5,6 @@ import { closeSync, constants, fstatSync, openSync, readdirSync, readSync } from
 import { join } from "node:path";
 
 const TRANSCRIPT_TAIL_BYTES = 64 * 1024;
-// Upper bound on how far back the transcript sensor will scan for a parseable
-// event line; keeps a pathological transcript from turning the sweep O(file).
 const TRANSCRIPT_TAIL_MAX_BYTES = 8 * 1024 * 1024;
 
 export function readTail(fd: number, sizeBytes: number, windowBytes: number): string {

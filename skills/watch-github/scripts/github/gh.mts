@@ -7,9 +7,9 @@ export const DEFAULT_TIMEOUT_MS = 60_000;
 
 /** A gh call or response-shape failure. The caller decides whether it retries. */
 export class GhError extends Error {
-  /** gh exits 1 on a GraphQL reply that carries an `errors` entry, with the reply still on stdout;
-   * a reader that can use the partial `data` (repository.mts) finds it here. */
+  /** gh exits 1 on a reply carrying an `errors` entry with the reply still on stdout; repository.mts reads the partial `data` from here. */
   readonly stdout: string | undefined;
+
   /** What gh itself printed on a nonzero exit; absent on an error this module raised about the reply. */
   readonly stderr: string | undefined;
 

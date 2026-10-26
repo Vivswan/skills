@@ -7,10 +7,7 @@ import { ROOT, walkFiles } from "../../scripts/lib.mts";
 /** Vale reads every *.yml under the folder a consumer names as its style, so every one of them must be a rule. */
 const STYLE_ROOT = "skills";
 
-/**
- * The two rules derived from the upstream /unslop skill's text, which this repository does not hold (the skill
- * installs from its own repository), so the token-in-source test below cannot read it for them.
- */
+/** The rules derived from the upstream /unslop skill's text, which this repository does not hold, so the token-in-source test cannot read it for them. */
 const UPSTREAM_DERIVED = new Set([
   "skills.natural-writing.vale.AIVocabulary",
   "skills.natural-writing.vale.PlainWords",
@@ -54,6 +51,27 @@ function rules(): { id: string; skill: string; rule: Rule }[] {
 
 const lower = (text: string) => text.toLowerCase();
 
+/** True when the skill text lists `entry` as a whole word or phrase, so `bust` does not ride on `robust`. */
+function listsEntry(source: string, entry: string): boolean {
+  const escaped = lower(entry).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(source);
+}
+
+/** The trailing-participle rule is one alternation; its members are the words the skill lists. */
+function participles(tokens: string[]): string[] {
+  return tokens.flatMap((token) => {
+    const group = /\(([^)]*)\)/.exec(token)?.[1] ?? "";
+    return group.split("|").map((word) => `, ${word}`);
+  });
+}
+
+/** The entries a rule takes from the skill text: the participle alternation's members, else its tokens or its swap keys. */
+function sourceEntries(id: string, rule: Rule): string[] {
+  if (id.endsWith(".TrailingParticiple")) return participles(rule.tokens ?? []);
+
+  return rule.tokens ?? Object.keys(rule.swap ?? {});
+}
+
 describe("vale styles", () => {
   // Vale parses every .yml under a style folder as a rule; a stray one (a registry, a config) breaks every consumer.
   test("the only .yml files under skills/ are Vale rules in a vale/ folder", () => {
@@ -92,25 +110,11 @@ describe("vale styles", () => {
     for (const { id, skill, rule } of rules()) {
       const source = sources[skill];
       if (source === undefined || UPSTREAM_DERIVED.has(id)) continue;
-      const entries = id.endsWith(".TrailingParticiple")
-        ? participles(rule.tokens ?? [])
-        : (rule.tokens ?? Object.keys(rule.swap ?? {}));
-      for (const entry of entries) if (!listsEntry(source, entry)) missing.push(`${id}: ${entry}`);
+
+      for (const entry of sourceEntries(id, rule)) {
+        if (!listsEntry(source, entry)) missing.push(`${id}: ${entry}`);
+      }
     }
     expect(missing).toEqual([]);
   });
 });
-
-/** True when the skill text lists `entry` as a whole word or phrase, so `bust` does not ride on `robust`. */
-function listsEntry(source: string, entry: string): boolean {
-  const escaped = lower(entry).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(source);
-}
-
-/** The trailing-participle rule is one alternation; its members are the words the skill lists. */
-function participles(tokens: string[]): string[] {
-  return tokens.flatMap((token) => {
-    const group = /\(([^)]*)\)/.exec(token)?.[1] ?? "";
-    return group.split("|").map((word) => `, ${word}`);
-  });
-}

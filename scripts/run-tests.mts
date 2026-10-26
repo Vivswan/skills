@@ -52,6 +52,7 @@ if (!hasPathTarget) args.push(join(ROOT, "tests"));
 
 // cwd sits one level below the scratch ceiling: a default-cwd git checks
 // cwd, finds no repository, and cannot climb further.
+
 const scratch = mkdtempSync(join(scratchParent(), SCRATCH_PREFIX));
 const cwd = join(scratch, "cwd");
 mkdirSync(cwd);
@@ -93,9 +94,11 @@ try {
 // FORCE_COLOR wraps the timing bracket in SGR codes  -> stripped first, or a green run would fail
 // several anchored summaries                         -> the LAST is the run's
 // no summary on exit 0                               -> fails, so a bun wording change breaks loudly
-// biome-ignore lint/suspicious/noControlCharactersInRegex: the ESC escape is exactly what is being stripped
-const plain = summary.replace(/\u001b\[[0-9;]*m/g, "");
+
+const ESC = "\u001b";
+const plain = summary.replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
 const ran = [...plain.matchAll(/(?:^|\n)Ran (\d+) tests? across \d+ files?\. \[/g)].at(-1);
+
 if (status === 0 && (ran === undefined || Number(ran[1]) === 0)) {
   console.error(
     ran === undefined

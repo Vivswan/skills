@@ -11,10 +11,13 @@ import { ROOT } from "../../scripts/lib.mts";
 export interface SkillLayout {
   /** The canonical copies, under the real path of the temp root: bun names a script by its real path. */
   canon: string;
+
   /** Symlinks to the canonical copies, as the agent's skills directory holds them. */
   agent: string;
+
   /** An empty directory for SESSION_EVENTS_DIR, so the daemon's files stay inside the fixture. */
   runtime: string;
+
   /** Removes a skill's canonical copy and leaves its symlink dangling: the dependency is gone. */
   remove(skill: string): void;
 }

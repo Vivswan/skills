@@ -7,7 +7,6 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const EXIT_BROKEN = 3;
-// Every spawn is bounded: an unbounded child would leave the run with no verdict.
 export const FETCH_TIMEOUT_MS = 120_000;
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -49,11 +48,14 @@ export function exitWith(code: number, message: string): never {
 // Explicit function types: TypeScript narrows after a `never` call only when the
 // callee's type is declared, not inferred.
 export type Exit = (message: string) => never;
+
+// Exit 3 as the usage text promises: the question was never answered, so no gate passed and none failed.
 export const broken: Exit = (message) => exitWith(EXIT_BROKEN, `BROKEN: ${message}`);
+
+// Twelve hex digits: tests/skills/worktree-hygiene/retire-branch.test.ts normalizes a sha at this width.
 export const short = (sha: string): string => sha.slice(0, 12);
 
-// Repository-selecting GIT_* variables are exported to hooks, and a hook-spawned
-// run would retarget every command; only transport variables pass through.
+// Repository-selecting GIT_* variables are exported to hooks, and a hook-spawned run would retarget every command; only transport variables pass through.
 const GIT_TRANSPORT = new Set(["GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_PROXY_COMMAND"]);
 
 function childEnv(): Record<string, string> {
@@ -185,8 +187,7 @@ export function isContainedIn(root: string, args: { subject: string; reference: 
   return git(root, ["merge-base", "--is-ancestor", "--end-of-options", ...order]).status;
 }
 
-// `--no-renames` lists both halves of a rename so a surviving source cannot hide;
-// no diff.relative or diff.ignoreSubmodules config may narrow the listing.
+// `--no-renames` lists both halves of a rename so a surviving source cannot hide; no diff.relative or diff.ignoreSubmodules config may narrow the listing.
 export const NAME_ONLY_DIFF = ["diff", "--no-renames", "--no-relative", "--ignore-submodules=none"];
 
 // The merge result as `merge-tree --write-tree --name-only -z` prints it:
@@ -252,7 +253,6 @@ export function listWorktrees(root: string): Worktree[] {
   for (const line of gitOrBroken(root, ["worktree", "list", "--porcelain"]).split("\n")) {
     const [key = "", ...rest] = line.split(" ");
     const value = rest.join(" ");
-    const current = trees.at(-1);
     if (key === "worktree") {
       // git C-quotes a path with control or non-UTF-8 bytes; a guessed unquoting
       // would aim a removal at the wrong directory.
@@ -264,10 +264,13 @@ export function listWorktrees(root: string): Worktree[] {
         locked: null,
         isMain: trees.length === 0,
       });
-    } else if (current !== undefined && key === "HEAD") current.head = value;
-    else if (current !== undefined && key === "branch") current.branch = value;
-    else if (current !== undefined && key === "locked")
-      current.locked = value || "(no reason given)";
+      continue;
+    }
+    const current = trees.at(-1);
+    if (current === undefined) continue;
+    if (key === "HEAD") current.head = value;
+    else if (key === "branch") current.branch = value;
+    else if (key === "locked") current.locked = value || "(no reason given)";
   }
   return trees;
 }
@@ -349,6 +352,37 @@ interface Writer {
   readonly isAncestor: boolean;
 }
 
+interface CwdScan {
+  readonly writers: Writer[];
+  readonly records: number;
+}
+
+// lsof -F pcn prints one field per line: p<pid>, c<command>, then n<cwd>, which closes the record.
+function scanCwdRecords(stdout: string, treePath: string): CwdScan {
+  const prefix = treePath.endsWith("/") ? treePath : `${treePath}/`;
+  const ownPid = String(process.pid);
+  const ancestors = ancestorPids();
+  const writers: Writer[] = [];
+  let records = 0;
+  let pid = "";
+  let command = "";
+  for (const line of stdout.split("\n")) {
+    const value = line.slice(1);
+    if (line.startsWith("p")) pid = value;
+    else if (line.startsWith("c")) command = value;
+    else if (line.startsWith("n")) {
+      records += 1;
+      if ((value === treePath || value.startsWith(prefix)) && pid !== ownPid) {
+        writers.push({
+          description: `pid ${pid} (${command}) cwd ${value}`,
+          isAncestor: ancestors.has(pid),
+        });
+      }
+    }
+  }
+  return { writers, records };
+}
+
 // One global pass over cwd descriptors, filtered in-process; a non-zero exit is a
 // PARTIAL scan and zero records means the instrument failed (this process alone
 // has a cwd), and neither is an all-clear.
@@ -370,28 +404,8 @@ export function liveWriters(treePath: string): Writer[] {
     broken(
       `${probe} (lsof exited ${result.status}: a partial scan is not an all-clear); ${remedy}`,
     );
-  const prefix = treePath.endsWith("/") ? treePath : `${treePath}/`;
-  const ownPid = String(process.pid);
-  const ancestors = ancestorPids();
-  const writers: Writer[] = [];
-  let records = 0;
-  let pid = "";
-  let command = "";
-  for (const line of result.stdout.split("\n")) {
-    const value = line.slice(1);
-    if (line.startsWith("p")) pid = value;
-    else if (line.startsWith("c")) command = value;
-    else if (line.startsWith("n")) {
-      records += 1;
-      if ((value === treePath || value.startsWith(prefix)) && pid !== ownPid) {
-        writers.push({
-          description: `pid ${pid} (${command}) cwd ${value}`,
-          isAncestor: ancestors.has(pid),
-        });
-      }
-    }
-  }
-  if (records === 0)
+  const scan = scanCwdRecords(result.stdout, treePath);
+  if (scan.records === 0)
     broken(`${probe} (lsof returned zero cwd records: broken probe, not a quiet host); ${remedy}`);
-  return writers;
+  return scan.writers;
 }

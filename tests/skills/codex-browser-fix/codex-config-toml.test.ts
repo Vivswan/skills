@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
 import { withTomlValues } from "../../../skills/codex-browser-fix/scripts/codex-config-toml.mts";
 
-// The same key under three tables plus a look-alike inside a multiline
-// string: only the addressed table's assignment may change.
+// The same key under three tables plus a look-alike inside a multiline string: only the addressed table's assignment may change.
 const configLines = [
   'model_provider = "custom"',
   'instructions = """',

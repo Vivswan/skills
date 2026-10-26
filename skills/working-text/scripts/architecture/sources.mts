@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { ParserPlugin } from "@babel/parser";
-import type { Node, Program } from "@babel/types";
+import type { ExportNamedDeclaration, Node, Program } from "@babel/types";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -92,6 +92,7 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
 const { parse } = await import("@babel/parser");
 const { isFile } = await import("./paths.mts");
 
@@ -107,17 +108,24 @@ export interface ExportEntry {
 }
 
 export interface ModuleRecord {
+  /** The whole tree, for importSpecifiers to walk: `import()`, `require()`, and type-position imports are not in `requests`. */
   readonly program: Program;
+
   /** The module requests of the static imports and re-exports, in source order. */
   readonly requests: readonly string[];
+
+  /** The exports in source order; check-page.mts follows each one's `from` to its binding. */
   readonly exports: readonly ExportEntry[];
+
   /** The module requests of `export * from`, in source order. */
   readonly stars: readonly string[];
 }
 
 /** The string an export or import name is: `export { a as "b c" }` names "b c". */
 function moduleExportName(node: Node): string {
-  return node.type === "Identifier" ? node.name : node.type === "StringLiteral" ? node.value : "";
+  if (node.type === "Identifier") return node.name;
+  if (node.type === "StringLiteral") return node.value;
+  return "";
 }
 
 /** The identifiers a declaration binds: `export const { a, b: [c] } = x` exports a and c. */
@@ -191,21 +199,7 @@ function parseProgram(file: string, text: string): Program {
   }
 }
 
-/**
- * The module record of `text`: its static imports and exports, read from the TypeScript AST. A file
- * that does not parse throws naming the line.
- */
-export function parseModule(file: string, text: string): ModuleRecord {
-  let program: Program;
-  try {
-    program = parseProgram(file, text);
-  } catch (error) {
-    const line = (error as { loc?: { line?: number } }).loc?.line ?? 1;
-    throw new Error(
-      `${file}:${line} does not parse: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  // Bindings first, since `export { v }` may precede `import { v } from "./a"` and still forward it.
+function importedBindings(program: Program): Map<string, { request: string; imported: string }> {
   const imported = new Map<string, { request: string; imported: string }>();
   for (const statement of program.body) {
     if (statement.type !== "ImportDeclaration") continue;
@@ -223,6 +217,47 @@ export function parseModule(file: string, text: string): ModuleRecord {
       }
     }
   }
+  return imported;
+}
+
+function namedExports(
+  statement: ExportNamedDeclaration,
+  imported: ReadonlyMap<string, { request: string; imported: string }>,
+): ExportEntry[] {
+  const request = statement.source?.value;
+  const entries: ExportEntry[] = [];
+  for (const name of boundNames(statement.declaration)) entries.push({ name });
+  for (const specifier of statement.specifiers) {
+    if (specifier.type === "ExportNamespaceSpecifier") {
+      entries.push({ name: moduleExportName(specifier.exported) });
+    } else if (specifier.type === "ExportSpecifier") {
+      const local = moduleExportName(specifier.local);
+      const from = request === undefined ? imported.get(local) : { request, imported: local };
+      entries.push({ name: moduleExportName(specifier.exported), from });
+    }
+  }
+  return entries;
+}
+
+function programOf(file: string, text: string): Program {
+  try {
+    return parseProgram(file, text);
+  } catch (error) {
+    const line = (error as { loc?: { line?: number } }).loc?.line ?? 1;
+    throw new Error(
+      `${file}:${line} does not parse: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
+ * The module record of `text`: its static imports and exports, read from the TypeScript AST. A file
+ * that does not parse throws naming the line.
+ */
+export function parseModule(file: string, text: string): ModuleRecord {
+  const program = programOf(file, text);
+  // Bindings first, since `export { v }` may precede `import { v } from "./a"` and still forward it.
+  const imported = importedBindings(program);
   const requests: string[] = [];
   const exports: ExportEntry[] = [];
   const stars: string[] = [];
@@ -237,16 +272,7 @@ export function parseModule(file: string, text: string): ModuleRecord {
     } else if (statement.type === "ExportNamedDeclaration") {
       const request = statement.source?.value;
       if (request !== undefined) requests.push(request);
-      for (const name of boundNames(statement.declaration)) exports.push({ name });
-      for (const specifier of statement.specifiers) {
-        if (specifier.type === "ExportNamespaceSpecifier") {
-          exports.push({ name: moduleExportName(specifier.exported) });
-        } else if (specifier.type === "ExportSpecifier") {
-          const local = moduleExportName(specifier.local);
-          const from = request === undefined ? imported.get(local) : { request, imported: local };
-          exports.push({ name: moduleExportName(specifier.exported), from });
-        }
-      }
+      exports.push(...namedExports(statement, imported));
     }
   }
   return { program, requests, exports, stars };

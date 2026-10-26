@@ -11,13 +11,14 @@ import {
 } from "../../../skills/working-text/scripts/docs-probe.mts";
 import { tempDirs } from "../../helpers/temp-dirs";
 
+// The command as a user runs it: the source path, so a spawn's first run self-builds.
 const PROBE = join(ROOT, "skills", "working-text", "scripts", "docs-probe.mts");
-// A spawned probe's first run installs and bundles, which passed bun's 5 s default beside two
-// other test processes and a typecheck, so every spawn gets what the suite gives its other CLIs.
-const CLI_TIMEOUT = 60_000;
-const temp = tempDirs();
 
-const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
+// A spawned probe's first run installs and bundles, which passed bun's 5 s default beside two other test processes and a typecheck, so every spawn gets what the suite gives its other CLIs.
+const CLI_TIMEOUT = 60_000;
+
+// Called at top level: bun:test binds the afterAll that removes the fixtures to the registering file.
+const temp = tempDirs();
 
 function repo(files: Record<string, string>): string {
   const root = temp.dir("docs-probe-");
@@ -33,6 +34,7 @@ function runProbe(cwd: string, ...args: string[]) {
   return { status: proc.status, stdout: proc.stdout, stderr: proc.stderr };
 }
 
+const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
 const units = (page: string) => scanPage(page).units.map((u) => [u.kind, u.line, u.text] as const);
 
 describe("what Markdown renders as prose", () => {

@@ -29,7 +29,6 @@ const messages = (root: string, ...files: string[]) =>
 const LATE = "is assigned below the first def; module constants sit in one block after the imports";
 const FORWARD = "defined below it; a function sits above its callers";
 
-// The module in the shape the standard's specimen approves: constants first, helpers above the one caller.
 const IN_ORDER = `"""Transcribe a video."""
 import json
 from pathlib import Path

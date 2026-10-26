@@ -68,34 +68,43 @@ describe("typosquat.mts", () => {
     return new Response(stream, { status });
   }
 
+  /** An Io whose crates.io replies stream slowly (the first ranking page with `pageStatus`, the
+   * `tokios` lookup a 404), and whose `overlaps` collects every crates.io request that opened
+   * while another was still unsettled. */
+  function overlapWatchingIo(pageStatus: number, overlaps: string[]): Io {
+    let open = 0;
+    const base = sourcesIo([], [], ["tokio"]);
+    const settleOnce = (): (() => void) => {
+      let settled = false;
+      return () => {
+        if (settled) return;
+        settled = true;
+        open--;
+      };
+    };
+    return {
+      ...base,
+      fetch: async (input, init) => {
+        const url = new URL(input);
+        if (url.hostname !== "crates.io") return base.fetch(input, init);
+        if (open > 0) overlaps.push(url.pathname + url.search);
+        open++;
+        const settle = settleOnce();
+        if (url.pathname === "/api/v1/crates" && url.searchParams.get("page") === "1") {
+          return slowReply(pageStatus, CRATES_PAGE(["tokio"]).body, settle);
+        }
+        if (url.pathname === "/api/v1/crates/tokios") return slowReply(404, {}, settle);
+        const response = await base.fetch(input, init);
+        settle();
+        return response;
+      },
+    };
+  }
+
   test("crates.io sees one request at a time, body included: a second name's crate lookup waits for a ranking page still streaming, and a status-only lookup or a failed page releases its body before the next request", async () => {
     for (const pageStatus of [200, 503]) {
       const overlaps: string[] = [];
-      let open = 0;
-      const base = sourcesIo([], [], ["tokio"]);
-      const io: Io = {
-        ...base,
-        fetch: async (input, init) => {
-          const url = new URL(input);
-          if (url.hostname !== "crates.io") return base.fetch(input, init);
-          if (open > 0) overlaps.push(url.pathname + url.search);
-          open++;
-          let settled = false;
-          const settle = () => {
-            if (!settled) {
-              settled = true;
-              open--;
-            }
-          };
-          if (url.pathname === "/api/v1/crates" && url.searchParams.get("page") === "1") {
-            return slowReply(pageStatus, CRATES_PAGE(["tokio"]).body, settle);
-          }
-          if (url.pathname === "/api/v1/crates/tokios") return slowReply(404, {}, settle);
-          const response = await base.fetch(input, init);
-          settle();
-          return response;
-        },
-      };
+      const io = overlapWatchingIo(pageStatus, overlaps);
       // The second name's crate lookup queues behind the first name's ranking page.
       const rows = await Promise.all(["tokios", "serdes"].map((n) => checkName(io, OPTIONS, n)));
       expect(

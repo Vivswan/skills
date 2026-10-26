@@ -34,8 +34,6 @@ const USAGE = [
   "exits: 0 ok (a measurement succeeded, or a check passed); 1 a failed check or a broken probe; 2 usage",
 ].join("\n");
 
-// Same bound as sweep.mts: a child git on a stalled mount must fail loudly
-// instead of hanging the probe with no JSON.
 const COMMAND_TIMEOUT_MS = 15_000;
 
 function emit(result: Record<string, unknown>, code: number): never {
@@ -144,37 +142,39 @@ function embedsAfter(text: string, end: number, literal: string): boolean {
 // the anchoring that keeps "release.yml" out of "update-release.yml"
 // survives normalization unchanged.
 function anchoredIndexOf(text: string, literal: string, from: number): number {
+  let cursor = from;
   while (true) {
-    const at = text.indexOf(literal, from);
+    const at = text.indexOf(literal, cursor);
     if (at === -1) {
       return -1;
     }
     if (!embedsBefore(text, at, literal) && !embedsAfter(text, at + literal.length, literal)) {
       return at;
     }
-    from = at + 1;
+    cursor = at + 1;
   }
 }
 
 interface Evidence {
+  // The 1-based original line the match starts on.
   line: number;
+
+  // That original line's text, before whitespace normalization.
   text: string;
-  // Present only when the match spans a wrapped line boundary; `line` is
-  // then the first original line of the span and endLine the last.
+
+  // Present only when the match spans a wrapped line boundary; `line` is then the span's first original line and endLine its last.
   endLine?: number;
 }
 
 interface Normalized {
+  // The haystack side of the shared normalization policy; normalizeLiteral is the needle side.
   text: string;
+
   // For every character of `text`, the 1-based original line it came from.
   lineOf: number[];
 }
 
-// One line-break definition shared by the normalizer's line counter and the
-// evidence split, so a match's reported lines always agree with the lines a
-// reader would count: CRLF, lone CR, LF, and the unicode line/paragraph
-// separators. Diverging definitions would let a spanning match report the
-// wrong line or drop its endLine note.
+// The evidence split's line-break set; isLineBreak counts the same set, and the two diverging would let a spanning match report the wrong line or drop its endLine.
 const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 
 function isLineBreak(c: string, next: string | undefined): boolean {
@@ -264,9 +264,7 @@ function cmdCount(file: string, literal: string): never {
 
 // --- json-keys ----------------------------------------------------------------
 
-// Bare dot rendering only for JS-identifier keys, so every rendered path is
-// a valid JS accessor chain; any other key ("1st", "foo-bar", "a[0]", "a.b")
-// bracket-quotes and can never collide with a real index or nested key.
+// Only a JS-identifier key renders with a bare dot; any other ("1st", "foo-bar", "a[0]", "a.b") bracket-quotes, so a rendered path can never collide with a real index or nested key.
 const PLAIN_KEY = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 function childPath(prefix: string, key: string): string {
@@ -462,6 +460,42 @@ interface TokenResult {
   error?: string;
 }
 
+/** The tree root as given and as canonicalized, so an entry's realpath can be checked against it. */
+interface TreeRoot {
+  path: string;
+  real: string;
+  prefix: string;
+}
+
+/** A table entry's content, or why it could not be read. */
+type TreeFile = { content: string } | { error: string };
+
+function validateToken(tablePath: string, file: string, spec: unknown): TokenSpec {
+  if (
+    spec === null ||
+    typeof spec !== "object" ||
+    !("text" in spec) ||
+    typeof spec.text !== "string"
+  ) {
+    fail(`${tablePath}: every token for "${file}" needs a non-empty "text"`);
+  }
+  const needle = normalizeLiteral(spec.text);
+  if (needle === null) {
+    // Under whitespace normalization a whitespace-only token could only
+    // ever measure whitespace - exactly what a reflow changes.
+    fail(`${tablePath}: every token for "${file}" needs a "text" with a non-whitespace character`);
+  }
+  const expect: unknown = "expect" in spec ? spec.expect : undefined;
+  const valid =
+    expect === ">=1" || (typeof expect === "number" && Number.isInteger(expect) && expect >= 0);
+  if (!valid) {
+    fail(
+      `${tablePath}: token "${spec.text}" in "${file}" needs "expect" of ">=1" or a non-negative integer`,
+    );
+  }
+  return { text: spec.text, needle, expect: expect as Expectation };
+}
+
 function validateTable(tablePath: string, parsed: unknown): Record<string, TokenSpec[]> {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     fail(`${tablePath}: table must be an object mapping relative files to token lists`);
@@ -484,32 +518,46 @@ function validateTable(tablePath: string, parsed: unknown): Record<string, Token
     if (!Array.isArray(specs) || specs.length === 0) {
       fail(`${tablePath}: entry for "${file}" must be a non-empty array of tokens`);
     }
-    const tokens: TokenSpec[] = [];
-    for (const spec of specs) {
-      if (spec === null || typeof spec !== "object" || typeof spec.text !== "string") {
-        fail(`${tablePath}: every token for "${file}" needs a non-empty "text"`);
-      }
-      const needle = normalizeLiteral(spec.text);
-      if (needle === null) {
-        // Under whitespace normalization a whitespace-only token could only
-        // ever measure whitespace - exactly what a reflow changes.
-        fail(
-          `${tablePath}: every token for "${file}" needs a "text" with a non-whitespace character`,
-        );
-      }
-      const expect: unknown = spec.expect;
-      const valid =
-        expect === ">=1" || (typeof expect === "number" && Number.isInteger(expect) && expect >= 0);
-      if (!valid) {
-        fail(
-          `${tablePath}: token "${spec.text}" in "${file}" needs "expect" of ">=1" or a non-negative integer`,
-        );
-      }
-      tokens.push({ text: spec.text, needle, expect: expect as Expectation });
-    }
-    table[file] = tokens;
+    table[file] = specs.map((spec) => validateToken(tablePath, file, spec));
   }
   return table;
+}
+
+function readTreeFile(tree: TreeRoot, file: string): TreeFile {
+  try {
+    const real = realpathSync(join(tree.path, file));
+    if (real !== tree.real && !real.startsWith(tree.prefix)) {
+      fail(`${file}: resolves outside tree root`);
+    }
+    return { content: readRegularFile(real, file) };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return { error: `${file}: no such file under ${tree.path}` };
+    }
+    return {
+      error: `${file}: unreadable under ${tree.path}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function tokenResult(file: string, spec: TokenSpec, read: TreeFile): TokenResult {
+  if ("error" in read) {
+    // A vanished file fails EVERY token loudly. A negative token must
+    // never read the missing file as 0 occurrences and silently pass.
+    return {
+      file,
+      token: spec.text,
+      expected: spec.expect,
+      actual: null,
+      pass: false,
+      evidence: [],
+      error: read.error,
+    };
+  }
+  const { value, evidence } = countMatches(read.content, spec.needle);
+  const pass = spec.expect === ">=1" ? value >= 1 : value === spec.expect;
+  return { file, token: spec.text, expected: spec.expect, actual: value, pass, evidence };
 }
 
 function cmdTokens(tablePath: string, treeRoot: string): never {
@@ -526,7 +574,6 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
     fail(`${treeRoot}: not a directory`);
   }
 
-  const results: TokenResult[] = [];
   // Canonicalize both sides: the lexical ".." check in validateTable cannot
   // see symlinks, so a link.md entry could resolve outside the tree and the
   // probe would read external (possibly stale) content as if it were the
@@ -537,47 +584,13 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
   // the separator; naively appending sep would demand a "//" prefix and
   // reject every valid descendant.
   const rootPrefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
+  const tree: TreeRoot = { path: treeRoot, real: rootReal, prefix: rootPrefix };
+
+  const results: TokenResult[] = [];
   for (const [file, specs] of Object.entries(table)) {
-    let content: string | null = null;
-    let readError: string | null = null;
-    try {
-      const real = realpathSync(join(treeRoot, file));
-      if (real !== rootReal && !real.startsWith(rootPrefix)) {
-        fail(`${file}: resolves outside tree root`);
-      }
-      content = readRegularFile(real, file);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      readError =
-        code === "ENOENT"
-          ? `${file}: no such file under ${treeRoot}`
-          : `${file}: unreadable under ${treeRoot}: ${error instanceof Error ? error.message : String(error)}`;
-    }
+    const read = readTreeFile(tree, file);
     for (const spec of specs) {
-      if (content === null) {
-        // A vanished file fails EVERY token loudly. A negative token must
-        // never read the missing file as 0 occurrences and silently pass.
-        results.push({
-          file,
-          token: spec.text,
-          expected: spec.expect,
-          actual: null,
-          pass: false,
-          evidence: [],
-          error: readError ?? `${file}: unreadable under ${treeRoot}`,
-        });
-        continue;
-      }
-      const { value, evidence } = countMatches(content, spec.needle);
-      const pass = spec.expect === ">=1" ? value >= 1 : value === spec.expect;
-      results.push({
-        file,
-        token: spec.text,
-        expected: spec.expect,
-        actual: value,
-        pass,
-        evidence,
-      });
+      results.push(tokenResult(file, spec, read));
     }
   }
   const failures = results.filter((result) => !result.pass).length;
@@ -585,6 +598,14 @@ function cmdTokens(tablePath: string, treeRoot: string): never {
 }
 
 // --- dispatch --------------------------------------------------------------------
+
+function requireTwo(rest: string[], message: string): [string, string] {
+  const [first, second] = rest;
+  if (rest.length !== 2 || first === undefined || second === undefined) {
+    usage(message);
+  }
+  return [first, second];
+}
 
 function main(argv: string[]): void {
   const [subcommand, ...rest] = argv;
@@ -594,10 +615,7 @@ function main(argv: string[]): void {
   }
   switch (subcommand) {
     case "count": {
-      const [file, literal] = rest;
-      if (rest.length !== 2 || file === undefined || literal === undefined) {
-        usage("count needs <file> <literal>");
-      }
+      const [file, literal] = requireTwo(rest, "count needs <file> <literal>");
       cmdCount(file, literal);
       break;
     }
@@ -610,18 +628,12 @@ function main(argv: string[]): void {
       break;
     }
     case "set": {
-      const [root, baseRef] = rest;
-      if (rest.length !== 2 || root === undefined || baseRef === undefined) {
-        usage("set needs <repo-root> <base-ref>");
-      }
+      const [root, baseRef] = requireTwo(rest, "set needs <repo-root> <base-ref>");
       cmdSet(root, baseRef);
       break;
     }
     case "tokens": {
-      const [tablePath, treeRoot] = rest;
-      if (rest.length !== 2 || tablePath === undefined || treeRoot === undefined) {
-        usage("tokens needs <table.json> <tree-root>");
-      }
+      const [tablePath, treeRoot] = requireTwo(rest, "tokens needs <table.json> <tree-root>");
       cmdTokens(tablePath, treeRoot);
       break;
     }

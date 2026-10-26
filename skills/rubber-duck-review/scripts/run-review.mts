@@ -41,16 +41,12 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
 
+// The skill's directory is resolved through any install symlink, so its siblings are the installed skills.
+
 const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), "verdict-schema.json");
-
-// This skill's directory through any install symlink; its siblings are the installed skills.
 const SKILL_DIR = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
-
 const SKILLS_ROOT = dirname(SKILL_DIR);
-
-// A checkout of the repository: its plugin manifest beside skills/ lists this skill, and every skill it lists is the collection.
 const PLUGIN_MANIFEST = join(dirname(SKILLS_ROOT), ".claude-plugin", "plugin.json");
-
 const CRITERIA_HEADING = "Review Criteria";
 const COMPANION_HEADING = "## Companion review criteria";
 const COMPANION_INSTRUCTION =
@@ -136,11 +132,7 @@ const WAIT_POLL_MS = 2000;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
 const DEFAULT_STALL_SECONDS = 900;
 const WHOLE_SECONDS = /^[1-9][0-9]*$/;
-
-// A timer's delay is a 32-bit count of milliseconds; past it the timer fires at once.
 const MAX_TIMER_SECONDS = 2147483;
-
-// One table for both forms, so a flag of the other form is refused by name, never as unknown.
 const FLAGS = {
   background: { type: "boolean" },
   "stdin-prompt": { type: "boolean" },
@@ -156,8 +148,6 @@ const EXTRACT_FLAGS = ["wait", "timeout"] as const;
 const STALL_STATUS = /^stalled: /;
 const MINT_MARKER = ".minted-by-run-review";
 const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-/** Revision files outside refs/ that a prompt may name as a diff base: the tip before a reset or
- * rebase, the last fetch, the heads of an operation in progress. */
 const REVISION_FILES = [
   "ORIG_HEAD",
   "FETCH_HEAD",
@@ -546,11 +536,10 @@ function printCriteria(args: string[]): void {
 }
 
 interface Delivery {
-  /** The reviewer's argv for the codex sandbox the launch settled on; claude
-   * and copilot ignore the argument. */
+  /** The reviewer's argv for the codex sandbox the launch settled on; claude and copilot ignore the argument. */
   args: (sandbox: CodexSandbox) => string[];
-  /** null: prompt travels as argv and stdin is 'ignore'. Otherwise the file
-   * served as the reviewer's stdin (EOF-terminated, complete by construction). */
+
+  /** null: the prompt travels as argv and stdin is 'ignore'; otherwise the file served as the reviewer's stdin, EOF-terminated and complete by construction. */
   stdinFile: string | null;
 }
 
@@ -580,9 +569,7 @@ type Launch =
   | { sandbox: "read-only" }
   | {
       sandbox: "copy";
-      /** The bwrap line that refused, for the progress line and the failure. */
       reason: string;
-      /** The repository root to snapshot and the cwd's path inside it. */
       root: string;
       subdir: string;
     };
@@ -780,6 +767,7 @@ function buildSnapshot(copy: string): void {
   for (const [key, value] of promisorConfig()) {
     write(["config", key, value]);
   }
+  // Outside refs/, yet a prompt may name one as a diff base: the tip before a reset or rebase, the last fetch, the heads of an operation in progress.
   for (const name of REVISION_FILES) {
     if (existsSync(join(gitDir, name))) copyFileSync(join(gitDir, name), join(copy, ".git", name));
   }
@@ -840,18 +828,8 @@ function withoutGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return stripped;
 }
 
-/** codex marks the directory it is launched in as a trusted project by
- * writing a block into its config file, and a copy has a fresh path every
- * review, so the user's own config would grow by one block per run. The
- * reviewer therefore gets a scratch CODEX_HOME holding copies of the user's
- * config and credentials; the trust write lands there and dies with it. */
 const CODEX_HOME_FILES = ["config.toml", "auth.json"];
 const CODEX_AUTH_FILE = "auth.json";
-/** codex writes each review's transcript (its session rollout) under this
- * directory of its home. Those are the user's review logs, so the scratch
- * home links it to the user's own directory instead of holding a copy that
- * dies with the review. Everything else codex writes (its sqlite state, the
- * trust block) stays scratch. */
 const CODEX_SESSIONS_DIR = "sessions";
 
 /** Absolute, since the sessions link below is read from inside the scratch home, not from the cwd. */
@@ -859,8 +837,14 @@ function realCodexHome(): string {
   return resolve(process.env.CODEX_HOME ?? join(homedir(), ".codex"));
 }
 
-/** Fills `home` (already created) with the user's config and credentials, each only when it exists,
- * and links its sessions directory to the user's, created if missing.
+/** Fills `home` (already created) as the reviewer's scratch CODEX_HOME. codex marks the directory it is launched
+ * in as a trusted project by writing a block into its config file, and a copy has a fresh path every review, so
+ * the user's own config would grow by one block per run; in the scratch home the trust write dies with it.
+ *
+ *   config.toml, auth.json  -> copied, each only when it exists
+ *   sessions/               -> linked to the user's own (created if missing): the transcripts codex writes there are the user's review logs
+ *
+ * Everything else codex writes (its sqlite state, the trust block) stays scratch.
  * Returns the credentials bytes as copied, so a later refresh is told apart from them. */
 function fillCodexHome(home: string): Buffer | null {
   const real = realCodexHome();
@@ -1015,12 +999,157 @@ function recordStatus(
 }
 
 interface ReviewerHooks {
+  /** Fires once, on the reviewer's first stdout byte. */
   onLife?: () => void;
+
   /** The copy mode's progress line: the refusal and where the copy lives. */
   onFallback?: (message: string) => void;
+
+  /** The reviewer never ran: the spawn failed, or in copy mode the snapshot or the scratch home did; onDone never follows it. */
   onSpawnError: (error: Error) => void;
+
   /** Receives the recorded status: "0" is the only success. */
   onDone: (status: string) => void;
+}
+
+/** The descriptors one run holds until it settles: the stream capture, its stderr, and the prompt file when the delivery is by stdin. */
+interface CaptureFds {
+  out: number;
+  err: number;
+  stdin: number | null;
+}
+
+/** What the copy mode adds to a run: the snapshot and the cwd inside it, and the scratch CODEX_HOME with the credentials as copied. */
+interface CopyMode {
+  copy: string;
+  cwd: string;
+  codexHome: string;
+  originalAuth: Buffer | null;
+}
+
+/** What the stream watcher needs of its run: where the bytes go, what the close handler records, and what settling releases. */
+interface Run {
+  tool: Tool;
+  scratch: Scratch;
+  criteria: string[];
+  sandbox: "copy" | undefined;
+  stallSeconds: number;
+  fds: CaptureFds;
+  copyMode: CopyMode | null;
+  warn: (line: string) => void;
+}
+
+function openCaptureFds(delivery: Delivery, scratch: Scratch): CaptureFds {
+  let stdin: number | null = null;
+  if (delivery.stdinFile !== null) {
+    try {
+      stdin = openSync(delivery.stdinFile, "r");
+    } catch (error) {
+      usageError(`cannot open prompt file for stdin delivery: ${String(error)}`);
+    }
+  }
+
+  return { out: openSync(scratch.outFile, "w"), err: openSync(scratch.errFile, "w"), stdin };
+}
+
+/** A failure removes what was built and names it, for the caller to report as a spawn failure. The home's
+ * path is fixed before it is filled, so a fill that fails midway is removed with the copy. */
+function prepareCopyMode(
+  launch: Extract<Launch, { sandbox: "copy" }>,
+  scratch: Scratch,
+  warn: (line: string) => void,
+): { ok: true; copyMode: CopyMode } | { ok: false; reason: string } {
+  const snapshot = snapshotRepository(launch, scratch, warn);
+  if (!snapshot.ok) return snapshot;
+
+  const codexHome = join(scratch.dir, "codex-home");
+  try {
+    mkdirSync(codexHome);
+    const originalAuth = fillCodexHome(codexHome);
+    return {
+      ok: true,
+      copyMode: { copy: snapshot.copy, cwd: snapshot.cwd, codexHome, originalAuth },
+    };
+  } catch (error) {
+    removeTree(snapshot.copy, warn);
+    removeTree(codexHome, warn);
+    return { ok: false, reason: `scratch codex home failed: ${String(error)}` };
+  }
+}
+
+/** Let go together on every path, the copy and the scratch home first: the home holds copied credentials, and
+ * a token codex refreshed there goes back to the user's before it dies. */
+function releaseRun(
+  fds: CaptureFds,
+  copyMode: CopyMode | null,
+  warn: (line: string) => void,
+): void {
+  if (copyMode !== null) {
+    removeTree(copyMode.copy, warn);
+    returnRefreshedAuth(copyMode.codexHome, copyMode.originalAuth, warn);
+    removeTree(copyMode.codexHome, warn);
+  }
+
+  closeSync(fds.out);
+  closeSync(fds.err);
+  if (fds.stdin !== null) closeSync(fds.stdin);
+}
+
+/** Every byte from the reviewer winds the stall clock and lands in the capture. When the clock runs out, the
+ * reviewer's whole process group is killed and the run is a stall: a stuck browser-extension host codex spawned
+ * once held a silent review for three hours while a 3600 s wait ran. A spawn failure emits 'error' and may still
+ * emit 'close', so the run settles once. */
+function watchReviewer(child: ReturnType<typeof spawn>, run: Run, hooks: ReviewerHooks): void {
+  let sawLife = false;
+  let stalled = false;
+  let stallClock: ReturnType<typeof setTimeout> | null = null;
+  const windStallClock = () => {
+    if (stallClock !== null) clearTimeout(stallClock);
+    stallClock = setTimeout(() => {
+      stalled = true;
+      run.warn(
+        `review stalled: no stream event for ${run.stallSeconds} s; killing the reviewer (pid ${child.pid})`,
+      );
+      killTree(child, "SIGKILL");
+    }, run.stallSeconds * 1000);
+  };
+  windStallClock();
+
+  // stdio[1] and stdio[2] are "pipe" in runReviewer's spawn call, so both streams
+  // exist; the null in their types only covers other stdio configurations.
+  child.stdout!.on("data", (chunk: Buffer) => {
+    if (!sawLife) {
+      sawLife = true;
+      hooks.onLife?.();
+    }
+    windStallClock();
+    writeFileSync(run.fds.out, chunk);
+  });
+  child.stderr!.on("data", (chunk: Buffer) => {
+    windStallClock();
+    writeFileSync(run.fds.err, chunk);
+  });
+
+  let settled = false;
+  const settle = (handle: () => void) => {
+    if (settled) return;
+    settled = true;
+    if (stallClock !== null) clearTimeout(stallClock);
+    releaseRun(run.fds, run.copyMode, run.warn);
+    handle();
+  };
+  child.on("error", (error) => {
+    settle(() => hooks.onSpawnError(error));
+  });
+  child.on("close", (code) => {
+    settle(() => {
+      const status = stalled
+        ? `stalled: no stream event for ${run.stallSeconds} s`
+        : String(code ?? "signal");
+      recordStatus(run.scratch, run.tool, { criteria: run.criteria, status, sandbox: run.sandbox });
+      hooks.onDone(status);
+    });
+  });
 }
 
 function runReviewer(
@@ -1032,135 +1161,61 @@ function runReviewer(
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
   const criteria = rules.criteria.map((entry) => entry.name);
-  const { stallSeconds } = rules;
-  let stdinFd: number | null = null;
-  if (delivery.stdinFile !== null) {
-    try {
-      stdinFd = openSync(delivery.stdinFile, "r");
-    } catch (error) {
-      usageError(`cannot open prompt file for stdin delivery: ${String(error)}`);
-    }
-  }
-  const outFd = openSync(scratch.outFile, "w");
-  const errFd = openSync(scratch.errFile, "w");
+  const fds = openCaptureFds(delivery, scratch);
   const sandbox = launch.sandbox === "copy" ? "copy" : undefined;
   recordStatus(scratch, tool, { criteria, sandbox });
   // A warning lands in review.err, which outlives the run and is named by a
   // failure, as well as on stderr (ignored for a detached monitor).
   const warn = (line: string) => {
-    writeFileSync(errFd, `${line}\n`);
+    writeFileSync(fds.err, `${line}\n`);
     process.stderr.write(`${line}\n`);
   };
-  // The copy and the scratch codex home, when there are any, die with the
-  // review on every path below: the home holds copied credentials.
-  let copy: string | null = null;
-  let codexHome: string | null = null;
-  let originalAuth: Buffer | null = null;
-  const closeFds = () => {
-    if (copy !== null) removeTree(copy, warn);
-    if (codexHome !== null) {
-      returnRefreshedAuth(codexHome, originalAuth, warn);
-      removeTree(codexHome, warn);
-    }
-    closeSync(outFd);
-    closeSync(errFd);
-    if (stdinFd !== null) closeSync(stdinFd);
-  };
-  let cwd: string | undefined;
-  let env: NodeJS.ProcessEnv | undefined;
+
+  let copyMode: CopyMode | null = null;
   let args = delivery.args("read-only");
+  let env: NodeJS.ProcessEnv | undefined;
   if (launch.sandbox === "copy") {
-    const snapshot = snapshotRepository(launch, scratch, warn);
-    if (!snapshot.ok) {
-      closeFds();
-      hooks.onSpawnError(new Error(snapshot.reason));
+    const built = prepareCopyMode(launch, scratch, warn);
+    if (!built.ok) {
+      releaseRun(fds, null, warn);
+      hooks.onSpawnError(new Error(built.reason));
       return null;
     }
-    copy = snapshot.copy;
-    cwd = snapshot.cwd;
-    // Assigned before it is filled, so a copy that fails midway is still removed.
-    codexHome = join(scratch.dir, "codex-home");
-    try {
-      mkdirSync(codexHome);
-      originalAuth = fillCodexHome(codexHome);
-    } catch (error) {
-      closeFds();
-      hooks.onSpawnError(new Error(`scratch codex home failed: ${String(error)}`));
-      return null;
-    }
-    env = { ...withoutGitEnv(process.env), CODEX_HOME: codexHome };
+    copyMode = built.copyMode;
+    env = { ...withoutGitEnv(process.env), CODEX_HOME: copyMode.codexHome };
     args = delivery.args("danger-full-access");
     hooks.onFallback?.(
-      `codex sandbox unavailable (${launch.reason}): reviewing an unsandboxed snapshot copy at ${copy}`,
+      `codex sandbox unavailable (${launch.reason}): reviewing an unsandboxed snapshot copy at ${copyMode.copy}`,
     );
   }
+
   // spawn can also throw synchronously (e.g. a NUL byte in an argv element);
   // that must reach onSpawnError like an async spawn failure, not crash.
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(tool, args, {
-      cwd,
+      cwd: copyMode?.cwd,
       env,
-      stdio: [stdinFd ?? "ignore", "pipe", "pipe"],
+      stdio: [fds.stdin ?? "ignore", "pipe", "pipe"],
       detached: true,
     });
   } catch (error) {
-    closeFds();
+    releaseRun(fds, copyMode, warn);
     hooks.onSpawnError(error instanceof Error ? error : new Error(String(error)));
     return null;
   }
-  let sawLife = false;
-  let stalled = false;
-  let stallClock: ReturnType<typeof setTimeout> | null = null;
-  /** Every byte from the reviewer winds the clock. When it runs out, the reviewer's whole
-   * process group is killed and the run is a stall: a stuck browser-extension host codex spawned
-   * once held a silent review for three hours while a 3600 s wait ran. */
-  const windStallClock = () => {
-    if (stallClock !== null) clearTimeout(stallClock);
-    stallClock = setTimeout(() => {
-      stalled = true;
-      warn(
-        `review stalled: no stream event for ${stallSeconds} s; killing the reviewer (pid ${child.pid})`,
-      );
-      killTree(child, "SIGKILL");
-    }, stallSeconds * 1000);
+
+  const run: Run = {
+    tool,
+    scratch,
+    criteria,
+    sandbox,
+    stallSeconds: rules.stallSeconds,
+    fds,
+    copyMode,
+    warn,
   };
-  windStallClock();
-  // stdio[1] and stdio[2] are "pipe" in the spawn call above, so both streams
-  // exist; the null in their types only covers other stdio configurations.
-  child.stdout!.on("data", (chunk: Buffer) => {
-    if (!sawLife) {
-      sawLife = true;
-      hooks.onLife?.();
-    }
-    windStallClock();
-    writeFileSync(outFd, chunk);
-  });
-  child.stderr!.on("data", (chunk: Buffer) => {
-    windStallClock();
-    writeFileSync(errFd, chunk);
-  });
-  // A spawn failure emits 'error' and may still emit 'close'; settle once.
-  let settled = false;
-  const settle = (handle: () => void) => {
-    if (settled) return;
-    settled = true;
-    if (stallClock !== null) clearTimeout(stallClock);
-    closeFds();
-    handle();
-  };
-  child.on("error", (error) => {
-    settle(() => hooks.onSpawnError(error));
-  });
-  child.on("close", (code) => {
-    settle(() => {
-      const status = stalled
-        ? `stalled: no stream event for ${stallSeconds} s`
-        : String(code ?? "signal");
-      recordStatus(scratch, tool, { criteria, status, sandbox });
-      hooks.onDone(status);
-    });
-  });
+  watchReviewer(child, run, hooks);
   return child;
 }
 
@@ -1365,6 +1420,8 @@ function extractRecorded(tool: Tool, outputFile: string): void {
   reportRecordedRun(tool, outputFile, record.status, record.sandbox, record.criteria);
 }
 
+/** A whole number of seconds up to MAX_TIMER_SECONDS: a timer's delay is a 32-bit count of milliseconds, and
+ * past it the timer fires at once. */
 function secondsArg(flag: string, value: string | undefined): number {
   if (value === undefined || !WHOLE_SECONDS.test(value) || Number(value) > MAX_TIMER_SECONDS) {
     usageError(`${flag} requires a whole number of seconds, 1 to ${MAX_TIMER_SECONDS}`);
@@ -1372,32 +1429,47 @@ function secondsArg(flag: string, value: string | undefined): number {
   return Number(value);
 }
 
-/** The flags of one form, parsed by node. Its refusals come back as this tool's own usage errors,
- * which the tests pin, with the flag read out of node's message. */
-function parseFlags(args: string[], form: "launch" | "extract") {
-  const foreign = form === "launch" ? EXTRACT_FLAGS : LAUNCH_FLAGS;
-  const belongsTo = form === "launch" ? "--extract" : "a launch";
-  const refuse = (flag: string): never => usageError(`--${flag} applies only to ${belongsTo}`);
-  const foreignFlag = (flag: string) => foreign.some((name) => `--${name}` === flag);
+type FlagForm = "launch" | "extract";
 
+/** The other form's flags, which this form refuses by name. */
+function foreignFlags(form: FlagForm): readonly (keyof typeof FLAGS)[] {
+  return form === "launch" ? EXTRACT_FLAGS : LAUNCH_FLAGS;
+}
+
+function refuseForeignFlag(flag: string, form: FlagForm): never {
+  const belongsTo = form === "launch" ? "--extract" : "a launch";
+  return usageError(`--${flag} applies only to ${belongsTo}`);
+}
+
+/** node's refusal of the argv as this tool's own usage error, which the tests pin, with the flag read out of
+ * node's message. A refusal of another kind is rethrown. */
+function refuseArgv(error: unknown, form: FlagForm): never {
+  const message = isRecord(error) ? String(error.message) : String(error);
+  const flag = /'(-[^ ']+)/.exec(message)?.[1] ?? "";
+  const code = isRecord(error) ? error.code : undefined;
+  if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") usageError(`unknown flag: ${flag}`);
+  if (code !== "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") throw error;
+
+  const name = flag.slice(2);
+  if (foreignFlags(form).some((foreign) => foreign === name)) refuseForeignFlag(name, form);
+  if (flag === "--capture") usageError("--capture requires a directory");
+  if (flag === "--criteria") usageError("--criteria requires <name>[,<name>] or none");
+  if (flag === "--timeout" || flag === "--stall") secondsArg(flag, undefined);
+  usageError(message);
+}
+
+/** The flags of one form, parsed by node over FLAGS, which holds both forms: a flag of the other form is
+ * refused by name, never as unknown. */
+function parseFlags(args: string[], form: FlagForm) {
   let parsed: ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>;
   try {
     parsed = parseArgs({ args, options: FLAGS, allowPositionals: true, strict: true });
   } catch (error) {
-    const message = isRecord(error) ? String(error.message) : String(error);
-    const flag = /'(-[^ ']+)/.exec(message)?.[1] ?? "";
-    const code = isRecord(error) ? error.code : undefined;
-    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") usageError(`unknown flag: ${flag}`);
-    if (code !== "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") throw error;
-    if (foreignFlag(flag)) refuse(flag.slice(2));
-    if (flag === "--capture") usageError("--capture requires a directory");
-    if (flag === "--criteria") usageError("--criteria requires <name>[,<name>] or none");
-    if (flag === "--timeout" || flag === "--stall") secondsArg(flag, undefined);
-    usageError(message);
+    refuseArgv(error, form);
   }
 
-  for (const flag of foreign) {
-    if (parsed.values[flag] !== undefined) refuse(flag);
+  for (const flag of foreignFlags(form)) {
+    if (parsed.values[flag] !== undefined) refuseForeignFlag(flag, form);
   }
   return parsed;
 }
@@ -1431,53 +1503,37 @@ function extractAfterWait(tool: Tool, outputFile: string, timeoutSeconds: number
   reportRecordedRun(tool, outputFile, record.status, record.sandbox, record.criteria);
 }
 
-function main(): void {
-  const argv = process.argv.slice(2);
-  if (argv[0] === "--help" || argv[0] === "-h") {
-    process.stdout.write(`${USAGE}\n`);
-    return;
-  }
-  if (argv[0] === "prepare") {
-    const section = argv[1];
-    if (section === undefined || argv.length !== 2)
-      usageError("prepare takes exactly one <section>");
-    preparePrompt(section);
-    return;
-  }
-  if (argv[0] === "criteria") {
-    printCriteria(argv.slice(1));
-    return;
-  }
-  const toolArg = argv[0];
-  if (toolArg === undefined || !isTool(toolArg)) {
-    usageError(`unknown reviewer: ${toolArg ?? "(none)"}`);
-  }
-  const tool = toolArg;
-  const rest = argv.slice(1);
+/** The `--extract` form: the recorded verdict of a capture, after a wait for it under `--wait`. */
+function extractCommand(tool: Tool, args: string[]): void {
+  const { values, positionals } = parseFlags(args, "extract");
+  const wait = values.wait === true;
+  const timeoutSeconds =
+    values.timeout === undefined ? null : secondsArg("--timeout", values.timeout);
+  if (timeoutSeconds !== null && !wait) usageError("--timeout applies only to --extract --wait");
 
-  if (rest[0] === "--extract") {
-    const { values, positionals } = parseFlags(rest.slice(1), "extract");
-    const wait = values.wait === true;
-    const timeoutSeconds =
-      values.timeout === undefined ? null : secondsArg("--timeout", values.timeout);
-    if (timeoutSeconds !== null && !wait) usageError("--timeout applies only to --extract --wait");
-
-    const outputFile = positionals[0];
-    if (outputFile === undefined || positionals.length !== 1) {
-      usageError("--extract takes exactly one <output-file>");
-    }
-    if (wait) extractAfterWait(tool, outputFile, timeoutSeconds ?? DEFAULT_WAIT_TIMEOUT_SECONDS);
-    else extractRecorded(tool, outputFile);
-    return;
+  const outputFile = positionals[0];
+  if (outputFile === undefined || positionals.length !== 1) {
+    usageError("--extract takes exactly one <output-file>");
   }
+  if (wait) extractAfterWait(tool, outputFile, timeoutSeconds ?? DEFAULT_WAIT_TIMEOUT_SECONDS);
+  else extractRecorded(tool, outputFile);
+}
 
-  const { values, positionals } = parseFlags(rest, "launch");
+interface LaunchOptions {
+  background: boolean;
+  stdinPrompt: boolean;
+  captureDir: string | null;
+  stallSeconds: number;
+  criteriaSpec: string | null;
+  promptFile: string;
+}
+
+function launchOptions(args: string[]): LaunchOptions {
+  const { values, positionals } = parseFlags(args, "launch");
   const background = values.background === true;
-  const stdinPrompt = values["stdin-prompt"] === true;
   const captureDir = values.capture ?? null;
   const stallSeconds =
     values.stall === undefined ? DEFAULT_STALL_SECONDS : secondsArg("--stall", values.stall);
-  const criteriaSpec = values.criteria ?? null;
   if (background && captureDir !== null) {
     usageError("--background and --capture are mutually exclusive");
   }
@@ -1486,8 +1542,18 @@ function main(): void {
   if (promptFile === undefined || positionals.length !== 1) {
     usageError("expected exactly one <prompt-file>");
   }
-  if (captureDir === null) requireMintedPrompt(promptFile);
-  else requireCaptureProvenance(tool, promptFile, captureDir);
+
+  return {
+    background,
+    stdinPrompt: values["stdin-prompt"] === true,
+    captureDir,
+    stallSeconds,
+    criteriaSpec: values.criteria ?? null,
+    promptFile,
+  };
+}
+
+function readPrompt(promptFile: string): string {
   let prompt: string;
   try {
     prompt = readFileSync(promptFile, "utf-8");
@@ -1495,8 +1561,46 @@ function main(): void {
     usageError(`cannot read prompt file ${promptFile}: ${String(error)}`);
   }
   if (prompt.trim() === "") usageError(`prompt file is empty: ${promptFile}`);
+
+  return prompt;
+}
+
+/** The reviewer run in this process: the foreground run that prints the verdict, or under `--capture` the
+ * detached monitor's silent one. */
+function runInThisProcess(
+  tool: Tool,
+  launch: Launch,
+  options: LaunchOptions,
+  prompt: string,
+  rules: Rules,
+): ReturnType<typeof spawn> | null {
+  const scratch = scratchPaths(
+    options.captureDir ?? mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)),
+    tool,
+  );
+  // The snapshot lives and dies with the capture; the caller's own prompt file stays theirs.
+  const fullPrompt = withCriteria(prompt, rules.criteria);
+  const promptSnapshot = join(scratch.dir, "prompt.txt");
+  writeFileSync(promptSnapshot, fullPrompt);
+  const delivery = options.stdinPrompt
+    ? stdinDelivery(tool, promptSnapshot)
+    : argvDelivery(tool, fullPrompt);
+  if (options.captureDir === null) return runForeground(tool, launch, delivery, scratch, rules);
+
+  return runCapture(tool, launch, delivery, scratch, rules);
+}
+
+function launchCommand(tool: Tool, args: string[]): void {
+  const options = launchOptions(args);
+  const { background, stdinPrompt, captureDir, criteriaSpec, promptFile } = options;
+  if (captureDir === null) requireMintedPrompt(promptFile);
+  else requireCaptureProvenance(tool, promptFile, captureDir);
+  const prompt = readPrompt(promptFile);
   // Selected in the parent of a --background launch too, so an unknown name is its usage error.
-  const rules: Rules = { stallSeconds, criteria: selectCriteria(criteriaSpec) };
+  const rules: Rules = {
+    stallSeconds: options.stallSeconds,
+    criteria: selectCriteria(criteriaSpec),
+  };
 
   // stdinDelivery owns the copilot rejection; validate up front (against the
   // caller's path) so a bad tool/flag combination is a parent-side usage
@@ -1515,19 +1619,40 @@ function main(): void {
     runBackground(tool, launch, prompt, stdinPrompt, rules, criteriaSpec);
     return;
   }
-  const scratch = scratchPaths(captureDir ?? mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
-  // The snapshot lives and dies with the capture; the caller's own prompt file stays theirs.
-  const fullPrompt = withCriteria(prompt, rules.criteria);
-  const promptSnapshot = join(scratch.dir, "prompt.txt");
-  writeFileSync(promptSnapshot, fullPrompt);
-  const delivery = stdinPrompt
-    ? stdinDelivery(tool, promptSnapshot)
-    : argvDelivery(tool, fullPrompt);
-  const child =
-    captureDir !== null
-      ? runCapture(tool, launch, delivery, scratch, rules)
-      : runForeground(tool, launch, delivery, scratch, rules);
+
+  const child = runInThisProcess(tool, launch, options, prompt, rules);
   if (forwarded !== null) forwarded.child = child;
+}
+
+function main(): void {
+  const argv = process.argv.slice(2);
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    process.stdout.write(`${USAGE}\n`);
+    return;
+  }
+  if (argv[0] === "prepare") {
+    const section = argv[1];
+    if (section === undefined || argv.length !== 2)
+      usageError("prepare takes exactly one <section>");
+    preparePrompt(section);
+    return;
+  }
+  if (argv[0] === "criteria") {
+    printCriteria(argv.slice(1));
+    return;
+  }
+
+  const toolArg = argv[0];
+  if (toolArg === undefined || !isTool(toolArg)) {
+    usageError(`unknown reviewer: ${toolArg ?? "(none)"}`);
+  }
+  const rest = argv.slice(1);
+  if (rest[0] === "--extract") {
+    extractCommand(toolArg, rest.slice(1));
+    return;
+  }
+
+  launchCommand(toolArg, rest);
 }
 
 try {

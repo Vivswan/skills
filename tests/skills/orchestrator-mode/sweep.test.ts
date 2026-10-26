@@ -15,8 +15,6 @@ import { ROOT } from "../../../scripts/lib.mts";
 import { cleanEnv, fakeLsof, git, park, scratchRepo } from "../../helpers/scratch-repo";
 import { tempDirs } from "../../helpers/temp-dirs";
 
-const temp = tempDirs();
-
 // Fixture-repo test for the fleet sweep script: a temp git repo with a live
 // worktree (ahead of origin, dirty + untracked), a repo-wiping worktree, a
 // worktree whose directory was deleted, a divergent origin/develop branch for
@@ -28,16 +26,16 @@ const temp = tempDirs();
 // transcript sensor survives truncated final JSONL lines, including one
 // larger than the sensor's base tail window.
 
+const temp = tempDirs();
+
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "sweep.mts");
 const SWEEP_TIMEOUT = 60_000;
 
 const fixtureRoot = temp.dir("sweep-test-");
 
-// Fixture: repo (6 tracked files) with an origin so aheadBehind is
-// computable, a live worktree one commit ahead with dirty and untracked
-// files (one nested), a wipe worktree whose commit deletes lib/, and a
-// registered worktree whose directory is deleted afterwards.
 const { base, repo } = scratchRepo(fixtureRoot, {});
+
+// An origin, so aheadBehind is computable.
 git(fixtureRoot, "clone", "--bare", repo, "origin.git");
 git(repo, "remote", "add", "origin", join(fixtureRoot, "origin.git"));
 git(repo, "fetch", "origin");
@@ -71,6 +69,7 @@ rmSync(wtGone, { recursive: true, force: true });
 // counts against origin/main in BOTH directions for wt-live (ahead by its own
 // commit, behind by the develop-only commit). The temporary worktree is
 // removed so the sweep's row set stays at four.
+
 const wtDev = join(base, "wt-dev");
 git(repo, "worktree", "add", wtDev, "-b", "develop");
 writeFileSync(join(wtDev, "dev-only.txt"), "develop\n");

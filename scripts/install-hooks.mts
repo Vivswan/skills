@@ -35,6 +35,7 @@ import { ROOT } from "./lib.mts";
 //   GIT_CONFIG_GLOBAL=/dev/null bun run hooks         -> the check passes, dispatcher shadowed at every later commit
 //   GIT_DIR, GIT_CONFIG, GIT_CONFIG_COUNT/KEY_n/VALUE_n -> another repository, another file, injected entries
 // Tests isolate the global scope through HOME/XDG_CONFIG_HOME instead, which git reads unmasked.
+
 const env: Record<string, string> = {};
 for (const [key, value] of Object.entries(process.env)) {
   if (value === undefined) continue;
@@ -88,6 +89,7 @@ if (git("rev-parse", "--git-dir").code !== 0) {
 // top level IS this working directory - a mismatch (or a bare repository,
 // where --show-toplevel fails) takes the skip path. realpath both sides:
 // macOS tempdirs reach the same directory through /var and /private/var.
+
 const toplevel = git("rev-parse", "--show-toplevel");
 if (toplevel.code !== 0 || realpathSync(toplevel.stdout) !== realpathSync(process.cwd())) {
   console.error(
@@ -104,6 +106,7 @@ if (toplevel.code !== 0 || realpathSync(toplevel.stdout) !== realpathSync(proces
 // included foreign hooksPath would otherwise slip past validation (the
 // all-scope check below labels included values "local" too, which this
 // validation must therefore cover).
+
 const local = git("config", "-z", "--local", "--includes", "--get-all", "core.hooksPath");
 if (local.code !== 0 && local.code !== 1) {
   fail(`could not read local core.hooksPath (git exited ${local.code}).`);
@@ -123,6 +126,7 @@ if (local.code === 0 && (localValues.length === 0 || !localValues.every(isHusky)
 // shadowed at commit time, and writing into the configured location could
 // clobber a user-wide hook. Exit 1 is "no such key"; anything above it is an
 // unreadable configuration, which fails closed instead of reading as unset.
+
 const scoped = git("config", "-z", "--show-scope", "--get-all", "core.hooksPath");
 if (scoped.code !== 0 && scoped.code !== 1) {
   fail(`could not enumerate core.hooksPath scopes (git exited ${scoped.code}).`);
@@ -130,6 +134,7 @@ if (scoped.code !== 0 && scoped.code !== 1) {
 // With -z, --show-scope emits alternating NUL-terminated fields: scope,
 // value, scope, value... An unpaired field means the output shape changed;
 // fail closed rather than guess which field is which.
+
 const scopedFields = scoped.code === 0 ? nulValues(scoped.raw) : [];
 if (scopedFields.length % 2 !== 0) {
   fail("could not parse core.hooksPath scopes (unpaired scope/value fields from git config -z).");
@@ -147,17 +152,12 @@ if (outer.length > 0) {
   );
 }
 
-// The common hooks directory, resolved independently of configuration
-// (`--git-path hooks` would honor a hooksPath; `--git-common-dir` cannot).
+// The common hooks directory, resolved independently of configuration: `--git-path hooks` would honor a hooksPath, `--git-common-dir` cannot.
 const commonDir = git("rev-parse", "--git-common-dir");
+
 if (commonDir.code !== 0) {
   fail(`could not resolve the common git directory (git exited ${commonDir.code}).`);
 }
-const hooksDir = join(
-  isAbsolute(commonDir.stdout) ? commonDir.stdout : resolve(commonDir.stdout),
-  "hooks",
-);
-const target = join(hooksDir, "pre-commit");
 
 // Overwrite only our own previous installs, recognized by the dispatcher's
 // managed-by marker: the COMPLETE line, matched as a whole line - neither a
@@ -167,6 +167,7 @@ const target = join(hooksDir, "pre-commit");
 // two cannot drift apart. lstat, not stat: a symlink here - even a dangling
 // one - is someone else's wiring, and following it would judge (and later
 // write) a file OUTSIDE the hooks directory.
+
 const MARKER =
   "# managed-by: Vivswan/skills scripts/install-hooks.ts - do not edit the installed copy";
 const hasMarkerLine = (content: string) => content.split("\n").includes(MARKER);
@@ -174,6 +175,12 @@ const dispatcherSource = readFileSync(join(ROOT, ".githooks", "pre-commit"), "ut
 if (!hasMarkerLine(dispatcherSource)) {
   fail(".githooks/pre-commit lost its managed-by marker line; restore it before installing.");
 }
+
+const hooksDir = join(
+  isAbsolute(commonDir.stdout) ? commonDir.stdout : resolve(commonDir.stdout),
+  "hooks",
+);
+const target = join(hooksDir, "pre-commit");
 const existing = lstatSync(target, { throwIfNoEntry: false });
 if (existing && !existing.isFile()) {
   fail(

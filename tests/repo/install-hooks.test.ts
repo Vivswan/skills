@@ -13,8 +13,6 @@ import { isAbsolute, join } from "node:path";
 import { ROOT } from "../../scripts/lib.mts";
 import { tempDirs } from "../helpers/temp-dirs";
 
-const temp = tempDirs();
-
 // scripts/install-hooks.mts (`bun run hooks`, once per clone) copies the
 // dispatcher into the repository's hooks directory and removes any stale
 // core.hooksPath, so hooks work identically in the main checkout and every
@@ -22,6 +20,7 @@ const temp = tempDirs();
 // time instead of silently skipping (a checkout-relative core.hooksPath
 // would do exactly that).
 
+const temp = tempDirs();
 const SCRIPT = join(ROOT, "scripts", "install-hooks.mts");
 const DISPATCHER = readFileSync(join(ROOT, ".githooks", "pre-commit"), "utf-8");
 
@@ -46,6 +45,7 @@ function makeRepo(): string {
 // installer deliberately scrubs ALL GIT_* selectors (they are transient and
 // diverge from what unmasked commits see), so global-scope fixtures are
 // injected the way real machines carry them - as files under HOME.
+
 const cleanHome = temp.dir("install-hooks-home-");
 
 function homeEnv(home: string): Record<string, string> {

@@ -28,6 +28,7 @@ export function skillTestDir(path: string): string | undefined {
 /** The launcher every test runs under; a change anywhere in its import closure reaches every test. */
 export const LAUNCHER_ROOTS = ["scripts/run-tests.mts", "tests/preload.ts"] as const;
 
+/** Relative specifiers only: a package import reaches no file of this repository. */
 const RELATIVE_IMPORT = /(?:from\s+|import\s+|import\()\s*["'](\.{1,2}\/[^"']+)["']/g;
 
 /** Relative imports of one file, resolved to paths present in `files` (extension-less specifiers try .ts and .mts). */
@@ -143,7 +144,7 @@ function run(script: string, args: readonly string[] = []): void {
   if (proc.exitCode !== null) process.exit(proc.exitCode);
   // Shell-style status when the check dies by signal (143 for SIGTERM), as the hook reports it.
   const signal = proc.signalCode ? constants.signals[proc.signalCode as NodeJS.Signals] : undefined;
-  process.exit(signal !== undefined ? 128 + signal : 1);
+  process.exit(signal === undefined ? 1 : 128 + signal);
 }
 
 if (import.meta.main) {

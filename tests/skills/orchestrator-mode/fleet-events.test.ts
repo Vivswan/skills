@@ -43,8 +43,7 @@ const GIT_TIMEOUT = 60_000;
 const TRACKS = { "wt-a": "track-a", "wt-b": "track-b" };
 const TWO_MINUTES_MS = 120_000;
 const HOUR_MS = 3_600_000;
-// In minutes, what `ago` takes: a transcript from a session days old.
-const FOUR_DAYS = 4 * 24 * 60;
+const FOUR_DAYS_MINUTES = 4 * 24 * 60;
 
 type Line = Record<string, unknown>;
 
@@ -1006,11 +1005,11 @@ describe("fleet-events.mts", () => {
       session,
       A,
       { name: "builder-a", description: "build" },
-      stilled(A, ago(FOUR_DAYS)),
+      stilled(A, ago(FOUR_DAYS_MINUTES)),
     );
     const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
-      ...exchange(ago(FOUR_DAYS), "toolu_b0", B),
-      said(ago(FOUR_DAYS), "end_turn", B),
+      ...exchange(ago(FOUR_DAYS_MINUTES), "toolu_b0", B),
+      said(ago(FOUR_DAYS_MINUTES), "end_turn", B),
     ]);
     const pathC = writeAgent(
       session,
@@ -1038,7 +1037,7 @@ describe("fleet-events.mts", () => {
       session,
       D,
       { name: "builder-d", description: "build" },
-      stilled(D, ago(FOUR_DAYS)),
+      stilled(D, ago(FOUR_DAYS_MINUTES)),
     );
     expect(polled(s, box.path)).toBe(2);
     expect(rows(s).slice(3)).toEqual([

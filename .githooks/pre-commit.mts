@@ -21,11 +21,9 @@ function entry(path: string) {
   return statSync(path, { throwIfNoEntry: false });
 }
 
-// Manual invocation from a subdirectory would run the checks in the wrong
-// place; git itself always provides the repository root as the cwd. A .git
-// directory is the main checkout, a .git file a linked worktree - both are
-// repository roots.
+// A manual run from a subdirectory would check the wrong tree (git itself runs hooks at the root); a .git file is a linked worktree's root, a directory the main checkout's.
 const dotGit = entry(join(root, ".git"));
+
 if (!dotGit?.isDirectory() && !dotGit?.isFile()) {
   console.error(
     `pre-commit: ${root} is not a repository root; run from the top of the working tree.`,
@@ -33,25 +31,23 @@ if (!dotGit?.isDirectory() && !dotGit?.isFile()) {
   process.exit(1);
 }
 
-// The staged list is read BEFORE the scrub below: `git commit <pathspec>` and
-// `git commit -a` stage into a temporary index that only GIT_INDEX_FILE names.
+// Read BEFORE the scrub below: `git commit <pathspec>` and `git commit -a` stage into a temporary index that only GIT_INDEX_FILE names.
 const staged = Bun.spawnSync(
   ["git", "diff", "--cached", "--name-only", "--diff-filter=ACDMR", "-z"],
   { cwd: root, stdout: "pipe", stderr: "inherit" },
 );
+
 if (staged.exitCode !== 0) {
   console.error("pre-commit: could not read the staged files.");
   process.exit(1);
 }
+
+// Empty when nothing is staged; the gate then reads the index itself (scripts/check-staged.mts).
 const stagedPaths = staged.stdout.toString().split("\0").filter(Boolean);
 
-// Incident class: leaked git hook environment. git exports GIT_DIR,
-// GIT_INDEX_FILE, and other GIT_* variables to hooks; everything spawned
-// below inherits them, and an inherited GIT_DIR redirects any fixture git
-// operation at THIS repository. Nothing below needs any GIT_* variable - the
-// checks run at the repository root, so git rediscovers the repository from
-// the working directory - scrub them all.
+// Incident class: git exports GIT_DIR, GIT_INDEX_FILE and other GIT_* variables to hooks, and an inherited GIT_DIR redirects any fixture git operation at THIS repository; nothing below needs them.
 const env: Record<string, string> = {};
+
 for (const [key, value] of Object.entries(process.env)) {
   if (value !== undefined && !key.toUpperCase().startsWith("GIT_")) env[key] = value;
 }
@@ -63,7 +59,10 @@ const check = Bun.spawnSync(["bun", "run", "check:staged", ...stagedPaths], {
   stdout: "inherit",
   stderr: "inherit",
 });
+
 if (check.exitCode !== null) process.exit(check.exitCode);
+
 // Shell-style status when the check dies by signal (e.g. 143 for SIGTERM).
 const signalNumber = check.signalCode ? constants.signals[check.signalCode] : undefined;
-process.exit(signalNumber !== undefined ? 128 + signalNumber : 1);
+
+process.exit(signalNumber === undefined ? 1 : 128 + signalNumber);

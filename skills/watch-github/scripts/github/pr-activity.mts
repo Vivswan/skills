@@ -8,32 +8,52 @@ export type PrRef = { repo: string; number: number };
 
 // 100 threads per page; a PR with more than 5000 is a broken measurement.
 const MAX_THREAD_PAGES = 50;
-// Each connection is read newest-first until an id an earlier read already fetched appears; a
-// daemon stopped for long enough to miss this many pages reports the gap instead of the rest.
+
+// Each connection is read newest-first until an id an earlier read fetched appears; a daemon stopped long enough to miss this many pages reports the gap instead of the rest.
 const MAX_BACK_PAGES = 10;
 
 export type Activity = {
   /** `<kind class>:<GitHub database id>`; the source's cursor is the set of these its reads have fetched. */
   id: string;
+
+  /** A thread's first comment is a "review-comment", each later one a "reply". */
   kind: "comment" | "review" | "review-comment" | "reply";
+
+  /** For ordering only: news is judged by id, since GitHub's timestamps have one-second grain (newActivity). */
   at: string;
+
+  /** The login; "ghost" for a deleted account, as GitHub renders it. */
   author: string;
+
   /** Whether the author wrote anything: an empty COMMENTED review is the wrapper GitHub puts around inline comments. */
   hasBody: boolean;
+
+  /** The permalink, which the event line links (targets/pr.mts). */
   url: string;
+
+  /** Set on an inline comment: the file its thread sits on. */
   path?: string;
+
+  /** Set on an inline comment: the thread's line, null when GitHub gives the thread no current line. */
   line?: number | null;
+
+  /** Set on a review: GitHub's state word, never PENDING, since drafts are dropped. */
   reviewState?: string;
+
   /** For an inline comment, the `id` of the review that published it. */
   reviewId?: string;
 };
 
 export type PrDetail = {
+  /** Threads GitHub does not mark resolved, counted over every page read. */
   unresolvedThreads: number;
+
   /** What the read fetched, cut below the newest id already seen: the candidates for news. */
   activities: Activity[];
+
   /** Every id the read fetched, the cut ones included: what the source has now seen. */
   fetchedIds: string[];
+
   /** One line per connection whose older activity was left unread at the paging cap. */
   gaps: string[];
 };
@@ -43,8 +63,6 @@ const REVIEW_COMMENT_FIELDS = `${COMMENT_FIELDS} pullRequestReview { fullDatabas
 const REVIEW_FIELDS = "fullDatabaseId submittedAt state author { login } body url";
 const BACK_PAGE_INFO = "pageInfo { hasPreviousPage startCursor }";
 
-// totalCount on a thread's comments tells whether the oldest fetched comment is the thread's
-// first: comments(last: 3) on a longer thread returns replies only.
 const DETAIL_QUERY = `query PrDetail($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -165,10 +183,10 @@ function commentActivity(
   return activity;
 }
 
-// A PENDING review (no submittedAt) and the inline comments drafted under it are the login's own
-// unsubmitted draft: not news, and not fetched ids either, or their submission under the same ids
-// would count as already seen.
+// A PENDING review (no submittedAt) is the login's own unsubmitted draft: not news, and not a fetched id either, or its submission under the same id would count as already seen.
 const isDraftReview = (node: unknown): boolean => typeof get(node, "submittedAt") !== "string";
+
+// The inline comments drafted under a PENDING review are the same draft, dropped with it.
 const isDraftInline = (node: unknown): boolean =>
   get(get(node, "pullRequestReview"), "state") === "PENDING";
 
@@ -194,6 +212,8 @@ function reviewActivities(nodes: unknown[]): Activity[] {
   return activities;
 }
 
+// totalCount on a thread's comments tells whether the oldest fetched comment is the thread's
+// first: comments(last: 3) on a longer thread returns replies only.
 function threadActivities(
   thread: { path: string; line: number | null },
   total: number,
@@ -216,8 +236,11 @@ export type Seen = ReadonlySet<string> | null;
 
 class DetailReader {
   private readonly owner: string;
+
   private readonly name: string;
+
   readonly gaps: string[] = [];
+
   readonly fetchedIds: string[] = [];
 
   constructor(

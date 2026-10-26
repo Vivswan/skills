@@ -25,16 +25,22 @@ export interface Program {
 // --- plumbing -------------------------------------------------------------------
 
 export interface Inbox {
+  /** The socket file, `<dir>/<this pid>.sock`, so the daemon's owner is this live process. */
   path: string;
-  /** Waits for `expected` closed connections (or gives up after a few seconds), then settles: the
-   * bytes arrived while spawnSync held this process's event loop. */
+
+  /** Waits for `expected` closed connections (or gives up after a few seconds), then settles: the bytes arrived while spawnSync held this process's event loop. */
   frames: (expected: number) => Promise<string[]>;
+
   /** The events log's ids as they stood when each connection arrived. */
   logAtConnect: number[][];
+
   /** The saved counter as it stood when each connection arrived. */
   savedAtConnect: number[];
+
   /** When each connection arrived, meaningful only while this process's event loop was free. */
   arrivedAt: number[];
+
+  /** Stops listening; the scenario's cleanup calls it once its daemons are gone. */
   close: () => void;
 }
 
@@ -123,12 +129,16 @@ export interface RunResult {
 export interface RunOptions {
   /** The owner's inbox, handed to the process as CLAUDE_CODE_MESSAGING_SOCKET. */
   inbox?: string;
+
+  /** Variables laid over the program's own: a test's SESSION_EVENTS_DIR, or a source's switch. */
   env?: Record<string, string>;
 }
 
 export interface StartOptions extends RunOptions {
   /** A file-sink daemon's name; without it and without an inbox the daemon exits 2. */
   id?: string;
+
+  /** The daemon's own flags after `--id`: `--interval`, `--mode`, `--pid`. */
   args?: string[];
 }
 
@@ -137,12 +147,29 @@ export type Daemon = ReturnType<typeof Bun.spawn>;
 /** Whose files: a file sink by id, or a session by its pid and inbox (this process by default). */
 export type OwnerKey = { id: string } | { pid: number; inbox: string };
 
+/** Whose daemon the options name: a file sink by `--id`, else the session owning `inbox`, else the default owner. */
+function ownerKeyOf(
+  options: StartOptions,
+  sessionPid: (inbox: string) => number,
+): OwnerKey | undefined {
+  if (options.id !== undefined) return { id: options.id };
+  if (options.inbox !== undefined) return { pid: sessionPid(options.inbox), inbox: options.inbox };
+  return undefined;
+}
+
+/**
+ * One test's daemon, its files, and the fake inboxes it delivers to. `fixtureDir` is where the
+ * scenario's fixtures go: the fake source's polls, or the stub gh's replies.
+ */
 export class Scenario {
   readonly dir: string;
-  /** Where a scenario's fixtures go: the fake source's polls, or the stub gh's replies. */
+
   readonly fixtureDir: string;
+
   private readonly inboxes: Inbox[] = [];
+
   private readonly daemons: Daemon[] = [];
+
   private sessionInbox = "";
 
   constructor(
@@ -208,12 +235,7 @@ export class Scenario {
     const daemon = this.spawn([...args, ...(options.args ?? [])], options);
     this.daemons.push(daemon);
     harness().started.push(daemon);
-    const owner: OwnerKey | undefined =
-      options.id !== undefined
-        ? { id: options.id }
-        : options.inbox !== undefined
-          ? { pid: Number(/(\d+)\.sock$/.exec(options.inbox)?.[1]), inbox: options.inbox }
-          : undefined;
+    const owner = ownerKeyOf(options, (inbox) => Number(/(\d+)\.sock$/.exec(inbox)?.[1]));
     const banner = `${this.program.source} daemon ${daemon.pid} for `;
     const deadline = Date.now() + 5000;
     while (!this.log(owner).includes(banner) && daemon.exitCode === null && Date.now() < deadline) {
@@ -273,12 +295,7 @@ export class Scenario {
     const result = this.run(args, options);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("daemon stopped");
-    const owner: OwnerKey | undefined =
-      options.id !== undefined
-        ? { id: options.id }
-        : options.inbox !== undefined
-          ? { pid: process.pid, inbox: options.inbox }
-          : undefined;
+    const owner = ownerKeyOf(options, () => process.pid);
     expect(existsSync(this.socketPath(owner))).toBe(false);
   }
 
@@ -338,7 +355,6 @@ export function digestHeadlines(frames: string[], name: string): string[] {
 export interface Harness {
   temp: TempDirs;
   scenarios: Scenario[];
-  /** Every daemon any test of the file started; the file's end asserts each is gone. */
   started: Daemon[];
 }
 

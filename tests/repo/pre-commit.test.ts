@@ -4,28 +4,22 @@ import { join } from "node:path";
 import { ROOT } from "../../scripts/lib.mts";
 import { tempDirs } from "../helpers/temp-dirs";
 
-const temp = tempDirs();
-
 // Incident class: git exports GIT_DIR and GIT_INDEX_FILE to hooks, everything `bun run check:staged`
 // spawns inherits them, and an unscrubbed fixture git flow then lands on the REAL repository
 // (fixture commits on real branches, core.bare and identity overwrites in the shared .git/config).
 // The hermetic launcher environment (tests/repo/git-isolation.test.ts) already contains every git spawned
 // here, so each scenario adds the leaks it simulates explicitly and nothing else is scrubbed.
 
+const temp = tempDirs();
 const DISPATCHER = join(ROOT, ".githooks", "pre-commit");
 const HOOK = join(ROOT, ".githooks", "pre-commit.mts");
 
-// The fake `bun` handles the two call shapes the hook chain produces: the
-// dispatcher's `bun .githooks/pre-commit.mts` is forwarded to the real bun
-// so the hook logic really runs, and the hook's `bun run check:staged` is
-// intercepted - it dumps the GIT_* environment and argv it received, then
-// plays a scenario: an unscrubbed fixture git flow (init + commit that would
-// land on the victim if GIT_DIR leaked through), a check failure, or death
-// by signal.
 const FAKE_BUN = `#!/usr/bin/env bash
+# Every call but "bun run" goes to the real bun, so the dispatcher's hook logic really runs.
 if [ "$1" != "run" ]; then
   exec "\${HOOK_REAL_BUN}" "$@"
 fi
+# "bun run check:staged" is intercepted: dump the GIT_* environment and argv received, then play the scenario.
 env | grep '^GIT_' > "\${HOOK_ENV_DUMP:-/dev/null}" || true
 [ -n "\${HOOK_ARGV_DUMP:-}" ] && echo "$*" > "\${HOOK_ARGV_DUMP}"
 case "\${HOOK_BUN_MODE:-ok}" in
