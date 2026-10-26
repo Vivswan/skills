@@ -36,16 +36,7 @@ In `biome.json`:
 }
 ```
 
-The three threshold rules warn and never block: a threshold is a hint about readability, and a forced split can read worse. A finding is read, then the function is split, or the case is carried with a per-path `overrides` entry in the repository's own biome layer with its reason, never an inline `biome-ignore`:
-
-```jsonc
-"overrides": [
-  // train is one concept, and it is long
-  { "includes": ["src/train.ts"], "linter": { "rules": { "complexity": { "noExcessiveLinesPerFunction": "off" } } } }
-]
-```
-
-The other rules block: a violation is fixed, and a rule whose fix would change behaviour goes off in `biome.json` with its reason.
+The three threshold rules warn: a threshold is a hint about readability, and a forced split can read worse. A finding is split, or the case is carried with a per-path `overrides` entry in the repository's own biome layer with its reason, never an inline `biome-ignore`. The other rules block: a violation is fixed, and a rule whose fix would change behaviour goes off in `biome.json` with its reason.
 
 Specimen: `useLiteralKeys` rewrites `record["name"]` to `record.name`, which `tsc` rejects under `noPropertyAccessFromIndexSignature`. The rule is off in `biome.json` with that comment, not ignored line by line.
 

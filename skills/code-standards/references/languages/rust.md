@@ -35,13 +35,7 @@ too-many-lines-threshold = 100
 cognitive-complexity-threshold = 15
 ```
 
-The three thresholds warn and never block: a threshold is a hint about readability, and a forced split can read worse. A finding is read, then the function is split, or the known case carries `#[expect(clippy::too_many_lines, reason = "...")]`, which fails under the `unfulfilled_lint_expectations` deny above when the lint stops firing.
-
-A CI line of `cargo clippy -- -D warnings` re-promotes them whatever follows it, since the `warnings` group ignores flag order. `--force-warn` takes precedence over every other lint flag, so the line becomes:
-
-```bash
-cargo clippy -- -D warnings --force-warn clippy::too_many_arguments --force-warn clippy::too_many_lines --force-warn clippy::cognitive_complexity
-```
+The three thresholds warn: a threshold is a hint about readability, and a forced split can read worse. A finding is split, or the known case carries `#[expect(clippy::<lint>, reason = "...")]`, which fails when stale under the deny above.
 
 The other rules deny: a violation is fixed, never silenced with `#[allow(...)]`. A rule that fights the shape goes to `allow` in `Cargo.toml` with its reason, as `module_name_repetitions` does above. `cognitive_complexity` is off in clippy's default set; naming it under `[lints.clippy]` turns it on by itself.
 

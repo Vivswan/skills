@@ -66,7 +66,7 @@ A function does one thing a reader can name in a few words: train the model, rea
 
 A function doing two nameable things, or whose raises serve two different concepts, is split into named steps, and the caller reads like the list of those steps. The rule runs both ways: a step called from one place that is not a concept of its own folds back into its caller.
 
-A complexity lint is the backstop, not the definition (the thresholds are on each language page). It warns rather than blocks where the language page sets a warn level (TypeScript, Python, Rust): a threshold is a hint about readability, and a forced split can read worse. Go's runner exits non-zero on any issue whatever its severity, so its threshold blocks until that page changes.
+A complexity lint is the backstop, not the definition (the thresholds are on each language page). It warns rather than blocks where the language page sets a warn level: a threshold is a hint about readability, and a forced split can read worse.
 
 A finding is split, or the case is carried with its reason the way the language page says; it is never silenced with a bare inline suppression.
 
