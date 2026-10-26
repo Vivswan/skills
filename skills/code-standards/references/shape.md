@@ -66,7 +66,9 @@ A function does one thing a reader can name in a few words: train the model, rea
 
 A function doing two nameable things, or whose raises serve two different concepts, is split into named steps, and the caller reads like the list of those steps. The rule runs both ways: a step called from one place that is not a concept of its own folds back into its caller.
 
-A complexity lint is the backstop, not the definition (the thresholds are on each language page). A violation is split, or the threshold is raised at config level with its reason; it is never silenced inline.
+A complexity lint is the backstop, not the definition (the thresholds are on each language page). It warns rather than blocks where the language page sets a warn level: a threshold is a hint about readability, and a forced split can read worse.
+
+A finding is split, or the case is carried with its reason the way the language page says; it is never silenced with a bare inline suppression.
 
 A cap tighter than the language page's floor is a defect, since it forces splits that read worse. Specimen: one tree capped at complexity 8 against the floor's 12, 8 branches against 12, 30 statements against 50, 6 arguments against 8, and 4 returns against 6, went from 324 functions to 543.
 
@@ -197,7 +199,7 @@ Readability and beauty come first: this rule yields where following it would rea
 ## How to apply
 
 - Writing a module: lay the constants block down first, then write the leaves, then the function that uses them, so the order falls out of the writing.
-- A complexity finding: name the concepts the function holds and split along them. The names are the design. One nameable concept over the threshold raises the threshold, with the reason beside it.
+- A complexity finding: name the concepts the function holds and split along them. The names are the design. One nameable concept over the threshold is carried with its reason the way the language page says.
 - Sweeping a tree: enable the lint floor first, at its thresholds and no tighter, then split what it finds. One tree enabled the floor after a shape sweep and found dozens of multi-concept functions the sweep had passed.
 - Reviewing: the checker runs before the review, and its empty output is a verified line in the review prompt. Then read every body for its paragraphs, its guards, and the ugly one-liners in the table.
 - A review prompt that asks for correctness alone reviews half the standard. Many correctness rounds on one tool found real defects every time and passed every nested conditional, splice, and a sixteen-argument call; the shape criteria in SKILL.md go into the prompt.

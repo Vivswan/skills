@@ -30,7 +30,9 @@ max-returns = 6
 convention = "google"
 ```
 
-A violation is split, never silenced with `noqa`. A threshold too tight for one nameable concept is raised in this file with its reason, none is set tighter than the block above, and a rule whose fix would change behaviour goes off here in the `ignore` list the same way, never inline. Without that exit, an agent re-implements a library's semantics to satisfy a lint.
+`C901` and the `PLR09` counts are advisory: a threshold is a hint about readability, and a forced split can read worse. A threshold finding is split, or the known case is a scoped `per-file-ignores` entry here with its reason. A blocking violation is fixed, never silenced with `noqa`.
+
+A rule whose fix would change behaviour goes off here in the `ignore` list with its reason, never inline. Without that exit, an agent re-implements a library's semantics to satisfy a lint.
 
 Specimen: `PTH207` asks for `Path.glob` in place of `glob.glob`, but `glob.glob` accepts absolute patterns and skips dotfiles and `Path.glob` does neither, so the rule is ignored in `pyproject.toml` with that comment.
 

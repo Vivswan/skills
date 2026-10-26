@@ -12,11 +12,12 @@ In `Cargo.toml` and `clippy.toml`:
 # Cargo.toml
 [lints.rust]
 missing_docs = "deny"
+unfulfilled_lint_expectations = "deny"  # an #[expect] whose lint stopped firing is stale, and the build says so
 
 [lints.clippy]
-too_many_arguments = "deny"
-too_many_lines = "deny"
-cognitive_complexity = "deny"
+too_many_arguments = "warn"
+too_many_lines = "warn"
+cognitive_complexity = "warn"
 manual_let_else = "deny"
 collapsible_if = "deny"
 collapsible_else_if = "deny"
@@ -34,7 +35,9 @@ too-many-lines-threshold = 100
 cognitive-complexity-threshold = 15
 ```
 
-A violation is split, or the threshold is raised in `clippy.toml` with its reason; never silenced with `#[allow(...)]`. A rule that fights the shape goes to `allow` in `Cargo.toml` with its reason, as `module_name_repetitions` does above. `cognitive_complexity` is off in clippy's default set; naming it under `[lints.clippy]` turns it on by itself.
+The three thresholds warn: a threshold is a hint about readability, and a forced split can read worse. A finding is split, or the known case carries `#[expect(clippy::<lint>, reason = "...")]`, which fails when stale under the deny above.
+
+The other rules deny: a violation is fixed, never silenced with `#[allow(...)]`. A rule that fights the shape goes to `allow` in `Cargo.toml` with its reason, as `module_name_repetitions` does above. `cognitive_complexity` is off in clippy's default set; naming it under `[lints.clippy]` turns it on by itself.
 
 ## Module order, read
 
