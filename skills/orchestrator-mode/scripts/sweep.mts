@@ -10,6 +10,7 @@
 
 import { resolve } from "node:path";
 import {
+  type BaseRef,
   controlFailureReason,
   discoverWorktrees,
   resolveBaseRef,
@@ -17,7 +18,7 @@ import {
   type WorktreeRow,
   worktreeRow,
 } from "./fleet/git.mts";
-import { attributeProcesses } from "./fleet/processes.mts";
+import { attributeProcesses, type LsofLine } from "./fleet/processes.mts";
 import { transcriptReport } from "./fleet/transcript-tail.mts";
 
 function emit(value: unknown): void {
@@ -42,9 +43,64 @@ const USAGE = [
   "exits: 0 the sweep ran (ok:false rows included); 1 control failure; 2 usage error",
 ].join("\n");
 
+interface Options {
+  repoRoot: string;
+  transcriptsDir: string | null;
+  baseRefArg: string | null;
+}
+
 function usage(): number {
   console.error(USAGE);
   return 2;
+}
+
+/** The parsed command line, or null when it is malformed and the caller prints USAGE. */
+function parseArgs(args: string[]): Options | null {
+  const positional: string[] = [];
+  let transcriptsDir: string | null = null;
+  let baseRefArg: string | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] as string;
+    const value = args[i + 1];
+    // A refname can never start with "-", so a "-"-prefixed value is a
+    // missing value with the NEXT option consumed by mistake ("--base
+    // --transcripts"): a usage error, not a baseRef diagnostic.
+    if (arg === "--base" && value !== undefined && !value.startsWith("-")) {
+      baseRefArg = value;
+      i += 1;
+    } else if (arg === "--transcripts" && value !== undefined) {
+      transcriptsDir = resolve(value);
+      i += 1;
+    } else if (arg.startsWith("-")) {
+      return null;
+    } else {
+      positional.push(arg);
+    }
+  }
+  const [repoRoot, ...extra] = positional;
+  if (repoRoot === undefined || extra.length > 0) return null;
+  return { repoRoot: resolve(repoRoot), transcriptsDir, baseRefArg };
+}
+
+/** Prints the report lines in USAGE order and returns the exit code: 1 once the positive control failed. */
+function report(options: Options, rows: WorktreeRow[], base: BaseRef, lsofLine: LsofLine): number {
+  // Positive control: the first porcelain entry is the main checkout. An
+  // impossible control row means the instrument is broken - report that,
+  // never a quiet fleet.
+  const controlFailure = controlFailureReason(rows[0] as WorktreeRow);
+  if (controlFailure !== null) emit({ control: "FAILED", reason: controlFailure });
+
+  if (lsofLine !== null) emit(lsofLine);
+  if (base.ref === null) {
+    emit(
+      options.baseRefArg === null
+        ? { defaultRef: { ok: false, error: base.error } }
+        : { baseRef: { ok: false, error: base.error } },
+    );
+  }
+  for (const row of rows) emit(row);
+  if (options.transcriptsDir !== null) emit(transcriptReport(options.transcriptsDir));
+  return controlFailure === null ? 0 : 1;
 }
 
 /**
@@ -59,33 +115,10 @@ async function main(): Promise<number> {
     console.log(USAGE);
     return 0;
   }
-  let repoRoot: string | null = null;
-  let transcriptsDir: string | null = null;
-  let baseRefArg: string | null = null;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i] as string;
-    if (arg === "--base") {
-      const value = args[++i];
-      // A refname can never start with "-", so a "-"-prefixed value is a
-      // missing value with the NEXT option consumed by mistake ("--base
-      // --transcripts"): a usage error, not a baseRef diagnostic.
-      if (value === undefined || value.startsWith("-")) return usage();
-      baseRefArg = value;
-    } else if (arg === "--transcripts") {
-      const value = args[++i];
-      if (value === undefined) return usage();
-      transcriptsDir = resolve(value);
-    } else if (arg.startsWith("-")) {
-      return usage();
-    } else if (repoRoot === null) {
-      repoRoot = resolve(arg);
-    } else {
-      return usage();
-    }
-  }
-  if (repoRoot === null) return usage();
+  const options = parseArgs(args);
+  if (options === null) return usage();
 
-  const worktrees = await discoverWorktrees(repoRoot);
+  const worktrees = await discoverWorktrees(options.repoRoot);
   if (!worktrees.ok) {
     emit({ control: "FAILED", reason: worktrees.reason });
     return 1;
@@ -93,37 +126,18 @@ async function main(): Promise<number> {
   const { processesByWorktree, lsofLine } = await attributeProcesses(worktrees.paths);
 
   const base =
-    baseRefArg === null
-      ? await resolveDefaultRef(repoRoot)
-      : await resolveBaseRef(repoRoot, baseRefArg);
+    options.baseRefArg === null
+      ? await resolveDefaultRef(options.repoRoot)
+      : await resolveBaseRef(options.repoRoot, options.baseRefArg);
+  const baseSha = base.ref === null ? null : base.sha;
   const rows: WorktreeRow[] = [];
   for (const worktreePath of worktrees.paths) {
     rows.push(
-      await worktreeRow(
-        worktreePath,
-        base.ref === null ? null : base.sha,
-        processesByWorktree.get(worktreePath) ?? [],
-      ),
+      await worktreeRow(worktreePath, baseSha, processesByWorktree.get(worktreePath) ?? []),
     );
   }
 
-  // Positive control: the first porcelain entry is the main checkout. An
-  // impossible control row means the instrument is broken - report that,
-  // never a quiet fleet.
-  const controlFailure = controlFailureReason(rows[0] as WorktreeRow);
-  if (controlFailure !== null) emit({ control: "FAILED", reason: controlFailure });
-
-  if (lsofLine !== null) emit(lsofLine);
-  if (base.ref === null) {
-    emit(
-      baseRefArg === null
-        ? { defaultRef: { ok: false, error: base.error } }
-        : { baseRef: { ok: false, error: base.error } },
-    );
-  }
-  for (const row of rows) emit(row);
-  if (transcriptsDir !== null) emit(transcriptReport(transcriptsDir));
-  return controlFailure === null ? 0 : 1;
+  return report(options, rows, base, lsofLine);
 }
 
 if (import.meta.main) process.exitCode = await main();

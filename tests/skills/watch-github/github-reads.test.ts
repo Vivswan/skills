@@ -35,6 +35,7 @@ import { tempDirs } from "../../helpers/temp-dirs";
 //   <kind>-<n>.exit1  call n prints its body, then this file to stderr, and exits 1: gh's
 //                     behavior on a reply carrying an `errors` entry
 //   <kind>-<n>.sleep  call n answers late
+
 const FAKE_GH = `#!/usr/bin/env bash
 { printf '%s' "$*" | tr '\\n' ' '; printf '\\n'; } >> "\${STUB_ARGS_LOG}"
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
@@ -111,9 +112,10 @@ const emptyBinDir = temps.dir("github-reads-nobin-");
 writeFileSync(join(binDir, "gh"), FAKE_GH);
 chmodSync(join(binDir, "gh"), 0o755);
 
+const ORIGINAL_PATH = process.env.PATH ?? "";
+
 // The modules spawn gh with the process environment, so the fake goes first on this process's
 // PATH for the file's duration.
-const ORIGINAL_PATH = process.env.PATH ?? "";
 process.env.PATH = `${binDir}:${ORIGINAL_PATH}`;
 afterAll(() => {
   process.env.PATH = ORIGINAL_PATH;
@@ -211,6 +213,10 @@ function run(spec: Exclude<SuiteSpec, { external: true }>): Run {
   };
 }
 
+/**
+ * `labels` are the names as GitHub lists them, in any order. `suites` are present only when the
+ * read asked for them.
+ */
 type PrNodeSpec = Partial<{
   number: number;
   url: string;
@@ -225,18 +231,40 @@ type PrNodeSpec = Partial<{
   threads: number;
   review: { id: string; submittedAt: string | null; state: string; login: string | null } | null;
   rollup: string | null;
-  /** The label names as GitHub lists them, in any order. */
   labels: string[];
   mergeable: string;
-  /** The head's check suites, present only when the read asked for them. */
   suites: SuiteSpec[];
   suitesNext: string;
 }>;
 
+function latestReviewNodes(review: PrNodeSpec["review"]): unknown[] {
+  if (review === null || review === undefined) return [];
+
+  return [
+    {
+      fullDatabaseId: review.id,
+      submittedAt: review.submittedAt,
+      state: review.state,
+      author: review.login === null ? null : { login: review.login },
+    },
+  ];
+}
+
+function headCommitNode(spec: PrNodeSpec): unknown {
+  const author = spec.author === undefined ? "octocat" : spec.author;
+  return {
+    oid: spec.headRefOid ?? "head0001",
+    author: { user: author === null ? null : { login: author } },
+    statusCheckRollup:
+      spec.rollup === undefined || spec.rollup === null ? null : { state: spec.rollup },
+    ...(spec.suites === undefined
+      ? {}
+      : { checkSuites: suitesConnection(spec.suites, spec.suitesNext ?? null) }),
+  };
+}
+
 /** One pullRequest node of the per-repository query, GitHub-shaped. */
 function prNode(spec: PrNodeSpec = {}): unknown {
-  const review = spec.review === undefined ? null : spec.review;
-  const author = spec.author === undefined ? "octocat" : spec.author;
   return {
     number: spec.number ?? 1,
     url: spec.url ?? `https://example.com/octocat/repo/pull/${spec.number ?? 1}`,
@@ -250,34 +278,8 @@ function prNode(spec: PrNodeSpec = {}): unknown {
     comments: { totalCount: spec.comments ?? 0 },
     reviewThreads: { totalCount: spec.threads ?? 0 },
     labels: { nodes: (spec.labels ?? []).map((name) => ({ name })) },
-    reviews: {
-      nodes:
-        review === null
-          ? []
-          : [
-              {
-                fullDatabaseId: review.id,
-                submittedAt: review.submittedAt,
-                state: review.state,
-                author: review.login === null ? null : { login: review.login },
-              },
-            ],
-    },
-    commits: {
-      nodes: [
-        {
-          commit: {
-            oid: spec.headRefOid ?? "head0001",
-            author: { user: author === null ? null : { login: author } },
-            statusCheckRollup:
-              spec.rollup === undefined || spec.rollup === null ? null : { state: spec.rollup },
-            ...(spec.suites === undefined
-              ? {}
-              : { checkSuites: suitesConnection(spec.suites, spec.suitesNext ?? null) }),
-          },
-        },
-      ],
-    },
+    reviews: { nodes: latestReviewNodes(spec.review) },
+    commits: { nodes: [{ commit: headCommitNode(spec) }] },
   };
 }
 
@@ -337,6 +339,7 @@ function commentNode(spec: CommentSpec): unknown {
   };
 }
 
+/** `before` is the startCursor of the fetched comments when the thread has older ones. */
 type ThreadSpec = {
   id?: string;
   isResolved: boolean;
@@ -344,7 +347,6 @@ type ThreadSpec = {
   line: number | null;
   total: number;
   comments: CommentSpec[];
-  /** The startCursor of the fetched comments when the thread has older ones. */
   before?: string;
 };
 

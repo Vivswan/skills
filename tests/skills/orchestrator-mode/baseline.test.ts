@@ -13,8 +13,6 @@ import { ROOT } from "../../../scripts/lib.mts";
 import { relativeStaysWithin } from "../../../skills/orchestrator-mode/scripts/baseline.mts";
 import { tempDirs } from "../../helpers/temp-dirs";
 
-const temp = tempDirs();
-
 // Contract test for the baseline snapshot helper: pinned copies compared
 // byte for byte and rendered as a unified diff must turn every
 // landing-verification failure mode into a visible diff. The scenarios pin
@@ -22,6 +20,8 @@ const temp = tempDirs();
 // as drift (not "content missing"), a resurrected deleted line must be
 // caught, and a file vanishing from the tree must be a loud finding, never a
 // silent pass.
+
+const temp = tempDirs();
 
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "baseline.mts");
 // Every case spawns the script, and the first spawn of a cold checkout installs and bundles, which passes

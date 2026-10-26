@@ -10,9 +10,11 @@ import { tempDirs } from "../helpers/temp-dirs";
 // probe: a probe exit it swallows, a --shape-only it drops, a page set that shrinks to nothing
 // and passes vacuously, or a first set's failure that hides the second set's findings (a README
 // path finding masked a 71-word skill paragraph, which only a reviewer caught).
-const SCRIPT = join(ROOT, "scripts", "check-docs.mts");
+//
 // The gate spawns the probe, whose first run installs and bundles: under a loaded machine that passed
 // bun's 5 s default, so every case gets what the suite gives its other spawned CLIs.
+
+const SCRIPT = join(ROOT, "scripts", "check-docs.mts");
 const CLI_TIMEOUT = 60_000;
 const temp = tempDirs();
 
@@ -24,8 +26,8 @@ const LONG_FINDING =
 const MISSING_PATH = "# S\n\nRead `docs/gone.md` in your repository.\n";
 const MISSING_PATH_FINDING = "`docs/gone.md` does not exist";
 
-/** One page per pattern of both sets; the skill page names a missing file under a real directory, which only the path check sees. */
 const TREE: Record<string, string> = {
+  // One page per pattern of both sets.
   "README.md": CLEAN,
   "CONTRIBUTING.md": CLEAN,
   "docs/guide.md": CLEAN,
@@ -34,11 +36,17 @@ const TREE: Record<string, string> = {
   "memories/note.md": CLEAN,
   "template/README.md": CLEAN,
   "template/references/ref.md": CLEAN,
+  // The skill page names a missing file under a real directory, which only the path check sees.
   "skills/one/SKILL.md": MISSING_PATH,
   "skills/one/references/ref.md": CLEAN,
   "skills/one/references/languages/nested.md": CLEAN,
   "template/SKILL.md": CLEAN,
 };
+
+function run(root: string) {
+  const proc = spawnSync("bun", [SCRIPT, root], { encoding: "utf8" });
+  return [proc.status, proc.stdout, proc.stderr.replaceAll(root, "<root>")];
+}
 
 function tree(overrides: Record<string, string | null>): string {
   const root = temp.dir("check-docs-");
@@ -48,11 +56,6 @@ function tree(overrides: Record<string, string | null>): string {
     writeFileSync(join(root, path), content);
   }
   return root;
-}
-
-function run(root: string) {
-  const proc = spawnSync("bun", [SCRIPT, root], { encoding: "utf8" });
-  return [proc.status, proc.stdout, proc.stderr.replaceAll(root, "<root>")];
 }
 
 describe("check-docs", () => {

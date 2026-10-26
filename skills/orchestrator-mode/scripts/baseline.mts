@@ -126,12 +126,13 @@ if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
 const { createTwoFilesPatch, FILE_HEADERS_ONLY } = await import("diff");
 
+// Renaming it orphans every baseline already on disk; tests/skills/orchestrator-mode/baseline.test.ts writes the name directly.
 const MANIFEST_NAME = "manifest.json";
+
+// Copies sit one level down, so a pinned file named manifest.json can never collide with the manifest.
 const CONTENT_DIR = "content";
-// The verdict is the byte comparison; the unified diff only renders it. jsdiff's line diff is quadratic
-// in the changed lines (5,000 lines rewritten end to end: about 8 s; 10,000: over 30 s), so without a
-// bound a regenerated large file stalls the check for minutes. Past it the finding stays drifted and
-// says the diff was abandoned.
+
+// jsdiff's line diff is quadratic in the changed lines (10,000 rewritten end to end: over 30 s); past the bound the finding stays drifted and says the diff was abandoned.
 const DIFF_TIMEOUT_MS = 10_000;
 
 /** CLI misuse (bad subcommand, arity, or file argument). Rendered as exit 2. */
@@ -179,11 +180,10 @@ interface DiffResult {
   readonly diff: string;
 }
 
-// git's own text-or-binary rule (buffer_is_binary): a NUL within the first 8000 bytes. Decoding validity
-// is not the rule, so a Latin-1 file still renders as a patch and a NUL-bearing pair never does.
+// git's own text-or-binary rule (buffer_is_binary): a NUL within the first 8000 bytes, never decoding validity, so a Latin-1 file still renders as a patch.
 const BINARY_PROBE_BYTES = 8000;
-// ignoreBOM keeps a leading U+FEFF in the string: the default strips it, and a pinned copy that differs
-// from the tree only by its BOM would then render as a drift with an empty diff.
+
+// ignoreBOM keeps a leading U+FEFF in the string: with the default strip, a pair differing only by its BOM would render as a drift with an empty diff.
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 function isBinary(bytes: Buffer): boolean {
@@ -297,47 +297,65 @@ function refuseOverlappingRoots(baselineDir: string, treeRoot: string): void {
   }
 }
 
-function pin(baselineDir: string, treeRoot: string, files: readonly string[]): number {
-  refuseOverlappingRoots(baselineDir, treeRoot);
-  const paths = [...new Set(files)].sort();
-  for (const path of paths) {
-    const problem = relPathProblem(path);
-    if (problem) usageError(`invalid file argument ${JSON.stringify(path)}: ${problem}`);
-  }
-
-  // Validate every source before copying anything: a missing or unreadable
-  // file must never leave a silently partial baseline behind, and every
-  // preflight problem is reported per file.
-  const sourceProblems = new Map<string, string>();
+/** Why each source cannot be pinned, keyed by path; empty when every source is a readable regular file. */
+function sourceProblems(treeRoot: string, paths: readonly string[]): Map<string, string> {
+  const problems = new Map<string, string>();
   for (const path of paths) {
     const source = resolve(treeRoot, path);
     try {
       if (!statSync(source, { throwIfNoEntry: false })?.isFile()) {
-        sourceProblems.set(path, `source missing: ${source}`);
+        problems.set(path, `source missing: ${source}`);
       }
     } catch (error) {
-      sourceProblems.set(path, `source unreadable: ${source} (${errorMessage(error)})`);
+      problems.set(path, `source unreadable: ${source} (${errorMessage(error)})`);
     }
   }
-  if (sourceProblems.size > 0) {
-    const reports = paths.map((path) => ({
-      path,
-      pinned: false,
-      reason:
-        sourceProblems.get(path) ?? "aborted because another source file is missing or unreadable",
-    }));
-    return failedPin(
-      baselineDir,
-      treeRoot,
-      `unusable source file(s): ${[...sourceProblems.keys()].join(", ")}; nothing was pinned`,
-      reports,
-    );
-  }
+  return problems;
+}
 
-  // Stage the whole new baseline in a sibling temp directory and swap it in
-  // only once every copy and the manifest have been written. The previous
-  // baseline is moved aside (never deleted first), so any failure restores
-  // it instead of leaving it half-updated or gone.
+/** What a failed install must undo: the baseline being replaced, the staging dir, and the moved-aside previous baseline. */
+interface InstallPaths {
+  readonly baselineDir: string;
+  readonly staging: string | undefined;
+  readonly backup: string | undefined;
+}
+
+/** The install error followed by any problem putting the previous baseline back or removing the staging dir. */
+function rollbackInstall({ baselineDir, staging, backup }: InstallPaths, error: unknown): string[] {
+  const problems = [`staging failed, nothing was pinned: ${errorMessage(error)}`];
+  if (backup) {
+    try {
+      renameSync(backup, baselineDir);
+    } catch (restoreError) {
+      problems.push(
+        `restoring the previous baseline failed (${errorMessage(restoreError)}); ` +
+          `it is preserved at ${backup}`,
+      );
+    }
+  }
+  if (staging) {
+    try {
+      rmSync(staging, { recursive: true, force: true });
+    } catch (cleanupError) {
+      problems.push(`staging dir ${staging} was left behind (${errorMessage(cleanupError)})`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * Stage the whole new baseline in a sibling temp directory and swap it in
+ * only once every copy and the manifest have been written. The previous
+ * baseline is moved aside (never deleted first), so any failure restores
+ * it instead of leaving it half-updated or gone.
+ *
+ * @returns the problems of a failed install, empty once the new baseline is in place
+ */
+function installBaseline(
+  baselineDir: string,
+  treeRoot: string,
+  paths: readonly string[],
+): string[] {
   let staging: string | undefined;
   let backup: string | undefined;
   try {
@@ -357,30 +375,7 @@ function pin(baselineDir: string, treeRoot: string, files: readonly string[]): n
     renameSync(staging, baselineDir);
     staging = undefined;
   } catch (error) {
-    const problems = [`staging failed, nothing was pinned: ${errorMessage(error)}`];
-    if (backup) {
-      try {
-        renameSync(backup, baselineDir);
-      } catch (restoreError) {
-        problems.push(
-          `restoring the previous baseline failed (${errorMessage(restoreError)}); ` +
-            `it is preserved at ${backup}`,
-        );
-      }
-    }
-    if (staging) {
-      try {
-        rmSync(staging, { recursive: true, force: true });
-      } catch (cleanupError) {
-        problems.push(`staging dir ${staging} was left behind (${errorMessage(cleanupError)})`);
-      }
-    }
-    const reports = paths.map((path) => ({
-      path,
-      pinned: false,
-      reason: "pin aborted before installing the new baseline; see error",
-    }));
-    return failedPin(baselineDir, treeRoot, problems.join("; "), reports);
+    return rollbackInstall({ baselineDir, staging, backup }, error);
   }
   if (backup) {
     try {
@@ -391,6 +386,44 @@ function pin(baselineDir: string, treeRoot: string, files: readonly string[]): n
         `warning: could not remove old baseline backup ${backup}: ${errorMessage(cleanupError)}`,
       );
     }
+  }
+  return [];
+}
+
+function pin(baselineDir: string, treeRoot: string, files: readonly string[]): number {
+  refuseOverlappingRoots(baselineDir, treeRoot);
+  const paths = [...new Set(files)].sort();
+  for (const path of paths) {
+    const problem = relPathProblem(path);
+    if (problem) usageError(`invalid file argument ${JSON.stringify(path)}: ${problem}`);
+  }
+
+  // Validate every source before copying anything: a missing or unreadable
+  // file must never leave a silently partial baseline behind, and every
+  // preflight problem is reported per file.
+  const problems = sourceProblems(treeRoot, paths);
+  if (problems.size > 0) {
+    const reports = paths.map((path) => ({
+      path,
+      pinned: false,
+      reason: problems.get(path) ?? "aborted because another source file is missing or unreadable",
+    }));
+    return failedPin(
+      baselineDir,
+      treeRoot,
+      `unusable source file(s): ${[...problems.keys()].join(", ")}; nothing was pinned`,
+      reports,
+    );
+  }
+
+  const installProblems = installBaseline(baselineDir, treeRoot, paths);
+  if (installProblems.length > 0) {
+    const reports = paths.map((path) => ({
+      path,
+      pinned: false,
+      reason: "pin aborted before installing the new baseline; see error",
+    }));
+    return failedPin(baselineDir, treeRoot, installProblems.join("; "), reports);
   }
 
   const reports = paths.map((path) => ({
@@ -454,6 +487,34 @@ function readManifest(baselineDir: string): string[] | string {
   return files;
 }
 
+function entryFinding(baselineDir: string, treeRoot: string, path: string): CheckFinding {
+  const baselineFile = join(baselineDir, CONTENT_DIR, path);
+  const treeFile = resolve(treeRoot, path);
+  if (!isFile(baselineFile)) {
+    return {
+      path,
+      status: "missing-baseline",
+      detail:
+        `listed in the manifest but the pinned copy at ${baselineFile} is gone` +
+        `${isFile(treeFile) ? "" : " (and the tree file is also missing)"}`,
+    };
+  }
+  if (!isFile(treeFile)) {
+    return {
+      path,
+      status: "missing-in-tree",
+      detail: `pinned at ${baselineFile} but absent from the tree at ${treeFile}`,
+    };
+  }
+  // readFileSync follows a symlinked tree file to its target, so the
+  // comparison is of the content pin copied, never of the link value.
+  const result = compareFiles(baselineFile, treeFile);
+  if (result.identical) {
+    return { path, status: "identical", detail: `matches pinned copy at ${baselineFile}` };
+  }
+  return { path, status: "drifted", detail: result.diff };
+}
+
 function check(baselineDir: string, treeRoot: string): number {
   refuseOverlappingRoots(baselineDir, treeRoot);
   const manifest = readManifest(baselineDir);
@@ -462,35 +523,7 @@ function check(baselineDir: string, treeRoot: string): number {
     emitSummary({ ok: false, action: "check", baselineDir, treeRoot, error: manifest, files: [] });
     return 1;
   }
-  const findings: CheckFinding[] = [];
-  for (const path of manifest) {
-    const baselineFile = join(baselineDir, CONTENT_DIR, path);
-    const treeFile = resolve(treeRoot, path);
-    if (!isFile(baselineFile)) {
-      findings.push({
-        path,
-        status: "missing-baseline",
-        detail:
-          `listed in the manifest but the pinned copy at ${baselineFile} is gone` +
-          `${isFile(treeFile) ? "" : " (and the tree file is also missing)"}`,
-      });
-    } else if (!isFile(treeFile)) {
-      findings.push({
-        path,
-        status: "missing-in-tree",
-        detail: `pinned at ${baselineFile} but absent from the tree at ${treeFile}`,
-      });
-    } else {
-      // readFileSync follows a symlinked tree file to its target, so the
-      // comparison is of the content pin copied, never of the link value.
-      const result = compareFiles(baselineFile, treeFile);
-      findings.push(
-        result.identical
-          ? { path, status: "identical", detail: `matches pinned copy at ${baselineFile}` }
-          : { path, status: "drifted", detail: result.diff },
-      );
-    }
-  }
+  const findings = manifest.map((path) => entryFinding(baselineDir, treeRoot, path));
   for (const finding of findings) {
     if (finding.status === "drifted") {
       note(`drifted: ${finding.path}`);

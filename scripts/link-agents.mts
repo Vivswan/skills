@@ -78,16 +78,23 @@ export type LockVerdict = "ours" | "foreign" | "unknown";
 export interface PruneOptions {
   /** This repo's skill directories (skills/); symlink targets under any of them are ours. */
   readonly repoSkillsDirs: readonly string[];
+
   /** Basenames of the skills the repo currently ships. */
   readonly currentSkills: ReadonlySet<string>;
+
   /** The canonical install directory (~/.agents/skills). */
   readonly agentsSkillsDir: string;
+
   /** Per-agent pointer directories to sweep (e.g. ~/.claude/skills). */
   readonly agentSkillDirs: readonly string[];
+
   /** Lockfile verdict per installed skill name; absent means not in the lockfile. */
   readonly lockAttribution: ReadonlyMap<string, LockVerdict>;
+
   /** Called as each action happens, so removals are reported even if a later step throws. */
   readonly onAction?: (action: PruneAction) => void;
+
+  /** Remove nothing and report "would-prune" in place of "pruned"; false when absent. */
   readonly dryRun?: boolean;
 }
 
@@ -107,8 +114,12 @@ export function addCommands(
 
 /** What the command line asked for. */
 export interface Args {
+  /** `--dry-run`: every link and prune is reported, nothing changes. */
   readonly dryRun: boolean;
+
+  /** `--add`: the installs run first, then the linking. */
   readonly withAdd: boolean;
+
   /** The flags after `--add`, for every `skills add` call; `--global` is dropped, since every call carries it. */
   readonly flags: string[];
 }
@@ -233,6 +244,32 @@ export function repoSkillSources(dirs: readonly string[]): Map<string, string> {
   return sources;
 }
 
+/** The link action for one skill's entry, with a replaceable entry (a symlink elsewhere, an installed copy) removed unless dryRun; an entry that is neither fails. */
+function prepareTarget(sourceDir: string, target: string, dryRun: boolean): LinkAction["kind"] {
+  const existing = lstatSync(target, { throwIfNoEntry: false });
+
+  if (existing?.isSymbolicLink()) {
+    if (safeRealpath(target) === realpathSync(sourceDir)) return "already-linked";
+    if (!dryRun) unlinkSync(target);
+    return "linked";
+  }
+
+  if (existing?.isDirectory()) {
+    // Only ever delete something that looks like an installed skill copy.
+    if (!statSync(join(target, "SKILL.md"), { throwIfNoEntry: false })?.isFile()) {
+      fail(`${target}: exists but has no SKILL.md; refusing to replace it`);
+    }
+    if (!dryRun) rmSync(target, { recursive: true });
+    return "linked";
+  }
+
+  if (existing) {
+    fail(`${target}: exists and is neither a directory nor a symlink; refusing to replace it`);
+  }
+
+  return "created";
+}
+
 /**
  * Link each repo skill directory into agentsSkillsDir. Returns the action
  * taken per skill; mutates nothing when dryRun is true.
@@ -250,33 +287,133 @@ export function linkSkills(
   for (const sourceDir of repoSkillDirs) {
     const skill = basename(sourceDir);
     const target = join(agentsSkillsDir, skill);
-    const existing = lstatSync(target, { throwIfNoEntry: false });
-
-    let kind: LinkAction["kind"];
-    if (existing?.isSymbolicLink()) {
-      if (safeRealpath(target) === realpathSync(sourceDir)) {
-        actions.push({ skill, kind: "already-linked" });
-        continue;
-      }
-      kind = "linked";
-      if (!dryRun) unlinkSync(target);
-    } else if (existing?.isDirectory()) {
-      // Only ever delete something that looks like an installed skill copy.
-      if (!statSync(join(target, "SKILL.md"), { throwIfNoEntry: false })?.isFile()) {
-        fail(`${target}: exists but has no SKILL.md; refusing to replace it`);
-      }
-      kind = "linked";
-      if (!dryRun) rmSync(target, { recursive: true });
-    } else if (existing) {
-      fail(`${target}: exists and is neither a directory nor a symlink; refusing to replace it`);
-    } else {
-      kind = "created";
-    }
-
-    if (!dryRun) symlinkSync(sourceDir, target, "dir");
+    const kind = prepareTarget(sourceDir, target, dryRun);
+    if (kind !== "already-linked" && !dryRun) symlinkSync(sourceDir, target, "dir");
     actions.push({ skill, kind });
   }
   return actions;
+}
+
+/** What the two sweeps share: the options, the recorder, and the canonical names the first sweep pruned, which the second follows. */
+interface Sweep {
+  readonly options: PruneOptions;
+  readonly dryRun: boolean;
+  readonly pruneKind: "pruned" | "would-prune";
+  readonly record: (action: PruneAction) => void;
+  readonly prunedNames: Set<string>;
+  readonly repoForms: readonly string[];
+  readonly agentsForms: readonly string[];
+}
+
+function pruneCanonicalSymlink(sweep: Sweep, name: string, entry: string): void {
+  const target = canonicalTarget(resolve(sweep.options.agentsSkillsDir, readlinkSync(entry)));
+  if (!isUnder(target, sweep.repoForms)) return; // another repo's symlink: never touch
+
+  const targetExists = statSync(target, { throwIfNoEntry: false }) !== undefined;
+  const reason = targetExists
+    ? `symlink into this repo, but "${name}" is not a current skill`
+    : `dangling symlink into this repo (${target} no longer exists)`;
+  if (!sweep.dryRun) unlinkSync(entry);
+  sweep.prunedNames.add(name);
+  sweep.record({ path: entry, kind: sweep.pruneKind, reason });
+}
+
+function pruneCanonicalCopy(sweep: Sweep, name: string, entry: string): void {
+  const verdict = sweep.options.lockAttribution.get(name);
+  if (verdict === "ours") {
+    if (!sweep.dryRun) rmSync(entry, { recursive: true });
+    sweep.prunedNames.add(name);
+    sweep.record({
+      path: entry,
+      kind: sweep.pruneKind,
+      reason: `installed copy of retired skill "${name}" (lockfile attributes it to this repo)`,
+    });
+  } else if (verdict === undefined) {
+    sweep.record({
+      path: entry,
+      kind: "kept",
+      reason: "copy with no lockfile entry; cannot attribute it to this repo, leaving it alone",
+    });
+  } else if (verdict === "unknown") {
+    sweep.record({
+      path: entry,
+      kind: "kept",
+      reason:
+        "copy whose lockfile entry has missing or conflicting source identity; " +
+        "cannot attribute it to this repo, leaving it alone",
+    });
+  }
+  // "foreign": another repo's skill, skip silently.
+}
+
+function pruneCanonical(sweep: Sweep): void {
+  const { agentsSkillsDir, currentSkills } = sweep.options;
+  for (const name of readdirSync(agentsSkillsDir).sort()) {
+    if (currentSkills.has(name)) continue; // linkSkills owns current skills
+
+    const entry = join(agentsSkillsDir, name);
+    const stat = lstatSync(entry);
+    if (stat.isSymbolicLink()) {
+      pruneCanonicalSymlink(sweep, name, entry);
+    } else if (stat.isDirectory()) {
+      pruneCanonicalCopy(sweep, name, entry);
+    }
+    // Plain files (e.g. .DS_Store) are not installs; skip silently.
+  }
+}
+
+/** A per-agent pointer at a name the repo no longer ships; one at a canonical entry this run kept stays, since that entry's own verdict already answered for it. */
+function pruneAgentPointer(sweep: Sweep, entry: string, canonicalName: string): void {
+  const { agentsSkillsDir, lockAttribution } = sweep.options;
+  if (sweep.prunedNames.has(canonicalName)) {
+    if (!sweep.dryRun) unlinkSync(entry);
+    sweep.record({
+      path: entry,
+      kind: sweep.pruneKind,
+      reason: `points at the pruned canonical entry for "${canonicalName}"`,
+    });
+    return;
+  }
+
+  if (lstatSync(join(agentsSkillsDir, canonicalName), { throwIfNoEntry: false }) !== undefined) {
+    return;
+  }
+
+  const verdict = lockAttribution.get(canonicalName);
+  if (verdict === "ours") {
+    if (!sweep.dryRun) unlinkSync(entry);
+    sweep.record({
+      path: entry,
+      kind: sweep.pruneKind,
+      reason: `dangling pointer to missing "${canonicalName}" (lockfile attributes it to this repo)`,
+    });
+  } else if (verdict !== "foreign") {
+    sweep.record({
+      path: entry,
+      kind: "kept",
+      reason: `dangling pointer to "${canonicalName}"; cannot attribute it to this repo`,
+    });
+  }
+  // "foreign": its owner's residue, skip silently.
+}
+
+function pruneAgentDir(sweep: Sweep, agentDir: string): void {
+  for (const name of readdirSync(agentDir).sort()) {
+    const entry = join(agentDir, name);
+    if (!lstatSync(entry).isSymbolicLink()) continue;
+
+    // Classify by the raw target's parent and basename without following
+    // the final hop, so dry runs and real runs agree on pointers into
+    // canonical entries this run prunes. Only exact direct children of the
+    // canonical directory count: a deeper path names someone else's tree.
+    const rawTarget = resolve(agentDir, readlinkSync(entry));
+    if (!sweep.agentsForms.includes(canonicalTarget(dirname(rawTarget)))) continue;
+
+    const canonicalName = basename(rawTarget);
+    if (sweep.options.currentSkills.has(canonicalName)) continue;
+
+    pruneAgentPointer(sweep, entry, canonicalName);
+  }
 }
 
 /**
@@ -287,109 +424,26 @@ export function linkSkills(
  * dryRun is true (actions report "would-prune" instead of "pruned").
  */
 export function pruneStaleSkills(options: PruneOptions): PruneAction[] {
-  const { repoSkillsDirs, currentSkills, agentsSkillsDir, agentSkillDirs, lockAttribution } =
-    options;
-  const dryRun = options.dryRun ?? false;
-  const pruneKind = dryRun ? "would-prune" : "pruned";
-  const repoForms = repoSkillsDirs.flatMap(pathForms);
-  const agentsForms = pathForms(agentsSkillsDir);
-
   const actions: PruneAction[] = [];
-  const record = (action: PruneAction): void => {
-    actions.push(action);
-    options.onAction?.(action);
+  const dryRun = options.dryRun ?? false;
+  const sweep: Sweep = {
+    options,
+    dryRun,
+    pruneKind: dryRun ? "would-prune" : "pruned",
+    record: (action) => {
+      actions.push(action);
+      options.onAction?.(action);
+    },
+    prunedNames: new Set(),
+    repoForms: options.repoSkillsDirs.flatMap(pathForms),
+    agentsForms: pathForms(options.agentsSkillsDir),
   };
-  const prunedNames = new Set<string>();
 
-  for (const name of readdirSync(agentsSkillsDir).sort()) {
-    if (currentSkills.has(name)) continue; // linkSkills owns current skills
-    const entry = join(agentsSkillsDir, name);
-    const stat = lstatSync(entry);
-
-    if (stat.isSymbolicLink()) {
-      const target = canonicalTarget(resolve(agentsSkillsDir, readlinkSync(entry)));
-      if (!isUnder(target, repoForms)) continue; // another repo's symlink: never touch
-      const targetExists = statSync(target, { throwIfNoEntry: false }) !== undefined;
-      const reason = targetExists
-        ? `symlink into this repo, but "${name}" is not a current skill`
-        : `dangling symlink into this repo (${target} no longer exists)`;
-      if (!dryRun) unlinkSync(entry);
-      prunedNames.add(name);
-      record({ path: entry, kind: pruneKind, reason });
-    } else if (stat.isDirectory()) {
-      const verdict = lockAttribution.get(name);
-      if (verdict === "ours") {
-        if (!dryRun) rmSync(entry, { recursive: true });
-        prunedNames.add(name);
-        record({
-          path: entry,
-          kind: pruneKind,
-          reason: `installed copy of retired skill "${name}" (lockfile attributes it to this repo)`,
-        });
-      } else if (verdict === undefined) {
-        record({
-          path: entry,
-          kind: "kept",
-          reason: "copy with no lockfile entry; cannot attribute it to this repo, leaving it alone",
-        });
-      } else if (verdict === "unknown") {
-        record({
-          path: entry,
-          kind: "kept",
-          reason:
-            "copy whose lockfile entry has missing or conflicting source identity; " +
-            "cannot attribute it to this repo, leaving it alone",
-        });
-      }
-      // "foreign": another repo's skill, skip silently.
-    }
-    // Plain files (e.g. .DS_Store) are not installs; skip silently.
+  pruneCanonical(sweep);
+  for (const agentDir of options.agentSkillDirs) {
+    if (safeIsDirectory(agentDir)) pruneAgentDir(sweep, agentDir);
   }
 
-  for (const agentDir of agentSkillDirs) {
-    if (!safeIsDirectory(agentDir)) continue;
-    for (const name of readdirSync(agentDir).sort()) {
-      const entry = join(agentDir, name);
-      if (!lstatSync(entry).isSymbolicLink()) continue;
-      // Classify by the raw target's parent and basename without following
-      // the final hop, so dry runs and real runs agree on pointers into
-      // canonical entries this run prunes. Only exact direct children of the
-      // canonical directory count: a deeper path names someone else's tree.
-      const rawTarget = resolve(agentDir, readlinkSync(entry));
-      if (!agentsForms.includes(canonicalTarget(dirname(rawTarget)))) continue;
-      const canonicalName = basename(rawTarget);
-      if (currentSkills.has(canonicalName)) continue;
-
-      if (prunedNames.has(canonicalName)) {
-        if (!dryRun) unlinkSync(entry);
-        record({
-          path: entry,
-          kind: pruneKind,
-          reason: `points at the pruned canonical entry for "${canonicalName}"`,
-        });
-      } else if (
-        lstatSync(join(agentsSkillsDir, canonicalName), { throwIfNoEntry: false }) === undefined
-      ) {
-        if (lockAttribution.get(canonicalName) === "ours") {
-          if (!dryRun) unlinkSync(entry);
-          record({
-            path: entry,
-            kind: pruneKind,
-            reason:
-              `dangling pointer to missing "${canonicalName}" ` +
-              "(lockfile attributes it to this repo)",
-          });
-        } else if (lockAttribution.get(canonicalName) !== "foreign") {
-          record({
-            path: entry,
-            kind: "kept",
-            reason: `dangling pointer to "${canonicalName}"; cannot attribute it to this repo`,
-          });
-        }
-        // "foreign": its owner's residue, skip silently.
-      }
-    }
-  }
   return actions;
 }
 

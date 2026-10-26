@@ -48,12 +48,10 @@ import {
 // Strings that should only ever appear in template/, never in a published skill.
 const PLACEHOLDER_MARKERS = ["Replace with", "Replace this", "template-skill", "Template Skill"];
 
-// Component-declaring plugin.json fields. A marketplace entry with
-// strict:false conflicts with any of these and the plugin fails to load.
+// The component-declaring plugin.json fields; a marketplace entry with strict:false beside any of them fails to load.
 const COMPONENT_FIELDS = ["skills", "commands", "agents", "hooks", "mcpServers", "lspServers"];
 
-// Marketplace-entry fields that have no counterpart in the plugin manifest, so
-// they are exempt from the entry-vs-manifest equality check.
+// Marketplace-entry fields with no counterpart in the plugin manifest, so exempt from the entry-vs-manifest equality check.
 const MARKETPLACE_ONLY_FIELDS = new Set([
   "source",
   "category",
@@ -299,6 +297,46 @@ function checkMarketplaceAgainstManifest(marketplace: Marketplace, manifest: Roo
 
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
+/** An upstream entry's git-subdir source: the GitHub owner/repo and the skill folder inside it, pinned to nothing. */
+function upstreamSource(
+  where: string,
+  source: unknown,
+): { readonly url: string; readonly path: string } {
+  if (!isRecord(source) || source.source !== "git-subdir") {
+    fail(
+      `${where}: source must be a git-subdir object -- only the root plugin is published from this repository`,
+    );
+  }
+  if (typeof source.url !== "string" || !GITHUB_REPO.test(source.url)) {
+    fail(`${where}: source.url must be the upstream as GitHub owner/repo`);
+  }
+  if (typeof source.path !== "string" || !/^[^/](.*[^/])?$/.test(source.path)) {
+    fail(
+      `${where}: source.path must be the skill folder, repository-relative, without a leading or trailing slash`,
+    );
+  }
+  if ("sha" in source || "ref" in source) {
+    fail(
+      `${where}: carries a sha or ref -- the upstream skills follow their default branch, so the entry pins nothing`,
+    );
+  }
+  return { url: source.url, path: source.path };
+}
+
+/** Whether the entry's metadata marks the skill explicit-invocation-only; the install commands read nothing else of it. */
+function upstreamExplicitOnly(where: string, metadata: unknown): boolean {
+  if (metadata !== undefined && !isRecord(metadata)) {
+    fail(`${where}: metadata must be an object`);
+  }
+  const explicitOnly = metadata?.["disable-model-invocation"];
+  if (explicitOnly !== undefined && explicitOnly !== true) {
+    fail(
+      `${where}: metadata["disable-model-invocation"] is true or absent -- the install commands read nothing else`,
+    );
+  }
+  return explicitOnly === true;
+}
+
 /**
  * Every marketplace entry other than the root plugin publishes one skill of another repository through a git-subdir
  * source: the fetched folder carries no plugin.json, so the entry is the manifest and the folder itself is the skill.
@@ -320,25 +358,7 @@ function checkUpstreamPlugins(
     if (skillNames.has(plugin.name) || skills.some((skill) => skill.name === plugin.name)) {
       fail(`${where}: the name is taken by another skill of this catalog -- one name, one skill`);
     }
-    const source = plugin.source;
-    if (!isRecord(source) || source.source !== "git-subdir") {
-      fail(
-        `${where}: source must be a git-subdir object -- only the root plugin is published from this repository`,
-      );
-    }
-    if (typeof source.url !== "string" || !GITHUB_REPO.test(source.url)) {
-      fail(`${where}: source.url must be the upstream as GitHub owner/repo`);
-    }
-    if (typeof source.path !== "string" || !/^[^/](.*[^/])?$/.test(source.path)) {
-      fail(
-        `${where}: source.path must be the skill folder, repository-relative, without a leading or trailing slash`,
-      );
-    }
-    if ("sha" in source || "ref" in source) {
-      fail(
-        `${where}: carries a sha or ref -- the upstream skills follow their default branch, so the entry pins nothing`,
-      );
-    }
+    const source = upstreamSource(where, plugin.source);
     if (JSON.stringify(plugin.skills) !== JSON.stringify(["./"])) {
       fail(`${where}: skills must be ["./"] -- the fetched folder is the skill itself`);
     }
@@ -347,22 +367,8 @@ function checkUpstreamPlugins(
         `${where}: needs a description -- before install, users see nothing else of a git-subdir entry`,
       );
     }
-    const metadata = plugin.metadata;
-    if (metadata !== undefined && !isRecord(metadata)) {
-      fail(`${where}: metadata must be an object`);
-    }
-    const explicitOnly = metadata?.["disable-model-invocation"];
-    if (explicitOnly !== undefined && explicitOnly !== true) {
-      fail(
-        `${where}: metadata["disable-model-invocation"] is true or absent -- the install commands read nothing else`,
-      );
-    }
-    skills.push({
-      name: plugin.name,
-      repo: source.url,
-      path: source.path,
-      explicitOnly: explicitOnly === true,
-    });
+    const explicitOnly = upstreamExplicitOnly(where, plugin.metadata);
+    skills.push({ name: plugin.name, repo: source.url, path: source.path, explicitOnly });
   }
   return skills;
 }
@@ -449,14 +455,13 @@ function checkIssueTemplateOptionsMatchFolders(skillNames: ReadonlySet<string>):
   }
 }
 
-// Every place that repeats the author's name or email must agree with the
-// canonical copy in .claude-plugin/plugin.json author.
-function checkAuthorIdentity(
-  marketplace: Marketplace,
-  manifest: RootManifest,
-  codexManifests: readonly CodexManifest[],
-  skillFrontmatters: readonly SkillFrontmatter[],
-): void {
+interface Author {
+  readonly name: string;
+  readonly email: string;
+}
+
+/** The author every other copy must match: .claude-plugin/plugin.json's. */
+function canonicalAuthor(manifest: RootManifest): Author {
   const author = isRecord(manifest.raw.author) ? manifest.raw.author : undefined;
   const authorName = author === undefined ? undefined : author.name;
   const authorEmail = author === undefined ? undefined : author.email;
@@ -468,26 +473,42 @@ function checkAuthorIdentity(
   ) {
     fail(`${rel(manifest.path)}: author must have non-empty string 'name' and 'email' fields`);
   }
-  const shortName = authorName.trim().split(/\s+/)[0] ?? "";
+  return { name: authorName, email: authorEmail };
+}
+
+function checkCodexAuthors(codexManifests: readonly CodexManifest[], author: Author): void {
+  for (const codex of codexManifests) {
+    const codexAuthor = isRecord(codex.plugin.author) ? codex.plugin.author : undefined;
+    if (
+      codexAuthor === undefined ||
+      codexAuthor.name !== author.name ||
+      codexAuthor.email !== author.email
+    ) {
+      fail(`${rel(codex.path)}: author name/email must match .claude-plugin/plugin.json author`);
+    }
+  }
+}
+
+// Every place that repeats the author's name or email must agree with the
+// canonical copy in .claude-plugin/plugin.json author.
+function checkAuthorIdentity(
+  marketplace: Marketplace,
+  manifest: RootManifest,
+  codexManifests: readonly CodexManifest[],
+  skillFrontmatters: readonly SkillFrontmatter[],
+): void {
+  const author = canonicalAuthor(manifest);
+  const shortName = author.name.trim().split(/\s+/)[0] ?? "";
 
   const owner = isRecord(marketplace.raw.owner) ? marketplace.raw.owner : undefined;
-  if (owner === undefined || owner.name !== authorName || owner.email !== authorEmail) {
+  if (owner === undefined || owner.name !== author.name || owner.email !== author.email) {
     fail(
       `${rel(marketplace.path)}: owner name/email must match the` +
         " .claude-plugin/plugin.json author",
     );
   }
 
-  for (const codex of codexManifests) {
-    const codexAuthor = isRecord(codex.plugin.author) ? codex.plugin.author : undefined;
-    if (
-      codexAuthor === undefined ||
-      codexAuthor.name !== authorName ||
-      codexAuthor.email !== authorEmail
-    ) {
-      fail(`${rel(codex.path)}: author name/email must match .claude-plugin/plugin.json author`);
-    }
-  }
+  checkCodexAuthors(codexManifests, author);
 
   for (const { path, frontmatter } of skillFrontmatters) {
     const metadata = frontmatter.metadata;
@@ -503,19 +524,52 @@ function checkAuthorIdentity(
   const licenseText = readTextFile(join(ROOT, "LICENSE.md"));
   const copyright = licenseText
     .split("\n")
-    .find((line) => line.includes("Copyright") && line.includes(authorName));
+    .find((line) => line.includes("Copyright") && line.includes(author.name));
   if (copyright === undefined) {
-    fail(`LICENSE.md: copyright line must name '${authorName}'`);
+    fail(`LICENSE.md: copyright line must name '${author.name}'`);
+  }
+}
+
+const LICENSE_DEFERRAL = "SEE LICENSE IN LICENSE.md";
+const LICENSE_NAME = "Individual and Small Organization License";
+const LICENSE_HEADING = new RegExp(`^# ${LICENSE_NAME} \\d+\\.\\d+\\.\\d+$`, "m");
+
+// `npx skills add --skill <name>` copies just the skill folder, so the
+// LICENSE.md the manifests refer to must travel inside each skill;
+// template/ seeds the next skill with its copy.
+function checkLicenseCopies(rootLicense: string): void {
+  for (const dir of [...skillDirs(), join(ROOT, "template")]) {
+    const path = join(dir, "LICENSE.md");
+    if (!existsSync(path) || readTextFile(path) !== rootLicense) {
+      fail(`${rel(path)}: must be a byte-identical copy of the root LICENSE.md`);
+    }
+  }
+
+  // The license file was renamed from LICENSE; a stale extensionless copy
+  // would ship alongside the real one and contradict the manifests.
+  for (const dir of [ROOT, ...skillDirs(), join(ROOT, "template")]) {
+    const stale = join(dir, "LICENSE");
+    if (existsSync(stale)) {
+      fail(`${rel(stale)}: stale extensionless license file; LICENSE.md is the license file`);
+    }
+  }
+}
+
+function checkReadmeLicenseSection(readme: string): void {
+  const licenseHeading = "\n## License\n";
+  const headingIndex = readme.indexOf(licenseHeading);
+  if (headingIndex === -1) fail("README.md: missing the '## License' section");
+  const afterHeading = readme.slice(headingIndex + licenseHeading.length);
+  const nextHeading = afterHeading.search(/^## /m);
+  const section = nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
+  if (!section.includes(LICENSE_NAME)) {
+    fail(`README.md: License section must mention ${LICENSE_NAME}`);
   }
 }
 
 // Every manifest and SKILL.md frontmatter defers to LICENSE.md (npm's "SEE
 // LICENSE IN <file>" convention): copies stay in lockstep with the root plugin
 // manifest, README and LICENSE.md name the same license, the version is LICENSE.md's alone.
-const LICENSE_DEFERRAL = "SEE LICENSE IN LICENSE.md";
-const LICENSE_NAME = "Individual and Small Organization License";
-const LICENSE_HEADING = new RegExp(`^# ${LICENSE_NAME} \\d+\\.\\d+\\.\\d+$`, "m");
-
 function checkLicenseIdentity(
   manifest: RootManifest,
   codexManifests: readonly CodexManifest[],
@@ -551,41 +605,25 @@ function checkLicenseIdentity(
   }
 
   const rootLicense = readTextFile(join(ROOT, "LICENSE.md"));
-
-  // `npx skills add --skill <name>` copies just the skill folder, so the
-  // LICENSE.md the manifests refer to must travel inside each skill;
-  // template/ seeds the next skill with its copy.
-  for (const dir of [...skillDirs(), join(ROOT, "template")]) {
-    const path = join(dir, "LICENSE.md");
-    if (!existsSync(path) || readTextFile(path) !== rootLicense) {
-      fail(`${rel(path)}: must be a byte-identical copy of the root LICENSE.md`);
-    }
-  }
-
-  // The license file was renamed from LICENSE; a stale extensionless copy
-  // would ship alongside the real one and contradict the manifests.
-  for (const dir of [ROOT, ...skillDirs(), join(ROOT, "template")]) {
-    const stale = join(dir, "LICENSE");
-    if (existsSync(stale)) {
-      fail(`${rel(stale)}: stale extensionless license file; LICENSE.md is the license file`);
-    }
-  }
-
-  const readme = readTextFile(join(ROOT, "README.md"));
-  const licenseHeading = "\n## License\n";
-  const headingIndex = readme.indexOf(licenseHeading);
-  if (headingIndex === -1) fail("README.md: missing the '## License' section");
-  const afterHeading = readme.slice(headingIndex + licenseHeading.length);
-  const nextHeading = afterHeading.search(/^## /m);
-  const section = nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
-  if (!section.includes(LICENSE_NAME)) {
-    fail(`README.md: License section must mention ${LICENSE_NAME}`);
-  }
+  checkLicenseCopies(rootLicense);
+  checkReadmeLicenseSection(readTextFile(join(ROOT, "README.md")));
 
   // The version lives in LICENSE.md alone (the fleet sync bumps it), so the
   // README names the license without a version and the heading must carry one.
   if (!LICENSE_HEADING.test(rootLicense)) {
     fail(`LICENSE.md: must carry the heading '# ${LICENSE_NAME} <version>'`);
+  }
+}
+
+function checkCodexHomepage(codex: CodexManifest, homepage: string): void {
+  const codexAuthor = isRecord(codex.plugin.author) ? codex.plugin.author : undefined;
+  if (codexAuthor === undefined || codexAuthor.url !== homepage) {
+    fail(`${rel(codex.path)}: author.url must be ${homepage} (root plugin.json homepage)`);
+  }
+  const interfaceBlock = isRecord(codex.plugin.interface) ? codex.plugin.interface : undefined;
+  const websiteURL = interfaceBlock === undefined ? undefined : interfaceBlock.websiteURL;
+  if (typeof codex.plugin.homepage !== "string" || websiteURL !== codex.plugin.homepage) {
+    fail(`${rel(codex.path)}: interface.websiteURL must equal the manifest's own homepage`);
   }
 }
 
@@ -607,17 +645,7 @@ function checkHomepageIdentity(
     fail(`${rel(marketplace.path)}: owner.url must match the .claude-plugin/plugin.json homepage`);
   }
 
-  for (const codex of codexManifests) {
-    const codexAuthor = isRecord(codex.plugin.author) ? codex.plugin.author : undefined;
-    if (codexAuthor === undefined || codexAuthor.url !== homepage) {
-      fail(`${rel(codex.path)}: author.url must be ${homepage} (root plugin.json homepage)`);
-    }
-    const interfaceBlock = isRecord(codex.plugin.interface) ? codex.plugin.interface : undefined;
-    const websiteURL = interfaceBlock === undefined ? undefined : interfaceBlock.websiteURL;
-    if (typeof codex.plugin.homepage !== "string" || websiteURL !== codex.plugin.homepage) {
-      fail(`${rel(codex.path)}: interface.websiteURL must equal the manifest's own homepage`);
-    }
-  }
+  for (const codex of codexManifests) checkCodexHomepage(codex, homepage);
 }
 
 // The SKILL.md H1 is the display-name authority; the codex manifest's
@@ -788,25 +816,32 @@ function checkPinnedSnapshotRevision(): void {
   }
 }
 
+// The index past the escape pair or bracket class opening at `at`, or `at` itself for any other character: what a
+// '|' or a parenthesis inside it must not count as. An unclosed class runs to the end of the pattern, as in grep.
+function opaqueEnd(pattern: string, at: number): number {
+  if (pattern[at] === "\\") return Math.min(at + 2, pattern.length);
+  if (pattern[at] !== "[") return at;
+
+  let i = at + 1;
+  while (i < pattern.length && pattern[i] !== "]") i += pattern[i] === "\\" ? 2 : 1;
+  return Math.min(i + 1, pattern.length);
+}
+
 // Split a POSIX ERE on top-level '|', ignoring '|' inside groups and classes.
 function splitAlternation(pattern: string): string[] {
   const terms: string[] = [];
   let current = "";
   let depth = 0;
-  let inClass = false;
-  for (let i = 0; i < pattern.length; i += 1) {
+  let i = 0;
+  while (i < pattern.length) {
+    const end = opaqueEnd(pattern, i);
+    if (end > i) {
+      current += pattern.slice(i, end);
+      i = end;
+      continue;
+    }
     const char = pattern[i] ?? "";
-    if (char === "\\") {
-      current += char + (pattern[i + 1] ?? "");
-      i += 1;
-      continue;
-    }
-    if (inClass) {
-      current += char;
-      if (char === "]") inClass = false;
-      continue;
-    }
-    if (char === "[") inClass = true;
+    i += 1;
     if (char === "(") depth += 1;
     if (char === ")") depth -= 1;
     if (char === "|" && depth === 0) {
@@ -839,6 +874,50 @@ function expandClass(content: string): string[] {
   return members;
 }
 
+/** One atom of a grep term: the literal strings it can match, and the index past it. */
+interface TermAtom {
+  readonly alternatives: readonly string[];
+  readonly end: number;
+}
+
+// The branches of the group opening at `start` and closing at `end`; an empty branch would match everything,
+// which no word-list entry can stand for.
+function groupBranches(term: string, start: number, end: number, sourceRel: string): string[] {
+  const branches = term.slice(start + 1, end).split("|");
+  for (const branch of branches) {
+    if (branch.trim() === "") {
+      fail(`${sourceRel}: empty alternation branch inside a group in grep term '${term}'`);
+    }
+  }
+  return branches;
+}
+
+// The atom at `at`: a '\x' escape, a '[x-y]' class, one level of '(a|b)' group, or a literal character. A group's
+// branches expand through expandTermCandidates below, so the two functions recurse into each other.
+function termAtom(term: string, at: number, sourceRel: string): TermAtom {
+  const char = term[at] ?? "";
+  if (char === "\\") return { alternatives: [term[at + 1] ?? ""], end: at + 2 };
+
+  if (char === "[") {
+    const end = term.indexOf("]", at + 1);
+    if (end === -1) fail(`${sourceRel}: unbalanced character class in grep term '${term}'`);
+    // The word list documents tokens like '[web:' without spelling out every
+    // class member, so a class also counts as matched when its surrounding
+    // literals appear ("" member).
+    return { alternatives: [...expandClass(term.slice(at + 1, end)), ""], end: end + 1 };
+  }
+
+  if (char === "(") {
+    const end = term.indexOf(")", at + 1);
+    if (end === -1) fail(`${sourceRel}: unbalanced group in grep term '${term}'`);
+    const branches = groupBranches(term, at, end, sourceRel);
+    const alternatives = branches.flatMap((branch) => expandTermCandidates(branch, sourceRel));
+    return { alternatives, end: end + 1 };
+  }
+
+  return { alternatives: [char], end: at + 1 };
+}
+
 // Expand one alternation term into the literal strings it can match,
 // resolving '\x' escapes, one level of '(a|b)' groups, and '[x-y]' classes.
 // sourceRel names the file the pattern came from in failure messages.
@@ -846,43 +925,9 @@ function expandTermCandidates(term: string, sourceRel: string): string[] {
   let results = [""];
   let i = 0;
   while (i < term.length) {
-    const char = term[i] ?? "";
-    if (char === "\\") {
-      const literal = term[i + 1] ?? "";
-      results = results.map((prefix) => prefix + literal);
-      i += 2;
-      continue;
-    }
-    if (char === "[") {
-      const end = term.indexOf("]", i + 1);
-      if (end === -1) fail(`${sourceRel}: unbalanced character class in grep term '${term}'`);
-      // The word list documents tokens like '[web:' without spelling out every
-      // class member, so a class also counts as matched when its surrounding
-      // literals appear ("" member).
-      const members = [...expandClass(term.slice(i + 1, end)), ""];
-      results = results.flatMap((prefix) => members.map((member) => prefix + member));
-      i = end + 1;
-      continue;
-    }
-    if (char === "(") {
-      const end = term.indexOf(")", i + 1);
-      if (end === -1) fail(`${sourceRel}: unbalanced group in grep term '${term}'`);
-      const branches = term.slice(i + 1, end).split("|");
-      for (const branch of branches) {
-        if (branch.trim() === "") {
-          fail(`${sourceRel}: empty alternation branch inside a group in grep term '${term}'`);
-        }
-      }
-      results = results.flatMap((prefix) =>
-        branches.flatMap((branch) =>
-          expandTermCandidates(branch, sourceRel).map((tail) => prefix + tail),
-        ),
-      );
-      i = end + 1;
-      continue;
-    }
-    results = results.map((prefix) => prefix + char);
-    i += 1;
+    const atom = termAtom(term, i, sourceRel);
+    results = results.flatMap((prefix) => atom.alternatives.map((tail) => prefix + tail));
+    i = atom.end;
   }
   return results;
 }
@@ -963,6 +1008,32 @@ function checkReviewerPreamble(): void {
   }
 }
 
+/** The checks of one published skill, and the two files of it the catalog-wide checks read afterwards. */
+function checkPublishedSkill(
+  skillDir: string,
+  rootDevDependencies: Record<string, unknown>,
+  buildBlock: string,
+): { codex: CodexManifest; skillMd: SkillFrontmatter } {
+  requireFile(join(skillDir, "README.md"));
+  checkNoPlaceholders(skillDir);
+  checkNoInstallDroppedFiles(skillDir);
+  checkDependencies(skillDir, rootDevDependencies, buildBlock);
+  const codex = loadCodexManifest(skillDir);
+  const skillMd = loadSkillFrontmatter(skillDir);
+  checkSingleSourceVersion(codex, skillMd);
+  checkManifestConventions(skillDir, codex);
+  checkInterfaceIdentity(skillDir, codex);
+  const openaiYaml = join(skillDir, "agents", "openai.yaml");
+  checkExplicitInvocationPairing({
+    skillMdPath: rel(skillMd.path),
+    frontmatter: skillMd.frontmatter,
+    openaiYamlPath: rel(openaiYaml),
+    openaiYamlText: existsSync(openaiYaml) ? readTextFile(openaiYaml) : undefined,
+  });
+  checkDescriptionTriggerForm(rel(skillMd.path), skillMd.frontmatter);
+  return { codex, skillMd };
+}
+
 function main(): void {
   for (const name of ["README.md", "AGENTS.md"]) requireFile(join(ROOT, name));
   const marketplace = loadMarketplace();
@@ -991,23 +1062,7 @@ function main(): void {
   const codexManifests: CodexManifest[] = [];
   const skillFrontmatters: SkillFrontmatter[] = [];
   for (const skillDir of dirs) {
-    requireFile(join(skillDir, "README.md"));
-    checkNoPlaceholders(skillDir);
-    checkNoInstallDroppedFiles(skillDir);
-    checkDependencies(skillDir, rootDevDependencies, buildBlock);
-    const codex = loadCodexManifest(skillDir);
-    const skillMd = loadSkillFrontmatter(skillDir);
-    checkSingleSourceVersion(codex, skillMd);
-    checkManifestConventions(skillDir, codex);
-    checkInterfaceIdentity(skillDir, codex);
-    const openaiYaml = join(skillDir, "agents", "openai.yaml");
-    checkExplicitInvocationPairing({
-      skillMdPath: rel(skillMd.path),
-      frontmatter: skillMd.frontmatter,
-      openaiYamlPath: rel(openaiYaml),
-      openaiYamlText: existsSync(openaiYaml) ? readTextFile(openaiYaml) : undefined,
-    });
-    checkDescriptionTriggerForm(rel(skillMd.path), skillMd.frontmatter);
+    const { codex, skillMd } = checkPublishedSkill(skillDir, rootDevDependencies, buildBlock);
     codexManifests.push(codex);
     skillFrontmatters.push(skillMd);
   }

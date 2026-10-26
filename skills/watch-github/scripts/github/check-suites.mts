@@ -5,19 +5,20 @@
 
 import { GhError, get, graphql, requireNumber, requireString, stringOrNull } from "./gh.mts";
 
-// Heavy retriggering stacks hundreds of suites on one SHA; a re-run between two page fetches can
-// hide a re-queued suite from both, so a multi-page snapshot is judged only once two reads agree.
+// Heavy retriggering stacks hundreds of suites on one SHA; past this many pages of 100 a head is refused, never judged partial.
 const MAX_SUITE_PAGES = 10;
+
+// A re-run between two page fetches can hide a re-queued suite from both, so a multi-page snapshot counts only once two of at most this many reads agree.
 const MAX_SNAPSHOT_ROUNDS = 5;
 
-// External apps (CodeQL, Semgrep) register check suites without a workflowRun; only github-actions
-// suites carrying one are workflow runs.
+// External apps (CodeQL, Semgrep) register check suites without a workflowRun; only github-actions suites carrying one are workflow runs.
 export const SUITE_NODE_FIELDS =
   "id status conclusion app { slug } workflowRun { databaseId url updatedAt workflow { databaseId name } }";
 
 /** The checkSuites connection as the per-repository read embeds it under a commit. */
 export const SUITES_CONNECTION = `checkSuites(first: 100) { nodes { ${SUITE_NODE_FIELDS} } pageInfo { hasNextPage endCursor } }`;
 
+// The same connection as SUITES_CONNECTION, paged by cursor for a head with more than one page.
 const SUITES_QUERY = `query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     object(oid: $oid) { ... on Commit {
@@ -40,14 +41,28 @@ const failedJobsQuery = (suiteIds: string[]): string => `query {
 }`;
 
 export type Run = {
+  /** The workflow run's database id; ids are monotonic, so the highest is the newest (ci.mts selectLatest). */
   id: number;
+
   /** The check suite's node id, for the failed-jobs read. */
   suiteId: string;
+
+  /** GitHub's status word, lowercased; "completed" is the settled one. */
   status: string;
+
+  /** GitHub's conclusion word, lowercased; null until the run completes. */
   conclusion: string | null;
+
+  /** The workflow file's database id; null for a ruleset or unnamed run, which is judged on its own. */
   workflowId: number | null;
+
+  /** The run's last change, so the snapshot comparison sees a re-run that completed again between two reads. */
   updatedAt: string;
+
+  /** The workflow's name, which a named gate is matched by; two workflow files can share one. */
   name: string;
+
+  /** The run's page; a red verdict links its first failed run's. */
   url: string;
 };
 

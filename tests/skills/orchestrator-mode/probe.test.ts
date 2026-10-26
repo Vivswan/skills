@@ -4,14 +4,14 @@ import { join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
 import { tempDirs } from "../../helpers/temp-dirs";
 
-const temp = tempDirs();
-
 // Contract tests for the orchestrator-mode probe tool: every result is
 // either evidence-bearing or a loud error, never a bare number. The tests
 // pin the failure modes the tool exists to make unrepresentable - a missing
 // file reading as 0, a substring matching a longer sibling filename, a
 // two-file swap hiding inside a stable count, and a negative token passing
 // silently on a broken measurement.
+
+const temp = tempDirs();
 
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "probe.mts");
 

@@ -5,6 +5,7 @@ import { selectTests } from "../../scripts/check-staged.mts";
 // so what would drift silently is a selection that misses a dependency (a test whose script imports
 // the staged module, a launcher module no test imports, a script a test runs by path) or one that
 // over-selects on a generic name (`read.mts` once ran every test whose text contained "read").
+
 const FILES = new Map<string, string>([
   ["scripts/lib.mts", "export const ROOT = 1;"],
   ["scripts/hermetic-git-env.mts", "export function hermeticGitEnv() {}"],

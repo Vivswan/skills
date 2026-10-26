@@ -29,6 +29,7 @@ import {
   runTeardown,
   short,
   stashesOnBranch,
+  type Worktree,
 } from "./retire/read.mts";
 
 const EXIT_USAGE = 2;
@@ -52,8 +53,6 @@ const USAGE = [
 
 const usage: Exit = (message) => exitWith(EXIT_USAGE, `${message}\n\n${USAGE}`);
 
-// --- the retirement --------------------------------------------------------------
-
 const VALUED_FLAGS = {
   "--branch": "branch",
   "--repo-root": "repoRoot",
@@ -62,11 +61,12 @@ const VALUED_FLAGS = {
   "--original-tip": "originalTip",
 } as const;
 
-function parseOptions(argv: string[]): Options {
-  if (argv[0] === "--help" || argv[0] === "-h") {
-    emit(1, USAGE);
-    process.exit(0);
-  }
+interface Holding {
+  readonly holder: Worktree | undefined;
+  readonly survivor: string;
+}
+
+function readFlags(argv: string[]): Options {
   const options: Options = {
     branch: "",
     repoRoot: process.cwd(),
@@ -87,6 +87,16 @@ function parseOptions(argv: string[]): Options {
     else if (flag === "--execute") options.execute = true;
     else usage(`unknown option: ${flag}`);
   }
+  return options;
+}
+
+function parseOptions(argv: string[]): Options {
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    emit(1, USAGE);
+    process.exit(0);
+  }
+
+  const options = readFlags(argv);
   if (options.branch === "") usage("--branch is required");
   if (options.branch === options.mainline)
     usage(
@@ -95,16 +105,16 @@ function parseOptions(argv: string[]): Options {
   return options;
 }
 
-function retire(options: Options): void {
-  const root = options.repoRoot;
+function requireWorkTree(root: string): void {
   // A BARE repository answers "false" on a ZERO exit; the answer is the stdout.
   const inside = git(root, ["rev-parse", "--is-inside-work-tree"]);
   if (inside.status !== 0) broken(`${root} is not a git working tree: ${inside.err}`);
   if (inside.text.trim() !== "true")
     broken(`${root} is a bare repository; a working tree is needed`);
+}
 
+function findHolder(root: string, branchRef: string): Holding {
   // ALL holders: forced checkouts defeat git's one-branch-one-worktree guard.
-  const branchRef = `refs/heads/${options.branch}`;
   const worktrees = listWorktrees(root);
   const mainWorktree = worktrees[0];
   if (mainWorktree === undefined) broken(`git worktree list reported no worktrees for ${root}`);
@@ -124,21 +134,26 @@ function retire(options: Options): void {
       `--repo-root is inside the worktree being retired; the removal and the deletion run from ${survivor}`,
     );
   }
-  const shallow = isShallow(root);
-  armTeardown(survivor);
+  return { holder, survivor };
+}
 
-  // A remote-tracking ref is a CACHE: after a non-fast-forward rewrite it may still
-  // contain the branch. Read first only to show the operator; judged never.
+function trackingNote(options: Options, trackingBefore: string | null, reference: string): string {
+  if (trackingBefore === null) return "no remote-tracking ref existed to compare";
+  if (trackingBefore === reference) return "the remote-tracking ref was already current";
+  return `the pre-fetch ${options.remote}/${options.mainline} was STALE at ${short(trackingBefore)}`;
+}
+
+// A remote-tracking ref is a CACHE: after a non-fast-forward rewrite it may still
+// contain the branch. Read first only to show the operator; judged never.
+function fetchReference(root: string, options: Options): string {
   const trackingBefore = resolveCommit(root, `refs/remotes/${options.remote}/${options.mainline}`);
   const reference = fetchMainline(root, options);
-  const trackingNote =
-    trackingBefore === null
-      ? "no remote-tracking ref existed to compare"
-      : trackingBefore === reference
-        ? "the remote-tracking ref was already current"
-        : `the pre-fetch ${options.remote}/${options.mainline} was STALE at ${short(trackingBefore)}`;
-  step("fetch", `${options.remote}/${options.mainline} -> ${reference} (${trackingNote})`);
+  const note = trackingNote(options, trackingBefore, reference);
+  step("fetch", `${options.remote}/${options.mainline} -> ${reference} (${note})`);
+  return reference;
+}
 
+function requireBranchTip(root: string, branchRef: string): string {
   const branchTip = resolveCommit(root, branchRef);
   if (branchTip === null)
     broken(`${branchRef} does not resolve to a commit: an unanswered question, not a passed gate`);
@@ -152,63 +167,28 @@ function retire(options: Options): void {
   if (symbolic.status !== 1)
     broken(`git symbolic-ref could not say whether ${branchRef} is symbolic: ${symbolic.err}`);
   step("branch", `${branchRef} is at ${branchTip}`);
+  return branchTip;
+}
 
+function landedOriginalTip(
+  root: string,
+  options: Options,
+  shallow: boolean,
+  reference: string,
+): string | null {
+  if (options.originalTip === null) return null;
+  const originalTip = resolveCommit(root, options.originalTip);
+  if (originalTip === null)
+    broken(`--original-tip ${options.originalTip} does not resolve to a commit`);
   step(
     "landed",
-    requireLanded({ root, shallow, label: options.branch, subject: branchTip, reference }),
+    requireLanded({ root, shallow, label: "the pre-rebase tip", subject: originalTip, reference }),
   );
-  let originalTip: string | null = null;
-  if (options.originalTip !== null) {
-    originalTip = resolveCommit(root, options.originalTip);
-    if (originalTip === null)
-      broken(`--original-tip ${options.originalTip} does not resolve to a commit`);
-    step(
-      "landed",
-      requireLanded({
-        root,
-        shallow,
-        label: "the pre-rebase tip",
-        subject: originalTip,
-        reference,
-      }),
-    );
-  }
-  const gates: Gates = { root, options, shallow, branchRef, branchTip, originalTip, reference };
+  return originalTip;
+}
 
-  if (holder === undefined) {
-    step("worktree", `no worktree holds ${branchRef}`);
-    const stashes = stashesOnBranch(root, options.branch, branchTip);
-    if (stashes.length > 0)
-      refuse(`${options.branch} has unfinished stashed work:\n  - ${stashes.join("\n  - ")}`);
-  } else {
-    judgeWorktree(gates, holder, "first");
-    step("worktree", `${holder.path} is clean and idle`);
-    if (!options.execute) step("worktree", `would remove ${holder.path} (add --execute)`);
-  }
-
-  if (!options.execute) {
-    step("delete", `would delete ${branchRef} at ${branchTip} (add --execute)`);
-    runTeardown();
-    emit(1, `REHEARSED: every gate passed for ${options.branch}; nothing was destroyed`);
-    return;
-  }
-  // Every network read and content gate runs BEFORE the removal; between the
-  // removal and the pinned deletion only the holder re-scan and the lease refuse.
-  reverifyLanding(gates);
-  if (holder !== undefined) {
-    judgeWorktree(gates, holder, "final");
-    // Removal BEFORE deletion: `worktree remove` refuses a tree whose branch ref
-    // is gone (HEAD stops resolving, every file reads as untracked).
-    const removed = git(survivor, ["worktree", "remove", "--", holder.path], FETCH_TIMEOUT_MS);
-    if (removed.status !== 0) broken(`git worktree remove ${holder.path} failed: ${removed.err}`);
-    step("worktree", `removed ${holder.path}`);
-  }
-  const holdersNow = listWorktrees(survivor).filter((tree) => tree.branch === branchRef);
-  if (holdersNow.length > 0)
-    refuse(
-      `${branchRef} acquired a worktree while the gates ran (${holdersNow.map((tree) => tree.path).join(", ")})`,
-    );
-
+function deletePinned(gates: Gates, survivor: string): void {
+  const { branchRef, branchTip } = gates;
   // Pinned to the judged sha: `branch -D` deletes whatever the name points at now;
   // this refuses a push that landed between the gate and the deletion. --no-deref:
   // a ref that turned symbolic since the check can only delete ITSELF.
@@ -245,6 +225,60 @@ function retire(options: Options): void {
     broken(
       `update-ref reported success but ${branchRef} still resolves to ${short(afterDelete.sha)}`,
     );
+}
+
+function retire(options: Options): void {
+  const root = options.repoRoot;
+  requireWorkTree(root);
+
+  const branchRef = `refs/heads/${options.branch}`;
+  const { holder, survivor } = findHolder(root, branchRef);
+  const shallow = isShallow(root);
+  armTeardown(survivor);
+
+  const reference = fetchReference(root, options);
+  const branchTip = requireBranchTip(root, branchRef);
+  step(
+    "landed",
+    requireLanded({ root, shallow, label: options.branch, subject: branchTip, reference }),
+  );
+  const originalTip = landedOriginalTip(root, options, shallow, reference);
+  const gates: Gates = { root, options, shallow, branchRef, branchTip, originalTip, reference };
+
+  if (holder === undefined) {
+    step("worktree", `no worktree holds ${branchRef}`);
+    const stashes = stashesOnBranch(root, options.branch, branchTip);
+    if (stashes.length > 0)
+      refuse(`${options.branch} has unfinished stashed work:\n  - ${stashes.join("\n  - ")}`);
+  } else {
+    judgeWorktree(gates, holder, "first");
+    step("worktree", `${holder.path} is clean and idle`);
+    if (!options.execute) step("worktree", `would remove ${holder.path} (add --execute)`);
+  }
+
+  if (!options.execute) {
+    step("delete", `would delete ${branchRef} at ${branchTip} (add --execute)`);
+    runTeardown();
+    emit(1, `REHEARSED: every gate passed for ${options.branch}; nothing was destroyed`);
+    return;
+  }
+  // Every network read and content gate runs BEFORE the removal; between the
+  // removal and the pinned deletion only the holder re-scan and the lease refuse.
+  reverifyLanding(gates);
+  if (holder !== undefined) {
+    judgeWorktree(gates, holder, "final");
+    // Removal BEFORE deletion: `worktree remove` refuses a tree whose branch ref
+    // is gone (HEAD stops resolving, every file reads as untracked).
+    const removed = git(survivor, ["worktree", "remove", "--", holder.path], FETCH_TIMEOUT_MS);
+    if (removed.status !== 0) broken(`git worktree remove ${holder.path} failed: ${removed.err}`);
+    step("worktree", `removed ${holder.path}`);
+  }
+  const holdersNow = listWorktrees(survivor).filter((tree) => tree.branch === branchRef);
+  if (holdersNow.length > 0)
+    refuse(
+      `${branchRef} acquired a worktree while the gates ran (${holdersNow.map((tree) => tree.path).join(", ")})`,
+    );
+  deletePinned(gates, survivor);
   step("delete", `deleted ${branchRef} (was ${branchTip})`);
   runTeardown();
   emit(1, `LANDED: ${options.branch} retired at ${branchTip}`);

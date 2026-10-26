@@ -133,6 +133,8 @@ export interface Gates {
   readonly reference: string;
 }
 
+type Phase = "first" | "final";
+
 // Re-fetched as late as it usefully can be: a mainline rewritten while the gates
 // ran recreates the stale-reference false-allow.
 export function reverifyLanding(gates: Gates): void {
@@ -164,11 +166,8 @@ export function reverifyLanding(gates: Gates): void {
   }
 }
 
-// Run once before the destructive phase and again immediately before the removal:
-// a tree can switch branches, commit, or acquire work or a stranger in between.
-export function judgeWorktree(gates: Gates, holder: Worktree, phase: "first" | "final"): void {
-  const { root, options, branchRef, branchTip } = gates;
-  const late = phase === "final" ? " while the gates ran" : "";
+function requireSoleHolder(gates: Gates, holder: Worktree, late: string): Worktree {
+  const { root, branchRef, branchTip } = gates;
   const holders = listWorktrees(root).filter((tree) => tree.branch === branchRef);
   const held = holders[0];
   if (holders.length !== 1 || held === undefined || held.path !== holder.path) {
@@ -180,6 +179,31 @@ export function judgeWorktree(gates: Gates, holder: Worktree, phase: "first" | "
       `${holder.path} committed${late} (${branchRef} is now at ${short(held.head)}, verified at ${short(branchTip)})`,
     );
   }
+  return held;
+}
+
+function writerRefusals(holder: Worktree, phase: Phase, late: string): string[] {
+  const refusals: string[] = [];
+  for (const writer of liveWriters(holder.path)) {
+    if (!writer.isAncestor) {
+      refusals.push(`a live process has its cwd inside the worktree${late}: ${writer.description}`);
+      continue;
+    }
+    if (phase === "first")
+      step(
+        "worktree",
+        `your own shell is inside this worktree (${writer.description}); cd out afterwards`,
+      );
+  }
+  return refusals;
+}
+
+// Run once before the destructive phase and again immediately before the removal:
+// a tree can switch branches, commit, or acquire work or a stranger in between.
+export function judgeWorktree(gates: Gates, holder: Worktree, phase: Phase): void {
+  const { root, options, branchRef, branchTip } = gates;
+  const late = phase === "final" ? " while the gates ran" : "";
+  const held = requireSoleHolder(gates, holder, late);
   const capture = captureWorktree(held);
   const refusals = capture.refusals;
   for (const entry of stashesOnBranch(root, options.branch, branchTip)) {
@@ -191,21 +215,10 @@ export function judgeWorktree(gates: Gates, holder: Worktree, phase: "first" | "
     refusals.push(
       `${branchRef} is checked out in the MAIN worktree; switch it to another branch first`,
     );
-  if (!options.wantWriterCheck) {
-    if (phase === "first")
-      step("worktree", "live-writer probe SKIPPED (--no-writer-check): no evidence either way");
-  } else {
-    for (const writer of liveWriters(holder.path)) {
-      if (!writer.isAncestor)
-        refusals.push(
-          `a live process has its cwd inside the worktree${late}: ${writer.description}`,
-        );
-      else if (phase === "first")
-        step(
-          "worktree",
-          `your own shell is inside this worktree (${writer.description}); cd out afterwards`,
-        );
-    }
+  if (options.wantWriterCheck) {
+    refusals.push(...writerRefusals(holder, phase, late));
+  } else if (phase === "first") {
+    step("worktree", "live-writer probe SKIPPED (--no-writer-check): no evidence either way");
   }
   if (capture.ignoredCount > 0) {
     const list = `git -C ${quote(holder.path)} status --porcelain -uall --ignored`;

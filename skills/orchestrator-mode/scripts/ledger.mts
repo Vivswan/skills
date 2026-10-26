@@ -469,6 +469,140 @@ function workerEntry(ledger: Ledger, worker: string): WorkerEntry {
   return entry;
 }
 
+function cmdInit(file: string, rest: string[]): never {
+  if (rest.length !== 0) {
+    usageError("init takes no arguments");
+  }
+  if (createLedgerExclusive(file, { workers: {}, flags: [] })) {
+    return emit(0, { ok: true, created: true, file });
+  }
+  loadLedger(file);
+  return emit(0, { ok: true, created: false, file });
+}
+
+function cmdState(file: string, rest: string[]): never {
+  const [worker, state] = rest;
+  if (rest.length !== 2 || !worker || !state) {
+    usageError("state requires <worker> <state>");
+  }
+  if (!(WORKER_STATES as readonly string[]).includes(state)) {
+    usageError(`invalid state "${state}"; expected one of: ${WORKER_STATES.join(", ")}`);
+  }
+  acquireLedgerLock(file);
+  const ledger = loadLedger(file);
+  const entry = workerEntry(ledger, worker);
+  const previous = entry.state;
+  entry.state = state as WorkerState;
+  saveLedger(file, ledger);
+  return emit(0, { ok: true, worker, previous, state });
+}
+
+function cmdFlag(file: string, rest: string[]): never {
+  const [worker, text] = rest;
+  if (rest.length !== 2 || !worker || !text) {
+    usageError("flag requires <worker> <text>");
+  }
+  const hash = flagHash(worker, text);
+  acquireLedgerLock(file);
+  const ledger = loadLedger(file);
+  const existing = ledger.flags.find((flag) => flag.hash === hash);
+  if (existing?.status === "standing") {
+    return emit(1, { ok: false, refused: "duplicate", hash, worker, text });
+  }
+  const at = new Date().toISOString();
+  if (existing) {
+    // Re-raising must not erase the retraction it supersedes: the
+    // completed cycle is archived, so retraction stays a recorded
+    // transition across re-flags.
+    if (existing.retractedAt === undefined) {
+      throw new Error("unreachable: a retracted flag always records retractedAt");
+    }
+    existing.history = [
+      ...(existing.history ?? []),
+      { at: existing.at, retractedAt: existing.retractedAt },
+    ];
+    existing.status = "standing";
+    existing.at = at;
+    delete existing.retractedAt;
+  } else {
+    ledger.flags.push({ hash, worker, text, status: "standing", at });
+  }
+  saveLedger(file, ledger);
+  return emit(0, { ok: true, hash, worker, text, at });
+}
+
+function cmdRetract(file: string, rest: string[]): never {
+  const [prefix] = rest;
+  if (rest.length !== 1 || !prefix) {
+    usageError("retract requires <flag-hash-prefix>");
+  }
+  acquireLedgerLock(file);
+  const ledger = loadLedger(file);
+  const matches = ledger.flags.filter((flag) => flag.hash.startsWith(prefix));
+  if (matches.length === 0) {
+    return emit(1, { ok: false, error: `no flag matches hash prefix "${prefix}"` });
+  }
+  if (matches.length > 1) {
+    return emit(1, {
+      ok: false,
+      error: `hash prefix "${prefix}" is ambiguous`,
+      matches: matches.map((flag) => flag.hash),
+    });
+  }
+  const flag = matches[0];
+  if (!flag) {
+    throw new Error("unreachable: single match vanished");
+  }
+  if (flag.status === "retracted") {
+    return emit(1, { ok: false, refused: "already-retracted", hash: flag.hash });
+  }
+  flag.status = "retracted";
+  flag.retractedAt = new Date().toISOString();
+  saveLedger(file, ledger);
+  return emit(0, {
+    ok: true,
+    hash: flag.hash,
+    status: "retracted",
+    retractedAt: flag.retractedAt,
+  });
+}
+
+function cmdGrant(file: string, rest: string[]): never {
+  const [worker, wording, ...globs] = rest;
+  if (!worker || !wording || globs.length === 0 || globs.some((glob) => glob.trim() === "")) {
+    usageError("grant requires <worker> <wording> and one or more non-empty <glob...>");
+  }
+  acquireLedgerLock(file);
+  const ledger = loadLedger(file);
+  const entry = workerEntry(ledger, worker);
+  const at = new Date().toISOString();
+  entry.grants.push({ wording, globs, at });
+  saveLedger(file, ledger);
+  return emit(0, { ok: true, worker, wording, globs, at });
+}
+
+function cmdShow(file: string, rest: string[]): never {
+  if (rest.length > 1) {
+    usageError("show takes at most one <worker>");
+  }
+  const ledger = loadLedger(file);
+  const [worker] = rest;
+  if (worker === undefined) {
+    return emit(0, ledger);
+  }
+  const entry = ledger.workers[worker];
+  const flags = ledger.flags.filter((flag) => flag.worker === worker);
+  if (!entry && flags.length === 0) {
+    return emit(1, { ok: false, error: `unknown worker "${worker}"` });
+  }
+  return emit(0, {
+    worker,
+    state: entry?.state ?? null,
+    grants: entry?.grants ?? [],
+    flags,
+  });
+}
+
 const [, , file, command, ...rest] = process.argv;
 if (file === "--help" || file === "-h") {
   process.stdout.write(USAGE);
@@ -482,134 +616,18 @@ if (!file || !command) {
 // every case exits via an explicit return.
 function main(file: string, command: string, rest: string[]): never {
   switch (command) {
-    case "init": {
-      if (rest.length !== 0) {
-        usageError("init takes no arguments");
-      }
-      if (createLedgerExclusive(file, { workers: {}, flags: [] })) {
-        return emit(0, { ok: true, created: true, file });
-      }
-      loadLedger(file);
-      return emit(0, { ok: true, created: false, file });
-    }
-    case "state": {
-      const [worker, state] = rest;
-      if (rest.length !== 2 || !worker || !state) {
-        usageError("state requires <worker> <state>");
-      }
-      if (!(WORKER_STATES as readonly string[]).includes(state)) {
-        usageError(`invalid state "${state}"; expected one of: ${WORKER_STATES.join(", ")}`);
-      }
-      acquireLedgerLock(file);
-      const ledger = loadLedger(file);
-      const entry = workerEntry(ledger, worker);
-      const previous = entry.state;
-      entry.state = state as WorkerState;
-      saveLedger(file, ledger);
-      return emit(0, { ok: true, worker, previous, state });
-    }
-    case "flag": {
-      const [worker, text] = rest;
-      if (rest.length !== 2 || !worker || !text) {
-        usageError("flag requires <worker> <text>");
-      }
-      const hash = flagHash(worker, text);
-      acquireLedgerLock(file);
-      const ledger = loadLedger(file);
-      const existing = ledger.flags.find((flag) => flag.hash === hash);
-      if (existing?.status === "standing") {
-        return emit(1, { ok: false, refused: "duplicate", hash, worker, text });
-      }
-      const at = new Date().toISOString();
-      if (existing) {
-        // Re-raising must not erase the retraction it supersedes: the
-        // completed cycle is archived, so retraction stays a recorded
-        // transition across re-flags.
-        if (existing.retractedAt === undefined) {
-          throw new Error("unreachable: a retracted flag always records retractedAt");
-        }
-        existing.history = [
-          ...(existing.history ?? []),
-          { at: existing.at, retractedAt: existing.retractedAt },
-        ];
-        existing.status = "standing";
-        existing.at = at;
-        delete existing.retractedAt;
-      } else {
-        ledger.flags.push({ hash, worker, text, status: "standing", at });
-      }
-      saveLedger(file, ledger);
-      return emit(0, { ok: true, hash, worker, text, at });
-    }
-    case "retract": {
-      const [prefix] = rest;
-      if (rest.length !== 1 || !prefix) {
-        usageError("retract requires <flag-hash-prefix>");
-      }
-      acquireLedgerLock(file);
-      const ledger = loadLedger(file);
-      const matches = ledger.flags.filter((flag) => flag.hash.startsWith(prefix));
-      if (matches.length === 0) {
-        return emit(1, { ok: false, error: `no flag matches hash prefix "${prefix}"` });
-      }
-      if (matches.length > 1) {
-        return emit(1, {
-          ok: false,
-          error: `hash prefix "${prefix}" is ambiguous`,
-          matches: matches.map((flag) => flag.hash),
-        });
-      }
-      const flag = matches[0];
-      if (!flag) {
-        throw new Error("unreachable: single match vanished");
-      }
-      if (flag.status === "retracted") {
-        return emit(1, { ok: false, refused: "already-retracted", hash: flag.hash });
-      }
-      flag.status = "retracted";
-      flag.retractedAt = new Date().toISOString();
-      saveLedger(file, ledger);
-      return emit(0, {
-        ok: true,
-        hash: flag.hash,
-        status: "retracted",
-        retractedAt: flag.retractedAt,
-      });
-    }
-    case "grant": {
-      const [worker, wording, ...globs] = rest;
-      if (!worker || !wording || globs.length === 0 || globs.some((glob) => glob.trim() === "")) {
-        usageError("grant requires <worker> <wording> and one or more non-empty <glob...>");
-      }
-      acquireLedgerLock(file);
-      const ledger = loadLedger(file);
-      const entry = workerEntry(ledger, worker);
-      const at = new Date().toISOString();
-      entry.grants.push({ wording, globs, at });
-      saveLedger(file, ledger);
-      return emit(0, { ok: true, worker, wording, globs, at });
-    }
-    case "show": {
-      if (rest.length > 1) {
-        usageError("show takes at most one <worker>");
-      }
-      const ledger = loadLedger(file);
-      const [worker] = rest;
-      if (worker === undefined) {
-        return emit(0, ledger);
-      }
-      const entry = ledger.workers[worker];
-      const flags = ledger.flags.filter((flag) => flag.worker === worker);
-      if (!entry && flags.length === 0) {
-        return emit(1, { ok: false, error: `unknown worker "${worker}"` });
-      }
-      return emit(0, {
-        worker,
-        state: entry?.state ?? null,
-        grants: entry?.grants ?? [],
-        flags,
-      });
-    }
+    case "init":
+      return cmdInit(file, rest);
+    case "state":
+      return cmdState(file, rest);
+    case "flag":
+      return cmdFlag(file, rest);
+    case "retract":
+      return cmdRetract(file, rest);
+    case "grant":
+      return cmdGrant(file, rest);
+    case "show":
+      return cmdShow(file, rest);
     default:
       usageError(`unknown command "${command}"`);
   }

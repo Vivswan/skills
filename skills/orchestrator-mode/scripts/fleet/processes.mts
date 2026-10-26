@@ -5,8 +5,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { parse } from "node:path";
 import { type RunResult, run } from "./git.mts";
 
-// The instrument's own children run from the filesystem root, which no worktree holds: spawned
-// where the caller stands, lsof (which lists itself) and ps would be attributed to that worktree.
+// The instrument's own children run from the filesystem root, which no worktree holds; spawned where the caller stands, lsof (which lists itself) and ps would be attributed to that worktree.
 const FILESYSTEM_ROOT = parse(process.cwd()).root;
 
 export interface ProcessRow {

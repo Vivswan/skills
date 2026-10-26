@@ -7,8 +7,7 @@
 import { parseSuites, SUITES_CONNECTION, type Suites } from "./check-suites.mts";
 import { GhError, get, gh, parseJson, requireNumber, requireString, stringOrNull } from "./gh.mts";
 
-// GitHub prices a GraphQL request by its node count; 30 PRs with one review and one commit each
-// stay far inside the per-request budget, and a chunk's failure costs at most 30 rows.
+// GitHub prices a GraphQL request by its node count; 30 PRs with one review and one commit each stay far inside the per-request budget, and a chunk's failure costs at most 30 rows.
 const CHUNK_SIZE = 30;
 
 export type Row = {
@@ -19,19 +18,17 @@ export type Row = {
   mergedAt: string | null;
   baseRefName: string;
   headRefOid: string;
-  /** The last commit's author login, null for a commit no account claims. */
   headAuthor: string | null;
   updatedAt: string;
   issueComments: number;
   reviewThreads: number;
   latestReview: { id: string; submittedAt: string; state: string; author: string } | null;
   rollupState: string | null;
-  /** The label names, sorted, so two rows compare as sets; one page of 100, GitHub's maximum, so a page shift never reads as a change. */
   labels: string[];
-  /** GitHub's merge test against the base: UNKNOWN while it recomputes after either side moves. */
   mergeable: Mergeable;
 };
 
+/** GitHub's merge test against the base: UNKNOWN while it recomputes after either side moves. */
 export type Mergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 
 export type Tip = {
@@ -50,6 +47,8 @@ export interface RepoRead {
 export interface RepoReply {
   /** Null: GitHub answered null for the alias (a deleted PR, or no access). */
   rows: Map<number, { row: Row; suites: Suites | null } | null>;
+
+  /** Null: GitHub answered null for the alias (a deleted branch, or no access). */
   tips: Map<string, { tip: Tip; suites: Suites | null } | null>;
 }
 
@@ -84,6 +83,7 @@ function buildChunk(repo: string, prs: number[], branches: string[], read: RepoR
   return { query, prs, branches };
 }
 
+// author.user is null for a commit no GitHub account claims.
 function loginOf(commit: unknown): string | null {
   return stringOrNull(get(get(get(commit, "author"), "user"), "login"));
 }
@@ -136,6 +136,7 @@ function parseRow(pr: unknown): { row: Row; suites: Suites | null } {
               author: stringOrNull(get(get(review, "author"), "login")) ?? "ghost",
             },
       rollupState: stringOrNull(get(get(commit, "statusCheckRollup"), "state")),
+      // Sorted, so two rows compare as sets; one page of 100, GitHub's maximum, so a page shift never reads as a change.
       labels: labelNodes
         .map((node, i) => requireString(get(node, "name"), `labels.nodes[${i}].name`))
         .sort(),
@@ -160,19 +161,21 @@ function parseTip(ref: unknown): { tip: Tip; suites: Suites | null } {
 
 // gh exits 1 when the reply carries an `errors` entry, which a deleted PR in the batch does
 // ("Could not resolve to a PullRequest"), with the other PRs' data still on stdout. That data is
-// read; a reply with no data at all is the failure it looks like, and so is an error at an alias
-// that is not a NOT_FOUND: an INTERNAL or RATE_LIMITED answer nulls the alias too, and read as a
-// deleted target it would end the watch with the wrong word.
-function requestChunk(chunk: Chunk): { data: unknown; failure: GhError | null } {
-  let raw: string;
-  let failure: GhError | null = null;
+// read, and the error kept for the caller to raise once the data proves unusable.
+function rawReply(query: string): { raw: string; failure: GhError | null } {
   try {
-    raw = gh(["api", "graphql", "-f", `query=${chunk.query}`]);
+    return { raw: gh(["api", "graphql", "-f", `query=${query}`]), failure: null };
   } catch (error) {
     if (!(error instanceof GhError) || error.stdout === undefined) throw error;
-    failure = error;
-    raw = error.stdout;
+    return { raw: error.stdout, failure: error };
   }
+}
+
+// A reply with no data at all is the failure it looks like, and so is an error at an alias that is
+// not a NOT_FOUND: an INTERNAL or RATE_LIMITED answer nulls the alias too, and read as a deleted
+// target it would end the watch with the wrong word.
+function requestChunk(chunk: Chunk): { data: unknown; failure: GhError | null } {
+  const { raw, failure } = rawReply(chunk.query);
   let body: unknown;
   try {
     body = parseJson(raw, "gh api graphql");

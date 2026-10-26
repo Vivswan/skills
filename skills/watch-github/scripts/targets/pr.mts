@@ -3,44 +3,54 @@
 // gates named on it, and the merge or close that ends the watch.
 
 import type { EventInput, Io } from "../../../session-events/scripts/session-events.mts";
-import { discoverRuns, type Suites } from "../github/check-suites.mts";
+import type { Suites } from "../github/check-suites.mts";
 import { type Activity, newActivity, readPrDetail } from "../github/pr-activity.mts";
 import { type Row, rowChanged } from "../github/repository.mts";
-import type { Outcome } from "./branch.mts";
-import {
-  type CiState,
-  describeVerdict,
-  judgeHead,
-  NO_RUN_POLLS,
-  plural,
-  rollupPending,
-  verdictKey,
-} from "./ci.mts";
+import { type Outcome, unreadableOutcome } from "./branch.mts";
+import { type CiHead, type CiState, carriedCi, judgeCi, plural, rollupPending } from "./ci.mts";
 
 const PR_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
-// GraphQL's Int: a number past it makes the whole repository query invalid, every target with it.
 const MAX_PR_NUMBER = 2_147_483_647;
 
+type ConflictLine = "told" | "told-before-move" | null;
+
 export interface PrTarget {
+  /** The tag the daemon dispatches on; a BranchTarget's is "branch". */
   form: "pr";
+
+  /** owner/repo, the key the poll groups its reads by. */
   repo: string;
+
+  /** The PR number, at most GraphQL's Int; the alias its row is read back by. */
   number: number;
+
+  /** The --expect-workflow names, sorted; the head is judged by their latest runs, not the rollup alone. */
   gates: string[];
-  /** The cursor: the row at the last poll, where its CI judgment stands, the verdict last delivered on its head, where the conflict line stands, and every activity id a detail read has fetched. */
+
+  /** The cursor; null before the first poll, which takes the baseline instead of reporting what it finds. */
   seen: {
+    /** The row as the previous poll read it. */
     row: Row;
+
+    /** Where the judgment stands; "pending" holds the busy interval and a suites read every poll. */
     ci: CiState;
+
     /** The last delivered verdict's key (ci.mts verdictKey). */
     verdict: string | null;
+
     /** Polls on this head with no checks at all (no rollup), for a named gate that never registers. */
     noRuns: number;
+
     /** A conflict line stands unresolved; after a head or base move the test has not settled since, a conflict that survived is said again. */
-    conflict: "told" | "told-before-move" | null;
+    conflict: ConflictLine;
+
     /** Every id fetched so far, so a comment that leaves the read window and comes back is never news again. */
     activity: string[];
   } | null;
+
   /** Set once the row answered null and the trouble event went out; cleared when it reads again. */
   unreadable?: boolean;
+
   /** Reads of this one target (detail, paged suites) that failed in a row; three are one trouble event. */
   readFailures?: number;
 }
@@ -49,6 +59,7 @@ export function parsePrTarget(text: string, gates: string[]): PrTarget | null {
   const match = PR_PATTERN.exec(text);
   if (match === null) return null;
   const number = Number(match[2]);
+  // GraphQL's Int: a number past it makes the whole repository query invalid, every target with it.
   if (number > MAX_PR_NUMBER) return null;
   return { form: "pr", repo: match[1] as string, number, gates, seen: null };
 }
@@ -112,80 +123,106 @@ export function describeLabels(previous: string[], current: string[]): string | 
   return parts.length === 0 ? null : parts.join("; ");
 }
 
+// A merged or closed row ends the watch before any other read: a detail read that keeps failing
+// (a PR past the paging cap) must not keep a finished PR watched for good.
+function watchEnd(
+  label: string,
+  row: Row,
+  fields: { repo: string; pr: number; sha: string },
+): Outcome | null {
+  if (row.state === "MERGED") {
+    const text = `${label}: merged into ${row.baseRefName}`;
+    return { events: [{ ...fields, kind: "merged", text, url: row.url }], busy: true, done: true };
+  }
+
+  if (row.state === "CLOSED") {
+    const text = `${label}: closed without merging`;
+    return { events: [{ ...fields, kind: "closed", text, url: row.url }], busy: true, done: true };
+  }
+
+  return null;
+}
+
+function pollActivity(
+  target: PrTarget,
+  row: Row,
+  activityMoved: boolean,
+  io: Io,
+): { activity: string[]; events: EventInput[] } {
+  const previous = target.seen;
+  // A cursor an older daemon saved as two lists of ids is not migrated: it carried draft ids as
+  // seen and had forgotten older ones, so the activity is a baseline again, read now.
+  const legacy = previous !== null && !previous.activity.every((id) => typeof id === "string");
+  const activity = legacy ? [] : (previous?.activity ?? []);
+  // A first sighting reads the detail too: what is on the PR now is the baseline, by id.
+  if (previous !== null && !legacy && !activityMoved) return { activity, events: [] };
+
+  const label = prLabel(target);
+  const seen = previous === null || legacy ? null : new Set(activity);
+  const detail = readPrDetail({ repo: target.repo, number: target.number }, seen);
+  const fetched = [...new Set([...activity, ...detail.fetchedIds])];
+  if (seen === null) return { activity: fetched, events: [] };
+
+  const events = describeActivities(label, newActivity(detail, seen));
+  for (const gap of detail.gaps) {
+    io.log(`${label}: ${gap}`);
+    events.push({
+      kind: "trouble",
+      text: `${label}: more activity than one read follows; open the PR`,
+      url: row.url,
+    });
+  }
+  return { activity: fetched, events };
+}
+
+// GitHub answers UNKNOWN while it recomputes the merge test after either side moved, so only a
+// settled answer is judged, and a move keeps the standing conflict line until one arrives.
+function judgeConflict(
+  previous: PrTarget["seen"],
+  row: Row,
+  headMoved: boolean,
+): { line: ConflictLine; said: string | null } {
+  const baseMoved = previous !== null && previous.row.baseRefName !== row.baseRefName;
+  let line = previous?.conflict ?? null;
+  if (line === "told" && (headMoved || baseMoved)) line = "told-before-move";
+
+  if (row.mergeable === "CONFLICTING" && line !== "told") {
+    return { line: "told", said: `conflicts with ${row.baseRefName}; rebase needed` };
+  }
+
+  if (row.mergeable === "MERGEABLE" && line !== null) {
+    return { line: null, said: "conflicts resolved" };
+  }
+
+  return { line, said: null };
+}
+
 export function processPr(
   target: PrTarget,
   reply: { row: Row; suites: Suites | null } | null,
   io: Io,
 ): Outcome {
   const label = prLabel(target);
-  const ref = { repo: target.repo, number: target.number };
   if (reply === null) {
-    if (target.unreadable) return { events: [], busy: false, done: false };
-    target.unreadable = true;
-    return {
-      events: [
-        {
-          repo: target.repo,
-          pr: target.number,
-          sha: null,
-          kind: "trouble",
-          text: `${label} is not readable; unwatch it or check access`,
-          url: `https://github.com/${target.repo}/pull/${target.number}`,
-        },
-      ],
-      busy: true,
-      done: false,
-    };
+    return unreadableOutcome(target, {
+      repo: target.repo,
+      pr: target.number,
+      sha: null,
+      kind: "trouble",
+      text: `${label} is not readable; unwatch it or check access`,
+      url: `https://github.com/${target.repo}/pull/${target.number}`,
+    });
   }
+
   const { row, suites } = reply;
   const previous = target.seen;
   const fields = { repo: target.repo, pr: target.number, sha: row.headRefOid };
   const changes = rowChanged(previous?.row, row);
-  const events: EventInput[] = [];
-  // A merged or closed row ends the watch before any other read: a detail read that keeps
-  // failing (a PR past the paging cap) must not keep a finished PR watched for good.
-  if (row.state === "MERGED") {
-    events.push({
-      ...fields,
-      kind: "merged",
-      text: `${label}: merged into ${row.baseRefName}`,
-      url: row.url,
-    });
-    return { events, busy: true, done: true };
-  }
-  if (row.state === "CLOSED") {
-    events.push({
-      ...fields,
-      kind: "closed",
-      text: `${label}: closed without merging`,
-      url: row.url,
-    });
-    return { events, busy: true, done: true };
-  }
-  // A cursor an older daemon saved as two lists of ids is not migrated: it carried draft ids as
-  // seen and had forgotten older ones, so the activity is a baseline again, read now.
-  const legacy = previous !== null && !previous.activity.every((id) => typeof id === "string");
-  let activity = legacy ? [] : (previous?.activity ?? []);
-  // A first sighting reads the detail too: what is on the PR now is the baseline, by id.
-  if (previous === null || legacy || changes.activity) {
-    const seen = previous === null || legacy ? null : new Set(activity);
-    const detail = readPrDetail(ref, seen);
-    activity = [...new Set([...activity, ...detail.fetchedIds])];
-    if (seen !== null) {
-      for (const event of describeActivities(label, newActivity(detail, seen))) {
-        events.push({ ...fields, ...event });
-      }
-      for (const gap of detail.gaps) {
-        io.log(`${label}: ${gap}`);
-        events.push({
-          ...fields,
-          kind: "trouble",
-          text: `${label}: more activity than one read follows; open the PR`,
-          url: row.url,
-        });
-      }
-    }
-  }
+  const ended = watchEnd(label, row, fields);
+  if (ended !== null) return ended;
+
+  const read = pollActivity(target, row, changes.activity, io);
+  const events: EventInput[] = read.events.map((event) => ({ ...fields, ...event }));
   if (previous !== null && changes.head) {
     events.push({
       ...fields,
@@ -199,55 +236,34 @@ export function processPr(
     if (labelMoves !== null)
       events.push({ ...fields, kind: "label", text: `${label}: ${labelMoves}`, url: row.url });
   }
-  // GitHub answers UNKNOWN while it recomputes the merge test after either side moved, so only a
-  // settled answer is judged, and a move keeps the standing conflict line until one arrives.
-  const moved = changes.head || (previous !== null && previous.row.baseRefName !== row.baseRefName);
-  let conflict = previous?.conflict ?? null;
-  if (conflict === "told" && moved) conflict = "told-before-move";
-  if (row.mergeable === "CONFLICTING" && conflict !== "told") {
-    events.push({
-      ...fields,
-      kind: "conflict",
-      text: `${label}: conflicts with ${row.baseRefName}; rebase needed`,
-      url: row.url,
-    });
-    conflict = "told";
-  } else if (row.mergeable === "MERGEABLE" && conflict !== null) {
-    events.push({
-      ...fields,
-      kind: "conflict",
-      text: `${label}: conflicts resolved`,
-      url: row.url,
-    });
-    conflict = null;
+
+  const conflict = judgeConflict(previous, row, changes.head);
+  if (conflict.said !== null) {
+    events.push({ ...fields, kind: "conflict", text: `${label}: ${conflict.said}`, url: row.url });
   }
-  let ci: CiState = previous?.ci ?? "pending";
-  // The verdict last delivered on this head; a new head has none, so its first verdict is news. A
-  // rollup that moves after a verdict is judged again, and the same verdict stays silent.
-  let verdict = previous !== null && !changes.head ? previous.verdict : null;
-  let noRuns = previous !== null && !changes.head ? previous.noRuns : 0;
-  if (previous !== null && (changes.head || changes.rollup)) ci = "pending";
-  if (suites !== null) {
-    const runs = suites.complete ? suites.runs : discoverRuns(target.repo, row.headRefOid);
-    noRuns = row.rollupState === null ? noRuns + 1 : 0;
-    const judged = judgeHead(row.rollupState, runs, target.gates, noRuns >= NO_RUN_POLLS);
-    const key = verdictKey(judged);
-    ci = judged.kind;
-    // Described (a red reads its failed jobs) only when it is news.
-    if (key !== null && key !== verdict) {
-      const said = describeVerdict(label, row.headRefOid, judged, `${row.url}/checks`, io.log);
-      if (said !== null)
-        events.push({ ...fields, kind: said.kind, text: said.text, url: said.url });
-      verdict = key;
-    }
+
+  const head: CiHead = {
+    label,
+    repo: target.repo,
+    sha: row.headRefOid,
+    rollupState: row.rollupState,
+    suites,
+    gates: target.gates,
+    checksUrl: `${row.url}/checks`,
+  };
+  const judged = judgeCi(carriedCi(previous, changes.head, changes.rollup), head, io.log);
+  if (judged.event !== null) {
+    const { kind, text, url } = judged.event;
+    events.push({ ...fields, kind, text, url });
   }
+
   delete target.unreadable;
-  target.seen = { row, ci, verdict, noRuns, conflict, activity };
+  target.seen = { row, ...judged.cursor, conflict: conflict.line, activity: read.activity };
   // Pending CI holds the busy interval; a head with no CI does not. The ci term covers the poll a
   // rollup change is first seen on, and a named gate's run still registering or queued.
   return {
     events,
-    busy: rollupPending(row.rollupState) || events.length > 0 || ci === "pending",
+    busy: rollupPending(row.rollupState) || events.length > 0 || judged.cursor.ci === "pending",
     done: false,
   };
 }

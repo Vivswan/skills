@@ -20,8 +20,9 @@ export function npmModule(names: string[]): string {
   return `export const topDownload = [\n${names.map((name) => `  '${name}'`).join(",\n")}\n]\n`;
 }
 
-/** What the sources publish and the script requires: PyPI's and npm's lists read for their top
- * 5000, crates.io's ranking 100 a page over 20 pages. Literals, so a shrink in the script shows. */
+// What the sources publish and the script requires: PyPI's and npm's lists read for their top
+// 5000, crates.io's ranking 100 a page over 20 pages. Literals, so a shrink in the script shows.
+
 export const TOP = 5000;
 export const PAGE = 100;
 export const PAGES = 20;
@@ -130,6 +131,33 @@ export function fakeIo(
   };
 }
 
+/** The taken reading of the control `named` from the host `url` names: the shape that host's reader accepts, or a bare 200 where the status alone decides. */
+function takenReply(url: URL, named: string): Reply {
+  if (url.pathname === "/search/repositories") {
+    // One full page of substring hits, the control's own repository first.
+    const items = [{ name: named, stargazers_count: 5000 }];
+    for (let i = 1; i < 100; i++) items.push({ name: `${named}-${i}`, stargazers_count: 4000 });
+    return { status: 200, body: { items } };
+  }
+  if (url.hostname === "export.arxiv.org") {
+    return {
+      status: 200,
+      text: "<feed><opensearch:totalResults>12</opensearch:totalResults></feed>",
+    };
+  }
+  if (url.hostname === "en.wiktionary.org") {
+    return wikitextReply("==Spanish==\n# {{lb|es|vulgar}} [[wanker]]\n");
+  }
+  if (url.hostname === "api.urbandictionary.com") {
+    return { status: 200, body: { list: [{ word: named, definition: "slang", thumbs_up: 3 }] } };
+  }
+  if (url.hostname === "search.maven.org") {
+    return { status: 200, body: { response: { numFound: 4 } } };
+  }
+  if (url.hostname === "hub.docker.com") return { status: 308 };
+  return { status: 200, body: {} };
+}
+
 /** Each column's taken control reads taken there; every other name reads free. */
 export function allTakenIo(resolving: string[]): Io {
   const controls = REGISTRIES.filter((entry) => entry.kind === "registry").map(
@@ -145,29 +173,7 @@ export function allTakenIo(resolving: string[]): Io {
     const path = decodeURIComponent(url.pathname + url.search).toLowerCase();
     const named = controls.find((control) => path.includes(control));
     if (!named) return undefined;
-    if (url.pathname === "/search/repositories") {
-      // One full page of substring hits, the control's own repository first.
-      const items = [{ name: named, stargazers_count: 5000 }];
-      for (let i = 1; i < 100; i++) items.push({ name: `${named}-${i}`, stargazers_count: 4000 });
-      return { status: 200, body: { items } };
-    }
-    if (url.hostname === "export.arxiv.org") {
-      return {
-        status: 200,
-        text: "<feed><opensearch:totalResults>12</opensearch:totalResults></feed>",
-      };
-    }
-    if (url.hostname === "en.wiktionary.org") {
-      return wikitextReply("==Spanish==\n# {{lb|es|vulgar}} [[wanker]]\n");
-    }
-    if (url.hostname === "api.urbandictionary.com") {
-      return { status: 200, body: { list: [{ word: named, definition: "slang", thumbs_up: 3 }] } };
-    }
-    if (url.hostname === "search.maven.org") {
-      return { status: 200, body: { response: { numFound: 4 } } };
-    }
-    if (url.hostname === "hub.docker.com") return { status: 308 };
-    return { status: 200, body: {} };
+    return takenReply(url, named);
   }, resolving);
 }
 

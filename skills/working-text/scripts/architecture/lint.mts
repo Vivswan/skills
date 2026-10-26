@@ -114,6 +114,7 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
 const { DEFAULT_CONFIG, layerOf, readArchitecture, renderArchitectureMermaid } = await import(
   "./declaration.mts"
 );
@@ -132,17 +133,7 @@ function scanRoots(arch: Architecture): string[] {
   return [...roots].sort();
 }
 
-/**
- * The lint verdict for the tree at `root`. Empty means the declaration is
- * exactly the tree. `configLabel` is how the messages name the declaration file.
- */
-export function lintArchitecture(
-  root: string,
-  arch: Architecture,
-  configLabel = DEFAULT_CONFIG,
-): string[] {
-  const excluded = arch.exclude.map((pattern) => new Bun.Glob(pattern));
-  const drawn = new Map<string, string[]>();
+function layerPathProblems(root: string, arch: Architecture): string[] {
   const problems: string[] = [];
   for (const [layer, paths] of Object.entries(arch.layers)) {
     for (const path of paths) {
@@ -156,25 +147,66 @@ export function lintArchitecture(
       }
     }
   }
+  return problems;
+}
+
+function sourceFiles(root: string, arch: Architecture): string[] {
+  const excluded = arch.exclude.map((pattern) => new Bun.Glob(pattern));
+  const isSource = (file: string): boolean =>
+    SOURCE_EXTENSIONS.some((ext) => file.endsWith(ext)) &&
+    isFile(join(root, file)) &&
+    !excluded.some((glob) => glob.match(file));
   const files: string[] = [];
   // A layer may own a root-level file (main.ts); no scan root reaches it, so it is seeded by name.
-  for (const paths of Object.values(arch.layers)) {
-    for (const path of paths) {
-      if (path.includes("/") || !SOURCE_EXTENSIONS.some((ext) => path.endsWith(ext))) continue;
-      if (isFile(join(root, path)) && !excluded.some((glob) => glob.match(path))) files.push(path);
-    }
+  for (const path of Object.values(arch.layers).flat()) {
+    if (!path.includes("/") && isSource(path)) files.push(path);
   }
   for (const scanRoot of scanRoots(arch)) {
     if (!existsSync(join(root, scanRoot))) continue;
     for (const entry of readdirSync(join(root, scanRoot), { recursive: true, encoding: "utf8" })) {
       const file = toPosix(join(scanRoot, entry));
-      if (!SOURCE_EXTENSIONS.some((ext) => file.endsWith(ext))) continue;
-      if (!isFile(join(root, file))) continue;
-      if (excluded.some((glob) => glob.match(file))) continue;
-      files.push(file);
+      if (isSource(file)) files.push(file);
     }
   }
-  for (const file of files.sort()) {
+  return files.sort();
+}
+
+function edgeProblems(
+  arch: Architecture,
+  drawn: ReadonlyMap<string, string[]>,
+  configLabel: string,
+): string[] {
+  const declared = new Set(
+    Object.entries(arch.edges).flatMap(([from, targets]) =>
+      targets.map((to) => `${from} -> ${to}`),
+    ),
+  );
+  const problems: string[] = [];
+  for (const [key, sites] of [...drawn].sort()) {
+    if (!declared.has(key)) {
+      problems.push(`forbidden import ${key}: ${sites.join(", ")}; move it or declare the edge`);
+    }
+  }
+  for (const key of [...declared].sort()) {
+    if (!drawn.has(key)) {
+      problems.push(`stale allowance ${key}: no file draws it; remove it from ${configLabel}`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * The lint verdict for the tree at `root`. Empty means the declaration is
+ * exactly the tree. `configLabel` is how the messages name the declaration file.
+ */
+export function lintArchitecture(
+  root: string,
+  arch: Architecture,
+  configLabel = DEFAULT_CONFIG,
+): string[] {
+  const problems = layerPathProblems(root, arch);
+  const drawn = new Map<string, string[]>();
+  for (const file of sourceFiles(root, arch)) {
     const from = layerOf(arch, file);
     if (from === undefined) {
       problems.push(`${file} belongs to no layer in ${configLabel}`);
@@ -192,21 +224,7 @@ export function lintArchitecture(
       }
     }
   }
-  const declared = new Set(
-    Object.entries(arch.edges).flatMap(([from, targets]) =>
-      targets.map((to) => `${from} -> ${to}`),
-    ),
-  );
-  for (const [key, sites] of [...drawn].sort()) {
-    if (!declared.has(key)) {
-      problems.push(`forbidden import ${key}: ${sites.join(", ")}; move it or declare the edge`);
-    }
-  }
-  for (const key of [...declared].sort()) {
-    if (!drawn.has(key)) {
-      problems.push(`stale allowance ${key}: no file draws it; remove it from ${configLabel}`);
-    }
-  }
+  problems.push(...edgeProblems(arch, drawn, configLabel));
   return problems;
 }
 

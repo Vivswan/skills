@@ -331,13 +331,15 @@ function gitValue(stdout: Buffer): string {
   return stdout.toString("utf8").replace(/\n$/, "");
 }
 
+type AheadBehind = { ahead: number; behind: number };
+
 export type WorktreeRow =
   | {
       worktree: string;
       branch: string | null;
       ok: true;
       headSha: string;
-      aheadBehind: { ahead: number; behind: number } | null;
+      aheadBehind: AheadBehind | null;
       treeFileCount: number;
       dirtyCount: number;
       untrackedCount: number;
@@ -346,6 +348,110 @@ export type WorktreeRow =
       processes: ProcessRow[];
     }
   | { worktree: string; ok: false; error: string };
+
+type Failure = { ok: false; error: string };
+
+/** What the row's bracket pins at its open and re-reads at its close. */
+interface Identity {
+  path: string;
+  gitDir: string;
+  headSha: string;
+  branch: string | null;
+}
+
+async function pinnedGitDir(path: string): Promise<{ ok: true; gitDir: string } | Failure> {
+  // A worktree dir that lost its .git file still exists, but `git -C` then discovers the ENCLOSING
+  // checkout (this repo nests worktrees inside the main one) and every reading would describe the
+  // wrong repo. So discovery runs once, bracketed, and every later call is pinned to the verified
+  // gitdir and work tree; the end-of-row re-read closes the same bracket around the readings.
+  //   gitdir -> toplevel (must be this path) -> gitdir again (must match the first) -> pin trusted
+  // One single-value call per value, never one call split on newline: a path holding a newline would shear the split.
+  const gitDirResult = await run("git", ["-C", path, "rev-parse", "--absolute-git-dir"]);
+  if (!gitDirResult.ok) return { ok: false, error: gitDirResult.error };
+  const gitDir = gitValue(gitDirResult.stdout);
+  if (gitDir.length === 0) return { ok: false, error: "rev-parse returned an empty git dir" };
+  const toplevelResult = await run("git", ["-C", path, "rev-parse", "--show-toplevel"]);
+  if (!toplevelResult.ok) return { ok: false, error: toplevelResult.error };
+  try {
+    const found = realpathSync(gitValue(toplevelResult.stdout));
+    const expected = realpathSync(path);
+    if (found !== expected) {
+      return { ok: false, error: `git discovery escaped the worktree: found toplevel ${found}` };
+    }
+  } catch (error) {
+    return { ok: false, error: `cannot verify toplevel: ${String(error)}` };
+  }
+  const gitDirVerify = await run("git", ["-C", path, "rev-parse", "--absolute-git-dir"]);
+  if (!gitDirVerify.ok) return { ok: false, error: gitDirVerify.error };
+  if (gitValue(gitDirVerify.stdout) !== gitDir) {
+    return {
+      ok: false,
+      error: `gitdir moved during discovery (${gitDir} -> ${gitValue(gitDirVerify.stdout)})`,
+    };
+  }
+  return { ok: true, gitDir };
+}
+
+async function readIdentity(
+  pinnedGit: PinnedGit,
+): Promise<{ ok: true; headSha: string; branch: string | null } | Failure> {
+  const head = await pinnedGit(["rev-parse", "HEAD"]);
+  if (!head.ok) return { ok: false, error: head.error };
+  const branch = await readBranch(pinnedGit);
+  if (!branch.ok) return { ok: false, error: branch.error };
+  return { ok: true, headSha: head.stdout.toString("utf8").trim(), branch: branch.branch };
+}
+
+async function readAheadBehind(
+  pinnedGit: PinnedGit,
+  baseSha: string,
+): Promise<{ ok: true; aheadBehind: AheadBehind } | Failure> {
+  // The base is the sweep-wide PINNED sha of the base ref (origin's
+  // default branch, or the --base ref), not the mutable ref name: a
+  // concurrent fetch moving the ref mid-sweep would otherwise give
+  // different rows different bases.
+  const counts = await pinnedGit(["rev-list", "--left-right", "--count", `${baseSha}...HEAD`]);
+  if (!counts.ok) return { ok: false, error: counts.error };
+  const [behind, ahead] = counts.stdout.toString("utf8").trim().split(/\s+/);
+  const aheadBehind = {
+    ahead: Number.parseInt(ahead ?? "", 10),
+    behind: Number.parseInt(behind ?? "", 10),
+  };
+  if (Number.isNaN(aheadBehind.ahead) || Number.isNaN(aheadBehind.behind)) {
+    return { ok: false, error: `unparsable rev-list count: ${counts.stdout.toString("utf8")}` };
+  }
+  return { ok: true, aheadBehind };
+}
+
+/** Why the row's readings are inconsistent, or null once the bracket closed on the identity it opened with. */
+async function identityMoved(pinnedGit: PinnedGit, identity: Identity): Promise<string | null> {
+  const { path, gitDir, headSha, branch } = identity;
+  // Close the bracket: if HEAD or the branch moved while status/ls-tree/
+  // rev-list ran, the row's readings describe a mix of two states - refuse
+  // the row rather than report an internally inconsistent one; the next
+  // sweep re-measures.
+  const headAfter = await pinnedGit(["rev-parse", "HEAD"]);
+  if (!headAfter.ok) return headAfter.error;
+  const headShaAfter = headAfter.stdout.toString("utf8").trim();
+  if (headShaAfter !== headSha) {
+    return `HEAD moved mid-row (${headSha} -> ${headShaAfter}); readings are inconsistent`;
+  }
+  const branchAfter = await readBranch(pinnedGit);
+  if (!branchAfter.ok) return branchAfter.error;
+  if (branchAfter.branch !== branch) {
+    return `branch moved mid-row (${branch} -> ${branchAfter.branch}); readings are inconsistent`;
+  }
+  // Re-discover the gitdir and require it unchanged: this closes the window
+  // between the toplevel and gitdir reads in pinnedGitDir (a .git swap between
+  // them could pin the wrong repo) and catches any mid-row identity change the
+  // pinned reads themselves cannot see.
+  const gitDirAfter = await run("git", ["-C", path, "rev-parse", "--absolute-git-dir"]);
+  if (!gitDirAfter.ok) return gitDirAfter.error;
+  if (gitValue(gitDirAfter.stdout) !== gitDir) {
+    return `gitdir moved mid-row (${gitDir} -> ${gitValue(gitDirAfter.stdout)}); readings are inconsistent`;
+  }
+  return null;
+}
 
 export async function worktreeRow(
   path: string,
@@ -356,42 +462,9 @@ export async function worktreeRow(
     return { worktree: path, ok: false, error: "worktree directory no longer exists" };
   }
 
-  // A worktree dir that lost its .git file still exists, but `git -C` then discovers the ENCLOSING
-  // checkout (this repo nests worktrees inside the main one) and every reading would describe the
-  // wrong repo. So discovery runs once, bracketed, and every later call is pinned to the verified
-  // gitdir and work tree; the end-of-row re-read closes the same bracket around the readings.
-  //   gitdir -> toplevel (must be this path) -> gitdir again (must match the first) -> pin trusted
-  // One single-value call per value, never one call split on newline: a path holding a newline would shear the split.
-  const gitDirResult = await run("git", ["-C", path, "rev-parse", "--absolute-git-dir"]);
-  if (!gitDirResult.ok) return { worktree: path, ok: false, error: gitDirResult.error };
-  const gitDir = gitValue(gitDirResult.stdout);
-  if (gitDir.length === 0) {
-    return { worktree: path, ok: false, error: "rev-parse returned an empty git dir" };
-  }
-  const toplevelResult = await run("git", ["-C", path, "rev-parse", "--show-toplevel"]);
-  if (!toplevelResult.ok) return { worktree: path, ok: false, error: toplevelResult.error };
-  try {
-    const found = realpathSync(gitValue(toplevelResult.stdout));
-    const expected = realpathSync(path);
-    if (found !== expected) {
-      return {
-        worktree: path,
-        ok: false,
-        error: `git discovery escaped the worktree: found toplevel ${found}`,
-      };
-    }
-  } catch (error) {
-    return { worktree: path, ok: false, error: `cannot verify toplevel: ${String(error)}` };
-  }
-  const gitDirVerify = await run("git", ["-C", path, "rev-parse", "--absolute-git-dir"]);
-  if (!gitDirVerify.ok) return { worktree: path, ok: false, error: gitDirVerify.error };
-  if (gitValue(gitDirVerify.stdout) !== gitDir) {
-    return {
-      worktree: path,
-      ok: false,
-      error: `gitdir moved during discovery (${gitDir} -> ${gitValue(gitDirVerify.stdout)})`,
-    };
-  }
+  const pin = await pinnedGitDir(path);
+  if (!pin.ok) return { worktree: path, ok: false, error: pin.error };
+  const gitDir = pin.gitDir;
   // cwd is pinned too: git reads a cwd INSIDE a work tree as a pathspec
   // prefix, so a sweep launched from a nested worktree (this repo keeps them
   // under the main checkout) would list the main checkout's tree relative to
@@ -404,12 +477,9 @@ export async function worktreeRow(
   // after the other probes: discovery-time values could predate a mid-sweep
   // commit or checkout, and a row mixing old identity with new counts would
   // carry a contradiction.
-  const headBefore = await pinnedGit(["rev-parse", "HEAD"]);
-  if (!headBefore.ok) return { worktree: path, ok: false, error: headBefore.error };
-  const headSha = headBefore.stdout.toString("utf8").trim();
-  const branchBefore = await readBranch(pinnedGit);
-  if (!branchBefore.ok) return { worktree: path, ok: false, error: branchBefore.error };
-  const branch = branchBefore.branch;
+  const identity = await readIdentity(pinnedGit);
+  if (!identity.ok) return { worktree: path, ok: false, error: identity.error };
+  const { headSha, branch } = identity;
 
   // --untracked-files=all: the default collapses a nested untracked tree to
   // one "dir/" entry whose mtime does not move on edits inside it, so active
@@ -427,64 +497,15 @@ export async function worktreeRow(
   if (!tree.ok) return { worktree: path, ok: false, error: tree.error };
   const treeFileCount = splitNul(tree.stdout).filter((name) => name.length > 0).length;
 
-  let aheadBehind: { ahead: number; behind: number } | null = null;
+  let aheadBehind: AheadBehind | null = null;
   if (baseSha !== null) {
-    // The base is the sweep-wide PINNED sha of the base ref (origin's
-    // default branch, or the --base ref), not the mutable ref name: a
-    // concurrent fetch moving the ref mid-sweep would otherwise give
-    // different rows different bases.
-    const counts = await pinnedGit(["rev-list", "--left-right", "--count", `${baseSha}...HEAD`]);
+    const counts = await readAheadBehind(pinnedGit, baseSha);
     if (!counts.ok) return { worktree: path, ok: false, error: counts.error };
-    const [behind, ahead] = counts.stdout.toString("utf8").trim().split(/\s+/);
-    aheadBehind = {
-      ahead: Number.parseInt(ahead ?? "", 10),
-      behind: Number.parseInt(behind ?? "", 10),
-    };
-    if (Number.isNaN(aheadBehind.ahead) || Number.isNaN(aheadBehind.behind)) {
-      return {
-        worktree: path,
-        ok: false,
-        error: `unparsable rev-list count: ${counts.stdout.toString("utf8")}`,
-      };
-    }
+    aheadBehind = counts.aheadBehind;
   }
 
-  // Close the bracket: if HEAD or the branch moved while status/ls-tree/
-  // rev-list ran, the readings above describe a mix of two states - refuse
-  // the row rather than report an internally inconsistent one; the next
-  // sweep re-measures.
-  const headAfter = await pinnedGit(["rev-parse", "HEAD"]);
-  if (!headAfter.ok) return { worktree: path, ok: false, error: headAfter.error };
-  const headShaAfter = headAfter.stdout.toString("utf8").trim();
-  if (headShaAfter !== headSha) {
-    return {
-      worktree: path,
-      ok: false,
-      error: `HEAD moved mid-row (${headSha} -> ${headShaAfter}); readings are inconsistent`,
-    };
-  }
-  const branchAfter = await readBranch(pinnedGit);
-  if (!branchAfter.ok) return { worktree: path, ok: false, error: branchAfter.error };
-  if (branchAfter.branch !== branch) {
-    return {
-      worktree: path,
-      ok: false,
-      error: `branch moved mid-row (${branch} -> ${branchAfter.branch}); readings are inconsistent`,
-    };
-  }
-  // Re-discover the gitdir and require it unchanged: this closes the window
-  // between the toplevel and gitdir reads above (a .git swap between them
-  // could pin the wrong repo) and catches any mid-row identity change the
-  // pinned reads themselves cannot see.
-  const gitDirAfter = await run("git", ["-C", path, "rev-parse", "--absolute-git-dir"]);
-  if (!gitDirAfter.ok) return { worktree: path, ok: false, error: gitDirAfter.error };
-  if (gitValue(gitDirAfter.stdout) !== gitDir) {
-    return {
-      worktree: path,
-      ok: false,
-      error: `gitdir moved mid-row (${gitDir} -> ${gitValue(gitDirAfter.stdout)}); readings are inconsistent`,
-    };
-  }
+  const moved = await identityMoved(pinnedGit, { path, gitDir, headSha, branch });
+  if (moved !== null) return { worktree: path, ok: false, error: moved };
 
   const { dirtyPaths, untrackedPaths, statusHash } = parseStatus(status.stdout);
   return {

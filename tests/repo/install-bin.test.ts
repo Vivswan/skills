@@ -15,8 +15,12 @@ import { join } from "node:path";
 import { ROOT } from "../../scripts/lib.mts";
 import { tempDirs } from "../helpers/temp-dirs";
 
+// Every scratch directory of the file: a run's HOME, PATH stub, and call log, and a catalog case's copy of the bin.
 const temp = tempDirs();
+
+// The bin as committed; the malformed-catalog cases run a copy beside scratch catalog files.
 const BIN = join(ROOT, "bin", "install.mjs");
+
 // The bin's own runtime under npx; an absolute path, since the no-npx case below empties PATH.
 const NODE = Bun.which("node") ?? "node";
 
@@ -26,22 +30,35 @@ const NODE = Bun.which("node") ?? "node";
 //
 // Every call carries `-y` unless the flags say yes (the CLI's overwrite prompt would stop an unattended run) and
 // `-a universal` unless the agents cover it (the CLI would otherwise install to every agent it knows).
-const commands = (flags: string[]) => [
-  ["npx", "-y", "skills", "add", "Vivswan/skills", ...flags],
-  ["npx", "-y", "skills", "add", "Leonxlnx/taste-skill/skills/taste-skill", ...flags],
-  ["npx", "-y", "skills", "add", "anthropics/skills/skills/frontend-design", ...flags],
-  ["npx", "-y", "skills", "add", "pbakaus/impeccable/.agents/skills/impeccable", ...flags],
-  ["npx", "-y", "skills", "add", "cursor/plugins/pstack/skills/unslop", ...flags],
-];
+function commands(flags: string[]): string[][] {
+  return [
+    ["npx", "-y", "skills", "add", "Vivswan/skills", ...flags],
+    ["npx", "-y", "skills", "add", "Leonxlnx/taste-skill/skills/taste-skill", ...flags],
+    ["npx", "-y", "skills", "add", "anthropics/skills/skills/frontend-design", ...flags],
+    ["npx", "-y", "skills", "add", "pbakaus/impeccable/.agents/skills/impeccable", ...flags],
+    ["npx", "-y", "skills", "add", "cursor/plugins/pstack/skills/unslop", ...flags],
+  ];
+}
+
 /** The calls at these positions of `commands(flags)`: 0 is this repository, 4 the unslop upstream. */
-const only = (flags: string[], ...which: number[]) =>
-  which.map((index) => commands(flags)[index] as string[]);
-const printed = (argvs: string[][]) => argvs.map((argv) => argv.join(" "));
+function only(flags: string[], ...which: number[]): string[][] {
+  return which.map((index) => commands(flags)[index] as string[]);
+}
+
+function printed(argvs: string[][]): string[] {
+  return argvs.map((argv) => argv.join(" "));
+}
 
 // Two stubs for the bin's launcher: an `npx` on PATH, and npm's own `npx-cli.js` for a bin that npx started.
 // Each logs its name and argv (one call per line, a unit separator between arguments) and exits 0, or 3 on the
 // call STUB_FAIL_AT names after speaking as the CLI does on a failure: npm's cold-cache line and a colored
 // warning on stderr, progress and a closing verdict on stdout (quoting npm's update-notice setting).
+//
+// The PATH stub also plays the CLI's install for the target's skill (STUB_INSTALL_NAMES maps target to name): a
+// listing writes nothing; `--copy -a claude-code` creates or rewrites Claude's own copy under HOME/.claude/skills;
+// otherwise the canonical copy under HOME/.agents/skills is touched when it is a real directory, never through a
+// symlink.
+
 const SEPARATOR = String.fromCharCode(0x1f);
 const FAKE_NPX = `#!/usr/bin/env bash
 { printf '%s' "$(basename "$0")"; printf '\\x1f%s' "$@"; printf '\\n'; } >> "\${STUB_ARGS_LOG}"
@@ -69,10 +86,6 @@ else
 fi
 exit 0
 `;
-// The PATH stub also plays the CLI's install for the target's skill (STUB_INSTALL_NAMES maps target to name): a
-// listing writes nothing; `--copy -a claude-code` creates or rewrites Claude's own copy under HOME/.claude/skills;
-// otherwise the canonical copy under HOME/.agents/skills is touched when it is a real directory, never through a
-// symlink.
 const INSTALL_NAMES = [
   "Leonxlnx/taste-skill/skills/taste-skill=design-taste-frontend",
   "anthropics/skills/skills/frontend-design=frontend-design",
@@ -83,22 +96,25 @@ const FAKE_NPX_CLI = `const { appendFileSync } = require("node:fs");
 appendFileSync(process.env.STUB_ARGS_LOG, ["npx-cli.js", ...process.argv.slice(2)].join("\\x1f") + "\\n");
 `;
 
+/** What one run of the bin produced, and the scratch HOME it installed under. */
 interface Run {
   readonly status: number | null;
   readonly stdout: string[];
   readonly stderr: string;
   readonly calls: string[][];
-  /** The scratch HOME the run installed under. */
   readonly home: string;
 }
 
 interface RunOptions {
   /** Extra environment; HOME is always a scratch directory, so a run never reaches the developer's own installs. */
   readonly env?: Record<string, string>;
+
   /** Put the stub `npx` on PATH; false leaves PATH without any npx. */
   readonly npxOnPath?: boolean;
+
   /** Point npm_execpath at a scratch npm whose npx-cli.js is the stub, as a bin started by npx sees it. */
   readonly underNpx?: boolean;
+
   /** The bin to run; a copy beside scratch catalog files for the malformed-data cases. */
   readonly bin?: string;
 }
@@ -153,14 +169,16 @@ function run(
   };
 }
 
-/** What the stub says on a failing call, as the bin streams it: the raw stderr lines, the two stdout lines. */
+// What the stub says on a failing call, as the bin streams it: the raw stderr lines, the two stdout lines.
+
 const STUB_WARNING = (target: string) =>
   `npm warn exec stub: the skills package will be installed\n\u001b[33m\u26a0 stub skipped ${target}\u001b[0m\n`;
 const STUB_PROGRESS = "spinner frames";
 const STUB_VERDICT = "\u2514  stub gave up (update notifier: false)";
+
 /** The summary the bin ends with: npm's line dropped, the warning quoted without its color, the verdict last. */
-const summary = (total: number, ...failed: [target: string, status: number][]) =>
-  [
+function summary(total: number, ...failed: [target: string, status: number][]): string {
+  return [
     `install: ${failed.length} of ${total} skills add calls failed`,
     ...failed.flatMap(([target, status]) => [
       `  ${target}: exit ${status}`,
@@ -169,10 +187,14 @@ const summary = (total: number, ...failed: [target: string, status: number][]) =
     ]),
     "",
   ].join("\n");
-/** The stderr line for a flagged upstream whose call wrote no copy under the run's HOME. */
-const noCopy = (home: string, name: string) =>
-  `install: no fresh copy at ${join(home, ".agents", "skills", name)} to mark explicit-invocation-only\n`;
+}
 
+/** The stderr line for a flagged upstream whose call wrote no copy under the run's HOME. */
+function noCopy(home: string, name: string): string {
+  return `install: no fresh copy at ${join(home, ".agents", "skills", name)} to mark explicit-invocation-only\n`;
+}
+
+/** One run of the bin and what it must produce; `stderr` is the whole of it given the run's scratch HOME, and a case without it leaves stderr unasserted. */
 interface Case {
   readonly name: string;
   readonly args: string[];
@@ -180,7 +202,6 @@ interface Case {
   readonly status: number;
   readonly calls: string[][];
   readonly stdout: string[];
-  /** The whole stderr, given the run's scratch HOME; absent when the case leaves stderr unasserted. */
   readonly stderr?: (home: string) => string;
 }
 
@@ -518,10 +539,10 @@ describe("bin/install.mjs", () => {
     return { bin: join(root, "bin", "install.mjs"), manifest, marketplace };
   }
 
+  /** A malformed catalog file and the one line the bin prints for it, which names `file`. */
   interface CatalogCase {
     readonly name: string;
     readonly files: { manifest?: string; marketplace: string };
-    /** Which file the one line names. */
     readonly file: "manifest" | "marketplace";
     readonly message: RegExp;
   }

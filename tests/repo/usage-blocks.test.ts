@@ -24,14 +24,18 @@ import { ROOT } from "../../scripts/lib.mts";
 
 /** Not pages of this repository: dependencies. Dot directories (.git, .build, .claude) are outside a glob by default. */
 const SKIPPED_DIRS = new Set(["node_modules"]);
+
 /** A dependency install plus a bundle on the first run; the next runs take the built bundle. */
 const BUILD_TIMEOUT_MS = 180_000;
 
 export interface UsageFence {
   /** Where the fence sits, as `<page>:<line>` for a message. */
   readonly at: string;
+
   /** The script the info string names, relative to the repository root. */
   readonly script: string;
+
+  /** The fence's body as the page holds it, trailing whitespace and all. */
   readonly text: string;
 }
 

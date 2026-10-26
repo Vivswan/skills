@@ -8,22 +8,30 @@ export type Cell =
   | { status: "note"; detail: string };
 
 export type Io = {
+  /** The live fetch in a run; a test injects hand-written replies here, so no test reaches the network. */
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
+
   /** Resolves a hostname to at least one address, or throws (ENOTFOUND for an unregistered name). */
   resolve: (host: string) => Promise<unknown>;
+
   /** Lists a zone's name servers, or throws (ENOTFOUND for a zone no registry delegates). */
   resolveNs: (zone: string) => Promise<string[]>;
+
+  /** From GH_TOKEN, GITHUB_TOKEN, or `gh auth token`; null runs the GitHub columns anonymously, at the lower search rate. */
   githubToken: string | null;
+
   /** A request past this is an `unknown` cell, so one stalled endpoint cannot hold the table. */
   timeoutMs: number;
+
   /** arXiv asks for one request every three seconds; its lookups are serialised this far apart. */
   arxivGapMs: number;
-  /** GitHub allows 30 searches a minute per token, 10 with none, and every lane on the machine
-   * shares the token; the searches are serialised this far apart. */
+
+  /** GitHub allows 30 searches a minute per token, 10 with none, and every lane on the machine shares the token; the searches are serialised this far apart. */
   githubSearchGapMs: number;
-  /** crates.io asks for one request a second from anything automated; its lookups and the pages
-   * of its ranking are serialised this far apart. */
+
+  /** crates.io asks for one request a second from anything automated; its lookups and the pages of its ranking are serialised this far apart. */
   cratesGapMs: number;
+
   /** Where the typosquat column keeps the day's popular-name lists, or null for no cache. */
   cacheDir: string | null;
 };

@@ -91,6 +91,7 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
 const { fromMarkdown } = await import("mdast-util-from-markdown");
 const { gfmFromMarkdown } = await import("mdast-util-gfm");
 const { toString: plainText } = await import("mdast-util-to-string");
@@ -102,32 +103,47 @@ export const DEMONSTRATED = "Demonstrated by:";
 export interface Fence {
   /** One-based line of the opening fence. */
   line: number;
+
   /** One-based line of the closing fence (or the last line when the fence never closes). */
   end: number;
+
   /** The info string names mermaid; other fences are text the page quotes. */
   mermaid: boolean;
+
+  /** The lines between the fence markers; a mermaid fence's body is what check-page.mts reads nodes from. */
   body: string;
+
   /** Between a BEGIN and an END GENERATED marker: the declaration's diagram, not the author's. */
   generated: boolean;
 }
 
 export interface Marker {
+  /** BEGIN opens a region, END closes it; every fence between a BEGIN and the next END is generated, whatever its name. */
   kind: "BEGIN" | "END";
+
+  /** The region name the marker carries, one token; render-map.mts splices the region of the name it is given. */
   name: string;
+
   /** One-based line of the marker. */
   line: number;
-  /** Offsets of the marker in the page text, from its line's first character (indent included) to its last. */
+
+  /** Offset in the page text of the marker line's first character, indent included. */
   start: number;
+
+  /** Offset in the page text just past the marker's last character. */
   end: number;
 }
 
 export interface Page {
   /** Every fence, whatever its language, at any depth. */
   fences: readonly Fence[];
+
   /** The region markers, in page order: a top-level HTML block that is one marker line. */
   markers: readonly Marker[];
+
   /** One-based lines of the top-level headings, ATX and Setext alike. */
   headings: readonly number[];
+
   /** Top-level paragraphs opening with "Demonstrated by:", each with the destinations it links. */
   demonstrations: readonly { line: number; links: string[] }[];
 }

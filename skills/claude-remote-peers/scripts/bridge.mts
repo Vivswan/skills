@@ -27,10 +27,10 @@ const USAGE = [
 
 const args = parseArgs(process.argv.slice(2));
 const localSocket = requireEnv("CLAUDE_CODE_MESSAGING_SOCKET");
-// ControlPath=none: with connection sharing in the user's ssh config the forwards would
-// belong to a shared master that outlives this process, so teardown could not remove them.
 const ssh = [
   "ssh",
+  // With connection sharing in the user's ssh config the forwards would belong to a shared
+  // master that outlives this process, so teardown could not remove them.
   "-o",
   "ControlPath=none",
   "-o",
@@ -43,9 +43,13 @@ const ssh = [
   "ConnectTimeout=10", // bounds each handshake; ServerAliveInterval only covers an open session
   ...args.sshOptions,
 ];
-// The short commands (lookup, precheck, probe, cleanup) drop any forward the user's ssh
-// config adds for this host; a LocalForward there would collide with the tunnel's copy.
-const sshCommand = [...ssh, "-o", "ClearAllForwardings=yes"];
+const sshCommand = [
+  ...ssh,
+  // The short commands (lookup, precheck, probe, cleanup) drop any forward the user's ssh
+  // config adds for this host; a LocalForward there would collide with the tunnel's copy.
+  "-o",
+  "ClearAllForwardings=yes",
+];
 
 const remote = await pickRemoteSession(await listLiveRemoteSessions(), args.remotePid);
 const remoteSocket = remote.messagingSocketPath;
@@ -209,6 +213,26 @@ function openTunnel() {
   );
 }
 
+// Exit 1 is `test` saying the socket is not there yet; anything else is the probe's own ssh failing.
+async function reverseForwardUp(): Promise<boolean> {
+  const reverse = await $`${sshCommand} ${args.destination} ${`test -S ${shellQuote(localSocket)}`}`
+    .quiet()
+    .nothrow();
+  if (reverse.exitCode === 0) return true;
+  if (reverse.exitCode === 1) return false;
+  return shutdown(
+    `could not verify the reverse forward on ${args.destination} (ssh exit ${reverse.exitCode}): ${reverse.stderr.toString().trim()}`,
+    1,
+  );
+}
+
+function forwardsTimeoutReason(): string {
+  if (existsSync(remoteSocket)) {
+    return `reverse forward did not bind ${localSocket} on ${args.destination} within 60 s (ssh is up, so the socket is not visible at that path there: a different /tmp view, or a bind still pending)`;
+  }
+  return `forwarded socket ${remoteSocket} never appeared within 60 s`;
+}
+
 // ssh creates the -L socket before it learns whether the server accepted the -R, so the
 // local socket alone is not proof. Ready means all three at once: ssh still running, the
 // -L socket here, the -R socket on the remote. Until the deadline a missing one is "not yet".
@@ -218,26 +242,8 @@ async function waitForForwards() {
     if (shuttingDown) await new Promise(() => {}); // a signal began teardown; it ends the process
     if (tunnel.exitCode !== null)
       await shutdown(`ssh exited (${tunnel.exitCode}) before the forwards came up`, 1);
-    if (existsSync(remoteSocket)) {
-      const reverse =
-        await $`${sshCommand} ${args.destination} ${`test -S ${shellQuote(localSocket)}`}`
-          .quiet()
-          .nothrow();
-      if (reverse.exitCode === 0 && tunnel.exitCode === null) return;
-      // Exit 1 is `test` saying the socket is not there yet; anything else is the probe's own ssh failing.
-      if (reverse.exitCode !== 0 && reverse.exitCode !== 1)
-        await shutdown(
-          `could not verify the reverse forward on ${args.destination} (ssh exit ${reverse.exitCode}): ${reverse.stderr.toString().trim()}`,
-          1,
-        );
-    }
-    if (Date.now() > deadline)
-      await shutdown(
-        existsSync(remoteSocket)
-          ? `reverse forward did not bind ${localSocket} on ${args.destination} within 60 s (ssh is up, so the socket is not visible at that path there: a different /tmp view, or a bind still pending)`
-          : `forwarded socket ${remoteSocket} never appeared within 60 s`,
-        1,
-      );
+    if (existsSync(remoteSocket) && (await reverseForwardUp()) && tunnel.exitCode === null) return;
+    if (Date.now() > deadline) await shutdown(forwardsTimeoutReason(), 1);
     await Bun.sleep(500);
   }
 }

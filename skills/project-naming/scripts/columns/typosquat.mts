@@ -15,10 +15,10 @@ import {
 /** The top of each download ranking; names past this are not what a typo lands on. */
 export const RANKING_TOP = 5_000;
 
-/** crates.io publishes no ranking file, and its search is not the ranking: a search for the name
- * returns what matches the name, not the popular crate one edit away. So its crate list sorted
- * by downloads is read whole, CRATES_PER_PAGE a page (the most it serves), this many pages. */
+/** crates.io publishes no ranking file, and its search returns what matches the name, not the popular crate one edit away; so its crate list sorted by downloads is read whole, this many pages. */
 export const CRATES_PAGES = 20;
+
+/** The crates a page of that list holds, the most crates.io serves. */
 export const CRATES_PER_PAGE = 100;
 
 /** How many names a list holds when it is whole. A list is read for the names a typo lands on,
@@ -26,37 +26,45 @@ export const CRATES_PER_PAGE = 100;
  * free: it is a malformed reply, and so is one cached short by an earlier build. */
 type Size = { exactly: number } | { atLeast: number };
 
-/** PyPI's list publishes 15,000 names and npm's about 16,000; each is read for its top
- * RANKING_TOP, so one under that was cut. */
+/** PyPI's list publishes 15,000 names and npm's about 16,000; each is read for its top RANKING_TOP, so one under that was cut. */
 const RANKING_FLOOR: Size = { atLeast: RANKING_TOP };
+
 /** The registry holds hundreds of thousands of crates, so every page the lane reads is full. */
 const CRATES_PAGE_SIZE: Size = { exactly: CRATES_PER_PAGE };
 
-/** Every request to crates.io, the per-name lookups and the ranking pages alike: its crawler
- * policy asks for one request a second and a User-Agent that says who is asking. */
+/** Every request to crates.io, the per-name lookups and the ranking pages alike: its crawler policy asks for one request a second and a User-Agent that says who is asking. */
 export const cratesQueue = serialQueue();
 
-/** True when `b` is one insertion, deletion, substitution, or adjacent transposition from `a`.
- * Hand-rolled: shipped skill scripts run from the installed folder on node built-ins alone, and
- * the bound-1 check is a few lines where the general Damerau-Levenshtein algorithm is a library. */
-export function oneEditApart(a: string, b: string): boolean {
-  if (a === b || Math.abs(a.length - b.length) > 1) return false;
-  if (a.length === b.length) {
-    const differ: number[] = [];
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) differ.push(i);
-    if (differ.length === 1) return true;
-    if (differ.length !== 2) return false;
-    const [i, j] = differ as [number, number];
-    return j === i + 1 && a[i] === b[j] && a[j] === b[i];
-  }
-  const [long, short] = a.length > b.length ? [a, b] : [b, a];
+function oneSubstitutionOrSwapApart(a: string, b: string): boolean {
+  const differ: number[] = [];
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) differ.push(i);
+  if (differ.length === 1) return true;
+  if (differ.length !== 2) return false;
+
+  const [i, j] = differ as [number, number];
+  return j === i + 1 && a[i] === b[j] && a[j] === b[i];
+}
+
+function oneDeletionApart(long: string, short: string): boolean {
   let skipped = false;
   for (let i = 0, j = 0; i < long.length; i++) {
     if (long[i] === short[j]) j++;
     else if (skipped) return false;
     else skipped = true;
   }
+
   return true;
+}
+
+/** True when `b` is one insertion, deletion, substitution, or adjacent transposition from `a`.
+ * Hand-rolled: shipped skill scripts run from the installed folder on node built-ins alone, and
+ * the bound-1 check is a few lines where the general Damerau-Levenshtein algorithm is a library. */
+export function oneEditApart(a: string, b: string): boolean {
+  if (a === b || Math.abs(a.length - b.length) > 1) return false;
+  if (a.length === b.length) return oneSubstitutionOrSwapApart(a, b);
+
+  const [long, short] = a.length > b.length ? [a, b] : [b, a];
+  return oneDeletionApart(long, short);
 }
 
 /** The strings `pick` finds in the JSON list at `path`. Anything else is a malformed reply and
@@ -79,16 +87,18 @@ type Source =
   | { registry: string; names: string[]; basis: string }
   | { registry: string; error: string };
 
-async function source(
-  io: Io,
-  registry: string,
-  label: string,
-  url: string,
-  basis: string,
-  extract: (text: string) => string[],
-  revive: (stored: unknown) => string[] | null,
-): Promise<Source> {
-  const loaded = await cached(io, { url, extract, revive });
+type PopularList = {
+  registry: string;
+  label: string;
+  url: string;
+  basis: string;
+  extract: (text: string) => string[];
+  revive: (stored: unknown) => string[] | null;
+};
+
+async function source(io: Io, list: PopularList): Promise<Source> {
+  const { registry, label, basis } = list;
+  const loaded = await cached(io, list);
   if ("error" in loaded) return { registry, error: `${label} ${loaded.error}` };
   return { registry, names: loaded.value, basis };
 }
@@ -116,9 +126,7 @@ function wholeStringList(size: Size): (stored: unknown) => string[] | null {
 // The project publishes the ranking at hugovk.github.io, which redirects here.
 export const PYPI_TOP_URL = "https://hugovk.dev/top-pypi-packages/top-pypi-packages.min.json";
 
-/** npm publishes no ranking and its search matches whole words (a one-letter typo returns
- * nothing), so the list is npm-high-impact's by-downloads ranking of the packages npm itself
- * calls high-impact, served by jsDelivr as a JS module of quoted names. */
+/** npm publishes no ranking and its search matches whole words (a one-letter typo returns nothing), so the list is npm-high-impact's by-downloads ranking of the packages npm itself calls high-impact. */
 const NPM_TOP_URL = "https://cdn.jsdelivr.net/npm/npm-high-impact@1/lib/top-download.js";
 
 function quotedNames(moduleText: string): string[] {
@@ -162,29 +170,28 @@ async function cratesRanking(io: Io): Promise<Source> {
 function sources(io: Io): Promise<Source>[] {
   const ranking = `top ${RANKING_TOP} by downloads`;
   return [
-    source(
-      io,
-      "pypi",
-      "top-pypi-packages",
-      PYPI_TOP_URL,
-      ranking,
-      (text) =>
+    source(io, {
+      registry: "pypi",
+      label: "top-pypi-packages",
+      url: PYPI_TOP_URL,
+      basis: ranking,
+      extract: (text) =>
         whole(
           stringsOf(text, ["rows"], (row) => (row as { project?: unknown }).project),
           "rows",
           RANKING_FLOOR,
         ).slice(0, RANKING_TOP),
-      wholeStringList(RANKING_FLOOR),
-    ),
-    source(
-      io,
-      "npm",
-      "npm-high-impact",
-      NPM_TOP_URL,
-      ranking,
-      (text) => whole(quotedNames(text), "the module", RANKING_FLOOR).slice(0, RANKING_TOP),
-      wholeStringList(RANKING_FLOOR),
-    ),
+      revive: wholeStringList(RANKING_FLOOR),
+    }),
+    source(io, {
+      registry: "npm",
+      label: "npm-high-impact",
+      url: NPM_TOP_URL,
+      basis: ranking,
+      extract: (text) =>
+        whole(quotedNames(text), "the module", RANKING_FLOOR).slice(0, RANKING_TOP),
+      revive: wholeStringList(RANKING_FLOOR),
+    }),
     cratesRanking(io),
   ];
 }

@@ -1,9 +1,7 @@
 // Wiktionary wikitext in, a reading out: the page's languages and the senses or terms its
 // register labels mark offensive. No IO; readers.mts fetches the page and hands the text here.
 
-/** Register labels Wiktionary puts in `{{lb|<lang>|...}}` on a sense, canonical names and their
- * aliases; any one makes the sense a flag. Any label ending in "slur" (ethnic, racial, religious)
- * counts too. */
+/** Register labels Wiktionary puts in `{{lb|<lang>|...}}` on a sense, canonical names and their aliases; any one makes the sense a flag. */
 const OFFENSIVE_LABELS = new Set([
   "vulgar",
   "coarse",
@@ -18,48 +16,65 @@ const OFFENSIVE_LABELS = new Set([
   "slur",
 ]);
 
+/** Any label ending in "slur" (ethnic, racial, religious) counts too. */
 function isOffensiveLabel(label: string): boolean {
   return OFFENSIVE_LABELS.has(label) || label.endsWith(" slur");
 }
 
-/** The label templates: on a sense line `lb` and its aliases, the older `context` and `cx` among
- * them; on a headword line `tlb` and `term-label`. */
+/** The label templates on a sense line: `lb` and its aliases, the older `context` and `cx` among them. */
 const SENSE_LABEL = ["lb", "lbl", "label", "context", "cx"];
+
+/** The label templates on a headword line. */
 const TERM_LABEL = ["tlb", "term-label"];
 
 type Template = { start: number; end: number; args: string[] };
 
-/** Each template on the line with one of the names, with its top-level arguments: a `|` or `}}`
- * inside a nested template, a linked label or a `sort={{...}}`, belongs to that template. */
+/** The template opening at `start` whose arguments begin at `argsFrom`, just past `{{name|`, with
+ * its top-level arguments: a `|` or `}}` inside a nested template, a linked label or a
+ * `sort={{...}}`, belongs to that template. Null when the line ends before the closing `}}`. */
+function templateAt(line: string, start: number, argsFrom: number): Template | null {
+  const args: string[] = [];
+  let depth = 1;
+  let argStart = argsFrom;
+  let i = argsFrom;
+  while (i < line.length && depth > 0) {
+    if (line.startsWith("{{", i)) {
+      depth++;
+      i += 2;
+      continue;
+    }
+
+    if (line.startsWith("}}", i)) {
+      depth--;
+      if (depth === 0) args.push(line.slice(argStart, i));
+      i += 2;
+      continue;
+    }
+
+    if (line[i] === "|" && depth === 1) {
+      args.push(line.slice(argStart, i));
+      argStart = i + 1;
+    }
+    i++;
+  }
+
+  if (depth > 0) return null;
+
+  return { start, end: i, args: args.map((arg) => arg.trim()) };
+}
+
+/** Each template on the line with one of the names, in order; an unclosed one ends the list. */
 function templates(line: string, names: readonly string[]): Template[] {
   const found: Template[] = [];
   const opener = new RegExp(`\\{\\{(?:${names.join("|")})\\|`, "g");
   for (let match = opener.exec(line); match; match = opener.exec(line)) {
-    const start = match.index;
-    const args: string[] = [];
-    let depth = 1;
-    let argStart = start + match[0].length;
-    let i = argStart;
-    while (i < line.length && depth > 0) {
-      if (line.startsWith("{{", i)) {
-        depth++;
-        i += 2;
-      } else if (line.startsWith("}}", i)) {
-        depth--;
-        if (depth === 0) args.push(line.slice(argStart, i));
-        i += 2;
-      } else {
-        if (line[i] === "|" && depth === 1) {
-          args.push(line.slice(argStart, i));
-          argStart = i + 1;
-        }
-        i++;
-      }
-    }
-    if (depth > 0) break;
-    found.push({ start, end: i, args: args.map((arg) => arg.trim()) });
-    opener.lastIndex = i;
+    const template = templateAt(line, match.index, match.index + match[0].length);
+    if (template === null) break;
+
+    found.push(template);
+    opener.lastIndex = template.end;
   }
+
   return found;
 }
 

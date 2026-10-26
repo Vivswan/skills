@@ -35,6 +35,7 @@ import {
   RuntimeDirError,
   readEventsSince,
   runtimeDir,
+  type State,
   saveState,
 } from "./state.mts";
 
@@ -62,7 +63,9 @@ export interface Io {
 }
 
 export interface PollResult {
+  /** This poll's events, alerts and notes alike, in the order the daemon numbers them. */
   events: EventInput[];
+
   /** Something is still moving (CI pending, an event this poll): the next poll comes after `interval`. A quiet poll doubles the wait, up to `idleInterval`. */
   busy: boolean;
 }
@@ -70,20 +73,26 @@ export interface PollResult {
 export interface Source<Target extends object> {
   /** `[a-z0-9-]{1,40}`: the file stems, the envelope's from-name, the msg_id prefix, the closing line. */
   name: string;
+
   /** Seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400. */
   interval: number;
+
   /** The longest wait between polls: a quiet poll doubles the wait, up to this; defaults to `interval`. */
   idleInterval?: number;
+
   /** Lines the usage text ends with: the target's forms and the source's own flags after `watch`. */
   usage?: string[];
+
   /** The arguments after `watch`, the target text first and the source's own flags after it; throws UsageError. */
   parseTarget(args: string[]): Target;
+
   /**
    * One read of every target, keyed by the text the user typed. A source writes its cursor onto
    * each target object, on the way to returning: a poll that throws is a failed poll, and
    * nothing it changed is saved. Three failures in a row are one `trouble` event.
    */
   poll(targets: Record<string, Target>, io: Io): Promise<PollResult>;
+
   /** Lines `status` prints under a target, what stands right now (a standing alert each); without it the target line stands alone. */
   summary?(target: Target): string[];
 }
@@ -103,25 +112,40 @@ export function runEvents<Target extends object>(source: Source<Target>): void {
 
 // --- constants ---------------------------------------------------------------------
 
+// A source's name goes into an envelope attribute and the file stems, so it is letters, digits, and dashes alone.
 const NAME_PATTERN = /^[a-z0-9-]{1,40}$/;
+
+// A file sink's --id is the stem of its files: one path segment, no leading dot, room left for the suffixes.
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+// The floor of every poll interval; `--help` quotes it, and tests/repo/usage-blocks.test.ts pins that text to SKILL.md.
 const MIN_INTERVAL_SECONDS = 1;
+
 // A day: past that, the poll timer's milliseconds overflow the 32-bit timer and fire at once.
 const MAX_INTERVAL_SECONDS = 86_400;
+
+// What `wait` blocks for without --timeout; past it the reader gets exit 4 and the unchanged cursor.
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 1800;
+
+// Failures in a row that make one `trouble` event; fewer are log lines alone.
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
+// Between a `wait`'s rereads of the log; each tick also notices a daemon that stopped.
 const WAIT_TICK_MS = 1000;
-// The owner's end is noticed between polls, so a finished session does not leave a poller behind
-// for the rest of a long idle interval.
+
+// The owner's end is noticed between polls, so a finished session does not leave a poller behind for the rest of a long idle interval.
 const OWNER_CHECK_MS = 1000;
-// How long a stopping daemon waits for a connection accepted before the stop to say what it wants
-// (it is refused), before the connection is cut so the process can end.
+
+// How long a stopping daemon waits for a connection accepted before the stop to say what it wants (it is refused), before the connection is cut so the process can end.
 const SILENT_CLIENT_GRACE_MS = 1000;
-// The receiver drops a second frame from one sender within the same second; a poll triggered by
-// `watch` right after another waits this long before its message goes out.
+
+// The receiver drops a second frame from one sender within the same second; a poll triggered by `watch` right after another waits this long before its message goes out.
 const MIN_DELIVERY_GAP_MS = 1100;
+
 // Linux allows 108 bytes for a Unix socket path and macOS 104; a longer one fails at bind.
 const SOCKET_PATH_MAX = 104;
+
+// The reply to a command a stopping daemon refuses, and the error of the watch its stop cut short.
 const STOPPING_ERROR = "daemon stopping; retry";
 
 class ToolingError extends Error {}
@@ -139,9 +163,12 @@ function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException).code;
 }
 
+/**
+ * What every command works from. `entry` is the source script as the user runs it: the usage line
+ * and the start command name it.
+ */
 interface Context<Target extends object> {
   source: Source<Target>;
-  /** The source script as the user runs it: the usage line and the start command name it. */
   entry: string;
   dir: string;
 }
@@ -267,7 +294,6 @@ type Command =
 interface Status {
   pid: number;
   lastEventId: number;
-  /** Each watched target by its key, with the source's summary lines for it. */
   targets: Array<{ key: string; summary: string[] }>;
 }
 
@@ -412,49 +438,73 @@ async function status(ctx: Context<object>, args: string[]): Promise<number> {
   return 0;
 }
 
+/** `--since` as a whole number, 0 included; undefined when absent. */
+function parseSince(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    usage(`--since must be a whole number, got: ${value}`);
+  }
+  return Number(value);
+}
+
+/**
+ * The events past `since` once a poll appends them, or why none came: the daemon stopped, or the
+ * deadline passed. A daemon stopped under a running wait: the log it was reading will never grow,
+ * and the reader needs the no-daemon exit now, not at the timeout. The log is read once more
+ * first: the daemon's last poll may have appended in the same second it stopped.
+ */
+async function followLog(
+  files: Files,
+  daemonPid: number,
+  since: number,
+  timeoutMs: number,
+): Promise<Event[] | "stopped" | "timeout"> {
+  const deadline = Date.now() + timeoutMs;
+  let alive = true;
+
+  for (;;) {
+    const events = readEventsSince(files, since);
+    if (events.length > 0) return events;
+    if (!alive) return "stopped";
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return "timeout";
+
+    await sleep(Math.min(WAIT_TICK_MS, remaining));
+    alive = existsSync(files.socket) && isProcessAlive(daemonPid);
+  }
+}
+
 async function wait(ctx: Context<object>, args: string[]): Promise<number> {
   const owner = resolveOwner(takeValue(args, "id"), undefined);
   const sinceValue = takeValue(args, "since");
   const timeoutSeconds =
     parsePositiveInt(takeValue(args, "timeout"), "--timeout") ?? DEFAULT_WAIT_TIMEOUT_SECONDS;
   positionals(args, 0);
-  if (
-    sinceValue !== undefined &&
-    (!/^\d+$/.test(sinceValue) || !Number.isSafeInteger(Number(sinceValue)))
-  ) {
-    usage(`--since must be a whole number, got: ${sinceValue}`);
-  }
+  const sinceArg = parseSince(sinceValue);
+
   const files = filesOf(ctx, owner);
   // A wait with no daemon would block for its whole timeout on a log nothing appends to.
   const daemon = unwrap(await request(ctx, owner, { cmd: "status" })).status as Status;
-  const since = sinceValue === undefined ? daemon.lastEventId : Number(sinceValue);
-  const deadline = Date.now() + timeoutSeconds * 1000;
-  // A daemon stopped under a running wait: the log it was reading will never grow, and the reader
-  // needs the no-daemon exit now, not at the timeout. The log is read once more first: the
-  // daemon's last poll may have appended in the same second it stopped.
-  let alive = true;
-  for (;;) {
-    const events = readEventsSince(files, since);
-    if (events.length > 0) {
-      for (const event of events) console.log(JSON.stringify(event));
-      console.log(`cursor: ${(events.at(-1) as Event).id}`);
-      return 0;
-    }
-    if (!alive) {
-      console.log(`cursor: ${since}`);
-      throw new NoDaemonError(
-        `the ${ctx.source.name} daemon for ${describeOwner(owner)} stopped while this wait was running; start one as a background task of this session:\n  ${startCommand(ctx, owner)}`,
-      );
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      console.log(`no event after ${timeoutSeconds}s`);
-      console.log(`cursor: ${since}`);
-      return 4;
-    }
-    await sleep(Math.min(WAIT_TICK_MS, remaining));
-    alive = existsSync(files.socket) && isProcessAlive(daemon.pid);
+  const since = sinceArg ?? daemon.lastEventId;
+  const followed = await followLog(files, daemon.pid, since, timeoutSeconds * 1000);
+
+  if (followed === "stopped") {
+    console.log(`cursor: ${since}`);
+    throw new NoDaemonError(
+      `the ${ctx.source.name} daemon for ${describeOwner(owner)} stopped while this wait was running; start one as a background task of this session:\n  ${startCommand(ctx, owner)}`,
+    );
   }
+
+  if (followed === "timeout") {
+    console.log(`no event after ${timeoutSeconds}s`);
+    console.log(`cursor: ${since}`);
+    return 4;
+  }
+
+  for (const event of followed) console.log(JSON.stringify(event));
+  console.log(`cursor: ${(followed.at(-1) as Event).id}`);
+  return 0;
 }
 
 async function daemon<Target extends object>(
@@ -537,6 +587,374 @@ function digest(name: string, events: Event[]): string {
   return `${events.map((event) => `${event.text}\n${event.url}`).join("\n\n")}\n${closingLine(name)}`;
 }
 
+/** What a daemon runs with, fixed once its socket is bound and its state loaded. */
+interface DaemonSetup<Target extends object> {
+  source: Source<Target>;
+  owner: Owner;
+  files: Files;
+  server: Server;
+  state: State<Target>;
+  busyInterval: number;
+  idleInterval: number;
+  mode: Mode;
+  log: (line: string) => void;
+}
+
+/**
+ * One daemon from its bound socket to its exit: the polls and their schedule, the delivery, the
+ * control protocol, and the one shutdown.
+ */
+class Daemon<Target extends object> {
+  private readonly source: Source<Target>;
+
+  private readonly owner: Owner;
+
+  private readonly files: Files;
+
+  private readonly server: Server;
+
+  private readonly state: State<Target>;
+
+  private readonly busyInterval: number;
+
+  private readonly idleInterval: number;
+
+  private readonly mode: Mode;
+
+  private readonly log: (line: string) => void;
+
+  private readonly silent = new Set<Socket>();
+
+  private readonly ended = Promise.withResolvers<number>();
+
+  private polling: Promise<number> | null = null;
+
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private ownerTimer: ReturnType<typeof setInterval> | null = null;
+
+  private nextInterval: number;
+
+  private failures = 0;
+
+  private stopping = false;
+
+  private lastDeliveryAt = Date.now();
+
+  private shuttingDown: Promise<void> | null = null;
+
+  constructor(setup: DaemonSetup<Target>) {
+    this.source = setup.source;
+    this.owner = setup.owner;
+    this.files = setup.files;
+    this.server = setup.server;
+    this.state = setup.state;
+    this.busyInterval = setup.busyInterval;
+    this.idleInterval = setup.idleInterval;
+    this.mode = setup.mode;
+    this.log = setup.log;
+    this.nextInterval = setup.busyInterval;
+  }
+
+  private ownerGone(): boolean {
+    return this.owner.pid !== null && !isProcessAlive(this.owner.pid);
+  }
+
+  /** The daemon's two fields win: a source field named id or at would renumber the log. */
+  private number(inputs: EventInput[]): Event[] {
+    return inputs.map(({ id: _id, at: _at, ...input }) => {
+      this.state.lastEventId += 1;
+      const event: Event = { id: this.state.lastEventId, at: new Date().toISOString(), ...input };
+      this.log(`event #${event.id} ${event.kind}: ${event.text.split("\n")[0]}`);
+      return event;
+    });
+  }
+
+  /**
+   * The log first, then the state: a daemon killed between the two restarts from a state whose
+   * cursors predate the logged events and reads them again, so a crash re-sends at most one poll.
+   * The other order would lose the events of that poll for good.
+   */
+  private commit(events: Event[]): void {
+    appendEvents(this.files, events);
+    saveState(this.files, this.state);
+  }
+
+  private async deliverDigest(events: Event[]): Promise<void> {
+    const inbox = this.owner.inbox;
+    if (inbox === null || events.length === 0) return;
+    const gap = this.lastDeliveryAt + MIN_DELIVERY_GAP_MS - Date.now();
+    if (gap > 0) await sleep(gap);
+    this.lastDeliveryAt = Date.now();
+    const from = `uds:${this.files.socket}`;
+    const frame: InboxFrame = {
+      type: "user",
+      message: {
+        role: "user",
+        content: envelope(from, this.source.name, this.mode, digest(this.source.name, events)),
+      },
+      from,
+      from_name: this.source.name,
+      from_mode: this.mode,
+      msg_id: `${this.source.name}-${(events[0] as Event).id}-${randomUUID()}`,
+    };
+    try {
+      await deliver(inbox, frame);
+    } catch (error) {
+      const ids = events.map((event) => `#${event.id}`).join(",");
+      this.log(`delivery of ${ids} to ${inbox} failed: ${errorCode(error) ?? errorText(error)}`);
+    }
+  }
+
+  /** A failed poll is a log line; the third in a row is one `trouble` event, delivered like an alert. */
+  private async pollFailed(error: unknown): Promise<number> {
+    this.failures += 1;
+    this.log(`poll failed (${this.failures} in a row): ${errorText(error)}`);
+    if (this.failures !== MAX_CONSECUTIVE_POLL_FAILURES) return 0;
+    const trouble = this.number([
+      {
+        kind: "trouble",
+        text: `${this.source.name}: the last ${MAX_CONSECUTIVE_POLL_FAILURES} polls failed; read the daemon log for the reason`,
+        url: this.files.log,
+      },
+    ]);
+    this.commit(trouble);
+    await this.deliverDigest(trouble);
+    return trouble.length;
+  }
+
+  /**
+   * Each polled target's cursor lands on the current map if the very object polled is still
+   * there; one the source dropped (a merged PR) goes; one watched or replaced meanwhile stays as
+   * the watch left it.
+   */
+  private landCursors(polled: Map<string, Target>, working: Record<string, Target>): void {
+    for (const [key, original] of polled) {
+      if (this.state.targets[key] !== original) continue;
+      if (Object.hasOwn(working, key)) this.state.targets[key] = working[key] as Target;
+      else delete this.state.targets[key];
+    }
+  }
+
+  /**
+   * The source works on a copy: a poll that throws has moved nothing, and a `watch` or `unwatch`
+   * served while the poll ran is not undone when its cursors come back.
+   */
+  private async poll(): Promise<number> {
+    let result: PollResult;
+    const polled = new Map(Object.entries(this.state.targets));
+    const working = structuredClone(this.state.targets);
+    try {
+      result = await this.source.poll(working, { log: this.log });
+    } catch (error) {
+      return this.pollFailed(error);
+    }
+    this.failures = 0;
+    this.landCursors(polled, working);
+    // A ramp, not a jump to idle: a merge or a review lands minutes after the last activity, with
+    // nothing pending.
+    this.nextInterval = result.busy
+      ? this.busyInterval
+      : Math.min(this.idleInterval, this.nextInterval * 2);
+    const events = this.number(result.events);
+    this.log(
+      `poll: ${events.length} event(s), ${result.busy ? "busy" : "quiet"}; next in ${this.nextInterval} s`,
+    );
+    this.commit(events);
+    // A note is in the log for `wait` and `status`; the owner's inbox hears only the alerts.
+    await this.deliverDigest(events.filter((event) => event.level !== "note"));
+    return events.length;
+  }
+
+  /**
+   * close() refuses new connections and leaves accepted ones open; a client that connected and
+   * never wrote would hold the process up past "daemon stopped" through its pending read.
+   */
+  private closeServer(): void {
+    this.server.close();
+    for (const client of this.silent) {
+      client.setTimeout(SILENT_CLIENT_GRACE_MS, () => client.destroy());
+    }
+  }
+
+  private removeSocket(): void {
+    try {
+      unlinkSync(this.files.socket);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") {
+        this.log(`could not remove ${this.files.socket}: ${errorText(error)}`);
+      }
+    }
+  }
+
+  /**
+   * A poll in flight is drained first: released earlier, the socket would let a replacement daemon
+   * start while this one still delivers and saves over the replacement's state.
+   */
+  private async endServing(reason: string): Promise<void> {
+    this.stopping = true;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.ownerTimer) clearInterval(this.ownerTimer);
+    if (this.polling) await this.polling.catch(() => {});
+
+    saveState(this.files, this.state);
+    this.closeServer();
+    this.removeSocket();
+    this.log(`daemon ${process.pid} stopped: ${reason}`);
+    this.ended.resolve(0);
+  }
+
+  /** One shutdown, whoever asks first; a later stop waits for the same one. */
+  private shutdown(reason: string): Promise<void> {
+    this.shuttingDown ??= this.endServing(reason);
+    return this.shuttingDown;
+  }
+
+  private schedulePoll(): void {
+    if (this.stopping) return;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = setTimeout(() => {
+      this.runPoll().catch((error: unknown) => this.log(`poll crashed: ${errorText(error)}`));
+    }, this.nextInterval * 1000);
+  }
+
+  /**
+   * A poll asked for while one is in flight follows it: two watches queued behind one poll each
+   * get their own read. Null: the daemon is stopping and nothing was read.
+   */
+  private runPoll(): Promise<number | null> {
+    if (this.stopping) return Promise.resolve(null);
+    if (this.polling) return this.polling.then(() => this.runPoll());
+    if (this.ownerGone()) {
+      void this.shutdown(`${describeOwner(this.owner)} exited`);
+      return Promise.resolve(null);
+    }
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    this.polling = this.poll().finally(() => {
+      this.polling = null;
+      this.schedulePoll();
+    });
+    return this.polling;
+  }
+
+  private async watchTarget(key: string, target: Target): Promise<Reply> {
+    this.state.targets[key] = target;
+    saveState(this.files, this.state);
+    this.log(`watch ${key}`);
+    if ((await this.runPoll()) === null) throw new Error(STOPPING_ERROR);
+    return { ok: true, watched: Object.keys(this.state.targets).length };
+  }
+
+  /** A null key drops every target. */
+  private unwatchTarget(key: string | null): Reply {
+    if (key === null) {
+      this.state.targets = noTargets();
+    } else if (Object.hasOwn(this.state.targets, key)) {
+      delete this.state.targets[key];
+    } else {
+      throw new Error(`${key} is not watched`);
+    }
+
+    saveState(this.files, this.state);
+    this.log(`unwatch ${key ?? "everything"}`);
+    return { ok: true, watched: Object.keys(this.state.targets).length };
+  }
+
+  private currentStatus(): Status {
+    return {
+      pid: process.pid,
+      lastEventId: this.state.lastEventId,
+      targets: Object.entries(this.state.targets).map(([key, target]) => ({
+        key,
+        summary: this.source.summary?.(target) ?? [],
+      })),
+    };
+  }
+
+  /**
+   * A connection accepted before the stop can still carry a command; work it would add has no
+   * poll left to run it.
+   */
+  private async dispatch(command: Command): Promise<Reply> {
+    if (this.stopping && command.cmd !== "status" && command.cmd !== "stop") {
+      return { ok: false, error: STOPPING_ERROR };
+    }
+    switch (command.cmd) {
+      case "watch":
+        return this.watchTarget(command.key, command.target as Target);
+      case "unwatch":
+        return this.unwatchTarget(command.key);
+      case "poll":
+        return { ok: true, events: (await this.runPoll()) ?? 0 };
+      case "status":
+        return { ok: true, status: this.currentStatus() };
+      case "stop":
+        await this.shutdown("stop command");
+        return { ok: true };
+    }
+  }
+
+  private async handleLine(line: string, socket: Socket): Promise<void> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      this.log("control: ignored a non-JSON frame");
+      socket.end();
+      return;
+    }
+    const frame = parsed as Partial<Command> & { type?: unknown };
+    // The receiver of a delivery reports what became of it to the frame's `from`, this socket, as
+    // a peer_message_status frame; the log is the one place it goes.
+    if (typeof frame !== "object" || frame === null || typeof frame.cmd !== "string") {
+      this.log(`control: ignored a frame of type ${String(frame?.type ?? "unknown")}`);
+      socket.end();
+      return;
+    }
+    let reply: Reply;
+    try {
+      reply = await this.dispatch(frame as Command);
+    } catch (error) {
+      reply = { ok: false, error: errorText(error) };
+      this.log(`control ${frame.cmd}: ${errorText(error)}`);
+    }
+    socket.end(`${JSON.stringify(reply)}\n`);
+  }
+
+  /** A connection is silent until its first line arrives; then it is answered and closes. */
+  private accept(socket: Socket): void {
+    this.silent.add(socket);
+    socket.once("close", () => this.silent.delete(socket));
+    firstLine(socket, "closed before a line").then(
+      (line) => {
+        this.silent.delete(socket);
+        return this.handleLine(line, socket);
+      },
+      (error) => this.log(`control connection: ${errorText(error)}`),
+    );
+  }
+
+  /** Serves until the shutdown, whoever asks for it; resolves with the exit code. */
+  run(): Promise<number> {
+    this.server.on("connection", (socket) => this.accept(socket));
+    this.ownerTimer = setInterval(() => {
+      if (this.ownerGone()) void this.shutdown(`${describeOwner(this.owner)} exited`);
+    }, OWNER_CHECK_MS);
+    process.on("SIGTERM", () => void this.shutdown("SIGTERM"));
+    process.on("SIGINT", () => void this.shutdown("SIGINT"));
+    // A restart with saved targets polls at once: what moved while the daemon was down is news.
+    if (Object.keys(this.state.targets).length > 0) {
+      this.runPoll().catch((error: unknown) => this.log(`poll crashed: ${errorText(error)}`));
+    } else {
+      this.schedulePoll();
+    }
+    return this.ended.promise;
+  }
+}
+
 async function runDaemon<Target extends object>(
   ctx: Context<Target>,
   owner: Owner,
@@ -552,7 +970,7 @@ async function runDaemon<Target extends object>(
     console.log(`another ${source.name} daemon already serves ${describeOwner(owner)}; exiting`);
     return 0;
   }
-  let state: ReturnType<typeof loadState<Target>>;
+  let state: State<Target>;
   try {
     state = loadState<Target>(files);
   } catch (error) {
@@ -563,261 +981,17 @@ async function runDaemon<Target extends object>(
   const banner = `${source.name} daemon ${process.pid} for ${describeOwner(owner)}; socket ${files.socket}; log ${files.log}; poll every ${busyInterval} s busy, doubling to ${idleInterval} s idle; mode ${mode}`;
   console.log(banner);
   log(banner);
-
-  let polling: Promise<number> | null = null;
-  let pollTimer: ReturnType<typeof setTimeout> | null = null;
-  let nextInterval = busyInterval;
-  let failures = 0;
-  let stopping = false;
-  let lastDeliveryAt = Date.now();
-  // Connections accepted whose first line has not arrived; one that has is answered and closes.
-  const silent = new Set<Socket>();
-  let finish: (code: number) => void = () => {};
-  const done = new Promise<number>((resolve) => {
-    finish = resolve;
-  });
-
-  const ownerGone = (): boolean => owner.pid !== null && !isProcessAlive(owner.pid);
-
-  // The daemon's two fields win: a source field named id or at would renumber the log.
-  const number = (inputs: EventInput[]): Event[] =>
-    inputs.map(({ id: _id, at: _at, ...input }) => {
-      state.lastEventId += 1;
-      const event: Event = { id: state.lastEventId, at: new Date().toISOString(), ...input };
-      log(`event #${event.id} ${event.kind}: ${event.text.split("\n")[0]}`);
-      return event;
-    });
-
-  // The log first, then the state: a daemon killed between the two restarts from a state whose
-  // cursors predate the logged events and reads them again, so a crash re-sends at most one poll.
-  // The other order would lose the events of that poll for good.
-  const commit = (events: Event[]): void => {
-    appendEvents(files, events);
-    saveState(files, state);
-  };
-
-  const deliverDigest = async (events: Event[]): Promise<void> => {
-    if (owner.inbox === null || events.length === 0) return;
-    const gap = lastDeliveryAt + MIN_DELIVERY_GAP_MS - Date.now();
-    if (gap > 0) await sleep(gap);
-    lastDeliveryAt = Date.now();
-    const from = `uds:${files.socket}`;
-    const frame: InboxFrame = {
-      type: "user",
-      message: {
-        role: "user",
-        content: envelope(from, source.name, mode, digest(source.name, events)),
-      },
-      from,
-      from_name: source.name,
-      from_mode: mode,
-      msg_id: `${source.name}-${(events[0] as Event).id}-${randomUUID()}`,
-    };
-    try {
-      await deliver(owner.inbox, frame);
-    } catch (error) {
-      const ids = events.map((event) => `#${event.id}`).join(",");
-      log(`delivery of ${ids} to ${owner.inbox} failed: ${errorCode(error) ?? errorText(error)}`);
-    }
-  };
-
-  // The source works on a copy: a poll that throws has moved nothing, and a `watch` or `unwatch`
-  // served while the poll ran is not undone when its cursors come back. Each polled target's
-  // cursor lands on the current map if the very object polled is still there; one the source
-  // dropped (a merged PR) goes; one watched or replaced meanwhile stays as the watch left it.
-  const poll = async (): Promise<number> => {
-    let result: PollResult;
-    const polled = new Map(Object.entries(state.targets));
-    const working = structuredClone(state.targets);
-    try {
-      result = await source.poll(working, { log });
-    } catch (error) {
-      failures += 1;
-      log(`poll failed (${failures} in a row): ${errorText(error)}`);
-      if (failures !== MAX_CONSECUTIVE_POLL_FAILURES) return 0;
-      const trouble = number([
-        {
-          kind: "trouble",
-          text: `${source.name}: the last ${MAX_CONSECUTIVE_POLL_FAILURES} polls failed; read the daemon log for the reason`,
-          url: files.log,
-        },
-      ]);
-      commit(trouble);
-      await deliverDigest(trouble);
-      return trouble.length;
-    }
-    failures = 0;
-    for (const [key, original] of polled) {
-      if (state.targets[key] !== original) continue;
-      if (Object.hasOwn(working, key)) state.targets[key] = working[key] as Target;
-      else delete state.targets[key];
-    }
-    // A ramp, not a jump to idle: a merge or a review lands minutes after the last activity, with
-    // nothing pending.
-    nextInterval = result.busy ? busyInterval : Math.min(idleInterval, nextInterval * 2);
-    const events = number(result.events);
-    log(
-      `poll: ${events.length} event(s), ${result.busy ? "busy" : "quiet"}; next in ${nextInterval} s`,
-    );
-    commit(events);
-    // A note is in the log for `wait` and `status`; the owner's inbox hears only the alerts.
-    await deliverDigest(events.filter((event) => event.level !== "note"));
-    return events.length;
-  };
-
-  const schedulePoll = (): void => {
-    if (stopping) return;
-    if (pollTimer) clearTimeout(pollTimer);
-    pollTimer = setTimeout(() => {
-      runPoll().catch((error: unknown) => log(`poll crashed: ${errorText(error)}`));
-    }, nextInterval * 1000);
-  };
-
-  // A poll asked for while one is in flight follows it: two watches queued behind one poll each
-  // get their own read. Null: the daemon is stopping and nothing was read.
-  const runPoll = (): Promise<number | null> => {
-    if (stopping) return Promise.resolve(null);
-    if (polling) return polling.then(() => runPoll());
-    if (ownerGone()) {
-      void shutdown(`${describeOwner(owner)} exited`);
-      return Promise.resolve(null);
-    }
-    if (pollTimer) {
-      clearTimeout(pollTimer);
-      pollTimer = null;
-    }
-    polling = poll().finally(() => {
-      polling = null;
-      schedulePoll();
-    });
-    return polling;
-  };
-
-  // One shutdown, whoever asks first; a later stop waits for the same one. A poll in flight is
-  // drained first: released earlier, the socket would let a replacement daemon start while this
-  // one still delivers and saves over the replacement's state.
-  let shuttingDown: Promise<void> | null = null;
-  const shutdown = (reason: string): Promise<void> => {
-    shuttingDown ??= (async () => {
-      stopping = true;
-      if (pollTimer) clearTimeout(pollTimer);
-      clearInterval(ownerTimer);
-      if (polling) await polling.catch(() => {});
-      saveState(files, state);
-      // close() refuses new connections and leaves accepted ones open; a client that connected and
-      // never wrote would hold the process up past "daemon stopped" through its pending read.
-      server.close();
-      for (const client of silent) {
-        client.setTimeout(SILENT_CLIENT_GRACE_MS, () => client.destroy());
-      }
-      try {
-        unlinkSync(files.socket);
-      } catch (error) {
-        if (errorCode(error) !== "ENOENT") {
-          log(`could not remove ${files.socket}: ${errorText(error)}`);
-        }
-      }
-      log(`daemon ${process.pid} stopped: ${reason}`);
-      finish(0);
-    })();
-    return shuttingDown;
-  };
-
-  const ownerTimer = setInterval(() => {
-    if (ownerGone()) void shutdown(`${describeOwner(owner)} exited`);
-  }, OWNER_CHECK_MS);
-
-  const dispatch = async (command: Command): Promise<Reply> => {
-    // A connection accepted before the stop can still carry a command; work it would add has no
-    // poll left to run it.
-    if (stopping && command.cmd !== "status" && command.cmd !== "stop") {
-      return { ok: false, error: STOPPING_ERROR };
-    }
-    switch (command.cmd) {
-      case "watch": {
-        state.targets[command.key] = command.target as Target;
-        saveState(files, state);
-        log(`watch ${command.key}`);
-        if ((await runPoll()) === null) throw new Error(STOPPING_ERROR);
-        return { ok: true, watched: Object.keys(state.targets).length };
-      }
-      case "unwatch": {
-        if (command.key === null) state.targets = noTargets();
-        else if (!Object.hasOwn(state.targets, command.key)) {
-          throw new Error(`${command.key} is not watched`);
-        } else delete state.targets[command.key];
-        saveState(files, state);
-        log(`unwatch ${command.key ?? "everything"}`);
-        return { ok: true, watched: Object.keys(state.targets).length };
-      }
-      case "poll":
-        return { ok: true, events: (await runPoll()) ?? 0 };
-      case "status":
-        return {
-          ok: true,
-          status: {
-            pid: process.pid,
-            lastEventId: state.lastEventId,
-            targets: Object.entries(state.targets).map(([key, target]) => ({
-              key,
-              summary: source.summary?.(target) ?? [],
-            })),
-          },
-        };
-      case "stop":
-        await shutdown("stop command");
-        return { ok: true };
-    }
-  };
-
-  const handleLine = async (line: string, socket: Socket): Promise<void> => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      log("control: ignored a non-JSON frame");
-      socket.end();
-      return;
-    }
-    const frame = parsed as Partial<Command> & { type?: unknown };
-    // The receiver of a delivery reports what became of it to the frame's `from`, this socket, as
-    // a peer_message_status frame; the log is the one place it goes.
-    if (typeof frame !== "object" || frame === null || typeof frame.cmd !== "string") {
-      log(`control: ignored a frame of type ${String(frame?.type ?? "unknown")}`);
-      socket.end();
-      return;
-    }
-    let reply: Reply;
-    try {
-      reply = await dispatch(frame as Command);
-    } catch (error) {
-      reply = { ok: false, error: errorText(error) };
-      log(`control ${frame.cmd}: ${errorText(error)}`);
-    }
-    socket.end(`${JSON.stringify(reply)}\n`);
-  };
-
-  server.on("connection", (socket) => {
-    silent.add(socket);
-    socket.once("close", () => silent.delete(socket));
-    firstLine(socket, "closed before a line").then(
-      (line) => {
-        silent.delete(socket);
-        return handleLine(line, socket);
-      },
-      (error) => log(`control connection: ${errorText(error)}`),
-    );
-  });
-
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-  // A restart with saved targets polls at once: what moved while the daemon was down is news.
-  if (Object.keys(state.targets).length > 0) {
-    runPoll().catch((error: unknown) => log(`poll crashed: ${errorText(error)}`));
-  } else {
-    schedulePoll();
-  }
-  return done;
+  return new Daemon({
+    source,
+    owner,
+    files,
+    server,
+    state,
+    busyInterval,
+    idleInterval,
+    mode,
+    log,
+  }).run();
 }
 
 // --- entry ---------------------------------------------------------------------

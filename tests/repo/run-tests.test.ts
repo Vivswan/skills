@@ -11,17 +11,17 @@ import {
 import { ROOT } from "../../scripts/lib.mts";
 import { tempDirs } from "../helpers/temp-dirs";
 
-const temp = tempDirs();
-
 // The launcher's zero-test guard: an invocation that runs zero tests must
 // fail HOWEVER it was reached. bun test itself exits 0 with "Ran 0 tests"
 // for --only with no .only test and for --pass-with-no-tests, so the
 // launcher is the backstop that keeps `bun run test <anything>` from ever
 // reporting a vacuous green.
+//
+// TARGET is the suite's smallest fast file; every scenario here nests a real bun test run, so the
+// target must stay cheap.
 
+const temp = tempDirs();
 const LAUNCHER = join(ROOT, "scripts", "run-tests.mts");
-// The suite's smallest fast file; every scenario here nests a real bun test
-// run, so the target must stay cheap.
 const TARGET = join("tests", "repo", "lib.test.ts");
 
 function run(...args: string[]) {

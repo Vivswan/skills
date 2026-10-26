@@ -32,6 +32,7 @@ import {
   normalizeMap,
   normalizeTranscript,
   num,
+  type PendingCall,
   projectsRoot,
   readSidecar,
   readTranscript,
@@ -43,32 +44,52 @@ import {
   type Transcript,
 } from "./fleet/transcripts.mts";
 
+// The command that puts the session-events skill beside this one, where the import below resolves it.
 const INSTALL = "npx skills add Vivswan/skills -g --skill session-events";
+
+// The `--quiet-after` default; `--help` shows it, and tests/repo/usage-blocks.test.ts holds a page's fence equal to `--help`.
 const DEFAULT_QUIET_AFTER_MINUTES = 10;
+
 // An unclaimed worktree that worked is idle after this many polls with no worker and no change.
 const IDLE_POLLS = 2;
-// A pending call is stuck past its own timeout plus the grace, or past the plain bound when it names none.
+
+// A pending call that names its own timeout is stuck this long past it.
 const TOOL_GRACE_MINUTES = 10;
+
+// A pending call that names no timeout is stuck past this plain bound.
 const TOOL_STUCK_MINUTES = 30;
+
 // A child whose own transcript has not moved for this long is stuck; a moving child never is.
 const CHILD_STILL_MINUTES = 30;
+
 // An ended turn is said once this old: its signal takes a moment to reach the one waiting on it.
 const ENDED_GRACE_MINUTES = 5;
-// A stillness already older than this when first judged (the first poll of a watch, a transcript
-// first seen) is history: one note, never an alert. One that crosses it under the watch was
-// judged fresh and stays an alert.
+
+// A stillness already older than this when first judged is history, one note and never an alert; one that crosses it under the watch stays an alert.
 const STALE_HOURS = 24;
+
 // A worktree the lead's own command named stays the lead's this long after the newest such command.
 const LEAD_CLAIM_MINUTES = 30;
+
 // A stuck or idle alert is repeated as its duration doubles, this many times, then held in silence.
 const MAX_REPEATS = 3;
+
 // The harness closes a background job's output file with this line.
 const EXIT_LINE = /^\[exited with code \d+\]$/;
+
+// Bytes read off the end of a job's output file for its exit line, which is under thirty bytes.
 const OUTPUT_TAIL_BYTES = 256;
+
 // A lone shell parked on a worktree is presence, not work; anything else beside it (a sleep too) is alive.
 const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh"]);
+
+// Claude Code names a subagent's transcript by its agentId; the sidecar beside it is `agent-<agentId>.meta.json`.
 const TRANSCRIPT_NAME = /^agent-([^/]+)\.jsonl$/;
+
+// Sha characters an event text shows for a head; git resolves the prefix.
 const SHORT_SHA = 12;
+
+// The bounds above are in minutes, and the transcripts' ISO timestamps compare in milliseconds.
 const MINUTE_MS = 60_000;
 
 /** An alert in force: what was said, when it began, the duration said (null for one said once), and how many repeats went out. */
@@ -91,23 +112,35 @@ interface Noted {
 interface AgentEntry extends Transcript {
   path: string;
   sidecar: Sidecar | null;
-  /** What stands said about this agent, null while nothing does. */
   said: Standing | Noted | null;
 }
 
 /** One worktree's last reading: the head, the tree size, the activity fingerprint, the dirty-tree reading, and the idle count. */
 interface WorktreeEntry {
+  /** The branch checked out, null on a detached head; it names the worktree in the event texts. */
   branch: string | null;
+
+  /** The head at the last reading; a different one now is a `head` note. */
   headSha: string | null;
+
+  /** Files at HEAD at the last reading; fewer than half now is a `wipe` alert. */
   treeFileCount: number | null;
+
+  /** The head and the dirty-tree reading together; a change in either is movement, the daemon's busy flag. */
   fingerprint: string | null;
+
   /** The dirty-tree reading alone (newest dirty mtime and status hash): what the idle count watches. */
   tree: string | null;
+
+  /** Workers and shells counted at the last reading, kept with the row; the idle judgment reads the fresh count, never this. */
   processes: { workers: number; shells: number };
+
   /** Polls in a row with no worker process and an unchanged dirty tree. */
   idlePolls: number;
+
   /** Whether a worker process or a dirty-tree change was ever seen here in this watch; a worktree that never worked never goes idle. */
   workSeen: boolean;
+
   /** The idle alert in force, null while none is. */
   said: Standing | null;
 }
@@ -123,20 +156,39 @@ interface StandingTrouble extends Trouble {
 }
 
 interface Target {
+  /** How the target was named: `session`, found by CLAUDE_CODE_SESSION_ID, or a directory path given whole. */
   form: "session" | "dir";
+
+  /** The lead's own transcript, `<project dir>/<session id>.jsonl`. */
   sessionFile: string;
+
+  /** Where Claude Code writes each subagent's transcript and sidecar, `<project dir>/<session id>/subagents`. */
   subagentsDir: string;
+
   /** Where the harness writes this session's background job output: `<tmp root>/<project slug>/<session id>/tasks`. */
   tasksDir: string;
+
+  /** The repository whose unclaimed worktrees are read, from `--repo`; null reads the agents alone. */
   repo: string | null;
+
+  /** From `--quiet-after`: an open turn with nothing pending is stuck after this long. */
   quietAfterMinutes: number;
+
   /** Polls done so far; an agent present at the first is not started. */
   polls: number;
+
+  /** Every fleet agent read so far, by agentId; one the listing dropped stays, its claims and its alert cleared. */
   agents: Record<string, AgentEntry>;
+
+  /** The lead's own transcript: its children and stops judge the agents, its named paths claim worktrees. */
   lead: Transcript;
+
+  /** The last reading of every unclaimed worktree, by path; one discovery no longer lists is dropped, with a `gone` note unless an agent claims it. */
   worktrees: Record<string, WorktreeEntry>;
+
   /** The trouble conditions in force, by key. */
   trouble: Record<string, StandingTrouble>;
+
   /** Whether the subagents directory has ever been listed; before the first worker is spawned it does not exist, and that is an empty fleet. */
   subagentsListed: boolean;
 }
@@ -150,6 +202,24 @@ type Situation =
   | { kind: "stranded"; job: string }
   | { kind: "stall"; since: string }
   | { kind: "ended"; since: string; signalled: boolean };
+
+/** One agent's read this poll: the entry read onto a copy, or the file that failed with the sidecar the poll holds for the agent. */
+type AgentRead =
+  | { ok: true; entry: AgentEntry; moved: boolean }
+  | { ok: false; file: string; reason: string; sidecar: Sidecar | null };
+
+interface WorktreeActivity {
+  working: boolean;
+  workSeen: boolean;
+  idle: boolean;
+  idlePolls: number;
+}
+
+/** The process reading over the discovered worktrees; `attributionOk` is false under a degraded or downed lsof, when no process list is verified. */
+interface ProcessReading {
+  processesByWorktree: Map<string, ProcessRow[]>;
+  attributionOk: boolean;
+}
 
 /** A read the whole poll depends on failed, so nothing this poll saw can be judged; `key` names the condition in the trouble ledger. */
 class FleetReadError extends Error {
@@ -185,6 +255,10 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** A comparator by the time `since` reads off an entry, oldest first. */
 function byTime<T>(since: (entry: T) => string): (a: T, b: T) => number {
   return (a, b) => Date.parse(since(a)) - Date.parse(since(b));
@@ -192,30 +266,35 @@ function byTime<T>(since: (entry: T) => string): (a: T, b: T) => number {
 
 // --- the target -------------------------------------------------------------------
 
+function flagValue(flag: string, value: string | undefined): string {
+  if (value === undefined || value.startsWith("--")) throw new UsageError(`${flag} needs a value`);
+  return value;
+}
+
+function repoOf(value: string): string {
+  if (!isAbsolute(value)) throw new UsageError(`--repo must be an absolute path, got: ${value}`);
+  return resolve(value);
+}
+
+function quietAfterOf(value: string): number {
+  if (!/^\d+$/.test(value) || Number(value) <= 0) {
+    throw new UsageError(`--quiet-after must be a positive whole number of minutes, got: ${value}`);
+  }
+  return Number(value);
+}
+
 function parseFlags(flags: string[]): { repo: string | null; quietAfterMinutes: number } {
   let repo: string | null = null;
   let quietAfterMinutes = DEFAULT_QUIET_AFTER_MINUTES;
   for (let i = 0; i < flags.length; i += 2) {
     const flag = flags[i] as string;
-    const value = flags[i + 1];
     if (flag !== "--repo" && flag !== "--quiet-after") {
       throw new UsageError(`unknown option: ${flag}`);
     }
-    if (value === undefined || value.startsWith("--"))
-      throw new UsageError(`${flag} needs a value`);
 
-    if (flag === "--repo") {
-      if (!isAbsolute(value))
-        throw new UsageError(`--repo must be an absolute path, got: ${value}`);
-      repo = resolve(value);
-    } else {
-      if (!/^\d+$/.test(value) || Number(value) <= 0) {
-        throw new UsageError(
-          `--quiet-after must be a positive whole number of minutes, got: ${value}`,
-        );
-      }
-      quietAfterMinutes = Number(value);
-    }
+    const value = flagValue(flag, flags[i + 1]);
+    if (flag === "--repo") repo = repoOf(value);
+    else quietAfterMinutes = quietAfterOf(value);
   }
   return { repo, quietAfterMinutes };
 }
@@ -341,7 +420,7 @@ function jobEnded(path: string, io: Io): boolean {
     fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      io.log(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+      io.log(`${path}: ${reasonOf(error)}`);
     }
     return false;
   }
@@ -381,6 +460,100 @@ function signalReached(target: Target, agentId: string, entry: AgentEntry): bool
   return call !== null && !Object.hasOwn(waiting.pending, call);
 }
 
+/** The stuck bound of a pending call: its own timeout plus the grace, or the plain bound when it names none. */
+function callBoundMs(call: PendingCall): number {
+  if (call.timeoutMs === null) return TOOL_STUCK_MINUTES * MINUTE_MS;
+  return call.timeoutMs + TOOL_GRACE_MINUTES * MINUTE_MS;
+}
+
+/** What a child the agent waits on says: still past the bound, unread when its read failed this poll, null while it moves. */
+function childSituation(
+  target: Target,
+  childId: string,
+  since: string,
+  nowMs: number,
+  failed: ReadonlyMap<string, Sidecar | null>,
+): Situation | null {
+  const moved = stillChild(target, childId, nowMs, failed);
+  if (moved === "unread") return { kind: "unread" };
+  if (moved === null) return null;
+  return {
+    kind: "child",
+    id: childId,
+    name: agentName(childId, target.agents[childId]),
+    moved,
+    since,
+  };
+}
+
+/** What the pending calls say, oldest first: a call on a fleet child still past the bound, or any other call past its bound; fine while every call is within bounds; null with none pending. */
+function pendingSituation(
+  target: Target,
+  state: Activity,
+  nowMs: number,
+  failed: ReadonlyMap<string, Sidecar | null>,
+): Situation | null {
+  const pending = Object.entries(state.pending).sort(byTime(([, call]) => call.at));
+  for (const [id, call] of pending) {
+    const childId = call.tool === "Agent" ? childOfCall(target, id, failed) : undefined;
+    if (childId !== undefined) {
+      const child = childSituation(target, childId, call.at, nowMs, failed);
+      if (child !== null) return child;
+      continue;
+    }
+    if (nowMs - Date.parse(call.at) >= callBoundMs(call)) {
+      return { kind: "tool", id, tool: call.tool, since: call.at };
+    }
+  }
+  return pending.length > 0 ? { kind: "fine" } : null;
+}
+
+/** What the running children say, oldest first: one still past the bound; fine while every one moves; null with none running. */
+function childrenSituation(
+  target: Target,
+  state: Activity,
+  nowMs: number,
+  failed: ReadonlyMap<string, Sidecar | null>,
+): Situation | null {
+  const running = Object.entries(state.children)
+    .filter(([, child]) => child.outcome === "running")
+    .sort(byTime(([, child]) => child.since));
+  for (const [id, child] of running) {
+    const situation = childSituation(target, id, child.since, nowMs, failed);
+    if (situation !== null) return situation;
+  }
+  return running.length > 0 ? { kind: "fine" } : null;
+}
+
+/** What the background jobs say, oldest first: stranded once one's output ended with no notice; fine while every one runs; null with none. */
+function jobsSituation(target: Target, state: Activity, io: Io): Situation | null {
+  const jobs = Object.entries(state.jobs).sort(byTime(([, job]) => job.at));
+  for (const [job] of jobs) {
+    if (jobEnded(join(target.tasksDir, `${job}.output`), io)) return { kind: "stranded", job };
+  }
+  return jobs.length > 0 ? { kind: "fine" } : null;
+}
+
+/** What a transcript with nothing pending says by its stillness: a stall past `--quiet-after` while the turn is open and no signal reached the one waiting, an ended turn past the grace, else fine. */
+function stillnessSituation(
+  target: Target,
+  agentId: string,
+  entry: AgentEntry,
+  nowMs: number,
+): Situation {
+  const movedAt = entry.state.lastMovedAt;
+  if (movedAt === null) return { kind: "fine" };
+
+  const stillMs = nowMs - Date.parse(movedAt);
+  const signalled = signalReached(target, agentId, entry);
+  if (entry.state.turn === "open" && !signalled) {
+    if (stillMs < target.quietAfterMinutes * MINUTE_MS) return { kind: "fine" };
+    return { kind: "stall", since: movedAt };
+  }
+  if (stillMs < ENDED_GRACE_MINUTES * MINUTE_MS) return { kind: "fine" };
+  return { kind: "ended", since: movedAt, signalled };
+}
+
 /**
  * What stands for one agent now, read off its transcript against the bounds: a stop, a stuck call
  * (past its own timeout plus the grace, or the plain bound), a child still past the bound, a job
@@ -397,62 +570,25 @@ function situationOf(
   io: Io,
   failed: ReadonlyMap<string, Sidecar | null>,
 ): Situation {
-  const state = entry.state;
   // A parent whose read failed this poll is stale: nothing read of it judges this agent.
   const parent = entry.sidecar?.parentAgentId ?? null;
   if (parent !== null && failed.has(parent)) return { kind: "unread" };
+
   const ownChild = parentState(target, entry) === target.lead.state;
   if (isStopped(target.lead.state, agentId, ownChild ? (entry.sidecar?.name ?? null) : null)) {
     return { kind: "stopped" };
   }
 
-  const pending = Object.entries(state.pending).sort(byTime(([, call]) => call.at));
-  for (const [id, call] of pending) {
-    const childId = call.tool === "Agent" ? childOfCall(target, id, failed) : undefined;
-    if (childId !== undefined) {
-      const moved = stillChild(target, childId, nowMs, failed);
-      if (moved === "unread") return { kind: "unread" };
-      if (moved !== null) {
-        const name = agentName(childId, target.agents[childId]);
-        return { kind: "child", id: childId, name, moved, since: call.at };
-      }
-      continue;
-    }
-    const boundMs =
-      call.timeoutMs === null
-        ? TOOL_STUCK_MINUTES * MINUTE_MS
-        : call.timeoutMs + TOOL_GRACE_MINUTES * MINUTE_MS;
-    if (nowMs - Date.parse(call.at) >= boundMs) {
-      return { kind: "tool", id, tool: call.tool, since: call.at };
-    }
-  }
-  if (pending.length > 0) return { kind: "fine" };
+  const pending = pendingSituation(target, entry.state, nowMs, failed);
+  if (pending !== null) return pending;
 
-  const running = Object.entries(state.children)
-    .filter(([, child]) => child.outcome === "running")
-    .sort(byTime(([, child]) => child.since));
-  for (const [id, child] of running) {
-    const moved = stillChild(target, id, nowMs, failed);
-    if (moved === "unread") return { kind: "unread" };
-    if (moved === null) continue;
-    return { kind: "child", id, name: agentName(id, target.agents[id]), moved, since: child.since };
-  }
-  if (running.length > 0) return { kind: "fine" };
+  const children = childrenSituation(target, entry.state, nowMs, failed);
+  if (children !== null) return children;
 
-  const jobs = Object.entries(state.jobs).sort(byTime(([, job]) => job.at));
-  for (const [job] of jobs) {
-    if (jobEnded(join(target.tasksDir, `${job}.output`), io)) return { kind: "stranded", job };
-  }
-  if (jobs.length > 0 || state.lastMovedAt === null) return { kind: "fine" };
+  const jobs = jobsSituation(target, entry.state, io);
+  if (jobs !== null) return jobs;
 
-  const stillMs = nowMs - Date.parse(state.lastMovedAt);
-  const signalled = signalReached(target, agentId, entry);
-  if (state.turn === "open" && !signalled) {
-    if (stillMs < target.quietAfterMinutes * MINUTE_MS) return { kind: "fine" };
-    return { kind: "stall", since: state.lastMovedAt };
-  }
-  if (stillMs < ENDED_GRACE_MINUTES * MINUTE_MS) return { kind: "fine" };
-  return { kind: "ended", since: state.lastMovedAt, signalled };
+  return stillnessSituation(target, agentId, entry, nowMs);
 }
 
 function situationKey(situation: Situation): string {
@@ -611,6 +747,62 @@ function agentTransition(
   return next.announce ? event("alert", next.said.text) : null;
 }
 
+/** The subagents directory's entries, null while it has never existed; its absence after a listing is a failed read. */
+function listSubagents(target: Target): string[] | null {
+  try {
+    return readdirSync(target.subagentsDir);
+  } catch (error) {
+    // The lead may watch before spawning anyone: a directory that has never existed is an empty
+    // fleet, so the first poll happens with no agents. Once listed, its absence is a failed read.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && !target.subagentsListed) return null;
+    throw new FleetReadError(
+      "subagents",
+      `fleet: cannot list ${target.subagentsDir}: ${(error as NodeJS.ErrnoException).code ?? "error"}`,
+      fileUrl(target.subagentsDir),
+    );
+  }
+}
+
+/**
+ * One agent's sidecar and transcript, read onto a copy of its known entry and kept only when both
+ * succeed: a sidecar read that returned (null for a removed one) before the transcript read failed
+ * must not reach the known entry. A failure carries the sidecar the poll holds for the agent: the
+ * one just read, else the known one, else null.
+ */
+function readAgent(target: Target, agentId: string, name: string): AgentRead {
+  const path = join(target.subagentsDir, name);
+  const known = target.agents[agentId];
+  const entry: AgentEntry =
+    known === undefined
+      ? { ...initialTranscript(), path, sidecar: null, said: null }
+      : structuredClone(known);
+  const sidecarName = `agent-${agentId}.meta.json`;
+
+  try {
+    entry.sidecar = readSidecar(join(target.subagentsDir, sidecarName));
+  } catch (error) {
+    return { ok: false, file: sidecarName, reason: reasonOf(error), sidecar: entry.sidecar };
+  }
+
+  try {
+    return { ok: true, entry, moved: readTranscript(entry, path) };
+  } catch (error) {
+    return { ok: false, file: name, reason: reasonOf(error), sidecar: entry.sidecar };
+  }
+}
+
+// The listing is the truth: an agent it no longer shows is gone, with its worktree claims (by
+// sidecar and by its commands) and its standing alert; one it still shows whose read failed
+// keeps its last good sidecar (the per-agent trouble).
+function forgetUnlisted(target: Target, listed: ReadonlySet<string>): void {
+  for (const [agentId, entry] of Object.entries(target.agents)) {
+    if (listed.has(agentId)) continue;
+    entry.sidecar = null;
+    entry.said = null;
+    entry.state.named = {};
+  }
+}
+
 /**
  * Reads every transcript under the subagents dir into `target.agents` and returns the ids read
  * this poll. A read that failed is no observation: that agent is not judged from a reading nobody
@@ -634,22 +826,8 @@ function readAgents(
   const failed = new Map<string, Sidecar | null>();
   let busy = false;
 
-  let names: string[];
-  try {
-    names = readdirSync(target.subagentsDir);
-  } catch (error) {
-    // The lead may watch before spawning anyone: a directory that has never existed is an empty
-    // fleet, so the first poll happens with no agents. Once listed, its absence is a failed read.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" && !target.subagentsListed) {
-      return { events, busy, refreshed, failed };
-    }
-    throw new FleetReadError(
-      "subagents",
-      `fleet: cannot list ${target.subagentsDir}: ${(error as NodeJS.ErrnoException).code ?? "error"}`,
-      fileUrl(target.subagentsDir),
-    );
-  }
-
+  const names = listSubagents(target);
+  if (names === null) return { events, busy, refreshed, failed };
   target.subagentsListed = true;
 
   const listed = new Set<string>();
@@ -657,63 +835,35 @@ function readAgents(
     const agentId = TRANSCRIPT_NAME.exec(name)?.[1];
     if (agentId === undefined) continue;
     listed.add(agentId);
-    const path = join(target.subagentsDir, name);
-    const known = target.agents[agentId];
-    // Both reads land on a copy, kept only when both succeed: a sidecar read that returned (null
-    // for a removed one) before the transcript read failed must not reach the known entry.
-    const entry: AgentEntry =
-      known === undefined
-        ? { ...initialTranscript(), path, sidecar: null, said: null }
-        : structuredClone(known);
-    const sidecarName = `agent-${agentId}.meta.json`;
-    // A read that fails is this one agent's trouble, never the poll's: the rest of the fleet is still read.
-    const fail = (file: string, error: unknown): void => {
-      const reason = error instanceof Error ? error.message : String(error);
-      io.log(`${agentId}: ${reason}`);
-      failed.set(agentId, entry.sidecar);
+    const fresh = target.agents[agentId] === undefined;
+    const read = readAgent(target, agentId, name);
+    if (!read.ok) {
+      // A read that fails is this one agent's trouble, never the poll's: the rest of the fleet is still read.
+      io.log(`${agentId}: ${read.reason}`);
+      failed.set(agentId, read.sidecar);
       trouble.set(`agent:${agentId}`, {
-        text: `fleet: cannot read ${file}: ${reason}`,
-        url: fileUrl(join(target.subagentsDir, file)),
+        text: `fleet: cannot read ${read.file}: ${read.reason}`,
+        url: fileUrl(join(target.subagentsDir, read.file)),
       });
-    };
-
-    try {
-      entry.sidecar = readSidecar(join(target.subagentsDir, sidecarName));
-    } catch (error) {
-      fail(sidecarName, error);
-      continue;
-    }
-
-    try {
-      if (readTranscript(entry, path)) busy = true;
-    } catch (error) {
-      fail(name, error);
       continue;
     }
 
     // An agent joins the fleet on its first readable poll, so its start is never lost to a failed one.
-    target.agents[agentId] = entry;
+    target.agents[agentId] = read.entry;
     refreshed.push(agentId);
-    if (known === undefined && target.polls > 0) {
+    busy ||= read.moved;
+    if (fresh && target.polls > 0) {
       events.push({
         kind: "agent",
         level: "note",
-        text: `agent ${agentName(agentId, entry)}: started`,
-        url: fileUrl(path),
+        text: `agent ${agentName(agentId, read.entry)}: started`,
+        url: fileUrl(read.entry.path),
         agentId,
       });
     }
   }
 
-  // The listing is the truth: an agent it no longer shows is gone, with its worktree claims (by
-  // sidecar and by its commands) and its standing alert; one it still shows whose read failed
-  // keeps its last good sidecar (the per-agent trouble above).
-  for (const [agentId, entry] of Object.entries(target.agents)) {
-    if (listed.has(agentId)) continue;
-    entry.sidecar = null;
-    entry.said = null;
-    entry.state.named = {};
-  }
+  forgetUnlisted(target, listed);
   return { events, busy, refreshed, failed };
 }
 
@@ -770,22 +920,14 @@ function claimedWorktrees(
   return claimed;
 }
 
-/** The head, wipe, idle, and active transitions of one worktree against its last reading; the first reading says nothing. */
-function worktreeTransitions(
-  target: Target,
+/** The head and wipe transitions against the last reading: a head that moved is a note, a tree with under half its files at HEAD is an alert. */
+function headTransitions(
+  previous: WorktreeEntry | undefined,
   row: WorktreeRow & { ok: true },
-  attributionOk: boolean,
-  nowMs: number,
-): { events: EventInput[]; moved: boolean } {
+  label: string,
+  url: string,
+): EventInput[] {
   const events: EventInput[] = [];
-  const label = `worktree ${row.branch ?? row.headSha.slice(0, SHORT_SHA)}`;
-  const url = fileUrl(row.worktree);
-  const fingerprint = fingerprintOf(row);
-  const tree = treeOf(row);
-  const processes = countProcesses(row.processes);
-  const previous = target.worktrees[row.worktree];
-  const moved = previous?.fingerprint !== fingerprint;
-
   if (previous?.headSha != null && previous.headSha !== row.headSha) {
     events.push({
       kind: "head",
@@ -806,16 +948,44 @@ function worktreeTransitions(
       sha: row.headSha,
     });
   }
+  return events;
+}
 
-  // Work is a worker in the row or a dirty-tree change; a bare head move with a clean tree and no
-  // process (the lead restacking from outside) is not. Under a downed or degraded lsof an empty
-  // process list is not verified inactivity, so the idle count holds at zero.
-  const working = processes.workers > 0 || (previous !== undefined && previous.tree !== tree);
+// Work is a worker in the row or a dirty-tree change; a bare head move with a clean tree and no
+// process (the lead restacking from outside) is not. Under a downed or degraded lsof an empty
+// process list is not verified inactivity, so the idle count holds at zero.
+function activityOf(
+  previous: WorktreeEntry | undefined,
+  workers: number,
+  tree: string,
+  attributionOk: boolean,
+): WorktreeActivity {
+  const working = workers > 0 || (previous !== undefined && previous.tree !== tree);
   const workSeen = (previous?.workSeen ?? false) || working;
   const idle = attributionOk && !working && previous !== undefined;
   const idlePolls = idle ? previous.idlePolls + 1 : 0;
+  return { working, workSeen, idle, idlePolls };
+}
+
+/** The head, wipe, idle, and active transitions of one worktree against its last reading; the first reading says nothing. */
+function worktreeTransitions(
+  target: Target,
+  row: WorktreeRow & { ok: true },
+  attributionOk: boolean,
+  nowMs: number,
+): { events: EventInput[]; moved: boolean } {
+  const label = `worktree ${row.branch ?? row.headSha.slice(0, SHORT_SHA)}`;
+  const url = fileUrl(row.worktree);
+  const fingerprint = fingerprintOf(row);
+  const tree = treeOf(row);
+  const processes = countProcesses(row.processes);
+  const previous = target.worktrees[row.worktree];
+  const moved = previous?.fingerprint !== fingerprint;
+  const events = headTransitions(previous, row, label, url);
+  const activity = activityOf(previous, processes.workers, tree, attributionOk);
+
   let said = previous?.said ?? null;
-  if (said !== null && working) {
+  if (said !== null && activity.working) {
     events.push({
       kind: "active",
       level: "note",
@@ -825,12 +995,12 @@ function worktreeTransitions(
     });
     said = null;
   }
-  if (idle && workSeen && (said !== null || idlePolls >= IDLE_POLLS)) {
+  if (activity.idle && activity.workSeen && (said !== null || activity.idlePolls >= IDLE_POLLS)) {
     const next = restate(
       said,
       "idle",
-      `${label}: idle ${idlePolls} polls after work`,
-      idlePolls,
+      `${label}: idle ${activity.idlePolls} polls after work`,
+      activity.idlePolls,
       nowMs,
     );
     said = next.said;
@@ -846,11 +1016,57 @@ function worktreeTransitions(
     fingerprint,
     tree,
     processes,
-    idlePolls,
-    workSeen,
+    idlePolls: activity.idlePolls,
+    workSeen: activity.workSeen,
     said,
   };
   return { events, moved };
+}
+
+/** The process reading for the unclaimed worktrees; a degraded or downed lsof is trouble, and no process list read under it is verified. */
+async function processReading(
+  paths: string[],
+  trouble: Map<string, Trouble>,
+  repo: string,
+): Promise<ProcessReading> {
+  const attributed = await attributeProcesses(paths);
+  const lsof = attributed.lsofLine?.lsof ?? null;
+  if (lsof?.ok === true) {
+    trouble.set("lsof", {
+      text: `fleet: process attribution degraded: ${lsof.note}`,
+      url: fileUrl(repo),
+    });
+  }
+  if (lsof?.ok === false) {
+    trouble.set("lsof", {
+      text: `fleet: process attribution is down: ${lsof.error}`,
+      url: fileUrl(repo),
+    });
+  }
+  return { processesByWorktree: attributed.processesByWorktree, attributionOk: lsof === null };
+}
+
+/** The `gone` note for each saved worktree the discovery no longer lists, dropped from the saved rows; one claimed since its last reading is its agent's, gone or not, and says nothing. */
+function goneTransitions(
+  target: Target,
+  seen: ReadonlySet<string>,
+  claimed: ReadonlySet<string>,
+): EventInput[] {
+  const events: EventInput[] = [];
+  for (const [path, entry] of Object.entries(target.worktrees)) {
+    if (seen.has(path)) continue;
+    delete target.worktrees[path];
+    if (claimed.has(resolve(path))) continue;
+    events.push({
+      kind: "gone",
+      level: "note",
+      text: `worktree ${entry.branch ?? path}: gone`,
+      url: fileUrl(path),
+      worktree: path,
+      sha: entry.headSha,
+    });
+  }
+  return events;
 }
 
 async function readWorktrees(
@@ -879,31 +1095,13 @@ async function readWorktrees(
     nowMs,
   );
   const unclaimed = discovered.paths.filter((path) => !claimed.has(resolve(path)));
-  let attributionOk = true;
-  let processesByWorktree = new Map<string, ProcessRow[]>();
-  if (unclaimed.length > 0) {
-    const attributed = await attributeProcesses(discovered.paths);
-    processesByWorktree = attributed.processesByWorktree;
-    const lsof = attributed.lsofLine?.lsof ?? null;
-    attributionOk = lsof === null;
-    if (lsof?.ok === true) {
-      trouble.set("lsof", {
-        text: `fleet: process attribution degraded: ${lsof.note}`,
-        url: fileUrl(repo),
-      });
-    }
-    if (lsof?.ok === false) {
-      trouble.set("lsof", {
-        text: `fleet: process attribution is down: ${lsof.error}`,
-        url: fileUrl(repo),
-      });
-    }
-  }
+  let reading: ProcessReading = { processesByWorktree: new Map(), attributionOk: true };
+  if (unclaimed.length > 0) reading = await processReading(discovered.paths, trouble, repo);
 
   const seen = new Set<string>();
   for (const path of unclaimed) {
     seen.add(path);
-    const row = await worktreeRow(path, null, processesByWorktree.get(path) ?? []);
+    const row = await worktreeRow(path, null, reading.processesByWorktree.get(path) ?? []);
     if (!row.ok) {
       trouble.set(`worktree:${path}`, {
         text: `fleet: worktree ${path}: ${row.error}`,
@@ -913,26 +1111,14 @@ async function readWorktrees(
       if (known !== undefined) known.idlePolls = 0;
       continue;
     }
-    const outcome = worktreeTransitions(target, row, attributionOk, nowMs);
+    const outcome = worktreeTransitions(target, row, reading.attributionOk, nowMs);
     events.push(...outcome.events);
     busy ||= outcome.moved;
   }
+
   // A successful discovery is the truth: a worktree it no longer lists is gone, said once, with
   // its last head so the lead can find the branch; a failed discovery threw above and says nothing.
-  for (const [path, entry] of Object.entries(target.worktrees)) {
-    if (seen.has(path)) continue;
-    delete target.worktrees[path];
-    // One claimed since its last reading is its agent's, gone or not.
-    if (claimed.has(resolve(path))) continue;
-    events.push({
-      kind: "gone",
-      level: "note",
-      text: `worktree ${entry.branch ?? path}: gone`,
-      url: fileUrl(path),
-      worktree: path,
-      sha: entry.headSha,
-    });
-  }
+  events.push(...goneTransitions(target, seen, claimed));
   return { events, busy };
 }
 
@@ -972,7 +1158,7 @@ async function readFleet(
   try {
     busy = readTranscript(draft.lead, draft.sessionFile);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = reasonOf(error);
     throw new FleetReadError(
       "session",
       `fleet: cannot read the session transcript: ${reason}`,

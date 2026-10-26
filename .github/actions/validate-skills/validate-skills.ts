@@ -8,10 +8,13 @@ import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+/** Every published name (a skill folder, a plugin, a marketplace) is kebab-case; it also keeps a name safe to embed in listedInOutput's regex. */
 export const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-// Claude Code rejects skills whose frontmatter exceeds these limits.
+/** Claude Code rejects a skill whose frontmatter name is longer. */
 export const MAX_NAME_LENGTH = 64;
+
+/** Claude Code rejects a skill whose frontmatter description is longer. */
 export const MAX_DESCRIPTION_LENGTH = 1024;
 
 /** Thrown by fail() and collected per unit by the callers, so one broken file cannot hide another's diagnosis. */
@@ -199,8 +202,47 @@ export function checkPluginSkillPath(
   if (!lstatOf(skillMd)?.isFile()) fail(`${at}: has no SKILL.md`);
 }
 
-export function validateSkillDir(skillDir: string, where: string): string[] {
+function skillNameErrors(name: unknown, folder: string, at: string): string[] {
+  if (typeof name !== "string" || !name) return [`${at}: missing frontmatter name`];
+
   const errors: string[] = [];
+  if (name !== folder) {
+    errors.push(`${at}: frontmatter name '${name}' does not match folder '${folder}'`);
+  }
+  if (!KEBAB_CASE.test(name)) errors.push(`${at}: name '${name}' must be kebab-case`);
+  if (name.length > MAX_NAME_LENGTH) {
+    errors.push(`${at}: name exceeds ${MAX_NAME_LENGTH} characters`);
+  }
+  return errors;
+}
+
+function skillDescriptionErrors(description: unknown, at: string): string[] {
+  if (typeof description !== "string" || description.trim() === "") {
+    return [`${at}: missing frontmatter description`];
+  }
+  if (description.length > MAX_DESCRIPTION_LENGTH) {
+    return [`${at}: description exceeds ${MAX_DESCRIPTION_LENGTH} characters`];
+  }
+  return [];
+}
+
+function mcpJsonErrors(skillDir: string, where: string): string[] {
+  const mcpJson = join(skillDir, ".mcp.json");
+  const mcpStat = lstatOf(mcpJson);
+  if (mcpStat?.isSymbolicLink()) {
+    return [
+      `${where}/.mcp.json: must be a real file, not a symlink (a link can point outside the checkout)`,
+    ];
+  }
+  if (!mcpStat) return [];
+
+  // Anything present must read and parse; a directory fails the read with EISDIR.
+  const errors: string[] = [];
+  collect(errors, () => void loadJson(mcpJson, `${where}/.mcp.json`));
+  return errors;
+}
+
+export function validateSkillDir(skillDir: string, where: string): string[] {
   const folder = basename(skillDir);
   const skillMd = join(skillDir, "SKILL.md");
   const at = `${where}/SKILL.md`;
@@ -214,24 +256,10 @@ export function validateSkillDir(skillDir: string, where: string): string[] {
     if (!(error instanceof CheckFailure)) throw error;
     return [error.message];
   }
-  const name = frontmatter.name;
-  const description = frontmatter.description;
-  if (typeof name !== "string" || !name) {
-    errors.push(`${at}: missing frontmatter name`);
-  } else {
-    if (name !== folder) {
-      errors.push(`${at}: frontmatter name '${name}' does not match folder '${folder}'`);
-    }
-    if (!KEBAB_CASE.test(name)) errors.push(`${at}: name '${name}' must be kebab-case`);
-    if (name.length > MAX_NAME_LENGTH) {
-      errors.push(`${at}: name exceeds ${MAX_NAME_LENGTH} characters`);
-    }
-  }
-  if (typeof description !== "string" || description.trim() === "") {
-    errors.push(`${at}: missing frontmatter description`);
-  } else if (description.length > MAX_DESCRIPTION_LENGTH) {
-    errors.push(`${at}: description exceeds ${MAX_DESCRIPTION_LENGTH} characters`);
-  }
+  const errors = [
+    ...skillNameErrors(frontmatter.name, folder, at),
+    ...skillDescriptionErrors(frontmatter.description, at),
+  ];
   // The skills CLI silently drops a skill whose metadata.internal === true from installs and listings (any other
   // value publishes), so that value on a published skill makes it vanish for consumers while every gate stays green.
   const metadata = frontmatter.metadata;
@@ -241,17 +269,105 @@ export function validateSkillDir(skillDir: string, where: string): string[] {
         "internal skills at install time)",
     );
   }
-  const mcpJson = join(skillDir, ".mcp.json");
-  const mcpStat = lstatOf(mcpJson);
-  if (mcpStat?.isSymbolicLink()) {
-    errors.push(
-      `${where}/.mcp.json: must be a real file, not a symlink (a link can point outside the checkout)`,
-    );
-  } else if (mcpStat) {
-    // Anything present must read and parse; a directory fails the read with EISDIR.
-    collect(errors, () => void loadJson(mcpJson, `${where}/.mcp.json`));
-  }
+  errors.push(...mcpJsonErrors(skillDir, where));
   return errors;
+}
+
+/** What every entry of one marketplace is judged against; `rootPlugin` is undefined when plugin.json failed to load. */
+interface MarketplaceScope {
+  readonly where: string;
+  readonly root: string;
+  readonly skillsRoot: string;
+  readonly skillsDir: string;
+  readonly rootPlugin: PluginManifest | undefined;
+}
+
+/** The directory a plugin's source path names, confined to the repository; undefined for a source object. */
+function pluginSourceDir(
+  plugin: Record<string, unknown>,
+  name: string,
+  scope: MarketplaceScope,
+): string | undefined {
+  const { where, root, rootPlugin } = scope;
+  const source = plugin.source;
+  // A source object names another repository (git-subdir, github, url, and the rest): nothing of it is in this
+  // checkout for the path rules below to hold, and Claude Code validates the object's own shape.
+  if (isRecord(source) && typeof source.source === "string" && source.source !== "") {
+    return undefined;
+  }
+  if (typeof source !== "string" || source === "") {
+    fail(
+      `${where}: plugin '${name}' needs a source path (the starter seeds "./") or a source object naming another repository`,
+    );
+  }
+  const resolvedSource = resolve(root, source);
+  if (resolvedSource !== root && !resolvedSource.startsWith(`${root}/`)) {
+    fail(`${where}: plugin '${name}' source ${source} escapes the repository`);
+  }
+  // statSync (following links) for existence: a source may legitimately
+  // sit behind an in-repo symlink; the physical-containment check below
+  // is what keeps any link from redirecting it outside the repository.
+  if (
+    resolvedSource !== root &&
+    !statSync(resolvedSource, { throwIfNoEntry: false })?.isDirectory()
+  ) {
+    fail(`${where}: plugin '${name}' source ${source} is not a directory in the repository`);
+  }
+  const physicalRoot = realpathSync(root);
+  const physicalSource = realpathSync(resolvedSource);
+  if (physicalSource !== physicalRoot && !physicalSource.startsWith(`${physicalRoot}/`)) {
+    fail(
+      `${where}: plugin '${name}' source ${source} resolves through a symlink to ` +
+        `${physicalSource}, outside the repository`,
+    );
+  }
+  // PHYSICAL equality with the root, not lexical: a self-link source
+  // ("./self-link" -> .) publishes the repository root all the same
+  // and must not slip past the name-consistency check.
+  if (physicalSource === physicalRoot && rootPlugin && name !== rootPlugin.name) {
+    fail(
+      `${where}: plugin '${name}' publishes the repository root but the plugin ` +
+        `manifest names it '${rootPlugin.name}' - the two manifests must agree`,
+    );
+  }
+  return resolvedSource;
+}
+
+function checkPluginSkills(
+  plugin: Record<string, unknown>,
+  name: string,
+  resolvedSource: string,
+  scope: MarketplaceScope,
+): void {
+  const { where, root, skillsRoot, skillsDir } = scope;
+  // Claude Code's marketplace schema types `skills` as string|array.
+  const skills = typeof plugin.skills === "string" ? [plugin.skills] : plugin.skills;
+  if (skills === undefined) return;
+
+  if (!Array.isArray(skills)) fail(`${where}: plugin '${name}' skills must be a list`);
+  // The root plugin publishes the repository's own skills directory, so its entries keep plugin.json's
+  // direct-child rule; any other plugin's entries resolve under that plugin's source.
+  for (const skillPath of skills) {
+    if (typeof skillPath !== "string") fail(`${where}: skill paths must be strings`);
+    if (resolvedSource === root) {
+      checkSkillPath(where, skillPath, root, skillsRoot, skillsDir);
+    } else {
+      checkPluginSkillPath(`${where}: plugin '${name}'`, skillPath, root, resolvedSource);
+    }
+  }
+}
+
+function validatePluginEntry(plugin: unknown, index: number, scope: MarketplaceScope): void {
+  const { where } = scope;
+  if (!isRecord(plugin)) fail(`${where}: plugins[${index}] must be an object`);
+  const name = plugin.name;
+  if (typeof name !== "string" || !KEBAB_CASE.test(name)) {
+    fail(`${where}: plugin name ${JSON.stringify(name)} must be kebab-case`);
+  }
+  const resolvedSource = pluginSourceDir(plugin, name, scope);
+  if (resolvedSource === undefined) return;
+
+  checkPluginSkills(plugin, name, resolvedSource, scope);
 }
 
 export function validateMarketplace(
@@ -275,68 +391,9 @@ export function validateMarketplace(
     }
     plugins = raw.plugins;
   });
+  const scope: MarketplaceScope = { where, root, skillsRoot, skillsDir, rootPlugin };
   for (const [index, plugin] of plugins.entries()) {
-    collect(errors, () => {
-      if (!isRecord(plugin)) fail(`${where}: plugins[${index}] must be an object`);
-      const name = plugin.name;
-      if (typeof name !== "string" || !KEBAB_CASE.test(name)) {
-        fail(`${where}: plugin name ${JSON.stringify(name)} must be kebab-case`);
-      }
-      const source = plugin.source;
-      // A source object names another repository (git-subdir, github, url, and the rest): nothing of it is in this
-      // checkout for the path rules below to hold, and Claude Code validates the object's own shape.
-      if (isRecord(source) && typeof source.source === "string" && source.source !== "") return;
-      if (typeof source !== "string" || source === "") {
-        fail(
-          `${where}: plugin '${name}' needs a source path (the starter seeds "./") or a source object naming another repository`,
-        );
-      }
-      const resolvedSource = resolve(root, source);
-      if (resolvedSource !== root && !resolvedSource.startsWith(`${root}/`)) {
-        fail(`${where}: plugin '${name}' source ${source} escapes the repository`);
-      }
-      // statSync (following links) for existence: a source may legitimately
-      // sit behind an in-repo symlink; the physical-containment check below
-      // is what keeps any link from redirecting it outside the repository.
-      if (
-        resolvedSource !== root &&
-        !statSync(resolvedSource, { throwIfNoEntry: false })?.isDirectory()
-      ) {
-        fail(`${where}: plugin '${name}' source ${source} is not a directory in the repository`);
-      }
-      const physicalRoot = realpathSync(root);
-      const physicalSource = realpathSync(resolvedSource);
-      if (physicalSource !== physicalRoot && !physicalSource.startsWith(`${physicalRoot}/`)) {
-        fail(
-          `${where}: plugin '${name}' source ${source} resolves through a symlink to ` +
-            `${physicalSource}, outside the repository`,
-        );
-      }
-      // PHYSICAL equality with the root, not lexical: a self-link source
-      // ("./self-link" -> .) publishes the repository root all the same
-      // and must not slip past the name-consistency check.
-      if (physicalSource === physicalRoot && rootPlugin && name !== rootPlugin.name) {
-        fail(
-          `${where}: plugin '${name}' publishes the repository root but the plugin ` +
-            `manifest names it '${rootPlugin.name}' - the two manifests must agree`,
-        );
-      }
-      // Claude Code's marketplace schema types `skills` as string|array.
-      const skills = typeof plugin.skills === "string" ? [plugin.skills] : plugin.skills;
-      if (skills !== undefined) {
-        if (!Array.isArray(skills)) fail(`${where}: plugin '${name}' skills must be a list`);
-        // The root plugin publishes the repository's own skills directory, so its entries keep plugin.json's
-        // direct-child rule; any other plugin's entries resolve under that plugin's source.
-        for (const skillPath of skills) {
-          if (typeof skillPath !== "string") fail(`${where}: skill paths must be strings`);
-          if (resolvedSource === root) {
-            checkSkillPath(where, skillPath, root, skillsRoot, skillsDir);
-          } else {
-            checkPluginSkillPath(`${where}: plugin '${name}'`, skillPath, root, resolvedSource);
-          }
-        }
-      }
-    });
+    collect(errors, () => validatePluginEntry(plugin, index, scope));
   }
   return errors;
 }
@@ -370,6 +427,61 @@ export function skillDirs(skillsRoot: string, where: string): { dirs: string[]; 
     }
   }
   return { dirs, errors };
+}
+
+/** The walk of an existing skills directory plus its index README.md, which installers browsing the directory read;
+ *  the README's own message replaces the walk's generic symlinked-entry one, whose remedy ("publish a real
+ *  directory") is wrong for it. */
+function indexedSkillDirs(
+  skillsRoot: string,
+  skillsDir: string,
+): { dirs: string[]; errors: string[] } {
+  const walked = skillDirs(skillsRoot, skillsDir);
+  const readmeRel = `${skillsDir}/README.md`;
+  const readme = lstatOf(join(skillsRoot, "README.md"));
+  if (readme?.isSymbolicLink()) {
+    const walkErrors = walked.errors.filter((error) => !error.startsWith(`${readmeRel}:`));
+    return {
+      dirs: walked.dirs,
+      errors: [
+        `${readmeRel}: must be a real file, not a symlink (a link can point outside the checkout)`,
+        ...walkErrors,
+      ],
+    };
+  }
+  if (readme?.isFile()) return walked;
+
+  return {
+    dirs: walked.dirs,
+    errors: [
+      `${readmeRel}: missing; a skills directory must carry an index README.md at its root`,
+      ...walked.errors,
+    ],
+  };
+}
+
+function marketplaceErrors(
+  root: string,
+  manifestRel: string,
+  skillsRoot: string,
+  skillsDir: string,
+  manifest: PluginManifest | undefined,
+): string[] {
+  const marketplaceRel = join(dirname(manifestRel), "marketplace.json");
+  const marketplacePath = resolve(root, marketplaceRel);
+  if (!lstatOf(marketplacePath)) return [];
+
+  const linkError = symlinkFreeError(root, marketplacePath, marketplaceRel);
+  if (linkError) return [linkError];
+
+  return validateMarketplace(
+    marketplacePath,
+    marketplaceRel,
+    root,
+    skillsRoot,
+    skillsDir,
+    manifest,
+  );
 }
 
 export function validateStructure(root: string, skillsDir: string, manifestRel: string): string[] {
@@ -408,52 +520,13 @@ export function validateStructure(root: string, skillsDir: string, manifestRel: 
   for (const skillPath of manifest?.skills ?? []) {
     collect(errors, () => checkSkillPath(manifestRel, skillPath, root, skillsRoot, skillsDir));
   }
-  const walked = skillDirs(skillsRoot, skillsDir);
-  let walkErrors = walked.errors;
-  // An existing skills directory must carry an index README.md at its
-  // root, so installers browsing the directory see what the catalog
-  // holds. A missing skills directory is the starter state (nothing
-  // published yet), so there is nothing to index.
-  if (rootStat) {
-    const readmeRel = `${skillsDir}/README.md`;
-    const readme = lstatOf(join(skillsRoot, "README.md"));
-    if (readme?.isSymbolicLink()) {
-      // One error with the right remediation: the directory walk's generic
-      // symlinked-entry message says "publish a real directory", which is
-      // wrong for the root README, so the file-specific message replaces it.
-      walkErrors = walkErrors.filter((error) => !error.startsWith(`${readmeRel}:`));
-      errors.push(
-        `${readmeRel}: must be a real file, not a symlink (a link can point outside the checkout)`,
-      );
-    } else if (!readme?.isFile()) {
-      errors.push(
-        `${readmeRel}: missing; a skills directory must carry an index README.md at its root`,
-      );
-    }
-  }
-  errors.push(...walkErrors);
+  // A missing skills directory is the starter state (nothing published yet), so there is nothing to index.
+  const walked = rootStat ? indexedSkillDirs(skillsRoot, skillsDir) : { dirs: [], errors: [] };
+  errors.push(...walked.errors);
   for (const name of walked.dirs) {
     errors.push(...validateSkillDir(join(skillsRoot, name), `${skillsDir}/${name}`));
   }
-  const marketplaceRel = join(dirname(manifestRel), "marketplace.json");
-  const marketplacePath = resolve(root, marketplaceRel);
-  if (lstatOf(marketplacePath)) {
-    const marketplaceLinkError = symlinkFreeError(root, marketplacePath, marketplaceRel);
-    if (marketplaceLinkError) {
-      errors.push(marketplaceLinkError);
-    } else {
-      errors.push(
-        ...validateMarketplace(
-          marketplacePath,
-          marketplaceRel,
-          root,
-          skillsRoot,
-          skillsDir,
-          manifest,
-        ),
-      );
-    }
-  }
+  errors.push(...marketplaceErrors(root, manifestRel, skillsRoot, skillsDir, manifest));
   return errors;
 }
 
@@ -487,26 +560,17 @@ export function kebabToTitle(name: string): string {
 /** An exact version, so a CLI release cannot red discovery on a green catalog; bump by hand (`npm view skills version`). */
 export const SKILLS_CLI_VERSION = "1.5.26";
 
+/** Tries of the npx download, which flakes on registry hiccups; docs/validate-skills.md states the count. */
 const DISCOVERY_ATTEMPTS = 3;
+
+/** The pause between tries; a registry hiccup clears in seconds. */
 const DISCOVERY_RETRY_DELAY_MS = 5_000;
 
-function runDiscovery(root: string, manifestRel: string): string[] {
-  const manifest = loadPluginManifest(resolve(root, manifestRel), manifestRel);
-  const expected = manifest.skills.map((skillPath) => basename(skillPath));
-  // Kebab-case keeps each name safe to embed in the boundary-match regex
-  // (this mode runs on its own job, without structure mode before it).
-  for (const name of expected) {
-    if (!KEBAB_CASE.test(name))
-      fail(`${manifestRel}: skill folder name '${name}' must be kebab-case`);
-  }
-  if (expected.length === 0) {
-    console.log(`discovery: ${manifestRel} publishes no skills yet; the CLI has nothing to list.`);
-    return [];
-  }
-  // Bounded retries: the npx download can flake on registry hiccups, and a
-  // launch/exit failure says nothing about the catalog. Note npx resolves
-  // node_modules/.bin first, so a local dependency named `skills` would
-  // shadow the CLI.
+// Bounded retries: the npx download can flake on registry hiccups, and a
+// launch/exit failure says nothing about the catalog. Note npx resolves
+// node_modules/.bin first, so a local dependency named `skills` would
+// shadow the CLI.
+function spawnDiscovery(root: string): SpawnSyncReturns<string> {
   let proc: SpawnSyncReturns<string> | undefined;
   for (let attempt = 1; attempt <= DISCOVERY_ATTEMPTS; attempt++) {
     proc = spawnSync("npx", ["-y", `skills@${SKILLS_CLI_VERSION}`, "add", root, "--list"], {
@@ -522,6 +586,23 @@ function runDiscovery(root: string, manifestRel: string): string[] {
   if (!proc || proc.error) {
     fail(`npx skills failed to launch: ${proc?.error?.message ?? "no attempt ran"}`);
   }
+  return proc;
+}
+
+function runDiscovery(root: string, manifestRel: string): string[] {
+  const manifest = loadPluginManifest(resolve(root, manifestRel), manifestRel);
+  const expected = manifest.skills.map((skillPath) => basename(skillPath));
+  // Kebab-case keeps each name safe to embed in the boundary-match regex
+  // (this mode runs on its own job, without structure mode before it).
+  for (const name of expected) {
+    if (!KEBAB_CASE.test(name))
+      fail(`${manifestRel}: skill folder name '${name}' must be kebab-case`);
+  }
+  if (expected.length === 0) {
+    console.log(`discovery: ${manifestRel} publishes no skills yet; the CLI has nothing to list.`);
+    return [];
+  }
+  const proc = spawnDiscovery(root);
   const output = stripAnsi(`${proc.stdout ?? ""}\n${proc.stderr ?? ""}`);
   if (proc.status !== 0) {
     fail(`npx skills exited with ${proc.status} after ${DISCOVERY_ATTEMPTS} attempts:\n${output}`);
@@ -549,6 +630,14 @@ function runDiscovery(root: string, manifestRel: string): string[] {
 
 // --- entry point ---------------------------------------------------------------
 
+// A traversing or absolute input would validate (or list) a tree outside the checkout.
+function requirePlainRelativePath(what: string, value: string): void {
+  const parts = value.split("/");
+  if (isAbsolute(value) || parts.includes("") || parts.includes(".") || parts.includes("..")) {
+    fail(`${what} '${value}' must be a plain relative path inside the repository`);
+  }
+}
+
 function main(): number {
   const skillsDir = process.env.SKILLS_DIR || "skills";
   const manifestRel = process.env.PLUGIN_MANIFEST || ".claude-plugin/plugin.json";
@@ -557,16 +646,8 @@ function main(): number {
 
   let errors: string[];
   try {
-    // A traversing or absolute input would validate (or list) a tree outside the checkout.
-    for (const [what, value] of [
-      ["skills-dir", skillsDir],
-      ["plugin-manifest", manifestRel],
-    ] as const) {
-      const parts = value.split("/");
-      if (isAbsolute(value) || parts.includes("") || parts.includes(".") || parts.includes("..")) {
-        fail(`${what} '${value}' must be a plain relative path inside the repository`);
-      }
-    }
+    requirePlainRelativePath("skills-dir", skillsDir);
+    requirePlainRelativePath("plugin-manifest", manifestRel);
     if (mode === "structure") {
       errors = validateStructure(root, skillsDir, manifestRel);
     } else if (mode === "discovery") {

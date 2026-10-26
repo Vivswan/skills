@@ -24,8 +24,6 @@ import {
   sessionEventsHarness,
 } from "./session-events-scenario";
 
-export { deadSocketFile, parseFrame } from "./session-events-scenario";
-
 export const SCRIPT = join(ROOT, "skills", "watch-github", "scripts", "github-events.mts");
 export const NAME = "github-events";
 
@@ -108,6 +106,11 @@ export function suitesConnection(runs: RunSpec[], nextCursor: string | null = nu
   };
 }
 
+/**
+ * `labels` are the names as GitHub lists them, in any order. `mergeable` is a settled MERGEABLE
+ * unless a spec says, so a first sighting is silent. `suites` are present only when the read asked
+ * for them, which a fixture cannot know, so a spec says.
+ */
 export interface RowSpec {
   number?: number;
   state?: "OPEN" | "MERGED" | "CLOSED";
@@ -119,11 +122,8 @@ export interface RowSpec {
   comments?: number;
   threads?: number;
   rollup?: string | null;
-  /** The label names as GitHub lists them, in any order. */
   labels?: string[];
-  /** The merge test's answer; a settled MERGEABLE unless a spec says, so a first sighting is silent. */
   mergeable?: string;
-  /** The head's check suites; present only when the read asked for them, which a fixture cannot know, so a spec says. */
   suites?: RunSpec[];
   suitesNext?: string;
 }
@@ -194,13 +194,15 @@ export function rows(
   });
 }
 
+/**
+ * `id` defaults to the comment's position in its fixture, from 901; the source's cursor is by id.
+ * `review` is the fullDatabaseId of the review that published an inline comment.
+ */
 export interface CommentSpec {
   login: string;
   at: string;
   body: string;
-  /** Defaults to the comment's position in its fixture, from 901; the source's cursor is by id. */
   id?: number;
-  /** For an inline comment, the fullDatabaseId of the review that published it. */
   review?: string;
 }
 
