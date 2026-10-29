@@ -215,7 +215,7 @@ function run(spec: Exclude<SuiteSpec, { external: true }>): Run {
 
 /**
  * `labels` are the names as GitHub lists them, in any order. `suites` are present only when the
- * read asked for them.
+ * read asked for them. `stack` is the stack's base branch for a PR in a stack.
  */
 type PrNodeSpec = Partial<{
   number: number;
@@ -224,6 +224,7 @@ type PrNodeSpec = Partial<{
   state: string;
   mergedAt: string | null;
   baseRefName: string;
+  stack: string;
   headRefOid: string;
   author: string | null;
   updatedAt: string;
@@ -272,6 +273,7 @@ function prNode(spec: PrNodeSpec = {}): unknown {
     state: spec.state ?? "OPEN",
     mergedAt: spec.mergedAt ?? null,
     baseRefName: spec.baseRefName ?? "main",
+    stack: spec.stack === undefined ? null : { baseRefName: spec.stack },
     headRefOid: spec.headRefOid ?? "head0001",
     updatedAt: spec.updatedAt ?? "2026-03-01T10:00:00Z",
     mergeable: spec.mergeable ?? "MERGEABLE",
@@ -291,6 +293,7 @@ function row(spec: Partial<Row> = {}): Row {
     state: "OPEN",
     mergedAt: null,
     baseRefName: "main",
+    stackBaseRefName: null,
     headRefOid: "head0001",
     headAuthor: "octocat",
     updatedAt: "2026-03-01T10:00:00Z",
@@ -916,6 +919,8 @@ describe("readRepository", () => {
     }
     // Labels arrive in GitHub's order and are kept sorted, so two rows compare as sets.
     r.p2 = prNode({ number: 2, labels: ["needs-rebase", "bug"], mergeable: "CONFLICTING" });
+    // PR 3 sits on PR 2's branch in a stack: its base is that branch, its merge lands on the stack's.
+    r.p3 = prNode({ number: 3, baseRefName: "topic/below", stack: "main" });
     r.b0 = {
       target: {
         oid: "tip00001",
@@ -967,6 +972,10 @@ describe("readRepository", () => {
         mergeable: "CONFLICTING",
       }),
       suites: null,
+    });
+    expect(reply.rows.get(3)?.row).toMatchObject({
+      baseRefName: "topic/below",
+      stackBaseRefName: "main",
     });
     // A deleted account nulls the author; a PENDING review has no submittedAt.
     expect(reply.rows.get(31)?.row).toMatchObject({

@@ -131,7 +131,8 @@ function watchEnd(
   fields: { repo: string; pr: number; sha: string },
 ): Outcome | null {
   if (row.state === "MERGED") {
-    const text = `${label}: merged into ${row.baseRefName}`;
+    // A stacked PR's base is the PR below it, while the stack merge lands on the stack's base.
+    const text = `${label}: merged into ${row.stackBaseRefName ?? row.baseRefName}`;
     return { events: [{ ...fields, kind: "merged", text, url: row.url }], busy: true, done: true };
   }
 
