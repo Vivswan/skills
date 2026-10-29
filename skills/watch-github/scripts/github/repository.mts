@@ -17,6 +17,7 @@ export type Row = {
   state: "OPEN" | "MERGED" | "CLOSED";
   mergedAt: string | null;
   baseRefName: string;
+  stackBaseRefName: string | null;
   headRefOid: string;
   headAuthor: string | null;
   updatedAt: string;
@@ -55,7 +56,7 @@ export interface RepoReply {
 const COMMIT_FIELDS = "oid author { user { login } } statusCheckRollup { state }";
 
 function rowFields(withSuites: boolean): string {
-  return `number url isDraft state mergedAt baseRefName headRefOid updatedAt mergeable
+  return `number url isDraft state mergedAt baseRefName headRefOid updatedAt mergeable stack { baseRefName }
       comments { totalCount } reviewThreads { totalCount } labels(first: 100) { nodes { name } }
       reviews(last: 1) { nodes { fullDatabaseId submittedAt state author { login } } }
       commits(last: 1) { nodes { commit { ${COMMIT_FIELDS}${withSuites ? ` ${SUITES_CONNECTION}` : ""} } } }`;
@@ -117,6 +118,7 @@ function parseRow(pr: unknown): { row: Row; suites: Suites | null } {
       state,
       mergedAt: stringOrNull(get(pr, "mergedAt")),
       baseRefName: requireString(get(pr, "baseRefName"), "pullRequest.baseRefName"),
+      stackBaseRefName: stringOrNull(get(get(pr, "stack"), "baseRefName")),
       headRefOid: requireString(get(pr, "headRefOid"), "pullRequest.headRefOid"),
       headAuthor: loginOf(commit),
       updatedAt: requireString(get(pr, "updatedAt"), "pullRequest.updatedAt"),

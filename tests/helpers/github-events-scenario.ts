@@ -109,13 +109,15 @@ export function suitesConnection(runs: RunSpec[], nextCursor: string | null = nu
 /**
  * `labels` are the names as GitHub lists them, in any order. `mergeable` is a settled MERGEABLE
  * unless a spec says, so a first sighting is silent. `suites` are present only when the read asked
- * for them, which a fixture cannot know, so a spec says.
+ * for them, which a fixture cannot know, so a spec says. `stack` is the stack's base branch for a
+ * PR in a stack.
  */
 export interface RowSpec {
   number?: number;
   state?: "OPEN" | "MERGED" | "CLOSED";
   mergedAt?: string;
   base?: string;
+  stack?: string;
   head?: string;
   author?: string | null;
   updatedAt?: string;
@@ -128,6 +130,21 @@ export interface RowSpec {
   suitesNext?: string;
 }
 
+/** A GitHub-shaped Commit node, a PR's head or a branch's tip, with its suites only when a spec says. */
+function commitNode(
+  oid: string,
+  spec: Pick<TipSpec, "author" | "rollup" | "suites" | "suitesNext">,
+): unknown {
+  return {
+    oid,
+    author: { user: spec.author === null ? null : { login: spec.author ?? "dev" } },
+    statusCheckRollup: spec.rollup ? { state: spec.rollup } : null,
+    ...(spec.suites === undefined
+      ? {}
+      : { checkSuites: suitesConnection(spec.suites, spec.suitesNext ?? null) }),
+  };
+}
+
 export function prNode(spec: RowSpec = {}): unknown {
   const number = spec.number ?? 7;
   const head = spec.head ?? HEAD_A;
@@ -138,6 +155,7 @@ export function prNode(spec: RowSpec = {}): unknown {
     state: spec.state ?? "OPEN",
     mergedAt: spec.mergedAt ?? null,
     baseRefName: spec.base ?? "main",
+    stack: spec.stack === undefined ? null : { baseRefName: spec.stack },
     headRefOid: head,
     updatedAt: spec.updatedAt ?? "2026-01-01T00:00:00Z",
     mergeable: spec.mergeable ?? "MERGEABLE",
@@ -145,20 +163,7 @@ export function prNode(spec: RowSpec = {}): unknown {
     reviewThreads: { totalCount: spec.threads ?? 0 },
     labels: { nodes: (spec.labels ?? []).map((name) => ({ name })) },
     reviews: { nodes: [] },
-    commits: {
-      nodes: [
-        {
-          commit: {
-            oid: head,
-            author: { user: spec.author === null ? null : { login: spec.author ?? "dev" } },
-            statusCheckRollup: spec.rollup ? { state: spec.rollup } : null,
-            ...(spec.suites === undefined
-              ? {}
-              : { checkSuites: suitesConnection(spec.suites, spec.suitesNext ?? null) }),
-          },
-        },
-      ],
-    },
+    commits: { nodes: [{ commit: commitNode(head, spec) }] },
   };
 }
 
@@ -171,16 +176,7 @@ export interface TipSpec {
 }
 
 export function refNode(spec: TipSpec = {}): unknown {
-  return {
-    target: {
-      oid: spec.oid ?? HEAD_A,
-      author: { user: spec.author === null ? null : { login: spec.author ?? "dev" } },
-      statusCheckRollup: spec.rollup ? { state: spec.rollup } : null,
-      ...(spec.suites === undefined
-        ? {}
-        : { checkSuites: suitesConnection(spec.suites, spec.suitesNext ?? null) }),
-    },
-  };
+  return { target: commitNode(spec.oid ?? HEAD_A, spec) };
 }
 
 /** One per-repository reply: the aliases as the query names them (`p<number>`, `b<i>`), null for a target GitHub cannot resolve. */

@@ -200,15 +200,24 @@ describe("github-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
-  test("a merged PR says what it merged into, a closed one that it closed, and both leave the targets", async () => {
+  test("a merged PR says what it merged into, a stacked one its stack's base rather than the PR below it, a closed one that it closed, and all leave the targets", async () => {
     const s = new Scenario("merged");
     const box = await s.inbox("a");
+    // PR 9 sits on PR 7's branch in a stack: GitHub keeps that branch as its base after the stack
+    // merge lands both on release/2, which is what the line must say.
     s.fixtures({
       "rows-1": rows({
         p7: prNode({ rollup: "SUCCESS", suites: [] }),
         p8: prNode({ number: 8, rollup: "SUCCESS", suites: [] }),
+        p9: prNode({
+          number: 9,
+          base: "topic/seven",
+          stack: "release/2",
+          rollup: "SUCCESS",
+          suites: [],
+        }),
       }),
-      "rows-3": rows({
+      "rows-4": rows({
         p7: prNode({
           state: "MERGED",
           mergedAt: "2026-01-01T01:00:00Z",
@@ -216,20 +225,32 @@ describe("github-events.mts", () => {
           rollup: "SUCCESS",
         }),
         p8: prNode({ number: 8, state: "CLOSED", rollup: "SUCCESS" }),
+        p9: prNode({
+          number: 9,
+          state: "MERGED",
+          mergedAt: "2026-01-01T01:00:00Z",
+          base: "topic/seven",
+          stack: "release/2",
+          rollup: "SUCCESS",
+        }),
       }),
     });
     await s.start({ inbox: box.path });
     expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
     expect(s.run(["watch", `${REPO}#8`], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("2 event(s)");
-    const frames = await box.frames(3);
-    expect(text(frames[2] as string)).toBe(
+    expect(s.run(["watch", `${REPO}#9`], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("3 event(s)");
+    const frames = await box.frames(4);
+    expect(text(frames[3] as string)).toBe(
       [
         `PR ${PR7}: merged into release/2`,
         PR7_URL,
         "",
         `PR ${REPO}#8: closed without merging`,
         `https://github.com/${REPO}/pull/8`,
+        "",
+        `PR ${REPO}#9: merged into release/2`,
+        `https://github.com/${REPO}/pull/9`,
         CLOSING,
       ].join("\n"),
     );
