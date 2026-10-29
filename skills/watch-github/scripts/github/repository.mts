@@ -17,10 +17,7 @@ export type Row = {
   state: "OPEN" | "MERGED" | "CLOSED";
   mergedAt: string | null;
   baseRefName: string;
-
-  /** The branch a stacked PR's merge lands on, the stack's base; null for a PR in no stack. */
   stackBaseRefName: string | null;
-
   headRefOid: string;
   headAuthor: string | null;
   updatedAt: string;
