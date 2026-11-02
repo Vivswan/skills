@@ -1,12 +1,13 @@
 // Contract tests for the run-review helper: stub reviewer binaries on PATH
 // drive every exit path, pinning the traps the script encapsulates - the
-// prompt travels as one argv element (backticks and $() stay literal), stdin
-// is closed so a CLI reviewer that reads it cannot hang, codex runs as an ACP
-// session (the fake agent in tests/helpers/acp-agent-stub.ts, behind a
-// codex-acp wrapper) in its read-only mode where a refused edit ends the turn,
-// the verdict is the text after codex's last tool call / the final claude
-// result and must be the schema object with at least one tool call before it,
-// and an empty, cut, blank, prose-only, preamble-only, or errored capture
+// prompt travels as one argv element for copilot (backticks and $() stay
+// literal) and inside the ACP request for codex and claude, stdin is closed so
+// a CLI reviewer that reads it cannot hang, codex and claude run as ACP
+// sessions (the fake agent in tests/helpers/acp-agent-stub.ts, behind a
+// codex-acp or claude-agent-acp wrapper), codex in its read-only mode and
+// claude in plan mode, where a refused request ends the turn, the verdict is
+// the trailing object of the final message with at least one tool call before
+// it, and an empty, cut, blank, prose-only, preamble-only, or errored capture
 // exits 1 (never a clean pass), and --extract --wait blocks on the launch
 // record until the monitor records the exit instead of leaving the caller to
 // poll by hand. gh-style violations files catch any drift in the exact
@@ -38,7 +39,6 @@ import { tempDirs } from "../../helpers/temp-dirs";
 const temp = tempDirs();
 
 const SCRIPT = join(ROOT, "skills", "rubber-duck-review", "scripts", "run-review.mts");
-const SCHEMA = join(ROOT, "skills", "rubber-duck-review", "scripts", "verdict-schema.json");
 const PROMPT = "Review only.\nRun `git --no-pager diff HEAD` and note $(hostname) stays literal.\n";
 const SKILLS_ROOT = join(ROOT, "skills");
 
@@ -72,7 +72,7 @@ const FULL_PROMPT = withCompanion(PROMPT);
 
 const BIG_VERDICT_BYTES = 262144;
 
-/** The verdict object the schema describes, as each stub reviewer reports it. */
+/** The verdict object the report format asks for, as each stub reviewer reports it. */
 function verdictFor(reviewer: string) {
   return {
     blocking: [],
@@ -104,21 +104,6 @@ const ACP_VERDICT_LINE = acpUpdate({
   content: { type: "text", text: JSON.stringify(CODEX_VERDICT) },
 });
 const ACP_STOP_LINE = JSON.stringify({ event: "stop", stopReason: "end_turn" });
-const CLAUDE_TOOL_LINE = JSON.stringify({
-  type: "assistant",
-  message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git diff" } }] },
-});
-const CLAUDE_ANSWER_TOOL_LINE = JSON.stringify({
-  type: "assistant",
-  message: { content: [{ type: "tool_use", name: "StructuredOutput", input: CLAUDE_VERDICT }] },
-});
-const CLAUDE_RESULT_LINE = JSON.stringify({
-  type: "result",
-  subtype: "success",
-  is_error: false,
-  result: JSON.stringify(CLAUDE_VERDICT),
-  structured_output: CLAUDE_VERDICT,
-});
 
 const FAKE_CODEX = `#!/usr/bin/env bash
 # codex itself is on PATH for the sandbox probe alone: STUB_SANDBOX=bwrap plays a container whose AppArmor
@@ -134,8 +119,8 @@ violate "codex argv: $*"; exit 64
 `;
 
 const ACP_STUB = join(ROOT, "tests", "helpers", "acp-agent-stub.ts");
-const FAKE_CODEX_ACP = `#!/usr/bin/env bash
-# The adapter runs the fake ACP agent from its real path, where the SDK resolves; STUB_SCENARIO names the script.
+const FAKE_ACP_ADAPTER = `#!/usr/bin/env bash
+# Both adapter names run the fake ACP agent from its real path, where the SDK resolves; STUB_SCENARIO names the script.
 exec "${process.execPath}" "${ACP_STUB}" "$@"
 `;
 const CODEX_MODES = {
@@ -170,13 +155,14 @@ const BARE_EDIT_STEP = { ...EDIT_STEP, askBare: true };
 const END = { type: "stop", reason: "end_turn" };
 const THINK = { type: "thought", text: "still reading" };
 
-/** One scripted turn under the codex modes, whose current mode is not read-only, so the launch must set it.
- * ACP_SCENARIOS keys these by the STUB_MODE a run names; the stub plays one per session/prompt. */
+/** One scripted turn under an adapter's modes, codex's unless `extra` says otherwise, whose current mode is never the
+ * one the review needs, so the launch must set it. CODEX_SCENARIOS and CLAUDE_SCENARIOS key these by the STUB_MODE a
+ * run names; the stub plays one per session/prompt. */
 function acpScenario(turn: unknown[], extra: Record<string, unknown> = {}): unknown {
   return { modes: CODEX_MODES, expectMode: "read-only", turns: [turn], ...extra };
 }
 
-const ACP_SCENARIOS: Record<string, unknown> = {
+const CODEX_SCENARIOS: Record<string, unknown> = {
   ok: acpScenario([
     { type: "thought", text: "thinking" },
     { type: "message", text: "intermediate narration" },
@@ -250,60 +236,59 @@ const ACP_SCENARIOS: Record<string, unknown> = {
   ]),
 };
 
-const FAKE_CLAUDE = `#!/usr/bin/env bash
-violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
-if [ "$1 $2 $3 $4 $5 $6 $7" != "-p --permission-mode plan --verbose --output-format stream-json --json-schema" ]; then
-  violate "claude argv: $*"; exit 64
-fi
-case "$8" in *'"recorded_not_built"'*) ;; *) violate "claude schema: $8"; exit 64;; esac
-if [ "$#" -eq 9 ]; then
-  channel=argv
-  printf '%s' "$9" > "\${STUB_PROMPT_COPY}"
-elif [ "$#" -eq 8 ]; then
-  channel=stdin
-  # STUB_SKIP_STDIN plays a reviewer that never reads its stdin prompt: the file is EOF-ended, so nothing blocks.
-  if [ "\${STUB_SKIP_STDIN:-0}" != "1" ]; then cat > "\${STUB_PROMPT_COPY}"; fi
-else
-  violate "claude argv: $*"; exit 64
-fi
-if [ "$channel" != "\${STUB_EXPECT_DELIVERY}" ]; then
-  violate "claude delivery: $channel"; exit 64
-fi
-case "\${STUB_MODE:-ok}" in
-  ok)
-    echo '{"type":"system","subtype":"init"}'
-    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"looking around"}]}}'
-    echo '${CLAUDE_TOOL_LINE}'
-    echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"diff"}]}}'
-    echo '${CLAUDE_ANSWER_TOOL_LINE}'
-    echo '${CLAUDE_RESULT_LINE}'
-    ;;
-  preamble)
-    echo '{"type":"system","subtype":"init"}'
-    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"I will review the changes now."}]}}'
-    echo '${CLAUDE_ANSWER_TOOL_LINE}'
-    echo '${CLAUDE_RESULT_LINE}'
-    ;;
-  resultstring)
-    echo '${CLAUDE_TOOL_LINE}'
-    echo '${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(CLAUDE_VERDICT) })}'
-    ;;
-  iserror)
-    echo '{"type":"system","subtype":"init"}'
-    echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Execution failed mid-run"}'
-    ;;
-  cut)
-    echo '{"type":"system","subtype":"init"}'
-    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"partial narration"}]}}'
-    ;;
-  blank)
-    echo '{"type":"system","subtype":"init"}'
-    echo '${CLAUDE_TOOL_LINE}'
-    echo '{"type":"result","subtype":"success","result":"   "}'
-    ;;
-esac
-exit "\${STUB_EXIT:-0}"
-`;
+const CLAUDE_MODES = {
+  currentModeId: "default",
+  availableModes: [
+    { id: "default", name: "Always Ask", description: "" },
+    { id: "acceptEdits", name: "Accept Edits", description: "" },
+    { id: "plan", name: "Plan Mode", description: "" },
+    { id: "auto", name: "Auto", description: "" },
+    { id: "bypassPermissions", name: "Bypass Permissions", description: "" },
+  ],
+};
+const PLAN = { modes: CLAUDE_MODES, expectMode: "plan" };
+const CLAUDE_VERDICT_TEXT = JSON.stringify(CLAUDE_VERDICT);
+const UNASKED_READ = { type: "tool", title: "Read src/a.ts", kind: "read", output: "one" };
+const PLAN_APPROVAL = {
+  type: "tool",
+  title: "Approve Plan",
+  kind: "switch_mode",
+  permission: true,
+  onReject: "cancel",
+};
+const CLAUDE_SCENARIOS: Record<string, unknown> = {
+  // Plan mode: the read runs unasked, so no permission row precedes the verdict.
+  ok: acpScenario(
+    [
+      { type: "message", text: "looking around" },
+      UNASKED_READ,
+      { type: "message", text: CLAUDE_VERDICT_TEXT },
+      END,
+    ],
+    PLAN,
+  ),
+  preamble: acpScenario(
+    [
+      { type: "message", text: "I will review the changes now." },
+      { type: "message", text: CLAUDE_VERDICT_TEXT },
+      END,
+    ],
+    PLAN,
+  ),
+  blank: acpScenario([UNASKED_READ, { type: "message", text: "" }, END], PLAN),
+  cut: acpScenario(
+    [
+      { type: "message", text: "partial narration" },
+      { type: "exit", code: 0 },
+    ],
+    PLAN,
+  ),
+  // The plan approval is the one request plan mode makes; refused, claude ends the turn cancelled.
+  planapproval: acpScenario(
+    [UNASKED_READ, PLAN_APPROVAL, { type: "message", text: CLAUDE_VERDICT_TEXT }, END],
+    PLAN,
+  ),
+};
 
 const FAKE_COPILOT = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
@@ -349,8 +334,8 @@ function inheritedEnv(): Record<string, string | undefined> {
 
 for (const [name, body] of [
   ["codex", FAKE_CODEX],
-  ["codex-acp", FAKE_CODEX_ACP],
-  ["claude", FAKE_CLAUDE],
+  ["codex-acp", FAKE_ACP_ADAPTER],
+  ["claude-agent-acp", FAKE_ACP_ADAPTER],
   ["copilot", FAKE_COPILOT],
   ["git", FAKE_GIT],
 ] as const) {
@@ -397,10 +382,11 @@ function run(
   scenario += 1;
   const violations = join(binDir, `violations-${scenario}`);
   const promptCopy = join(binDir, `prompt-copy-${scenario}`);
-  // A codex launch plays the scenario STUB_MODE names (ok by default) through the adapter stub.
+  // An ACP launch plays the scenario STUB_MODE names (ok by default) through the adapter stub.
   const scenarioFile = join(binDir, `scenario-${scenario}.json`);
-  const played = ACP_SCENARIOS[env.STUB_MODE ?? "ok"];
-  if (args[0] === "codex" && played !== undefined) {
+  const scenarios = args[0] === "codex" ? CODEX_SCENARIOS : CLAUDE_SCENARIOS;
+  const played = scenarios[env.STUB_MODE ?? "ok"];
+  if ((args[0] === "codex" || args[0] === "claude") && played !== undefined) {
     writeFileSync(scenarioFile, JSON.stringify(played));
   }
   // process.execPath is absolute, so the script launches even when PATH is
@@ -413,10 +399,6 @@ function run(
       STUB_VIOLATIONS: violations,
       STUB_PROMPT_COPY: promptCopy,
       STUB_SCENARIO: scenarioFile,
-      STUB_SCHEMA: SCHEMA,
-      // The stubs report the channel the prompt actually arrived on, so a
-      // --stdin-prompt run that fell back to argv fails as a violation.
-      STUB_EXPECT_DELIVERY: args.includes("--stdin-prompt") ? "stdin" : "argv",
       ...env,
     },
     stdout: "pipe",
@@ -579,21 +561,19 @@ describe("run-review.mts", () => {
     expect(statusLines).toEqual(["review stream alive", "reviewer exited (status=0)"]);
   });
 
-  test("claude: verdict is the structured_output on the final result event", () => {
+  test("claude: plan mode runs its reads unasked, and the trailing object of the final message is the verdict", () => {
     const r = run(["claude", promptFile]);
     expect(r.code).toBe(0);
     const report = r.report();
     expect(report.verdict).toEqual(CLAUDE_VERDICT);
-    // The StructuredOutput call delivers the answer; only Bash is a review step.
     expect(report.tool_calls).toBe(1);
-    expect(report.trajectory.map((row) => row.event)).toEqual(["text", "tool_use", "result"]);
+    expect(report.trajectory.map((row) => row.event)).toEqual([
+      "agent_message",
+      "tool_call",
+      "agent_message",
+      "stop",
+    ]);
     expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
-  });
-
-  test("claude: a result string carrying the object is the verdict when structured_output is absent", () => {
-    const r = run(["claude", promptFile], { STUB_MODE: "resultstring" });
-    expect(r.code).toBe(0);
-    expect(r.report().verdict).toEqual(CLAUDE_VERDICT);
   });
 
   test("copilot: prompt immediately after -p, plain stdout must be the verdict object", () => {
@@ -634,8 +614,8 @@ describe("run-review.mts", () => {
         reason: "non_blocking is not an array",
       },
       { id: "copilot prose", tool: "copilot", mode: "prose", reason: "final message is not JSON" },
-      // The schema says additionalProperties false; the script's own reading
-      // of a plain-text (copilot) verdict must be exactly as strict.
+      // The validator refuses an extra key; the script's reading of a plain-text
+      // (copilot) verdict must be exactly as strict.
       {
         id: "copilot extra key",
         tool: "copilot",
@@ -659,38 +639,6 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("--stdin-prompt serves the prompt file as claude's stdin; codex takes the prompt in the ACP request, so for it the flag is a usage error", () => {
-    const r = run(["claude", promptFile, "--stdin-prompt"]);
-    expect(r.code).toBe(0);
-    expect(r.report().verdict).toEqual(CLAUDE_VERDICT);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
-    expectFailure(run(["codex", promptFile, "--stdin-prompt"]), {
-      code: 2,
-      stderr: "codex takes the prompt in the ACP request; drop --stdin-prompt",
-    });
-  });
-
-  test("--stdin-prompt with copilot is a usage error: exit 2", () => {
-    const r = run(["copilot", promptFile, "--stdin-prompt"]);
-    expectFailure(r, { code: 2, stderr: "copilot does not support --stdin-prompt" });
-  });
-
-  test("--stdin-prompt delivers a prompt larger than any pipe buffer in full", () => {
-    const hugePrompt = mintPrompt("huge-prompt", "");
-    const hugeContent = "p".repeat(1 << 20);
-    writeFileSync(hugePrompt, hugeContent);
-    const r = run(["claude", hugePrompt, "--stdin-prompt"]);
-    expect(r.code).toBe(0);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(withCompanion(hugeContent));
-  });
-
-  test("a reviewer that ignores its stdin prompt file cannot hang or crash the run", () => {
-    const hugePrompt = mintPrompt("huge-prompt-ignored", "p".repeat(1 << 20));
-    const r = run(["claude", hugePrompt, "--stdin-prompt"], { STUB_SKIP_STDIN: "1" });
-    expect(r.code).toBe(0);
-    expect(r.report().verdict).toEqual(CLAUDE_VERDICT);
-  });
-
   test("a large verdict is printed in full, not truncated at exit", () => {
     const r = run(["codex", promptFile], { STUB_MODE: "big" });
     expect(r.code).toBe(0);
@@ -698,12 +646,14 @@ describe("run-review.mts", () => {
   });
 
   test("an adapter that dies mid-turn fails the review as a broken session, never a verdict", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "cut" });
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toMatch(
-      /review FAILED - relaunch \(error event: (the ACP session failed|the adapter exited \(0\) before the turn ended)/,
-    );
+    for (const tool of ["codex", "claude"]) {
+      const r = run([tool, promptFile], { STUB_MODE: "cut" });
+      expect(r.code, tool).toBe(1);
+      expect(r.stdout, tool).toBe("");
+      expect(r.stderr, tool).toMatch(
+        /review FAILED - relaunch \(error event: (the ACP session failed|the adapter exited \(0\) before the turn ended)/,
+      );
+    }
   });
 
   test("a sentence before the object in the final message leaves the object as the verdict; the rows keep narration and reasoning in stream order", () => {
@@ -806,22 +756,17 @@ describe("run-review.mts", () => {
     });
   });
 
-  test("claude stream ending without a result event exits 1", () => {
-    const r = run(["claude", promptFile], { STUB_MODE: "cut" });
+  test("a plan approval claude asks for is refused, claude ends the turn, and the review fails naming the request", () => {
+    const r = run(["claude", promptFile], { STUB_MODE: "planapproval" });
     expectFailure(r, {
       code: 1,
-      stderr: "review FAILED - relaunch (stream ended without a verdict event",
+      stderr:
+        "review FAILED - relaunch (error event: the reviewer asked to switch_mode (Approve Plan); a review is read-only",
     });
+    expect(r.report).toThrow();
   });
 
-  test("a claude result with is_error true is a failed review, even on CLI exit 0", () => {
-    const r = run(["claude", promptFile], { STUB_MODE: "iserror" });
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toContain("error_during_execution");
-  });
-
-  test("a whitespace-only verdict exits 1 for both stream formats", () => {
+  test("a whitespace-only verdict exits 1 for both ACP reviewers", () => {
     for (const tool of ["codex", "claude"]) {
       const r = run([tool, promptFile], { STUB_MODE: "blank" });
       expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty verdict" }, tool);
@@ -829,17 +774,23 @@ describe("run-review.mts", () => {
   });
 
   test("a verdict from a CLI reviewer that exited non-zero still fails", () => {
-    const r = run(["claude", promptFile], { STUB_EXIT: "3" });
+    const r = run(["copilot", promptFile], { STUB_EXIT: "3" });
     expectFailure(r, {
       code: 1,
       stderr: "review FAILED - relaunch (reviewer status: 3 (stderr kept at",
     });
   });
 
-  test("a missing reviewer binary exits 2, not 1, and for codex the binary is the adapter", () => {
-    const r = run(["codex", promptFile], {}, emptyBinDir);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("reviewer binary not found: codex-acp");
+  test("a missing reviewer binary exits 2, not 1, and for an ACP reviewer the binary is its adapter", () => {
+    for (const [tool, binary] of [
+      ["codex", "codex-acp"],
+      ["claude", "claude-agent-acp"],
+      ["copilot", "copilot"],
+    ] as const) {
+      const r = run([tool, promptFile], {}, emptyBinDir);
+      expect(r.code, tool).toBe(2);
+      expect(r.stderr, tool).toContain(`reviewer binary not found: ${binary}`);
+    }
   });
 
   /** A repository the shape a pre-commit review targets, carrying everything a copy of the checkout
@@ -1586,8 +1537,7 @@ describe("run-review.mts", () => {
   });
 
   /** A scratch install: this skill copied whole under <base>/skills (the script finds its root
-   * through its own real path), beside the siblings the case needs. The run uses the copy's script,
-   * so the stub is told the copy's schema path. */
+   * through its own real path), beside the siblings the case needs. The run uses the copy's script. */
   function scratchInstall(
     base: string,
     rootUnderBase = "skills",
@@ -1634,9 +1584,9 @@ describe("run-review.mts", () => {
     );
     const scripts = join(root, "rubber-duck-review", "scripts");
     const script = join(scripts, "run-review.mts");
-    const env = { STUB_SCHEMA: realpathSync(join(scripts, "verdict-schema.json")), ...extraEnv };
     return {
-      launch: (...args) => run(["codex", promptFile, ...args], env, undefined, undefined, script),
+      launch: (...args) =>
+        run(["codex", promptFile, ...args], extraEnv, undefined, undefined, script),
       print: (...args) => run(["criteria", ...args], extraEnv, undefined, undefined, script),
       page: (name) => realpathSync(join(root, name, "SKILL.md")),
     };
@@ -2034,11 +1984,11 @@ describe("run-review.mts", () => {
   });
 
   test("--extract fails a background run whose CLI reviewer exited non-zero", () => {
-    const r = run(["claude", promptFile, "--background"], { STUB_EXIT: "3" });
+    const r = run(["copilot", promptFile, "--background"], { STUB_EXIT: "3" });
     expect(r.code).toBe(0);
     const outputFile = backgroundOutputFile(r.stdout);
     expect(waitForStatus(outputFile)).toBe("3");
-    const extracted = run(["claude", "--extract", outputFile]);
+    const extracted = run(["copilot", "--extract", outputFile]);
     expect(extracted.code).toBe(1);
     expect(extracted.stderr).toContain("recorded reviewer status: 3");
     // Positive control for the kept-output suffix: the stream is still there.
