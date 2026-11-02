@@ -1,7 +1,7 @@
-// The verdict a reviewer's capture carries, read and checked: the final message must be the object
-// verdict-schema.json (beside this file) describes, and a codex or claude turn must have called a tool
-// before it. codex's capture is the ACP session acp.mts writes, claude's its CLI stream, copilot's plain
-// text. No IO; run-review.mts launches the reviewer, captures the stream, and reports this.
+// The verdict a reviewer's capture carries, read and checked: the final message must be the object the
+// reviewer prompt's report format describes, and an ACP reviewer's turn must have called a tool before
+// it. codex's and claude's capture is the ACP session acp.mts writes, copilot's is plain text. No IO;
+// run-review.mts launches the reviewer, captures the stream, and reports this.
 
 const TOOLS = ["codex", "claude", "copilot"] as const;
 export type Tool = (typeof TOOLS)[number];
@@ -20,7 +20,7 @@ interface Finding {
   evidence: string;
 }
 
-/** The verdict object verdict-schema.json describes. */
+/** The verdict object the reviewer prompt's report format describes. */
 export interface Verdict {
   blocking: Finding[];
   non_blocking: Finding[];
@@ -51,10 +51,7 @@ interface Reading {
   /** null until a final message lands, "" for a blank one, else the parsed verdict or the reason it is none. */
   verdict: Verdict | string | null;
 
-  /** The last error the reviewer reported and did not recover from; a codex message after one clears it. */
-  errorEvent: string | null;
-
-  /** A failed turn is final; a later verdict never clears it, unlike a reconnect error. */
+  /** Why no verdict came: the session's failure, a stop other than end_turn, a refused permission behind a cancel. */
   turnFailed: string | null;
 
   /** Tool calls seen so far in the turn. */
@@ -87,8 +84,7 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-/** Exactly the schema's keys: verdict-schema.json says additionalProperties
- * false, and this reading of a reviewer's message must not be looser. */
+/** Exactly the report format's keys: a key it does not name fails the reading. */
 function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
 }
@@ -106,8 +102,8 @@ function isFinding(value: unknown): value is Finding {
   );
 }
 
-/** The schema gives codex and claude the shape; this check is what makes the
- * script's own reading of any reviewer's final message the same contract. */
+/** No schema holds any reviewer to the shape: this check is the contract, the
+ * same for every reviewer's final message. */
 function parseVerdict(value: unknown): Verdict | string {
   if (!isRecord(value)) return "final message is not a JSON object";
   if (!hasOnlyKeys(value, VERDICT_KEYS)) {
@@ -143,9 +139,6 @@ function parseVerdictText(text: string): Verdict | string {
   return parseVerdict(value);
 }
 
-/** Claude's read-only turn calls tools by name; StructuredOutput only delivers the schema answer, so it is no evidence of a review. */
-const CLAUDE_ANSWER_TOOL = "StructuredOutput";
-
 /** copilot answers in plain text: the whole output is the verdict, and there are no tool calls to count. */
 function copilotVerdict(raw: string): Extraction {
   const text = raw.trim();
@@ -155,16 +148,6 @@ function copilotVerdict(raw: string): Extraction {
   if (typeof verdict === "string") return { ok: false, reason: `not a verdict: ${verdict}` };
 
   return { ok: true, review: { verdict, toolCalls: 0, trajectory: [] } };
-}
-
-/** claude's error event or failed turn. */
-function readErrorEvent(reading: Reading, event: Record<string, unknown>, line: string): void {
-  if (event.type !== "error" && event.type !== "turn.failed") return;
-
-  const message = typeof event.message === "string" ? event.message : line;
-  reading.errorEvent = message;
-  if (event.type === "turn.failed") reading.turnFailed = message;
-  reading.trajectory.push({ event: String(event.type), text: excerpt(message) });
 }
 
 /** A chunk of narration or reasoning joins the last segment of its kind, or opens one, so the rows keep the stream's order. */
@@ -260,69 +243,12 @@ function readAcpEvent(reading: Reading, event: Record<string, unknown>): void {
   }
 }
 
-/** The blocks of one assistant message: every tool call but the schema answer's is counted, every text is a step. */
-function readClaudeContent(reading: Reading, content: unknown[]): void {
-  for (const block of content) {
-    if (!isRecord(block)) continue;
-
-    if (block.type === "tool_use") {
-      const name = typeof block.name === "string" ? block.name : "tool";
-      if (name === CLAUDE_ANSWER_TOOL) continue;
-      reading.toolCallsThisTurn += 1;
-      reading.trajectory.push({
-        event: "tool_use",
-        text: excerpt(`${name} ${JSON.stringify(block.input ?? {})}`),
-      });
-    } else if (block.type === "text" && typeof block.text === "string") {
-      reading.trajectory.push({ event: "text", text: excerpt(block.text) });
-    }
-  }
-}
-
-/** The verdict a claude result carries: its structured output, else its result text; null when it has neither. */
-function claudeResultVerdict(event: Record<string, unknown>): Verdict | string | null {
-  if ("structured_output" in event) return parseVerdict(event.structured_output);
-  if (typeof event.result !== "string") return null;
-
-  return event.result.trim() === "" ? "" : parseVerdictText(event.result);
-}
-
-/** claude reports in-band terminal failures as result records with is_error: true (the CLI can still exit 0);
- * those carry no verdict. */
-function readClaudeResult(reading: Reading, event: Record<string, unknown>): void {
-  if (event.is_error === true) {
-    const subtype = typeof event.subtype === "string" ? event.subtype : "unknown";
-    reading.errorEvent = `claude result has is_error: true (subtype: ${subtype})`;
-    reading.trajectory.push({ event: "result", text: excerpt(reading.errorEvent) });
-    return;
-  }
-
-  const verdict = claudeResultVerdict(event);
-  if (verdict === null) return;
-
-  reading.verdict = verdict;
-  reading.toolCallsBeforeVerdict = reading.toolCallsThisTurn;
-  reading.trajectory.push({ event: "result" });
-}
-
-function readClaudeEvent(reading: Reading, event: Record<string, unknown>): void {
-  if (
-    event.type === "assistant" &&
-    isRecord(event.message) &&
-    Array.isArray(event.message.content)
-  ) {
-    readClaudeContent(reading, event.message.content);
-  }
-  if (event.type === "result") readClaudeResult(reading, event);
-}
-
 /** The stream read event by event, one JSON object per line; a line that is not one is skipped and remembered
  * only when it is the last. */
-function readStream(format: "acp" | "claude", raw: string): Reading {
+function readStream(raw: string): Reading {
   const reading: Reading = {
     trajectory: [],
     verdict: null,
-    errorEvent: null,
     turnFailed: null,
     toolCallsThisTurn: 0,
     toolCallsBeforeVerdict: 0,
@@ -345,12 +271,7 @@ function readStream(format: "acp" | "claude", raw: string): Reading {
     }
     if (!isRecord(event)) continue;
 
-    if (format === "acp") {
-      readAcpEvent(reading, event);
-      continue;
-    }
-    readErrorEvent(reading, event, trimmed);
-    readClaudeEvent(reading, event);
+    readAcpEvent(reading, event);
   }
 
   return reading;
@@ -361,8 +282,6 @@ function judgeReading(raw: string, reading: Reading): Extraction {
   const { verdict, toolCallsBeforeVerdict, trajectory } = reading;
   if (reading.turnFailed !== null)
     return { ok: false, reason: `error event: ${reading.turnFailed}` };
-  if (reading.errorEvent !== null)
-    return { ok: false, reason: `error event: ${reading.errorEvent}` };
   if (reading.lastLineMalformed) {
     return { ok: false, reason: "malformed trailing line (stream truncated mid-write)" };
   }
@@ -387,5 +306,5 @@ function judgeReading(raw: string, reading: Reading): Extraction {
 export function extractVerdict(tool: Tool, raw: string): Extraction {
   if (tool === "copilot") return copilotVerdict(raw);
 
-  return judgeReading(raw, readStream(tool === "codex" ? "acp" : "claude", raw));
+  return judgeReading(raw, readStream(raw));
 }

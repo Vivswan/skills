@@ -38,9 +38,8 @@ Read the change before you answer: a report with no reads behind it is not a rev
 
 ## How the report is enforced
 
-- `scripts/run-review.mts` hands `scripts/verdict-schema.json` to codex (`--output-schema`) and claude (`--json-schema`), so their final message cannot be anything but that object. The block above still tells the model what each field means.
-- copilot has no schema flag, so for copilot the block above is the only thing asking for the object. The script parses the plain-text answer as JSON (a ```json fence is fine) and fails the review when it is not the object.
-- The script also refuses a verdict with no tool call before it in the same turn. codex fills its narration into the schema too, so "I will review now" comes back as an empty, valid verdict. The missing reads are what give it away.
+- No reviewer is held to the object by a schema flag: the block above is what asks for it. `scripts/run-review.mts` reads the final message (the trailing object after a sentence for codex and claude over ACP, the whole text for copilot, a ```json fence either way) and fails the review when it is not exactly this shape.
+- The script also refuses a verdict with no tool call before it in the same turn. A reviewer narrates before it reads, so "I will review now" followed by the object is a verdict-shaped answer with no review behind it. The missing reads are what give it away.
 
 The launcher appends a `## Companion review criteria` section after this block: the `SKILL.md` of every installed skill of this collection that declares `## Review Criteria`, one line each, with the instruction to read and apply each. A user-invoke-only skill rides in only when named (step 3). The template needs no slot for them.
 

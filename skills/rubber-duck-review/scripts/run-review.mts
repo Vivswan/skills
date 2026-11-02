@@ -4,9 +4,9 @@
  * Each reviewer CLI has a trap the launch retires; the usage text is USAGE below.
  *
  *   prompt through a shell       -> backticks and $(...) expand: spawn from an argv array
- *   stdin left open              -> claude blocks forever: 'ignore', or a file (EOF-ended)
- *   codex narrates before it     -> an empty verdict reads as clean: a tool call must precede it
- *   codex asked to edit a file   -> the review refuses, codex ends the turn: the refusal is the failure's reason
+ *   stdin left open              -> a CLI reviewer blocks forever: 'ignore' for copilot, the protocol for an adapter
+ *   a reviewer narrates first    -> an empty verdict reads as clean: a tool call must precede it
+ *   a reviewer asks to write     -> the review refuses, the adapter ends the turn: the refusal is the failure's reason
  *   predictable prompt path      -> one agent overwrites another's: prepare mints a private dir
  *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
@@ -45,8 +45,9 @@ import { removeTree, snapshotRepository, withoutGitEnv } from "./copy-mode.mts";
 import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
 
 const USAGE = [
-  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>] [--criteria <names>|none]",
+  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stall <seconds>] [--criteria <names>|none]",
   "codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode: a file edit it asks for is refused, codex ends the turn, and the review fails naming the refusal",
+  "claude runs through the claude-agent-acp adapter on PATH (npm install -g @agentclientprotocol/claude-agent-acp) in its plan mode: its read-only tools run unasked, and whatever asks (a write, a plan approval) is refused",
   "       run-review.mts <codex|claude|copilot> --extract <output-file>",
   "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
   "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
@@ -58,7 +59,6 @@ const USAGE = [
   "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
   "codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are",
-  "--stdin-prompt is claude's: codex takes the prompt in the ACP request, copilot in its argument",
   "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
   "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
   "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
@@ -149,7 +149,6 @@ if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 const { startAcpSession } = await import("./acp.mts");
 
 const SKILL_DIR = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
-const SCHEMA_FILE = join(SKILL_DIR, "scripts", "verdict-schema.json");
 const SKILLS_ROOT = dirname(SKILL_DIR);
 const PLUGIN_MANIFEST = join(dirname(SKILLS_ROOT), ".claude-plugin", "plugin.json");
 const CRITERIA_HEADING = "Review Criteria";
@@ -157,33 +156,19 @@ const COMPANION_HEADING = "## Companion review criteria";
 const COMPANION_INSTRUCTION =
   "Read the `## Review Criteria` section of each page below and apply it as part of this review:";
 
-/** Read once at launch; a missing or malformed schema beside the script is a
- * broken install, not a review failure. */
-function schemaText(): string {
-  return readFileSync(SCHEMA_FILE, "utf-8");
-}
+/** copilot runs as a CLI; codex and claude run as ACP sessions (acp.mts) and have no argv: ACP_REVIEWERS names the
+ * adapter on PATH that serves each and the session mode the review needs. */
+type CliTool = Extract<Tool, "copilot">;
+type AcpTool = Exclude<Tool, "copilot">;
 
-/** The reviewers run as a CLI; codex runs as an ACP session (acp.mts) and has no argv. */
-type CliTool = Exclude<Tool, "codex">;
-
-const CODEX_ADAPTER = "codex-acp";
-const CODEX_MODE = "read-only";
+const ACP_REVIEWERS: Record<AcpTool, { adapter: string; mode: string }> = {
+  // read-only: commands ask before they run, a file edit asks, and a refusal ends the turn.
+  codex: { adapter: "codex-acp", mode: "read-only" },
+  // plan: the read-only tools run unasked, a write or a plan approval asks, and a refusal ends the turn.
+  claude: { adapter: "claude-agent-acp", mode: "plan" },
+};
 
 const TOOL_ARGS: Record<CliTool, (prompt: string) => string[]> = {
-  // --verbose is REQUIRED with --output-format stream-json; without it claude
-  // errors to stderr and stdout stays empty. --json-schema takes the schema
-  // inline and delivers the verdict as the result's structured_output.
-  claude: (prompt) => [
-    "-p",
-    "--permission-mode",
-    "plan",
-    "--verbose",
-    "--output-format",
-    "stream-json",
-    "--json-schema",
-    schemaText(),
-    prompt,
-  ],
   // -p consumes the next argument, so the prompt must immediately follow it.
   // -s strips the model/stats decoration so stdout is only the response.
   // --available-tools is a visibility allow-list: view/rg/glob are the read
@@ -211,7 +196,6 @@ const WHOLE_SECONDS = /^[1-9][0-9]*$/;
 const MAX_TIMER_SECONDS = 2147483;
 const FLAGS = {
   background: { type: "boolean" },
-  "stdin-prompt": { type: "boolean" },
   capture: { type: "string" },
   stall: { type: "string" },
   criteria: { type: "string" },
@@ -219,7 +203,7 @@ const FLAGS = {
   timeout: { type: "string" },
 } as const;
 
-const LAUNCH_FLAGS = ["background", "stdin-prompt", "capture", "stall", "criteria"] as const;
+const LAUNCH_FLAGS = ["background", "capture", "stall", "criteria"] as const;
 const EXTRACT_FLAGS = ["wait", "timeout"] as const;
 const STALL_STATUS = /^stalled: /;
 const MINT_MARKER = ".minted-by-run-review";
@@ -602,28 +586,13 @@ function printCriteria(args: string[]): void {
   process.stdout.write(companionBlock(selectCriteria(spec)));
 }
 
+/** The CLI reviewer's argv; the prompt travels as one element, so backticks and $() stay literal. */
 interface Delivery {
-  /** The reviewer's argv. */
   args: string[];
-
-  /** null: the prompt travels as argv and stdin is 'ignore'; otherwise the file served as the reviewer's stdin, EOF-terminated and complete by construction. */
-  stdinFile: string | null;
 }
 
 function argvDelivery(tool: CliTool, prompt: string): Delivery {
-  return { args: TOOL_ARGS[tool](prompt), stdinFile: null };
-}
-
-/** claude -p reads stdin when no prompt argument is given. copilot has no stdin form: -p requires the
- * prompt argument. codex takes the prompt in the ACP request, so stdin is the protocol's. */
-function stdinDelivery(tool: Tool, promptFile: string): Delivery {
-  if (tool === "claude") {
-    return { args: TOOL_ARGS.claude("").slice(0, -1), stdinFile: promptFile };
-  }
-  if (tool === "codex") {
-    usageError("codex takes the prompt in the ACP request; drop --stdin-prompt");
-  }
-  usageError("copilot does not support --stdin-prompt (-p requires the prompt as an argument)");
+  return { args: TOOL_ARGS[tool](prompt) };
 }
 
 /** How the reviewer is confined. `read-only` is every reviewer's own sandbox.
@@ -795,11 +764,10 @@ interface ReviewerHooks {
   onDone: (status: string) => void;
 }
 
-/** The descriptors one run holds until it settles: the stream capture, its stderr, and the prompt file when the delivery is by stdin. */
+/** The descriptors one run holds until it settles: the stream capture and its stderr. */
 interface CaptureFds {
   out: number;
   err: number;
-  stdin: number | null;
 }
 
 /** What the copy mode adds to a run: the snapshot and the cwd inside it. */
@@ -820,17 +788,8 @@ interface Run {
   warn: (line: string) => void;
 }
 
-function openCaptureFds(stdinFile: string | null, scratch: Scratch): CaptureFds {
-  let stdin: number | null = null;
-  if (stdinFile !== null) {
-    try {
-      stdin = openSync(stdinFile, "r");
-    } catch (error) {
-      usageError(`cannot open prompt file for stdin delivery: ${String(error)}`);
-    }
-  }
-
-  return { out: openSync(scratch.outFile, "w"), err: openSync(scratch.errFile, "w"), stdin };
+function openCaptureFds(scratch: Scratch): CaptureFds {
+  return { out: openSync(scratch.outFile, "w"), err: openSync(scratch.errFile, "w") };
 }
 
 /** A snapshot that failed midway is removed with the failure and named, for the caller to report as a spawn failure. */
@@ -855,7 +814,6 @@ function releaseRun(
 
   closeSync(fds.out);
   closeSync(fds.err);
-  if (fds.stdin !== null) closeSync(fds.stdin);
 }
 
 /** A warning lands in review.err, which outlives the run and is named by a failure, as well as on stderr (ignored for a detached monitor). */
@@ -964,7 +922,7 @@ function runCliReviewer(
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
   const criteria = rules.criteria.map((entry) => entry.name);
-  const fds = openCaptureFds(delivery.stdinFile, scratch);
+  const fds = openCaptureFds(scratch);
   recordStatus(scratch, tool, { criteria });
   const warn = warner(fds);
 
@@ -972,10 +930,8 @@ function runCliReviewer(
   // that must reach onSpawnError like an async spawn failure, not crash.
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(tool, delivery.args, {
-      stdio: [fds.stdin ?? "ignore", "pipe", "pipe"],
-      detached: true,
-    });
+    // stdin is 'ignore', never an open pipe a reviewer could wait on.
+    child = spawn(tool, delivery.args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
   } catch (error) {
     releaseRun(fds, null, warn);
     hooks.onSpawnError(error instanceof Error ? error : new Error(String(error)));
@@ -1022,12 +978,14 @@ function copyEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** What codex may do under each confinement. Under its own read-only sandbox a command that asks is one the
- * sandbox would refuse (a write, the network), so only reads and searches are allowed. Inside a snapshot copy
- * nothing confines an allowed command, and the copy is what keeps a write out of the checkout, so commands
- * are allowed there; a file edit is refused under both, since codex's edit tool writes where it is told, and
- * so is a request whose kind no message named. */
-function policyFor(launch: Launch): PermissionPolicy {
+/** What a reviewer may do when it asks. claude's plan mode runs its read-only tools unasked, so whatever asks is
+ * a write or a plan approval: refused. codex under its own read-only sandbox asks for a command the sandbox
+ * would refuse (a write, the network), so only reads and searches are allowed there; inside the snapshot copy
+ * nothing confines an allowed command, and the copy is what keeps a write out of the checkout, so commands are
+ * allowed; a file edit is refused under every confinement, and so is a request whose kind no message named. */
+function policyFor(tool: AcpTool, launch: Launch): PermissionPolicy {
+  if (tool === "claude") return () => "deny";
+
   const allowed = new Set(
     launch.sandbox === "copy" ? ["read", "search", "execute", "fetch"] : ["read", "search"],
   );
@@ -1037,6 +995,7 @@ function policyFor(launch: Launch): PermissionPolicy {
 const ADAPTER_CLOSE_GRACE_MS = 1000;
 
 function runAcpReviewer(
+  tool: AcpTool,
   launch: Launch,
   prompt: string,
   scratch: Scratch,
@@ -1044,9 +1003,9 @@ function runAcpReviewer(
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
   const criteria = rules.criteria.map((entry) => entry.name);
-  const fds = openCaptureFds(null, scratch);
+  const fds = openCaptureFds(scratch);
   const sandbox = launch.sandbox === "copy" ? "copy" : undefined;
-  recordStatus(scratch, "codex", { criteria, sandbox });
+  recordStatus(scratch, tool, { criteria, sandbox });
   const warn = warner(fds);
 
   let copyMode: CopyMode | null = null;
@@ -1064,7 +1023,7 @@ function runAcpReviewer(
   }
 
   const run: Run = {
-    tool: "codex",
+    tool,
     scratch,
     criteria,
     sandbox,
@@ -1089,13 +1048,13 @@ function runAcpReviewer(
   let session: ReturnType<typeof startAcpSession>;
   try {
     session = startAcpSession({
-      adapter: CODEX_ADAPTER,
+      adapter: ACP_REVIEWERS[tool].adapter,
       args: [],
       cwd: copyMode?.cwd,
       env: copyMode === null ? undefined : copyEnv(),
-      mode: CODEX_MODE,
+      mode: ACP_REVIEWERS[tool].mode,
       prompt,
-      policy: policyFor(launch),
+      policy: policyFor(tool, launch),
       capture: (line) => {
         capture(line);
         wound.wind();
@@ -1171,7 +1130,12 @@ interface Reviewer {
   prompt: string;
 }
 
-/** The reviewer behind one tool: codex as an ACP session, the others as the CLI the delivery names. */
+/** The binary a tool needs on PATH: its adapter for an ACP reviewer, itself for a CLI one. */
+function binaryOf(tool: Tool): string {
+  return tool === "copilot" ? tool : ACP_REVIEWERS[tool].adapter;
+}
+
+/** The reviewer behind one tool: copilot as the CLI the delivery names, the others as an ACP session. */
 function runReviewer(
   reviewer: Reviewer,
   scratch: Scratch,
@@ -1179,7 +1143,7 @@ function runReviewer(
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
   const { tool, launch, delivery, prompt } = reviewer;
-  if (tool === "codex") return runAcpReviewer(launch, prompt, scratch, rules, hooks);
+  if (tool !== "copilot") return runAcpReviewer(tool, launch, prompt, scratch, rules, hooks);
   if (delivery === null) throw new Error(`${tool} needs a delivery`);
 
   return runCliReviewer(tool, delivery, scratch, rules, hooks);
@@ -1198,9 +1162,7 @@ function runForeground(
       // Nothing was captured; a retained empty scratch dir would be noise.
       removeTree(scratch.dir, (line) => process.stderr.write(`${line}\n`));
       if (isEnoent(error)) {
-        process.stderr.write(
-          `reviewer binary not found: ${tool === "codex" ? CODEX_ADAPTER : tool}\n`,
-        );
+        process.stderr.write(`reviewer binary not found: ${binaryOf(tool)}\n`);
         process.exitCode = 2;
         return;
       }
@@ -1252,7 +1214,6 @@ function runBackground(
   tool: Tool,
   launch: Launch,
   prompt: string,
-  stdinPrompt: boolean,
   rules: Rules,
   criteriaSpec: string | null,
 ): void {
@@ -1278,7 +1239,6 @@ function runBackground(
     String(rules.stallSeconds),
   ];
   if (criteriaSpec !== null) monitorArgs.push("--criteria", criteriaSpec);
-  if (stdinPrompt) monitorArgs.push("--stdin-prompt");
   const monitor = spawn(process.execPath, monitorArgs, { detached: true, stdio: "ignore" });
   monitor.on("error", (error) => {
     process.stderr.write(`review FAILED - relaunch (failed to detach monitor: ${String(error)})\n`);
@@ -1352,7 +1312,7 @@ function reportRecordedRun(
   criteria: string[],
 ): void {
   if (status === "not-found") {
-    process.stderr.write(`reviewer binary not found: ${tool === "codex" ? CODEX_ADAPTER : tool}\n`);
+    process.stderr.write(`reviewer binary not found: ${binaryOf(tool)}\n`);
     process.exitCode = 2;
     return;
   }
@@ -1486,7 +1446,6 @@ function extractCommand(tool: Tool, args: string[]): void {
 
 interface LaunchOptions {
   background: boolean;
-  stdinPrompt: boolean;
   captureDir: string | null;
   stallSeconds: number;
   criteriaSpec: string | null;
@@ -1510,7 +1469,6 @@ function launchOptions(args: string[]): LaunchOptions {
 
   return {
     background,
-    stdinPrompt: values["stdin-prompt"] === true,
     captureDir,
     stallSeconds,
     criteriaSpec: values.criteria ?? null,
@@ -1530,16 +1488,9 @@ function readPrompt(promptFile: string): string {
   return prompt;
 }
 
-/** How a CLI reviewer gets its prompt; codex gets it in the ACP request and has no delivery. */
-function deliveryFor(
-  tool: Tool,
-  stdinPrompt: boolean,
-  promptSnapshot: string,
-  fullPrompt: string,
-): Delivery | null {
-  if (tool === "codex") return null;
-
-  return stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, fullPrompt);
+/** How the CLI reviewer gets its prompt; an ACP reviewer gets it in the request and has no delivery. */
+function deliveryFor(tool: Tool, fullPrompt: string): Delivery | null {
+  return tool === "copilot" ? argvDelivery(tool, fullPrompt) : null;
 }
 
 /** The reviewer run in this process: the foreground run that prints the verdict, or under `--capture` the
@@ -1562,7 +1513,7 @@ function runInThisProcess(
   const reviewer: Reviewer = {
     tool,
     launch,
-    delivery: deliveryFor(tool, options.stdinPrompt, promptSnapshot, fullPrompt),
+    delivery: deliveryFor(tool, fullPrompt),
     prompt: fullPrompt,
   };
   if (options.captureDir === null) return runForeground(reviewer, scratch, rules);
@@ -1572,7 +1523,7 @@ function runInThisProcess(
 
 function launchCommand(tool: Tool, args: string[]): void {
   const options = launchOptions(args);
-  const { background, stdinPrompt, captureDir, criteriaSpec, promptFile } = options;
+  const { background, captureDir, criteriaSpec, promptFile } = options;
   if (captureDir === null) requireMintedPrompt(promptFile);
   else requireCaptureProvenance(tool, promptFile, captureDir);
   const prompt = readPrompt(promptFile);
@@ -1582,10 +1533,6 @@ function launchCommand(tool: Tool, args: string[]): void {
     criteria: selectCriteria(criteriaSpec),
   };
 
-  // stdinDelivery owns the copilot rejection; validate up front (against the
-  // caller's path) so a bad tool/flag combination is a parent-side usage
-  // error even for --background, not a silent failure in the monitor.
-  if (stdinPrompt) stdinDelivery(tool, promptFile);
   // The parent of a --background launch runs no reviewer; every other
   // process forwards its kill to the one it is about to launch, listening
   // from here so the probe and the snapshot below are covered too.
@@ -1596,7 +1543,7 @@ function launchCommand(tool: Tool, args: string[]): void {
   const launch = planLaunch(tool);
   if (captureDir === null) purgeStaleScratch();
   if (background) {
-    runBackground(tool, launch, prompt, stdinPrompt, rules, criteriaSpec);
+    runBackground(tool, launch, prompt, rules, criteriaSpec);
     return;
   }
 
