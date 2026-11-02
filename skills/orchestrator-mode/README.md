@@ -47,7 +47,9 @@ npx skills add Vivswan/skills -g --skill verify-with-controls
 - [`references/spawn-briefs.md`](./references/spawn-briefs.md): what every spawn brief must contain
 - [`references/fleet-monitor.md`](./references/fleet-monitor.md): the monitor role's two instruments (the daemon's events and what it cannot see, the monitor subagent's brief), and the judgment and instruments that stay the lead's
 - [`references/landing.md`](./references/landing.md): the two landing gates (direct commits, and PRs with per-track independent or stacked bases)
+- [`references/acp-builders.md`](./references/acp-builders.md): a Codex, Gemini, or Claude Agent builder run as an ACP agent: the adapters and modes, the permission rule, the runner's command
 - [`scripts/fleet-events.mts`](./scripts/fleet-events.mts): the fleet monitor's daemon instrument, this skill's source for the `/session-events` daemon, run with bun: `daemon`, `watch`, `unwatch`, `wait`, `poll`, `status`, `stop`. Its target is a session's subagents, with `--repo <root>` for the worktrees.
+- [`scripts/acp-runner.mts`](./scripts/acp-runner.mts): a builder as an ACP agent, run with bun: `start` spawns the adapter in the worktree and serves a control socket, `prompt`, `status`, `cancel`, `stop`. Bundles its dependency, `@agentclientprotocol/sdk`, into the skill's `.build` folder on first run.
 - [`scripts/fleet/`](./scripts/fleet): the fleet readings: `git.mts` for the worktrees and `processes.mts` for the processes in them, shared by the daemon and `sweep.mts`; `transcript-tail.mts`, the sweep's `--transcripts` sensor; `transcripts.mts`, the daemon's reducer of what each agent waits on.
 - [`scripts/`](./scripts): the lead's instruments, `sweep.mts` (the one-shot worktree reading), `probe.mts`, `ledger.mts`, and `baseline.mts`. Run with bun; the first three also run on Node 24.3+, but `baseline.mts` bundles its one dependency, `diff`, into the skill's `.build` folder on first run and needs bun.
 

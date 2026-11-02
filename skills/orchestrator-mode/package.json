@@ -2,6 +2,7 @@
   "name": "orchestrator-mode-skill-dependencies",
   "private": true,
   "dependencies": {
+    "@agentclientprotocol/sdk": "2.1.0",
     "diff": "9.0.0"
   }
 }
