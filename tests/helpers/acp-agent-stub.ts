@@ -9,7 +9,7 @@
 //                                              _session/steering: injected while a turn runs, else promptRequired
 //                                              when the request asks for it, else a new turn from the next script
 //     "modes": { "currentModeId": "read-only", "availableModes": [{ "id": "read-only", "name": "Read-only" }] },
-//     "expectMode": "read-only",               the id session/set_mode must carry; any other is a violation
+//     "expectMode": "read-only",               the id session/set_mode must carry before the first prompt; another id, or no set_mode, is a violation
 //     "turns": [ [ <step>, ... ], ... ]        one list per session/prompt, in order
 //   }
 //
@@ -93,6 +93,7 @@ const scenario = JSON.parse(readFileSync(scenarioPath, "utf8")) as Scenario;
 
 let turnIndex = 0;
 let toolCalls = 0;
+let modeSet = false;
 let cancelled = false;
 let turnRunning = false;
 /** The connection's context, for the updates and requests a turn sends outside the prompt handler. */
@@ -270,6 +271,7 @@ function newSession(params: acp.NewSessionRequest): acp.NewSessionResponse {
 }
 
 function setMode(params: acp.SetSessionModeRequest): acp.SetSessionModeResponse {
+  modeSet = true;
   if (scenario.expectMode !== undefined && params.modeId !== scenario.expectMode) {
     violate(`set_mode: ${params.modeId}`);
   }
@@ -285,6 +287,8 @@ async function prompt(params: acp.PromptRequest): Promise<acp.PromptResponse> {
   if (turnIndex === 0) {
     const copy = env("STUB_PROMPT_COPY");
     if (copy !== undefined) writeFileSync(copy, promptText(params.prompt));
+    if (scenario.expectMode != null && !modeSet)
+      violate(`set_mode: never called, expected ${scenario.expectMode}`);
   }
   const steps = nextTurn();
   if (steps === null) {
