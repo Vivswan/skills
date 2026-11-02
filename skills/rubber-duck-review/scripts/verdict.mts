@@ -3,6 +3,97 @@
 // it. codex's and claude's capture is the ACP session acp.mts writes, copilot's is plain text. No IO;
 // run-review.mts launches the reviewer, captures the stream, and reports this.
 
+import { spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
+
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
+  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
+}
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
+}
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, scripts: string, skill: string, built: string): boolean {
+  // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
+  // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
+  mkdirSync(join(skill, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
+  try {
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
+  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  // A bundle killed by a signal has no status: die of the same signal.
+  if (run.signal) process.kill(process.pid, run.signal);
+  process.exitCode = run.status ?? 1;
+  return true;
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
+const z = await import("zod/mini");
+
 const TOOLS = ["codex", "claude", "copilot"] as const;
 export type Tool = (typeof TOOLS)[number];
 
@@ -80,47 +171,41 @@ function excerpt(text: string): string {
   return flat.length > EXCERPT_CHARS ? `${flat.slice(0, EXCERPT_CHARS)}...` : flat;
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
+// The report format's object, every key named and no other; the reviewer prompt asks the model for the same.
 
-/** Exactly the report format's keys: a key it does not name fails the reading. */
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return Object.keys(value).every((key) => keys.includes(key));
-}
+const FINDING = z.strictObject({ where: z.string(), claim: z.string(), evidence: z.string() });
+const VERDICT = z.strictObject({
+  blocking: z.array(FINDING),
+  non_blocking: z.array(FINDING),
+  recorded_not_built: z.array(z.string()),
+  summary: z.string().check(z.refine((text) => text.trim() !== "")),
+});
 
-const FINDING_KEYS = ["where", "claim", "evidence"] as const;
-const VERDICT_KEYS = ["blocking", "non_blocking", "recorded_not_built", "summary"] as const;
-
-function isFinding(value: unknown): value is Finding {
-  return (
-    isRecord(value) &&
-    hasOnlyKeys(value, FINDING_KEYS) &&
-    typeof value.where === "string" &&
-    typeof value.claim === "string" &&
-    typeof value.evidence === "string"
-  );
+/** Why a value is not the verdict object, in the report format's words: the issue's first path step names the field. */
+function verdictIssue(issue: { code: string; path: PropertyKey[]; keys?: string[] }): string {
+  const field = issue.path[0];
+  if (field === undefined) {
+    if (issue.code !== "unrecognized_keys") return "final message is not a JSON object";
+    return `unexpected key(s): ${(issue.keys ?? []).join(", ")}`;
+  }
+  if (field === "blocking" || field === "non_blocking") {
+    return `${field} is not an array of exactly {where, claim, evidence}`;
+  }
+  if (field === "recorded_not_built") return "recorded_not_built is not an array of strings";
+  return "summary is missing or blank";
 }
 
 /** No schema holds any reviewer to the shape: this check is the contract, the
  * same for every reviewer's final message. */
 function parseVerdict(value: unknown): Verdict | string {
-  if (!isRecord(value)) return "final message is not a JSON object";
-  if (!hasOnlyKeys(value, VERDICT_KEYS)) {
-    return `unexpected key(s): ${Object.keys(value)
-      .filter((key) => !VERDICT_KEYS.includes(key as (typeof VERDICT_KEYS)[number]))
-      .join(", ")}`;
-  }
-  const { blocking, non_blocking, recorded_not_built, summary } = value;
-  if (!Array.isArray(blocking) || !blocking.every(isFinding)) {
-    return "blocking is not an array of exactly {where, claim, evidence}";
-  }
-  if (!Array.isArray(non_blocking) || !non_blocking.every(isFinding)) {
-    return "non_blocking is not an array of exactly {where, claim, evidence}";
-  }
-  if (!isStringArray(recorded_not_built)) return "recorded_not_built is not an array of strings";
-  if (typeof summary !== "string" || summary.trim() === "") return "summary is missing or blank";
-  return { blocking, non_blocking, recorded_not_built, summary };
+  const read = VERDICT.safeParse(value);
+  if (read.success) return read.data;
+  const [issue] = read.error.issues;
+  return verdictIssue({
+    code: issue?.code ?? "invalid_type",
+    path: issue?.path ?? [],
+    keys: issue !== undefined && "keys" in issue ? (issue.keys as string[]) : undefined,
+  });
 }
 
 /** copilot answers in plain text, so the object may arrive inside a ```json

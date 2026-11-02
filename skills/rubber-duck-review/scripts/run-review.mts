@@ -15,9 +15,10 @@
  *   the stream goes silent       -> a stuck child held one run for hours: --stall kills the reviewer's process group
  *   criteria pasted by hand      -> thirty rounds passed what the house rules forbid: the launcher names this collection's pages
  *   the bundle runs from .build/ -> paths off import.meta would miss scripts/: the skill root is two levels up either way
+ *   codex-acp alone on PATH      -> no codex to probe read as a working sandbox: the codex the adapter bundles is probed instead
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { type SpawnSyncOptions, spawn, spawnSync } from "node:child_process";
 import type { Dirent } from "node:fs";
 import {
   closeSync,
@@ -42,7 +43,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { AcpEnd, PermissionPolicy } from "./acp.mts";
 import { removeTree, snapshotRepository, withoutGitEnv } from "./copy-mode.mts";
-import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
+import type { Extraction, Tool } from "./verdict.mts";
 
 const USAGE = [
   "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stall <seconds>] [--criteria <names>|none]",
@@ -130,23 +131,44 @@ function build(source: string, scripts: string, skill: string, built: string): b
   }
 }
 
-function ensureBuilt(source: string): boolean {
-  if (!source.endsWith(".mts")) return false;
+function ensureBuilt(source: string): Promise<boolean> {
+  if (!source.endsWith(".mts")) return Promise.resolve(false);
   const { scripts, skill, built } = buildPaths(source);
   if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
-  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
-  // A bundle killed by a signal has no status: die of the same signal.
-  if (run.signal) process.kill(process.pid, run.signal);
-  process.exitCode = run.status ?? 1;
-  return true;
+  // The bundle runs on this process's stdio, and a signal to this process goes on to it; this process then ends as
+  // the bundle did, by its status, or by the same signal once the forwarding is off and the signal's default is back.
+  const run = spawn("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  const forward = (signal: NodeJS.Signals) => {
+    run.kill(signal);
+  };
+  for (const signal of signals) process.on(signal, forward);
+  return new Promise((resolve) => {
+    const settle = (status: number | null, signal: NodeJS.Signals | null) => {
+      for (const name of signals) process.off(name, forward);
+      if (signal !== null) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exitCode = status ?? 1;
+      resolve(true);
+    };
+    run.on("exit", settle);
+    // A bundle that never started (no bun on PATH) emits error and no exit: that is the run's failure.
+    run.on("error", (error) => {
+      console.error(String(error));
+      settle(1, null);
+    });
+  });
 }
 
 // Only the command builds; a test or a sibling importing this file must not.
-if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+if (import.meta.main && (await ensureBuilt(import.meta.path))) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
 
 const { startAcpSession } = await import("./acp.mts");
+const { extractVerdict, isRecord, isTool } = await import("./verdict.mts");
 
 const SKILL_DIR = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
 const SKILLS_ROOT = dirname(SKILL_DIR);
@@ -613,21 +635,46 @@ type Launch =
 const SANDBOX_PROBE_TIMEOUT_MS = 15000;
 const BWRAP_REFUSAL = /^bwrap: .*$/m;
 
-/** codex runs every sandboxed command under bubblewrap, and a container whose
- * AppArmor profile denies mount propagation refuses it at start (`bwrap:
- * Failed to make / slave: Permission denied`). A no-op under the sandbox
- * shows that before the reviewer does. Only that refusal selects the copy:
- * a codex too old for the subcommand, or one not installed, keeps the
- * read-only launch and reports its own failure there. */
-function planLaunch(tool: Tool): Launch {
-  if (tool !== "codex") return { sandbox: "read-only" };
-  const probe = spawnSync("codex", ["sandbox", "--", "true"], {
+/** The codex the adapter bundles (codex-acp depends on @openai/codex): its launcher under a node_modules above the
+ * adapter's real path, or null where the adapter is not installed or carries none. The walk is the adapter's tree
+ * alone: bun's module resolver reaches past it, to a cached or freshly installed package, which is no sandbox here. */
+function adapterCodex(): string | null {
+  const adapter = Bun.which(ACP_REVIEWERS.codex.adapter);
+  if (adapter === null) return null;
+  let dir = dirname(realpathSync(adapter));
+  for (;;) {
+    const launcher = join(dir, "node_modules", "@openai", "codex", "bin", "codex.js");
+    if (existsSync(launcher)) return launcher;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** Why codex's sandbox cannot start here, or null where it can. On Linux codex runs every sandboxed command under
+ * bubblewrap, and a container whose AppArmor profile denies mount propagation refuses it at start (`bwrap: Failed to
+ * make / slave: Permission denied`); a no-op under the sandbox shows that before the reviewer does. codex's own probe
+ * is the measure, since it knows its bundled bubblewrap, its /proc fallback, and Seatbelt on macOS. */
+function sandboxRefusal(): string | null {
+  const options: SpawnSyncOptions = {
     stdio: ["ignore", "ignore", "pipe"],
     timeout: SANDBOX_PROBE_TIMEOUT_MS,
-  });
-  if (probe.status === 0 || probe.error !== undefined) return { sandbox: "read-only" };
-  const refusal = BWRAP_REFUSAL.exec(probe.stderr.toString())?.[0];
-  if (refusal === undefined) return { sandbox: "read-only" };
+  };
+  const read = (probe: ReturnType<typeof spawnSync>): string | null =>
+    probe.status === 0 ? null : (BWRAP_REFUSAL.exec(probe.stderr.toString())?.[0] ?? null);
+  const codex = spawnSync("codex", ["sandbox", "--", "true"], options);
+  if (codex.error === undefined) return read(codex);
+  if ((codex.error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+  const launcher = adapterCodex();
+  if (launcher === null) return null;
+  const bundled = spawnSync(process.execPath, [launcher, "sandbox", "--", "true"], options);
+  return bundled.error === undefined ? read(bundled) : null;
+}
+
+function planLaunch(tool: Tool): Launch {
+  if (tool !== "codex") return { sandbox: "read-only" };
+  const refusal = sandboxRefusal();
+  if (refusal === null) return { sandbox: "read-only" };
   const toplevel = spawnSync("git", ["rev-parse", "--show-toplevel"], {
     stdio: ["ignore", "pipe", "ignore"],
   });

@@ -94,7 +94,7 @@ An entry below `scripts/` bundles to the same relative path under the `.build` f
 
 `bun build` resolves installed packages only, which is why the install step exists. A failed install or build prints bun's error and exits 2. A user may install any one skill alone, so no script imports from another skill.
 
-The block needs `spawnSync` from `node:child_process`, `copyFileSync`, `cpSync`, `existsSync`, `mkdirSync`, `mkdtempSync`, `readdirSync`, `renameSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join`, `relative` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
+The block needs `spawn` and `spawnSync` from `node:child_process`, `copyFileSync`, `cpSync`, `existsSync`, `mkdirSync`, `mkdtempSync`, `readdirSync`, `renameSync`, `rmSync`, `statSync` from `node:fs`, and `basename`, `dirname`, `join`, `relative` from `node:path` among the script's imports. Every script that loads a package, directly or through a relative import, carries it byte for byte; the smoke test holds the copies to this text, and a dependency-free script carries none.
 
 Below the guard, the program loads its packages and sibling scripts with `await import("yaml")`, never a static import: ESM hoists a static import above the guard, where the source path would resolve the package through bun's unpinned auto-install. Type-only imports stay static; they are erased. The smoke test refuses a hoisted import, and a load placed above the block.
 
@@ -158,19 +158,39 @@ function build(source: string, scripts: string, skill: string, built: string): b
   }
 }
 
-function ensureBuilt(source: string): boolean {
-  if (!source.endsWith(".mts")) return false;
+function ensureBuilt(source: string): Promise<boolean> {
+  if (!source.endsWith(".mts")) return Promise.resolve(false);
   const { scripts, skill, built } = buildPaths(source);
   if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
-  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
-  // A bundle killed by a signal has no status: die of the same signal.
-  if (run.signal) process.kill(process.pid, run.signal);
-  process.exitCode = run.status ?? 1;
-  return true;
+  // The bundle runs on this process's stdio, and a signal to this process goes on to it; this process then ends as
+  // the bundle did, by its status, or by the same signal once the forwarding is off and the signal's default is back.
+  const run = spawn("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  const forward = (signal: NodeJS.Signals) => {
+    run.kill(signal);
+  };
+  for (const signal of signals) process.on(signal, forward);
+  return new Promise((resolve) => {
+    const settle = (status: number | null, signal: NodeJS.Signals | null) => {
+      for (const name of signals) process.off(name, forward);
+      if (signal !== null) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exitCode = status ?? 1;
+      resolve(true);
+    };
+    run.on("exit", settle);
+    // A bundle that never started (no bun on PATH) emits error and no exit: that is the run's failure.
+    run.on("error", (error) => {
+      console.error(String(error));
+      settle(1, null);
+    });
+  });
 }
 
 // Only the command builds; a test or a sibling importing this file must not.
-if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+if (import.meta.main && (await ensureBuilt(import.meta.path))) process.exit();
 ```
 
 Why a bundle: bun's auto-install ignores a `package.json` pin, an inline `pkg@1.2.3` specifier fails once a second version of the package was ever fetched on the machine, and a `node_modules` in a user's project is theirs, not the skill's.

@@ -113,12 +113,16 @@ writeFileSync(join(binDir, "gh"), FAKE_GH);
 chmodSync(join(binDir, "gh"), 0o755);
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
+const STUB_KEYS = ["STUB_DIR", "STUB_ARGS_LOG", "STUB_VIOLATIONS"] as const;
 
 // The modules spawn gh with the process environment, so the fake goes first on this process's
-// PATH for the file's duration.
+// PATH for the file's duration, and the fixture variables the fake reads live there too. Both are
+// undone after the file: a later suite in the same process spawns its own stubs with this
+// environment, and a STUB_ARGS_LOG into a fixture directory removed by then killed one at startup.
 process.env.PATH = `${binDir}:${ORIGINAL_PATH}`;
 afterAll(() => {
   process.env.PATH = ORIGINAL_PATH;
+  for (const key of STUB_KEYS) delete process.env[key];
 });
 
 function readOr(path: string, fallback: string): string {
