@@ -11,7 +11,7 @@
 //   STUB_PROMPT_COPY  the first prompt's text, for the test to compare
 //   STUB_PERMISSIONS  one JSON line per permission request: title, kind, and the option the client chose
 //   STUB_STEERS       one line per _session/steering request's text
-//   STUB_CWD_REPORT   git facts about the session's cwd, and a write into its toplevel (the copy-mode tests)
+//   STUB_CWD_REPORT   git facts about the session's cwd and the CODEX_HOME seen, and a write into its toplevel (the copy-mode tests)
 //   STUB_PID_FILE     this process's pid, for the stall tests to confirm the kill
 //   STUB_EXIT         the exit status once the client hangs up (default 0)
 
@@ -25,7 +25,6 @@ interface ToolStep {
   title: string;
   kind: acp.ToolKind;
   permission?: boolean;
-  /** The permission request names the call by id alone, as the SDK allows; the client reads the rest from the announcement. */
   askBare?: boolean;
   output?: string;
   onReject?: "cancel" | "continue";
@@ -134,6 +133,7 @@ function reportCwd(cwd: string, file: string): void {
     git("config", "--get", "filter.lfs.smudge"),
     git("--no-pager", "diff", "--stat", "origin/main...HEAD").split("\n").at(-1) ?? "",
     git("rev-parse", "-q", "--verify", "ORIG_HEAD"),
+    process.env.CODEX_HOME ?? "",
   ];
   writeFileSync(file, `${lines.join("\n")}\n`);
   // A write the prompt forbade: it must land in the copy, never in the checkout under review.

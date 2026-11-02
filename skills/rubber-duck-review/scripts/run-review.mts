@@ -14,6 +14,7 @@
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
  *   the stream goes silent       -> a stuck child held one run for hours: --stall kills the reviewer's process group
  *   criteria pasted by hand      -> thirty rounds passed what the house rules forbid: the launcher names this collection's pages
+ *   the bundle runs from .build/ -> paths off import.meta would miss scripts/: the skill root is two levels up either way
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -144,10 +145,8 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
-const { startAcpSession } = await import("./acp.mts");
 
-// The skill's directory is resolved through any install symlink, so its siblings are the installed skills;
-// the source under scripts/ and its bundle under .build/ both sit one level below it.
+const { startAcpSession } = await import("./acp.mts");
 
 const SKILL_DIR = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
 const SCHEMA_FILE = join(SKILL_DIR, "scripts", "verdict-schema.json");
@@ -167,10 +166,7 @@ function schemaText(): string {
 /** The reviewers run as a CLI; codex runs as an ACP session (acp.mts) and has no argv. */
 type CliTool = Exclude<Tool, "codex">;
 
-/** The adapter that serves codex over ACP, found on PATH. */
 const CODEX_ADAPTER = "codex-acp";
-
-/** codex's read-only mode: commands ask before they run, a file edit asks and a refusal ends the turn. */
 const CODEX_MODE = "read-only";
 
 const TOOL_ARGS: Record<CliTool, (prompt: string) => string[]> = {
@@ -1000,6 +996,32 @@ function runCliReviewer(
   return child;
 }
 
+/** realpath(3) over `relative` from `root`, as codex canonicalizes CODEX_HOME: each symlink is followed before a later
+ * `..` steps out of it. bun's realpathSync drops `link/..` by the text first, landing beside the link, not in its target. */
+function physicalPath(root: string, relative: string): string {
+  let current = root;
+  for (const part of relative.split("/")) {
+    if (part === "" || part === ".") continue;
+    current = part === ".." ? dirname(current) : realpathSync(`${current}/${part}`);
+  }
+  return current;
+}
+
+/** The adapter's environment inside the copy: no GIT_* variable, which would name the live repository, and a relative
+ * CODEX_HOME made absolute from the launcher's cwd, as codex reads it there; a path realpath cannot walk is taken by
+ * its text. An empty one is unset to codex. */
+function copyEnv(): NodeJS.ProcessEnv {
+  const env = withoutGitEnv(process.env);
+  if (env.CODEX_HOME && !isAbsolute(env.CODEX_HOME)) {
+    try {
+      env.CODEX_HOME = physicalPath(process.cwd(), env.CODEX_HOME);
+    } catch {
+      env.CODEX_HOME = resolve(process.cwd(), env.CODEX_HOME);
+    }
+  }
+  return env;
+}
+
 /** What codex may do under each confinement. Under its own read-only sandbox a command that asks is one the
  * sandbox would refuse (a write, the network), so only reads and searches are allowed. Inside a snapshot copy
  * nothing confines an allowed command, and the copy is what keeps a write out of the checkout, so commands
@@ -1012,9 +1034,6 @@ function policyFor(launch: Launch): PermissionPolicy {
   return (toolCall) => (allowed.has(toolCall.kind) ? "allow" : "deny");
 }
 
-/** How the adapter's close is read once the session settled: a stop or a failure the capture already carries,
- * so the exit code is not the status; and when the adapter dies before the session settles, the session is
- * given a moment to report the broken stream before the exit itself is written as the failure. */
 const ADAPTER_CLOSE_GRACE_MS = 1000;
 
 function runAcpReviewer(
@@ -1073,7 +1092,7 @@ function runAcpReviewer(
       adapter: CODEX_ADAPTER,
       args: [],
       cwd: copyMode?.cwd,
-      env: copyMode === null ? undefined : withoutGitEnv(process.env),
+      env: copyMode === null ? undefined : copyEnv(),
       mode: CODEX_MODE,
       prompt,
       policy: policyFor(launch),
@@ -1100,7 +1119,8 @@ function runAcpReviewer(
 
 /** The session's end is the review's: a stop the verdict reads, or a failure the capture names. The adapter idles
  * after the turn, so the launcher ends it, and the run settles once both the session and the adapter are done.
- * Returns the stall clock's wind, for the capture and the stderr to call. */
+ * An adapter that dies first gets ADAPTER_CLOSE_GRACE_MS for the session to report the broken stream before the
+ * exit itself is written as the failure. Returns the stall clock's wind, for the capture and the stderr to call. */
 function watchAcp(
   session: ReturnType<typeof startAcpSession>,
   run: Run,

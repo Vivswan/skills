@@ -91,6 +91,7 @@ const COPILOT_VERDICT = verdictFor("copilot");
 function acpUpdate(update: Record<string, unknown>): string {
   return JSON.stringify({ event: "update", update });
 }
+
 const ACP_TOOL_LINE = acpUpdate({
   sessionUpdate: "tool_call",
   toolCallId: "call-1",
@@ -119,9 +120,9 @@ const CLAUDE_RESULT_LINE = JSON.stringify({
   structured_output: CLAUDE_VERDICT,
 });
 
-/** codex itself is on PATH for the sandbox probe alone: STUB_SANDBOX=bwrap plays a container whose
- * AppArmor profile denies bubblewrap's mount propagation. Any other invocation is a violation. */
 const FAKE_CODEX = `#!/usr/bin/env bash
+# codex itself is on PATH for the sandbox probe alone: STUB_SANDBOX=bwrap plays a container whose AppArmor
+# profile denies bubblewrap's mount propagation. Any other invocation is a violation.
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
 if [ "$1 $2 $3" = "sandbox -- true" ] && [ "$#" -eq 3 ]; then
   if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then
@@ -132,14 +133,11 @@ fi
 violate "codex argv: $*"; exit 64
 `;
 
-/** The adapter on PATH runs the fake ACP agent from its real path, where the SDK resolves; the scenario the run
- * wrote arrives in STUB_SCENARIO. */
 const ACP_STUB = join(ROOT, "tests", "helpers", "acp-agent-stub.ts");
 const FAKE_CODEX_ACP = `#!/usr/bin/env bash
+# The adapter runs the fake ACP agent from its real path, where the SDK resolves; STUB_SCENARIO names the script.
 exec "${process.execPath}" "${ACP_STUB}" "$@"
 `;
-
-/** The modes a codex-acp advertises; the current one is not read-only, so the launch must set it. */
 const CODEX_MODES = {
   currentModeId: "workspace-write",
   availableModes: [
@@ -172,12 +170,12 @@ const BARE_EDIT_STEP = { ...EDIT_STEP, askBare: true };
 const END = { type: "stop", reason: "end_turn" };
 const THINK = { type: "thought", text: "still reading" };
 
-/** One scripted turn under the codex modes, read-only expected on set_mode. */
+/** One scripted turn under the codex modes, whose current mode is not read-only, so the launch must set it.
+ * ACP_SCENARIOS keys these by the STUB_MODE a run names; the stub plays one per session/prompt. */
 function acpScenario(turn: unknown[], extra: Record<string, unknown> = {}): unknown {
   return { modes: CODEX_MODES, expectMode: "read-only", turns: [turn], ...extra };
 }
 
-/** The codex scenarios by the STUB_MODE a run names; the stub plays one per session/prompt. */
 const ACP_SCENARIOS: Record<string, unknown> = {
   ok: acpScenario([
     { type: "thought", text: "thinking" },
@@ -337,9 +335,18 @@ exec "${REAL_GIT}" "$@"
 `;
 
 const binDir = temp.dir("run-review-test-");
-// No reviewer binary, but bun itself: the launcher runs its bundle through the bun on PATH.
 const emptyBinDir = temp.dir("run-review-nobin-");
+// A reviewer-less PATH still holds bun: the launcher runs its bundle through the bun on PATH.
 symlinkSync(process.execPath, join(emptyBinDir, "bun"));
+
+/** The test process's environment without another suite's STUB_* leftovers: a stale STUB_ARGS_LOG into a removed
+ * scratch directory kills the adapter stub at startup, and every ACP session then reads as a closed connection. */
+function inheritedEnv(): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("STUB_")),
+  );
+}
+
 for (const [name, body] of [
   ["codex", FAKE_CODEX],
   ["codex-acp", FAKE_CODEX_ACP],
@@ -401,7 +408,7 @@ function run(
   const result = Bun.spawnSync([process.execPath, script, ...args], {
     cwd,
     env: {
-      ...process.env,
+      ...inheritedEnv(),
       PATH: path ?? `${binDir}:${process.env.PATH}`,
       STUB_VIOLATIONS: violations,
       STUB_PROMPT_COPY: promptCopy,
@@ -536,7 +543,7 @@ function recordStatus(outputFile: string, status: string): void {
 /** A script run left in flight, for the --wait cases observed mid-wait. */
 function start(args: string[]) {
   return Bun.spawn([process.execPath, SCRIPT, ...args], {
-    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    env: { ...inheritedEnv(), PATH: `${binDir}:${process.env.PATH}` },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -863,8 +870,19 @@ describe("run-review.mts", () => {
 
   /** The stub's report of the copy as the reviewer saw it (the stub's cwd-report block names the lines). */
   function cwdReport(file: string) {
-    const [cwd, top, branch, status, head, commits, aText, lfsSmudge, branchDiff, origHead] =
-      readFileSync(file, "utf-8").split("\n");
+    const [
+      cwd,
+      top,
+      branch,
+      status,
+      head,
+      commits,
+      aText,
+      lfsSmudge,
+      branchDiff,
+      origHead,
+      codexHome,
+    ] = readFileSync(file, "utf-8").split("\n");
     return {
       cwd,
       top,
@@ -876,6 +894,7 @@ describe("run-review.mts", () => {
       lfsSmudge,
       branchDiff,
       origHead,
+      codexHome,
     };
   }
 
@@ -1019,6 +1038,48 @@ describe("run-review.mts", () => {
       expect(seen.branchDiff, id).toBe(" 1 file changed, 1 insertion(+), 1 deletion(-)");
     }
   }, 30000);
+
+  test("a relative CODEX_HOME names the launcher's directory, not the copy's: the adapter sees it absolute", () => {
+    const repo = fixtureRepo();
+    const reportFile = join(binDir, "cwd-report-codex-home");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile, CODEX_HOME: ".codex-home" },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(cwdReport(reportFile).codexHome).toBe(join(repo, ".codex-home"));
+  });
+
+  test("a relative CODEX_HOME through a symlink and .. resolves as codex does, by the filesystem, not by the text", () => {
+    const repo = fixtureRepo();
+    const home = temp.dir("run-review-codex-home-");
+    mkdirSync(join(home, "child"));
+    symlinkSync(join(home, "child"), join(repo, "link"));
+    const reportFile = join(binDir, "cwd-report-codex-home-link");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile, CODEX_HOME: "link/.." },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(cwdReport(reportFile).codexHome).toBe(realpathSync(home));
+  });
+
+  test("an empty CODEX_HOME stays empty: codex reads it as unset", () => {
+    const repo = fixtureRepo();
+    const reportFile = join(binDir, "cwd-report-codex-home-empty");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile, CODEX_HOME: "" },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(cwdReport(reportFile).codexHome).toBe("");
+  });
 
   test("ORIG_HEAD travels with the snapshot, so the tip before a reset or rebase resolves as a diff base in the copy", () => {
     const repo = fixtureRepo();

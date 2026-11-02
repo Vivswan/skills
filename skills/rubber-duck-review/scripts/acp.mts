@@ -92,6 +92,7 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
 const acp = await import("@agentclientprotocol/sdk");
 
 /** What the policy judges: the tool call's kind, its title, and the paths it names. */
@@ -106,21 +107,31 @@ export type PermissionAnswer = "allow" | "deny";
 export type PermissionPolicy = (toolCall: ToolCallFacts) => PermissionAnswer;
 
 export interface AcpSession {
-  /** The adapter binary on PATH, with its arguments. */
+  /** The adapter binary on PATH. */
   adapter: string;
+
+  /** The adapter's arguments. */
   args: string[];
 
   /** Where the adapter runs: the checkout, or the snapshot copy's twin of the cwd. */
   cwd: string | undefined;
+
+  /** The adapter's environment; undefined inherits the launcher's. */
   env: NodeJS.ProcessEnv | undefined;
 
   /** The session mode the review needs, by the id the adapter advertises. */
   mode: string;
+
+  /** The review prompt, the one user turn of the session. */
   prompt: string;
+
+  /** Answers each permission request. */
   policy: PermissionPolicy;
 
   /** One JSON object per call, the capture verdict.mts reads. */
   capture: (line: Record<string, unknown>) => void;
+
+  /** The adapter's stderr, chunk by chunk. */
   stderr: (chunk: Buffer) => void;
 }
 
