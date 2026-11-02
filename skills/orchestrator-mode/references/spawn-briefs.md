@@ -211,6 +211,14 @@ The exception class is named, never assumed: genuinely non-idempotent operations
 
 Production shape: two stacked builders each bumped the same manifest version by one. The double bump was absorbed only because a later rebase happened to collapse the two edits. The brief clause makes that coordination explicit instead of lucky.
 
+## ACP-Run Builders
+
+A builder under `acp-runner.mts` has no inbox: the lead's words arrive as user turns opening with `lead:`. The brief says so, and what follows from it:
+
+- A turn opening `lead:` is a directive to reconcile like a message (Final Signals Reconcile the Full Inbox), never a new task.
+- The builder's report is its final message; the runner's events log carries it to the lead.
+- An out-of-territory need is reported, never retried: the permission rule `references/acp-builders.md` owns refuses the write.
+
 ## The TODO Ban
 
 Builders may never leave TODO or FIXME markers. The work either happens in the same change or is surfaced as an escalation in the completion signal, for the lead to queue or put before the user. A TODO found in a diff at review time is a review finding.

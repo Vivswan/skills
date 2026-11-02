@@ -34,6 +34,7 @@ const READ_ONLY_MODES = {
 
 interface State {
   phase: string;
+  queued: number;
   sessionId: string | null;
   lastStop: string | null;
   steering: boolean;
@@ -43,6 +44,8 @@ interface State {
 
 interface EventLine {
   kind: string;
+  queued?: boolean;
+  outcome?: string;
   update?: { sessionUpdate: string };
   title?: string;
   allowed?: boolean;
@@ -75,6 +78,7 @@ function startRunner(scenario: object, flags: string[] = [], env: Record<string,
     STUB_PROMPT_COPY: join(dir, "prompt"),
     STUB_ARGS_LOG: join(dir, "args"),
     STUB_PID_FILE: join(dir, "pid"),
+    STUB_STEERS: join(dir, "steers"),
     ...env,
   };
   const proc = Bun.spawn(
@@ -346,13 +350,17 @@ describe("acp-runner.mts", () => {
     expect((await runner.exit()).code).toBe(0);
   }, 90_000);
 
-  test("a prompt during a turn is refused as busy with exit 1, and cancel ends the turn cancelled", async () => {
+  test("a prompt during a turn is queued where the adapter does not steer and runs as the next turn, and cancel ends the running turn cancelled", async () => {
     const runner = startRunner({
       modes: READ_ONLY_MODES,
       turns: [
         [
           { type: "sleep", ms: 5000 },
           { type: "message", text: "late" },
+        ],
+        [
+          { type: "message", text: "the queued one" },
+          { type: "stop", reason: "end_turn" },
         ],
       ],
     });
@@ -362,24 +370,95 @@ describe("acp-runner.mts", () => {
       stdout: "prompted",
     });
     waitForPhase(runner, "busy");
-    expect(runner.command("prompt", "and this")).toMatchObject({ code: 1, stdout: "busy" });
+    expect(runner.command("prompt", "and this")).toMatchObject({ code: 0, stdout: "queued" });
+    expect(runner.state().queued).toBe(1);
     expect(runner.command("cancel")).toMatchObject({ code: 0, stdout: "cancelled" });
+    waitFor(
+      "both stops",
+      () => runner.events().filter((event) => event.kind === "stop").length === 2,
+      20_000,
+    );
     waitForPhase(runner, "idle");
-    expect(runner.state().lastStop).toBe("cancelled");
+    expect(
+      runner
+        .events()
+        .filter((event) => event.kind === "stop")
+        .map((event) => event.stopReason),
+    ).toEqual(["cancelled", "end_turn"]);
+    expect(
+      runner
+        .events()
+        .filter((event) => event.kind === "prompt")
+        .map((event) => [event.text, event.queued]),
+    ).toEqual([
+      ["take your time", false],
+      ["and this", true],
+    ]);
     expect(runner.events().filter((event) => event.kind === "cancel")).toHaveLength(1);
+    expect(runner.state()).toMatchObject({ lastStop: "end_turn", queued: 0 });
+    expect(runner.violations()).toBe("");
     runner.command("stop");
     expect((await runner.exit()).code).toBe(0);
   }, 90_000);
 
-  test("an adapter that dies mid-turn ends the runner: the state names the exit and start leaves with 1", async () => {
-    const runner = startRunner({ modes: READ_ONLY_MODES, turns: [[{ type: "exit", code: 7 }]] });
+  test("where the adapter advertises steering, a prompt during a turn is injected into it and the text reaches the adapter", async () => {
+    const runner = startRunner({
+      steering: true,
+      modes: READ_ONLY_MODES,
+      turns: [
+        [
+          { type: "sleep", ms: 1500 },
+          { type: "message", text: "done" },
+          { type: "stop", reason: "end_turn" },
+        ],
+      ],
+    });
+    waitForSocket(runner);
+    expect(runner.state().steering).toBe(true);
+    expect(runner.command("prompt", "go")).toMatchObject({ code: 0, stdout: "prompted" });
+    waitForPhase(runner, "busy");
+    expect(runner.command("prompt", "lead: adjust the plan")).toMatchObject({
+      code: 0,
+      stdout: "injected",
+    });
+    waitFor("the stop", () => runner.events().some((event) => event.kind === "stop"), 20_000);
+    expect(readFileSync(join(runner.dir, "steers"), "utf8")).toBe("lead: adjust the plan\n");
+    expect(runner.events().find((event) => event.kind === "steer")).toMatchObject({
+      text: "lead: adjust the plan",
+      outcome: "injected",
+    });
+    expect(runner.state().queued).toBe(0);
+    expect(runner.violations()).toBe("");
+    runner.command("stop");
+    expect((await runner.exit()).code).toBe(0);
+  }, 90_000);
+
+  test("an adapter that dies mid-turn ends the runner: the state names the exit, start leaves with 1, and a queued text is kept, never sent down the closed connection", async () => {
+    const runner = startRunner({
+      modes: READ_ONLY_MODES,
+      turns: [
+        [
+          { type: "sleep", ms: 400 },
+          { type: "exit", code: 7 },
+        ],
+      ],
+    });
     waitForSocket(runner);
     expect(runner.command("prompt", "go")).toMatchObject({ code: 0, stdout: "prompted" });
+    waitForPhase(runner, "busy");
+    expect(runner.command("prompt", "later")).toMatchObject({ code: 0, stdout: "queued" });
     waitForPhase(runner, "ended");
-    expect(runner.state().reason).toBe("adapter exited 7");
+    expect(runner.state()).toMatchObject({ reason: "adapter exited 7", queued: 1 });
     const exit = await runner.exit();
     expect(exit.code).toBe(1);
     expect(runner.events().at(-1)).toMatchObject({ kind: "ended", reason: "adapter exited 7" });
+    expect(
+      runner
+        .events()
+        .filter((event) => event.kind === "prompt")
+        .map((event) => event.text),
+    ).toEqual(["go"]);
+    expect(runner.events().filter((event) => event.kind === "error").length).toBeLessThanOrEqual(1);
   }, 90_000);
 
   test("a mode the adapter does not advertise is a usage error naming the offered modes, exit 2, and the adapter is gone", async () => {

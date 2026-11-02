@@ -40,7 +40,8 @@ const USAGE = [
   "usage: acp-runner.mts <command> [options]",
   "  start --name <builder> --cwd <worktree> [--mode <id>] [--allow-outside] --adapter <command> [args...]",
   "      spawn the adapter in the worktree, open one ACP session there, and serve the control socket until stop",
-  "  prompt --name <builder> (<text> | --file <path>)   send the text as the builder's next turn",
+  "  prompt --name <builder> (<text> | --file <path>)   the builder's next turn: prompted when idle, injected into the running turn where",
+  "                                                     the adapter steers, else queued for the turn after",
   "  status --name <builder>                            print the state file as JSON",
   "  cancel --name <builder>                            interrupt the running turn",
   "  stop --name <builder>                              end the session and the adapter",
@@ -51,9 +52,9 @@ const USAGE = [
   "  and recorded, unless --allow-outside",
   "files: <dir>/<name>.acp-runner.{state.json,events.jsonl,sock}; <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events,",
   "  else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>",
-  "prints: start, one banner line, then nothing until it exits; prompt, one word: prompted, or busy while a turn runs;",
+  "prints: start, one banner line, then nothing until it exits; prompt, one word: prompted, injected, or queued;",
   "  status, the state object; cancel and stop, one word: cancelled, stopped",
-  "exits: 0 ok; 1 prompt refused (busy, or the runner still starting), or start ending because the adapter exited;",
+  "exits: 0 ok; 1 prompt refused (the runner still starting, or ended), or start ending because the adapter exited;",
   "       2 usage, a mode the adapter lacks, or a runner of this name already serving; 3 no runner answers for this name",
 ].join("\n");
 
@@ -164,6 +165,7 @@ interface State {
   lastUpdateAt: string | null;
   lastStop: string | null;
   steering: boolean;
+  queued: number;
   endedAt: string | null;
   reason: string | null;
 }
@@ -344,6 +346,8 @@ class Runner {
   private server: Server | null = null;
   /** The one shutdown in flight, which every stop caller awaits. */
   private stopping: Promise<void> | null = null;
+  /** The lead's texts waiting for the running turn to end, oldest first. */
+  private readonly queue: string[] = [];
   private readonly finished = Promise.withResolvers<void>();
   /** The adapter's exit, awaited by stop; taken at construction so an exit before stop is never missed. */
   private readonly exited: Promise<unknown>;
@@ -353,6 +357,8 @@ class Runner {
     private readonly options: StartOptions,
     private readonly child: ReturnType<typeof spawn>,
     private readonly agent: acpTypes.ClientContext,
+    /** Aborted once the connection to the adapter is closed, before the adapter's exit is even seen. */
+    private readonly connection: AbortSignal,
   ) {
     this.exited = once(child, "exit").catch(() => undefined);
     this.state = {
@@ -366,6 +372,7 @@ class Runner {
       lastUpdateAt: null,
       lastStop: null,
       steering: false,
+      queued: 0,
       endedAt: null,
       reason: null,
     };
@@ -461,25 +468,69 @@ class Runner {
         prompt: [{ type: "text", text }],
       });
       this.event({ kind: "stop", stopReason: response.stopReason });
-      if (this.state.phase !== "ended") {
+      if (this.alive())
         this.save({ phase: "idle", lastStop: response.stopReason, lastUpdateAt: now() });
-      }
     } catch (error) {
       this.event({ kind: "error", message: errorText(error) });
-      if (this.state.phase !== "ended") this.save({ phase: "idle", lastStop: "error" });
+      // A prompt the closed connection rejected is the adapter's end, which the exit handler or the stop records; the queue stays as it was.
+      if (this.alive()) this.save({ phase: "idle", lastStop: "error" });
+    }
+    this.drain();
+  }
+
+  private alive(): boolean {
+    return (
+      !this.connection.aborted &&
+      !adapterExited(this.child) &&
+      this.stopping === null &&
+      this.state.phase !== "ended"
+    );
+  }
+
+  private begin(text: string, queued: boolean): void {
+    this.save({ phase: "busy", lastUpdateAt: now(), queued: this.queue.length });
+    this.event({ kind: "prompt", text, queued });
+    void this.turn(text);
+  }
+
+  private drain(): void {
+    if (!this.alive() || this.state.phase !== "idle" || this.queue.length === 0) return;
+    this.begin(this.queue.shift() as string, true);
+  }
+
+  private async steer(text: string): Promise<string> {
+    try {
+      const reply = await this.agent.request<{ outcome: string }>("_session/steering", {
+        sessionId: this.state.sessionId,
+        prompt: [{ type: "text", text }],
+        _meta: { steering: { idleBehavior: "promptRequired" } },
+      });
+      return reply.outcome;
+    } catch (error) {
+      return `failed: ${errorText(error)}`;
     }
   }
 
-  prompt(text: string): Reply {
+  async prompt(text: string): Promise<Reply> {
     if (this.state.phase === "starting")
       return { ok: false, error: "the runner is still starting" };
     if (this.state.phase === "ended")
       return { ok: false, error: `the runner ended: ${this.state.reason}` };
-    if (this.state.phase !== "idle") return { ok: true, result: "busy" };
-    this.save({ phase: "busy", lastUpdateAt: now() });
-    this.event({ kind: "prompt", text });
-    void this.turn(text);
-    return { ok: true, result: "prompted" };
+    if (this.state.phase === "idle") {
+      this.begin(text, false);
+      return { ok: true, result: "prompted" };
+    }
+    if (this.state.steering) {
+      const outcome = await this.steer(text);
+      this.event({ kind: "steer", text, outcome });
+      if (outcome === "injected") return { ok: true, result: "injected" };
+    }
+    // No steering, or no turn left to steer into: the text waits, and runs at once if the turn just ended.
+    this.queue.push(text);
+    this.save({ queued: this.queue.length });
+    this.event({ kind: "queued", text });
+    this.drain();
+    return { ok: true, result: "queued" };
   }
 
   async cancel(): Promise<string> {
@@ -523,7 +574,7 @@ class Runner {
       case "status":
         return { ok: true, result: this.state.phase, state: this.state };
       case "prompt":
-        return this.prompt(command.text);
+        return await this.prompt(command.text);
       case "cancel":
         return { ok: true, result: await this.cancel() };
       case "stop":
@@ -656,7 +707,7 @@ function connectAdapter(
       runner?.onUpdate(ctx.params);
     })
     .connect(stream);
-  runner = new Runner(files, options, child, connection.agent);
+  runner = new Runner(files, options, child, connection.agent, connection.signal);
   child.stderr?.setEncoding("utf-8");
   child.stderr?.on("data", (chunk: string) => {
     for (const line of chunk.split("\n").filter((entry) => entry.trim() !== "")) {
@@ -779,7 +830,7 @@ async function clientCommand(command: string, args: string[]): Promise<number> {
     return 0;
   }
   console.log(reply.result);
-  return reply.result === "busy" ? 1 : 0;
+  return 0;
 }
 
 async function main(): Promise<number> {

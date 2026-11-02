@@ -41,13 +41,30 @@ The owner's rule: a builder writes its own worktree and nothing else. Every comm
 
 A refusal ends the turn on codex-acp (its reject means "tell Codex what to do differently"); claude-agent-acp marks the call failed and goes on. The state's `lastStop` says which.
 
+## Forwarding a Line
+
+A github-events line for an ACP builder goes to it the way the lead forwards one to a Claude builder by message, with the same judgment about which line is the builder's to act on:
+
+```bash
+bun "<skill-dir>/scripts/acp-runner.mts" prompt --name parser "lead: PR owner/repo#12: review by octocat (CHANGES_REQUESTED), 3 comments https://github.com/owner/repo/pull/12#pullrequestreview-7"
+```
+
+```text
+prompted   the builder was idle: the line is this turn
+injected   the adapter steers (codex-acp, claude-agent-acp advertise it): the line joins the running turn
+queued     no steering, or the turn ended as the steer arrived: the line is the next turn's prompt, sent as soon as the builder is idle
+```
+
+The lead opens the text with `lead:` so the builder tells the lead's words from its own brief; the spawn brief says so (`references/spawn-briefs.md`, ACP-Run Builders).
+
 ## The Command
 
 ```text usage=skills/orchestrator-mode/scripts/acp-runner.mts
 usage: acp-runner.mts <command> [options]
   start --name <builder> --cwd <worktree> [--mode <id>] [--allow-outside] --adapter <command> [args...]
       spawn the adapter in the worktree, open one ACP session there, and serve the control socket until stop
-  prompt --name <builder> (<text> | --file <path>)   send the text as the builder's next turn
+  prompt --name <builder> (<text> | --file <path>)   the builder's next turn: prompted when idle, injected into the running turn where
+                                                     the adapter steers, else queued for the turn after
   status --name <builder>                            print the state file as JSON
   cancel --name <builder>                            interrupt the running turn
   stop --name <builder>                              end the session and the adapter
@@ -58,8 +75,8 @@ permissions: every command runs; a file tool whose locations all sit inside the 
   and recorded, unless --allow-outside
 files: <dir>/<name>.acp-runner.{state.json,events.jsonl,sock}; <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events,
   else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
-prints: start, one banner line, then nothing until it exits; prompt, one word: prompted, or busy while a turn runs;
+prints: start, one banner line, then nothing until it exits; prompt, one word: prompted, injected, or queued;
   status, the state object; cancel and stop, one word: cancelled, stopped
-exits: 0 ok; 1 prompt refused (busy, or the runner still starting), or start ending because the adapter exited;
+exits: 0 ok; 1 prompt refused (the runner still starting, or ended), or start ending because the adapter exited;
        2 usage, a mode the adapter lacks, or a runner of this name already serving; 3 no runner answers for this name
 ```

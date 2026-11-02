@@ -145,7 +145,7 @@ The per-mode procedures, including the stacked-chain loop and the worktree rules
   Read every landing's sums against its own purpose and the wave's total against the wave's, and report the mismatches with their reasons.
 - **After every push or merge** (a direct landing, a PR update, or a PR merge), the PR or the mainline branch is subscribed with the `/watch-github` skill's `watch`, and the verdict arrives as a message naming the failed job and step. Never fire-and-forget a push, and never watch CI inline.
 
-  In a fleet the lead's session runs the daemon as its own background task, `--mode` matching the session, and watches every PR of the fleet (`watch owner/repo#n`); a builder never runs `watch`. When the lead wants a builder to act on a review line, it forwards that line by one message (Claude Code's SendMessage).
+  In a fleet the lead's session runs the daemon as its own background task, `--mode` matching the session, and watches every PR of the fleet (`watch owner/repo#n`); a builder never runs `watch`. When the lead wants a builder to act on a review line, it forwards that line by one message (Claude Code's SendMessage); to a builder under `acp-runner.mts`, by `acp-runner prompt` (`references/acp-builders.md`, Forwarding a Line).
 
   After a MERGE, the SHA judged is the PR's MERGE COMMIT on the mainline, never `git rev-parse HEAD` in the worktree: HEAD still names the topic tip, and the squash or merge commit exists only on the mainline. The mainline branch target, watched once, reports that tip and its verdict; for a direct landing, `git fetch <base-remote> <mainline> && git rev-parse FETCH_HEAD` names it.
 
