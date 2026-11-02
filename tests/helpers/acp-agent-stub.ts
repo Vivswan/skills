@@ -11,7 +11,7 @@
 //   STUB_PROMPT_COPY  the first prompt's text, for the test to compare
 //   STUB_PERMISSIONS  one JSON line per permission request: title, kind, and the option the client chose
 //   STUB_STEERS       one line per _session/steering request's text
-//   STUB_CWD_REPORT   git facts about the session's cwd, and a write into its toplevel (the copy-mode tests)
+//   STUB_CWD_REPORT   git facts about the session's cwd and the CODEX_HOME seen, and a write into its toplevel (the copy-mode tests)
 //   STUB_PID_FILE     this process's pid, for the stall tests to confirm the kill
 //   STUB_EXIT         the exit status once the client hangs up (default 0)
 
@@ -25,6 +25,7 @@ interface ToolStep {
   title: string;
   kind: acp.ToolKind;
   permission?: boolean;
+  askBare?: boolean;
   output?: string;
   onReject?: "cancel" | "continue";
   locations?: { path: string }[];
@@ -34,9 +35,9 @@ interface ToolStep {
  *   { "type": "message", "text": "...", "chunks": 3 }      agent_message_chunk, the text split into chunks
  *   { "type": "thought", "text": "..." }                   agent_thought_chunk
  *   { "type": "tool", "title": "git diff", "kind": "execute", "permission": true, "output": "...",
- *     "onReject": "cancel" }                               tool_call, then session/request_permission when permission
- *                                                           is set; a rejection ends the turn with stopReason cancelled
- *                                                           (codex) or marks the call failed and goes on ("continue", claude)
+ *     "onReject": "cancel", "askBare": false }             tool_call, then session/request_permission when permission is
+ *                                                           set, by id alone when askBare is set; a rejection ends the turn
+ *                                                           (stopReason cancelled, codex) or fails the call and goes on ("continue", claude)
  *   { "type": "stop", "reason": "end_turn" }               the prompt's response; end_turn when no step says
  *   { "type": "exit", "code": 1 }                          the adapter dies mid-turn
  *   { "type": "sleep", "ms": 300 }                         silence */
@@ -132,6 +133,7 @@ function reportCwd(cwd: string, file: string): void {
     git("config", "--get", "filter.lfs.smudge"),
     git("--no-pager", "diff", "--stat", "origin/main...HEAD").split("\n").at(-1) ?? "",
     git("rev-parse", "-q", "--verify", "ORIG_HEAD"),
+    process.env.CODEX_HOME ?? "",
   ];
   writeFileSync(file, `${lines.join("\n")}\n`);
   // A write the prompt forbade: it must land in the copy, never in the checkout under review.
@@ -175,13 +177,9 @@ async function runTool(step: ToolStep): Promise<boolean> {
       acp.methods.client.session.requestPermission,
       {
         sessionId: SESSION_ID,
-        toolCall: {
-          toolCallId,
-          title: step.title,
-          kind: step.kind,
-          status: "in_progress",
-          locations,
-        },
+        toolCall: step.askBare
+          ? { toolCallId }
+          : { toolCallId, title: step.title, kind: step.kind, status: "in_progress", locations },
         options: PERMISSION_OPTIONS,
       },
     );

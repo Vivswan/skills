@@ -1,6 +1,7 @@
-// The verdict a reviewer's captured stream carries, read and checked: the final message must be the
-// object verdict-schema.json (beside this file) describes, and a codex or claude turn must have called a
-// tool before it. No IO; run-review.mts launches the reviewer, captures the stream, and reports this.
+// The verdict a reviewer's capture carries, read and checked: the final message must be the object
+// verdict-schema.json (beside this file) describes, and a codex or claude turn must have called a tool
+// before it. codex's capture is the ACP session acp.mts writes, claude's its CLI stream, copilot's plain
+// text. No IO; run-review.mts launches the reviewer, captures the stream, and reports this.
 
 const TOOLS = ["codex", "claude", "copilot"] as const;
 export type Tool = (typeof TOOLS)[number];
@@ -56,20 +57,23 @@ interface Reading {
   /** A failed turn is final; a later verdict never clears it, unlike a reconnect error. */
   turnFailed: string | null;
 
-  /** Tool calls seen so far in the current turn; codex opens a new count at turn.started. */
+  /** Tool calls seen so far in the turn. */
   toolCallsThisTurn: number;
 
   /** The count at the moment the winning message landed: what proves the reviewer read something first. */
   toolCallsBeforeVerdict: number;
 
-  /** codex: a verdict counts only once its turn completes; a stream cut right after an agent_message is mid-thought narration. */
-  awaitingTurnEnd: boolean;
-
-  /** codex: a trailing turn.started with no matching end voids any earlier verdict. */
-  turnOpen: boolean;
-
   /** Mid-stream malformed lines are skippable noise; a malformed final line means the stream was truncated mid-write. */
   lastLineMalformed: boolean;
+
+  /** ACP: the agent's text since the last tool call, the final message once the turn ends. */
+  message: string;
+
+  /** ACP: the text segments since the last tool call in stream order, narration and reasoning alternating; each becomes one trajectory row. */
+  segments: { event: "agent_message" | "reasoning"; text: string }[];
+
+  /** ACP: the permission the review refused, which codex answers by ending the turn. */
+  refused: string | null;
 }
 
 const EXCERPT_CHARS = 160;
@@ -153,7 +157,7 @@ function copilotVerdict(raw: string): Extraction {
   return { ok: true, review: { verdict, toolCalls: 0, trajectory: [] } };
 }
 
-/** An error event or a failed turn, which either reviewer may report. */
+/** claude's error event or failed turn. */
 function readErrorEvent(reading: Reading, event: Record<string, unknown>, line: string): void {
   if (event.type !== "error" && event.type !== "turn.failed") return;
 
@@ -163,38 +167,96 @@ function readErrorEvent(reading: Reading, event: Record<string, unknown>, line: 
   reading.trajectory.push({ event: String(event.type), text: excerpt(message) });
 }
 
-/** A completed codex item: a tool call is counted, any text is a step, and an agent_message is the verdict
- * (codex narrates with intermediate ones; the last wins). */
-function readCodexItem(reading: Reading, item: Record<string, unknown>): void {
-  const kind = typeof item.type === "string" ? item.type : "item";
-  if (kind === "command_execution" || kind === "mcp_tool_call") {
-    reading.toolCallsThisTurn += 1;
-    const command = typeof item.command === "string" ? item.command : kind;
-    reading.trajectory.push({ event: kind, text: excerpt(command) });
-  } else if (typeof item.text === "string") {
-    reading.trajectory.push({ event: kind, text: excerpt(item.text) });
+/** A chunk of narration or reasoning joins the last segment of its kind, or opens one, so the rows keep the stream's order. */
+function addText(reading: Reading, event: "agent_message" | "reasoning", text: string): void {
+  if (event === "agent_message") reading.message += text;
+  const last = reading.segments.at(-1);
+  if (last !== undefined && last.event === event) {
+    last.text += text;
+    return;
   }
-
-  if (kind !== "agent_message" || typeof item.text !== "string") return;
-
-  reading.verdict = item.text.trim() === "" ? "" : parseVerdictText(item.text);
-  reading.toolCallsBeforeVerdict = reading.toolCallsThisTurn;
-  reading.awaitingTurnEnd = true;
-  // A stream reconnect ("stream disconnected ... retrying") is an error event the
-  // reviewer recovered from; a message landing after it is the verdict. An error with
-  // no message after it still fails the capture, and a turn.failed always does.
-  reading.errorEvent = null;
+  reading.segments.push({ event, text });
 }
 
-function readCodexEvent(reading: Reading, event: Record<string, unknown>): void {
-  if (event.type === "turn.started") {
-    reading.turnOpen = true;
-    reading.toolCallsThisTurn = 0;
+/** The text so far becomes trajectory rows, in the order it streamed: at a tool call, a permission, or the stop. */
+function flushSegments(reading: Reading): void {
+  for (const segment of reading.segments) {
+    if (segment.text.trim() !== "") {
+      reading.trajectory.push({ event: segment.event, text: excerpt(segment.text) });
+    }
   }
-  if (event.type === "item.completed" && isRecord(event.item)) readCodexItem(reading, event.item);
-  if (event.type === "turn.completed" || event.type === "turn.failed") {
-    reading.awaitingTurnEnd = false;
-    reading.turnOpen = false;
+  reading.segments = [];
+}
+
+/** A boundary that also starts the message over: the verdict is the text after the last tool call. */
+function flushText(reading: Reading): void {
+  flushSegments(reading);
+  reading.message = "";
+}
+
+/** The final message's verdict: the whole text when it is the object, else the trailing object after the sentence
+ * an unschema'd reviewer puts before it; the outermost `{` whose remainder parses wins, so prose stays prose. */
+function parseVerdictMessage(text: string): Verdict | string {
+  const whole = parseVerdictText(text);
+  if (typeof whole !== "string" || whole !== "final message is not JSON") return whole;
+
+  for (let at = text.indexOf("{"); at !== -1; at = text.indexOf("{", at + 1)) {
+    const trailing = parseVerdictText(text.slice(at));
+    if (typeof trailing !== "string" || trailing !== "final message is not JSON") return trailing;
+  }
+  return "final message is not JSON";
+}
+
+/** One session update of the ACP capture: text accumulates, a tool call (codex's Guardian Review is a `think`, not a read) is a boundary and a count. */
+function readAcpUpdate(reading: Reading, update: Record<string, unknown>): void {
+  const content = isRecord(update.content) ? update.content : undefined;
+  const text = content?.type === "text" && typeof content.text === "string" ? content.text : "";
+  if (update.sessionUpdate === "agent_message_chunk") addText(reading, "agent_message", text);
+  if (update.sessionUpdate === "agent_thought_chunk") addText(reading, "reasoning", text);
+  if (update.sessionUpdate !== "tool_call") return;
+
+  flushText(reading);
+  const title = typeof update.title === "string" ? update.title : "tool call";
+  reading.trajectory.push({ event: "tool_call", text: excerpt(title) });
+  if (update.kind !== "think") reading.toolCallsThisTurn += 1;
+}
+
+/** The turn's end: end_turn makes the text since the last tool call the verdict; any other stop reason fails the
+ * review, a cancel named by the permission the review refused (codex ends the turn on a refusal). */
+function readAcpStop(reading: Reading, stopReason: string): void {
+  if (stopReason !== "end_turn") {
+    reading.trajectory.push({ event: "stop", text: stopReason });
+    const refusal = stopReason === "cancelled" ? reading.refused : null;
+    reading.turnFailed = refusal ?? `turn ended ${stopReason}`;
+    return;
+  }
+  const message = reading.message;
+  reading.verdict = message.trim() === "" ? "" : parseVerdictMessage(message);
+  reading.toolCallsBeforeVerdict = reading.toolCallsThisTurn;
+  flushText(reading);
+  reading.trajectory.push({ event: "stop", text: stopReason });
+}
+
+/** One line of the capture acp.mts writes: a session update, a permission request with the review's answer, the stop, or the failure. */
+function readAcpEvent(reading: Reading, event: Record<string, unknown>): void {
+  if (event.event === "update" && isRecord(event.update)) readAcpUpdate(reading, event.update);
+  if (event.event === "permission") {
+    flushSegments(reading);
+    const kind = typeof event.kind === "string" ? event.kind : "other";
+    const title = typeof event.title === "string" ? event.title : "";
+    reading.trajectory.push({
+      event: "permission",
+      text: excerpt(`${event.answer} ${kind}: ${title}`),
+    });
+    if (event.answer === "deny")
+      reading.refused = `the reviewer asked to ${kind} (${title}); a review is read-only`;
+  }
+  if (event.event === "stop" && typeof event.stopReason === "string") {
+    readAcpStop(reading, event.stopReason);
+  }
+  if (event.event === "failed" && typeof event.reason === "string") {
+    reading.turnFailed = event.reason;
+    reading.trajectory.push({ event: "failed", text: excerpt(event.reason) });
   }
 }
 
@@ -256,7 +318,7 @@ function readClaudeEvent(reading: Reading, event: Record<string, unknown>): void
 
 /** The stream read event by event, one JSON object per line; a line that is not one is skipped and remembered
  * only when it is the last. */
-function readStream(tool: "codex" | "claude", raw: string): Reading {
+function readStream(format: "acp" | "claude", raw: string): Reading {
   const reading: Reading = {
     trajectory: [],
     verdict: null,
@@ -264,9 +326,10 @@ function readStream(tool: "codex" | "claude", raw: string): Reading {
     turnFailed: null,
     toolCallsThisTurn: 0,
     toolCallsBeforeVerdict: 0,
-    awaitingTurnEnd: false,
-    turnOpen: false,
     lastLineMalformed: false,
+    message: "",
+    segments: [],
+    refused: null,
   };
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -282,9 +345,12 @@ function readStream(tool: "codex" | "claude", raw: string): Reading {
     }
     if (!isRecord(event)) continue;
 
+    if (format === "acp") {
+      readAcpEvent(reading, event);
+      continue;
+    }
     readErrorEvent(reading, event, trimmed);
-    if (tool === "codex") readCodexEvent(reading, event);
-    else readClaudeEvent(reading, event);
+    readClaudeEvent(reading, event);
   }
 
   return reading;
@@ -306,9 +372,6 @@ function judgeReading(raw: string, reading: Reading): Extraction {
       reason: raw.trim() === "" ? "empty output" : "stream ended without a verdict event",
     };
   }
-  if (reading.awaitingTurnEnd || reading.turnOpen) {
-    return { ok: false, reason: "stream cut mid-turn (no turn.completed after the last events)" };
-  }
   if (verdict === "") return { ok: false, reason: "empty verdict" };
   if (typeof verdict === "string") return { ok: false, reason: `not a verdict: ${verdict}` };
   if (toolCallsBeforeVerdict === 0) {
@@ -324,5 +387,5 @@ function judgeReading(raw: string, reading: Reading): Extraction {
 export function extractVerdict(tool: Tool, raw: string): Extraction {
   if (tool === "copilot") return copilotVerdict(raw);
 
-  return judgeReading(raw, readStream(tool, raw));
+  return judgeReading(raw, readStream(tool === "codex" ? "acp" : "claude", raw));
 }
