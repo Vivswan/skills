@@ -204,8 +204,14 @@ interface Target {
   /** The last reading of every unclaimed worktree, by path; one discovery no longer lists is dropped, with a `gone` note unless an agent claims it. */
   worktrees: Record<string, WorktreeEntry>;
 
-  /** The ACP builders read from the runtime directory, by runner name; one whose state file is gone is dropped with a `gone` note. */
+  /** The runners' book, the ACP builders read from the runtime directory by name, one whose file is gone dropped with a `gone` note; every target holds the same copy. */
   runners: Record<string, RunnerEntry>;
+
+  /** The book's trouble: the runner files that would not read, the runtime directory that would not list; every target holds the same copy. */
+  runnersTrouble: Record<string, StandingTrouble>;
+
+  /** Whether this target is first in the watch order, the one that speaks for the runners' book in `status`. */
+  speaksForRunners: boolean;
 
   /** The trouble conditions in force, by key. */
   trouble: Record<string, StandingTrouble>;
@@ -376,6 +382,8 @@ function parseTarget(args: string[]): Target {
     lead: initialTranscript(),
     worktrees: {},
     runners: {},
+    runnersTrouble: {},
+    speaksForRunners: false,
     trouble: {},
     subagentsListed: false,
   };
@@ -1248,8 +1256,15 @@ function runnerStanding(
   return { said: next.said, lines: next.announce ? [["alert", next.said.text]] : [] };
 }
 
+/** The runners' book: what every target holds of the ACP builders, judged once per poll and written back to each. */
+interface RunnersBook {
+  runners: Record<string, RunnerEntry>;
+  trouble: Record<string, StandingTrouble>;
+}
+
 function runnerTransition(
-  target: Target,
+  book: RunnersBook,
+  quietAfterMinutes: number,
   read: RunnerRead & { ok: true },
   nowMs: number,
 ): { events: EventInput[]; busy: boolean } {
@@ -1265,7 +1280,7 @@ function runnerTransition(
   });
   const events: EventInput[] = [];
   // A runner restarted under the same name is a new builder: its predecessor's continuity would hide its start and its stop.
-  const known = Object.hasOwn(target.runners, name) ? target.runners[name] : undefined;
+  const known = Object.hasOwn(book.runners, name) ? book.runners[name] : undefined;
   const previous = known?.instance === state.instance ? known : undefined;
   const running = state.phase === "busy" || state.phase === "permission";
   const wasRunning = previous?.phase === "busy" || previous?.phase === "permission";
@@ -1274,11 +1289,11 @@ function runnerTransition(
   if (previous !== undefined && running && !wasRunning)
     events.push(event("note", `${label}: prompted`));
 
-  const situation = runnerSituation(state, target.quietAfterMinutes, nowMs);
+  const situation = runnerSituation(state, quietAfterMinutes, nowMs);
   const turnEnded = previous === undefined || previous.phase !== "idle";
   const standing = runnerStanding(previous?.said ?? null, situation, label, nowMs, turnEnded);
   for (const [level, text] of standing.lines) events.push(event(level, text));
-  target.runners[name] = {
+  book.runners[name] = {
     file,
     instance: state.instance,
     phase: state.phase,
@@ -1287,22 +1302,25 @@ function runnerTransition(
   return { events, busy: running };
 }
 
-function readRunners(
-  target: Target,
-  trouble: Map<string, Trouble>,
+/** One poll's judgment of the runners on `book`: every state file read and judged, the files gone dropped, the book's
+ * trouble (a file that would not read, a directory that would not list) said on entering and restored on leaving. */
+function judgeRunners(
+  book: RunnersBook,
+  quietAfterMinutes: number,
   nowMs: number,
 ): { events: EventInput[]; busy: boolean } {
-  let dir: string;
-  let reads: RunnerRead[];
+  const trouble = new Map<string, Trouble>();
+  let reads: RunnerRead[] = [];
   try {
-    dir = runtimeDir();
-    reads = readRunnerStates(dir);
+    reads = readRunnerStates(runtimeDir());
   } catch (error) {
-    throw new FleetReadError(
-      "runners",
-      `fleet: cannot list the runtime directory: ${reasonOf(error)}`,
-      "",
-    );
+    // No file was read, so no file's trouble is over: the standing conditions carry, and the listing's joins them.
+    for (const [key, { text, url }] of Object.entries(book.trouble))
+      trouble.set(key, { text, url });
+    trouble.set("runners", {
+      text: `fleet: cannot list the runtime directory: ${reasonOf(error)}`,
+      url: "",
+    });
   }
   const events: EventInput[] = [];
   let busy = false;
@@ -1316,29 +1334,32 @@ function readRunners(
       });
       continue;
     }
-    const outcome = runnerTransition(target, read, nowMs);
+    const outcome = runnerTransition(book, quietAfterMinutes, read, nowMs);
     events.push(...outcome.events);
     busy ||= outcome.busy;
   }
-  for (const [name, entry] of Object.entries(target.runners)) {
-    if (seen.has(name)) continue;
-    delete target.runners[name];
-    events.push({
-      kind: "builder",
-      level: "note",
-      text: `builder ${name}: gone`,
-      url: fileUrl(entry.file),
-      builder: name,
-    });
+  // A listing that failed names no file: the book keeps every runner until the directory reads again.
+  if (!trouble.has("runners")) {
+    for (const [name, entry] of Object.entries(book.runners)) {
+      if (seen.has(name)) continue;
+      delete book.runners[name];
+      events.push({
+        kind: "builder",
+        level: "note",
+        text: `builder ${name}: gone`,
+        url: fileUrl(entry.file),
+        builder: name,
+      });
+    }
   }
-  return { events, busy };
+  return { events: [...troubleTransitions(book, trouble, nowMs), ...events], busy };
 }
 
 // --- the poll ----------------------------------------------------------------------
 
 /** The trouble events: each condition is an alert once when it begins, and a restored note once when it is gone. */
 function troubleTransitions(
-  target: Target,
+  target: { trouble: Record<string, StandingTrouble> },
   trouble: Map<string, Trouble>,
   nowMs: number,
 ): EventInput[] {
@@ -1363,7 +1384,6 @@ async function readFleet(
   draft: Target,
   nowMs: number,
   io: Io,
-  withRunners: boolean,
 ): Promise<{ events: EventInput[]; busy: boolean; trouble: Map<string, Trouble> }> {
   const trouble = new Map<string, Trouble>();
   let busy = false;
@@ -1388,10 +1408,6 @@ async function readFleet(
       : await readWorktrees(draft, draft.repo, trouble, nowMs);
   busy ||= worktrees.busy;
 
-  // The runners belong to the runtime directory, not to a target: one target per poll judges them, so two watches say each line once.
-  const runners = withRunners ? readRunners(draft, trouble, nowMs) : { events: [], busy: false };
-  busy ||= runners.busy;
-
   const transitions: EventInput[] = [];
   for (const agentId of agents.refreshed) {
     const entry = draft.agents[agentId] as AgentEntry;
@@ -1401,7 +1417,7 @@ async function readFleet(
 
   draft.polls += 1;
   return {
-    events: [...agents.events, ...transitions, ...worktrees.events, ...runners.events],
+    events: [...agents.events, ...transitions, ...worktrees.events],
     busy,
     trouble,
   };
@@ -1429,18 +1445,12 @@ function troubleOnly(target: Target, failure: FleetReadError, nowMs: number): Po
  * commits the draft. An error that is not a read failure is the daemon's failed poll, which saves
  * nothing either.
  */
-async function pollTarget(
-  target: Target,
-  key: string,
-  nowMs: number,
-  io: Io,
-  withRunners: boolean,
-): Promise<PollResult> {
+async function pollTarget(target: Target, key: string, nowMs: number, io: Io): Promise<PollResult> {
   // The saved shape is read here, on the draft: a poll that fails leaves the saved target as it was.
   const draft = normalizeTarget(structuredClone(target), key, io);
   let outcome: Awaited<ReturnType<typeof readFleet>>;
   try {
-    outcome = await readFleet(draft, nowMs, io, withRunners);
+    outcome = await readFleet(draft, nowMs, io);
   } catch (error) {
     if (!(error instanceof FleetReadError)) throw error;
     io.log(error.message);
@@ -1543,25 +1553,27 @@ function normalizeRunner(value: unknown): RunnerEntry | null {
   };
 }
 
-/** The five maps of a saved target, each read in the shape its version used; null when any is in no shape a version wrote. */
+/** The six maps of a saved target, each read in the shape its version used; null when any is in no shape a version wrote. */
 function normalizeMaps(
   raw: Record<string, unknown>,
-): Pick<Target, "lead" | "agents" | "worktrees" | "runners" | "trouble"> | null {
+): Pick<Target, "lead" | "agents" | "worktrees" | "runners" | "runnersTrouble" | "trouble"> | null {
   const lead = normalizeTranscript(raw.lead);
   const agents = normalizeMap(raw.agents, normalizeAgent);
   const worktrees = normalizeMap(raw.worktrees, normalizeWorktree);
   const runners = normalizeMap(raw.runners ?? {}, normalizeRunner);
+  const runnersTrouble = normalizeMap(raw.runnersTrouble ?? {}, normalizeTrouble);
   const trouble = normalizeMap(raw.trouble, normalizeTrouble);
   if (
     lead === null ||
     agents === null ||
     worktrees === null ||
     runners === null ||
+    runnersTrouble === null ||
     trouble === null
   ) {
     return null;
   }
-  return { lead, agents, worktrees, runners, trouble };
+  return { lead, agents, worktrees, runners, runnersTrouble, trouble };
 }
 
 /**
@@ -1589,6 +1601,8 @@ function normalizeTarget(saved: Target, key: string, io: Io): Target {
       lead: initialTranscript(),
       worktrees: {},
       runners: {},
+      runnersTrouble: {},
+      speaksForRunners: false,
       trouble: {},
       subagentsListed: false,
     };
@@ -1598,6 +1612,7 @@ function normalizeTarget(saved: Target, key: string, io: Io): Target {
     ...config,
     ...maps,
     polls,
+    speaksForRunners: raw.speaksForRunners === true,
     // Before the flag existed a poll advanced only past a listing, so a polled target had one.
     subagentsListed: raw.subagentsListed === undefined ? polls > 0 : raw.subagentsListed === true,
   };
@@ -1607,12 +1622,41 @@ async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult
   const nowMs = Date.now();
   const events: EventInput[] = [];
   let busy = false;
-  for (const [index, [key, target]] of Object.entries(targets).entries()) {
-    const result = await pollTarget(target, key, nowMs, io, index === 0);
+  for (const [key, target] of Object.entries(targets)) {
+    const result = await pollTarget(target, key, nowMs, io);
     events.push(...result.events);
     busy ||= result.busy;
   }
+  // The runners belong to the runtime directory, not to a target: one book, judged once per poll and written back
+  // to every target, so an unwatched target loses nothing and a target whose own read failed still carries it. Every
+  // copy is the same but a target just watched, or watched again, which holds none yet: the first copy with anything
+  // in it is the book. The first target speaks for the book in `status`; its --quiet-after bounds the turns.
+  const list = Object.values(targets);
+  const first = list[0];
+  if (first !== undefined) {
+    const books = list.map(bookOf);
+    const book =
+      books.find((b) => Object.keys(b.runners).length + Object.keys(b.trouble).length > 0) ??
+      (books[0] as RunnersBook);
+    const runners = judgeRunners(book, first.quietAfterMinutes, nowMs);
+    events.push(...runners.events);
+    busy ||= runners.busy;
+    for (const target of list) {
+      target.runners = structuredClone(book.runners);
+      target.runnersTrouble = structuredClone(book.trouble);
+      target.speaksForRunners = target === first;
+    }
+  }
   return { events, busy };
+}
+
+/** The book as a target holds it, read in the shape its version saved: a target whose poll just failed is still the saved one. */
+function bookOf(target: Target): RunnersBook {
+  const raw = target as unknown as Record<string, unknown>;
+  return {
+    runners: normalizeMap(raw.runners ?? {}, normalizeRunner) ?? {},
+    trouble: normalizeMap(raw.runnersTrouble ?? {}, normalizeTrouble) ?? {},
+  };
 }
 
 /** The alerts in force for a target, oldest first: who needs the lead now. */
@@ -1627,8 +1671,11 @@ function summary(target: Target): string[] {
   for (const entry of Object.values(maps.worktrees)) {
     if (entry.said !== null) standing.push(entry.said);
   }
-  for (const entry of Object.values(maps.runners)) {
-    if (entry.said?.level === "alert") standing.push(entry.said);
+  if (target.speaksForRunners) {
+    for (const entry of Object.values(maps.runners)) {
+      if (entry.said?.level === "alert") standing.push(entry.said);
+    }
+    standing.push(...Object.values(maps.runnersTrouble));
   }
   standing.push(...Object.values(maps.trouble));
   const at = (since: string | null) =>

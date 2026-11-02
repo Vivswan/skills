@@ -5,7 +5,7 @@
 // note, a vanished file as gone, an unreadable one as trouble, and a target saved before the runners
 // map existed reading as no runners.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
 import {
@@ -19,13 +19,15 @@ sessionEventsHarness();
 const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "fleet-events.mts");
 const PROGRAM: Program = { script: SCRIPT, source: "fleet-events", env: () => ({}) };
 const SESSION = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
-// Fixed, so a rewritten fixture is the same runner instance; a restart names a new one.
-const STARTED_AT = "2026-01-01T09:00:00.000Z";
-const RESTARTED_AT = "2026-01-01T09:30:00.000Z";
 
 function ago(minutes: number): string {
   return new Date(Date.now() - minutes * 60_000).toISOString();
 }
+
+// A fixed start keeps a rewritten fixture the same runner instance; a restart names a new one.
+
+const STARTED_AT = "2026-01-01T09:00:00.000Z";
+const RESTARTED_AT = "2026-01-01T09:30:00.000Z";
 
 /** A session directory as Claude Code lays one out, with no agents: the runners are the whole fleet here. */
 function sessionDir(root: string): string {
@@ -138,6 +140,7 @@ describe("fleet-events.mts, the ACP builders", () => {
       reason: "stopped",
       endedAt: ago(0),
       lastStop: "end_turn",
+      lastUpdateAt: ago(0),
     });
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
@@ -215,19 +218,102 @@ describe("fleet-events.mts, the ACP builders", () => {
     s.stop({ inbox: box.path });
   }, 30_000);
 
-  test("two watched sessions share one runtime directory: each builder line is said once", async () => {
+  test("a file the runner never writes (a bad time, a phase without its stamp, an end without its reason) is trouble, not a builder", async () => {
+    const s = new Scenario(PROGRAM, "runner-bad-time");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", session], { inbox: box.path }).code).toBe(0);
+    runnerState(s, "late", { phase: "busy", lastUpdateAt: "not-a-time" });
+    runnerState(s, "half", { phase: "busy" });
+    runnerState(s, "quiet", { phase: "idle", lastStop: "end_turn" });
+    runnerState(s, "mute", { phase: "ended", endedAt: ago(1) });
+    expect(polled(s, box.path)).toBe(4);
+    expect(rows(s)).toEqual([
+      ["alert", "fleet: builder half: not a runner state"],
+      ["alert", "fleet: builder late: not a runner state"],
+      ["alert", "fleet: builder mute: not a runner state"],
+      ["alert", "fleet: builder quiet: not a runner state"],
+    ]);
+    runnerState(s, "late", { phase: "busy", lastUpdateAt: ago(1) });
+    runnerState(s, "half", { phase: "busy", lastUpdateAt: ago(1) });
+    runnerState(s, "quiet", { phase: "idle", lastStop: "end_turn", lastUpdateAt: ago(1) });
+    runnerState(s, "mute", { phase: "ended", endedAt: ago(1), reason: "stopped" });
+    expect(polled(s, box.path)).toBe(9);
+    expect(rows(s).slice(4)).toEqual([
+      ["note", "fleet: reading restored"],
+      ["note", "fleet: reading restored"],
+      ["note", "fleet: reading restored"],
+      ["note", "fleet: reading restored"],
+      ["note", "builder half: started"],
+      ["note", "builder late: started"],
+      ["note", "builder mute: stopped"],
+      ["note", "builder quiet: started"],
+      ["alert", "builder quiet: idle, turn ended end_turn"],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30_000);
+
+  test("two watched sessions share one runtime directory: the builders are one book, said once, kept when a target cannot read or is unwatched", async () => {
     const s = new Scenario(PROGRAM, "runner-two-targets");
     const box = await s.inbox("a");
     const first = sessionDir(s.fixtureDir);
     const second = sessionDir(join(s.fixtureDir, "other"));
     await s.start({ inbox: box.path });
     expect(s.run(["watch", first], { inbox: box.path }).code).toBe(0);
-    expect(s.run(["watch", second], { inbox: box.path }).code).toBe(0);
     runnerState(s, "parser", { phase: "idle", lastStop: "end_turn", lastUpdateAt: ago(0) });
-    expect(polled(s, box.path)).toBe(2);
+    const broken = runnerState(s, "broken", { phase: "busy", lastUpdateAt: 42 });
+    expect(polled(s, box.path)).toBe(3);
     expect(rows(s)).toEqual([
+      ["alert", "fleet: builder broken: not a runner state"],
       ["note", "builder parser: started"],
       ["alert", "builder parser: idle, turn ended end_turn"],
+    ]);
+
+    // The first target's transcript unreadable and a second target watched (which polls once): the book is still
+    // one, nothing is said again.
+    const transcript = join(s.fixtureDir, `${SESSION}.jsonl`);
+    rmSync(transcript);
+    expect(s.run(["watch", second], { inbox: box.path }).code).toBe(0);
+    runnerState(s, "docs", {});
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(3)).toEqual([
+      ["alert", expect.stringContaining("fleet: cannot read the session transcript")],
+      ["note", "builder docs: started"],
+    ]);
+    // The standing lines are listed once, under the first target: the builders' first, its own trouble after.
+    const listed = standing(s, box.path);
+    expect(listed.slice(0, 2)).toEqual([
+      "builder parser: idle, turn ended end_turn",
+      "fleet: builder broken: not a runner state",
+    ]);
+    expect(listed).toHaveLength(3);
+
+    // The transcript back: its trouble restored, the builders untouched.
+    writeFileSync(transcript, "");
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(5)).toEqual([["note", "fleet: reading restored"]]);
+
+    // The first target watched again (which polls once, the fresh target holding no book yet): nothing is said again.
+    expect(s.run(["watch", first], { inbox: box.path }).code).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s).slice(6)).toEqual([]);
+
+    // The first target unwatched: the second carries the book and speaks for it; nothing is said again.
+    expect(s.run(["unwatch", first], { inbox: box.path }).code).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+    expect(standing(s, box.path)).toEqual([
+      "builder parser: idle, turn ended end_turn",
+      "fleet: builder broken: not a runner state",
+    ]);
+    writeFileSync(
+      broken,
+      JSON.stringify({ ...JSON.parse(readFileSync(broken, "utf8")), lastUpdateAt: ago(0) }),
+    );
+    expect(polled(s, box.path)).toBe(2);
+    expect(rows(s).slice(6)).toEqual([
+      ["note", "fleet: reading restored"],
+      ["note", "builder broken: started"],
     ]);
     s.stop({ inbox: box.path });
   }, 30_000);

@@ -9,6 +9,7 @@ import { record } from "./transcripts.mts";
 /** `<name>.acp-runner.state.json`, the runner's name in front. */
 export const STATE_SUFFIX = ".acp-runner.state.json";
 
+/** The phases the runner writes; any other string is a failed read. */
 const PHASES = new Set(["starting", "idle", "busy", "permission", "ended"]);
 
 export type RunnerPhase = "starting" | "idle" | "busy" | "permission" | "ended";
@@ -17,10 +18,11 @@ export function isRunnerPhase(value: unknown): value is RunnerPhase {
   return typeof value === "string" && PHASES.has(value);
 }
 
-/** The facts of one state file the judgment reads; the runner writes more, which the lead reads with `status`. */
+/** The facts of one state file the judgment reads; the runner writes more, which the lead reads with `status`.
+ * `instance` is the writer's identity: a runner restarted under the same name is a new builder, with no continuity
+ * from the old. */
 export interface RunnerState {
   name: string;
-  /** The writer's identity: a runner restarted under the same name is a new builder, with no continuity from the old. */
   instance: string;
   phase: RunnerPhase;
   lastUpdateAt: string | null;
@@ -39,16 +41,29 @@ function nullableString(value: unknown): { ok: true; value: string | null } | { 
   return { ok: false };
 }
 
+/** A field the runner writes as an ISO time or null; a string Date.parse refuses is a shape it never wrote. */
+function nullableTime(value: unknown): { ok: true; value: string | null } | { ok: false } {
+  const read = nullableString(value);
+  if (!read.ok || read.value === null || !Number.isNaN(Date.parse(read.value))) return read;
+  return { ok: false };
+}
+
 /** A state file's content as the judgment needs it; null for a shape the runner never wrote, so the saved row stands. */
 export function parseRunnerState(raw: unknown): RunnerState | null {
   const saved = record(raw);
   if (saved === null || typeof saved.name !== "string" || !isRunnerPhase(saved.phase)) return null;
   if (typeof saved.pid !== "number" || typeof saved.startedAt !== "string") return null;
-  const lastUpdateAt = nullableString(saved.lastUpdateAt);
+  if (Number.isNaN(Date.parse(saved.startedAt))) return null;
+  const lastUpdateAt = nullableTime(saved.lastUpdateAt);
   const lastStop = nullableString(saved.lastStop);
-  const endedAt = nullableString(saved.endedAt);
+  const endedAt = nullableTime(saved.endedAt);
   const reason = nullableString(saved.reason);
   if (!lastUpdateAt.ok || !lastStop.ok || !endedAt.ok || !reason.ok) return null;
+  // The writer stamps lastUpdateAt on every prompt and turn's end, endedAt and a reason on ending: a file without is
+  // one it never wrote.
+  const running = saved.phase === "busy" || saved.phase === "permission";
+  if ((running || lastStop.value !== null) && lastUpdateAt.value === null) return null;
+  if (saved.phase === "ended" && (endedAt.value === null || reason.value === null)) return null;
   return {
     name: saved.name,
     instance: `${saved.pid}:${saved.startedAt}`,
