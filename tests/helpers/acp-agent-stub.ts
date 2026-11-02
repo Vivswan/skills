@@ -25,6 +25,8 @@ interface ToolStep {
   title: string;
   kind: acp.ToolKind;
   permission?: boolean;
+  /** The permission request names the call by id alone, as the SDK allows; the client reads the rest from the announcement. */
+  askBare?: boolean;
   output?: string;
   onReject?: "cancel" | "continue";
   locations?: { path: string }[];
@@ -34,9 +36,9 @@ interface ToolStep {
  *   { "type": "message", "text": "...", "chunks": 3 }      agent_message_chunk, the text split into chunks
  *   { "type": "thought", "text": "..." }                   agent_thought_chunk
  *   { "type": "tool", "title": "git diff", "kind": "execute", "permission": true, "output": "...",
- *     "onReject": "cancel" }                               tool_call, then session/request_permission when permission
- *                                                           is set; a rejection ends the turn with stopReason cancelled
- *                                                           (codex) or marks the call failed and goes on ("continue", claude)
+ *     "onReject": "cancel", "askBare": false }             tool_call, then session/request_permission when permission is
+ *                                                           set, by id alone when askBare is set; a rejection ends the turn
+ *                                                           (stopReason cancelled, codex) or fails the call and goes on ("continue", claude)
  *   { "type": "stop", "reason": "end_turn" }               the prompt's response; end_turn when no step says
  *   { "type": "exit", "code": 1 }                          the adapter dies mid-turn
  *   { "type": "sleep", "ms": 300 }                         silence */
@@ -175,13 +177,9 @@ async function runTool(step: ToolStep): Promise<boolean> {
       acp.methods.client.session.requestPermission,
       {
         sessionId: SESSION_ID,
-        toolCall: {
-          toolCallId,
-          title: step.title,
-          kind: step.kind,
-          status: "in_progress",
-          locations,
-        },
+        toolCall: step.askBare
+          ? { toolCallId }
+          : { toolCallId, title: step.title, kind: step.kind, status: "in_progress", locations },
         options: PERMISSION_OPTIONS,
       },
     );

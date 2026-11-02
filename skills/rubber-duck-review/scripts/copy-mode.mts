@@ -1,6 +1,6 @@
-// codex's copy mode, the two halves of its isolation: a snapshot of the repository the review runs in
-// when codex's bubblewrap sandbox cannot start, and the scratch CODEX_HOME that absorbs the trust block
-// codex writes for the directory it launches in. run-review.mts decides when the mode applies.
+// codex's copy mode: a snapshot of the repository the review runs in when codex's bubblewrap sandbox
+// cannot start, so a write the prompt forbade lands in the copy and never in the checkout.
+// run-review.mts decides when the mode applies.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -10,16 +10,12 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { isAbsolute, join, sep } from "node:path";
 
 const REVISION_FILES = [
   "ORIG_HEAD",
@@ -29,10 +25,6 @@ const REVISION_FILES = [
   "REVERT_HEAD",
   "REBASE_HEAD",
 ];
-
-const CODEX_HOME_FILES = ["config.toml", "auth.json"];
-const CODEX_AUTH_FILE = "auth.json";
-const CODEX_SESSIONS_DIR = "sessions";
 
 interface GitOptions {
   cwd?: string;
@@ -250,66 +242,4 @@ export function snapshotRepository(
   // symlink replaced (itself or an ancestor), the reviewer starts at the
   // copy's root.
   return { ok: true as const, copy, cwd: directoryInside(copy, launch.subdir) ?? copy };
-}
-
-/** Absolute, since the sessions link below is read from inside the scratch home, not from the cwd. */
-function realCodexHome(): string {
-  return resolve(process.env.CODEX_HOME ?? join(homedir(), ".codex"));
-}
-
-/** Fills `home` (already created) as the reviewer's scratch CODEX_HOME. codex marks the directory it is launched
- * in as a trusted project by writing a block into its config file, and a copy has a fresh path every review, so
- * the user's own config would grow by one block per run; in the scratch home the trust write dies with it.
- *
- *   config.toml, auth.json  -> copied, each only when it exists
- *   sessions/               -> linked to the user's own (created if missing): the transcripts codex writes there are the user's review logs
- *
- * Everything else codex writes (its sqlite state, the trust block) stays scratch.
- * Returns the credentials bytes as copied, so a later refresh is told apart from them. */
-export function fillCodexHome(home: string): Buffer | null {
-  const real = realCodexHome();
-  let auth: Buffer | null = null;
-  for (const name of CODEX_HOME_FILES) {
-    const source = join(real, name);
-    if (!statSync(source, { throwIfNoEntry: false })?.isFile()) continue;
-    copyFileSync(source, join(home, name));
-    if (name === CODEX_AUTH_FILE) auth = readFileSync(join(home, name));
-  }
-  const realSessions = join(real, CODEX_SESSIONS_DIR);
-  mkdirSync(realSessions, { recursive: true });
-  symlinkSync(realSessions, join(home, CODEX_SESSIONS_DIR));
-  return auth;
-}
-
-/** codex refreshes expiring login tokens into auth.json and expects the
- * refreshed file to persist, so a scratch copy that changed goes back to the
- * user's home by write-then-rename. Only when the user's file still holds the
- * bytes this review copied: a parallel review that refreshed first must not
- * be rolled back by an unchanged or older copy. The config never goes back:
- * its only change is the trust block the scratch home exists to absorb. */
-export function returnRefreshedAuth(
-  home: string,
-  original: Buffer | null,
-  warn: (line: string) => void,
-): void {
-  if (original === null) return;
-  const scratchAuth = join(home, CODEX_AUTH_FILE);
-  const realAuth = join(realCodexHome(), CODEX_AUTH_FILE);
-  if (!statSync(scratchAuth, { throwIfNoEntry: false })?.isFile()) return;
-  if (!statSync(realAuth, { throwIfNoEntry: false })?.isFile()) return;
-  try {
-    const refreshed = readFileSync(scratchAuth);
-    if (refreshed.equals(original)) return;
-    if (!readFileSync(realAuth).equals(original)) {
-      warn(
-        `codex credentials changed elsewhere during the review; the scratch refresh is not returned to ${realAuth}`,
-      );
-      return;
-    }
-    const pending = `${realAuth}.rubber-duck-tmp`;
-    writeFileSync(pending, refreshed, { mode: 0o600 });
-    renameSync(pending, realAuth);
-  } catch (error) {
-    warn(`refreshed codex credentials not returned to ${realAuth}: ${String(error)}`);
-  }
 }

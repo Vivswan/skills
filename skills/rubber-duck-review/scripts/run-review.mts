@@ -4,8 +4,9 @@
  * Each reviewer CLI has a trap the launch retires; the usage text is USAGE below.
  *
  *   prompt through a shell       -> backticks and $(...) expand: spawn from an argv array
- *   stdin left open              -> codex and claude block forever: 'ignore', or a file (EOF-ended)
- *   codex narrates in the schema -> an empty verdict reads as clean: a tool call must precede it
+ *   stdin left open              -> claude blocks forever: 'ignore', or a file (EOF-ended)
+ *   codex narrates before it     -> an empty verdict reads as clean: a tool call must precede it
+ *   codex asked to edit a file   -> the review refuses, codex ends the turn: the refusal is the failure's reason
  *   predictable prompt path      -> one agent overwrites another's: prepare mints a private dir
  *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
@@ -19,6 +20,8 @@ import { spawn, spawnSync } from "node:child_process";
 import type { Dirent } from "node:fs";
 import {
   closeSync,
+  copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -28,25 +31,126 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import {
-  fillCodexHome,
-  removeTree,
-  returnRefreshedAuth,
-  snapshotRepository,
-  withoutGitEnv,
-} from "./copy-mode.mts";
+import type { AcpEnd, PermissionPolicy } from "./acp.mts";
+import { removeTree, snapshotRepository, withoutGitEnv } from "./copy-mode.mts";
 import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
 
-// The skill's directory is resolved through any install symlink, so its siblings are the installed skills.
+const USAGE = [
+  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>] [--criteria <names>|none]",
+  "codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode: a file edit it asks for is refused, codex ends the turn, and the review fails naming the refusal",
+  "       run-review.mts <codex|claude|copilot> --extract <output-file>",
+  "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
+  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
+  "       run-review.mts prepare <section>",
+  "       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)",
+  "the prompt gets a '## Companion review criteria' section naming the SKILL.md of every installed skill of this collection (the installer's",
+  "  records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',",
+  "  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;",
+  "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
+  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
+  "codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are",
+  "--stdin-prompt is claude's: codex takes the prompt in the ACP request, copilot in its argument",
+  "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
+  "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
+  "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
+  "       1 review FAILED - relaunch: no usable verdict, whatever the cause, a stall, or --wait timed out; never a clean pass;",
+  "       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository",
+].join("\n");
 
-const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), "verdict-schema.json");
+if (import.meta.main && (process.argv[2] === "--help" || process.argv[2] === "-h")) {
+  process.stdout.write(`${USAGE}\n`);
+  process.exit(0);
+}
+
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
+  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
+}
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
+}
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, scripts: string, skill: string, built: string): boolean {
+  // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
+  // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
+  mkdirSync(join(skill, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
+  try {
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
+  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  // A bundle killed by a signal has no status: die of the same signal.
+  if (run.signal) process.kill(process.pid, run.signal);
+  process.exitCode = run.status ?? 1;
+  return true;
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const { startAcpSession } = await import("./acp.mts");
+
+// The skill's directory is resolved through any install symlink, so its siblings are the installed skills;
+// the source under scripts/ and its bundle under .build/ both sit one level below it.
+
 const SKILL_DIR = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
+const SCHEMA_FILE = join(SKILL_DIR, "scripts", "verdict-schema.json");
 const SKILLS_ROOT = dirname(SKILL_DIR);
 const PLUGIN_MANIFEST = join(dirname(SKILLS_ROOT), ".claude-plugin", "plugin.json");
 const CRITERIA_HEADING = "Review Criteria";
@@ -60,22 +164,16 @@ function schemaText(): string {
   return readFileSync(SCHEMA_FILE, "utf-8");
 }
 
-/** codex's filesystem policy for the review: read-only under its own sandbox,
- * or none at all inside a snapshot copy when that sandbox cannot start. */
-type CodexSandbox = "read-only" | "danger-full-access";
+/** The reviewers run as a CLI; codex runs as an ACP session (acp.mts) and has no argv. */
+type CliTool = Exclude<Tool, "codex">;
 
-const TOOL_ARGS: Record<Tool, (prompt: string, sandbox: CodexSandbox) => string[]> = {
-  // --sandbox read-only: the reviewer can grep/diff/typecheck but not write.
-  // --output-schema: the final message must be the verdict object.
-  codex: (prompt, sandbox) => [
-    "exec",
-    "--json",
-    "--sandbox",
-    sandbox,
-    "--output-schema",
-    SCHEMA_FILE,
-    prompt,
-  ],
+/** The adapter that serves codex over ACP, found on PATH. */
+const CODEX_ADAPTER = "codex-acp";
+
+/** codex's read-only mode: commands ask before they run, a file edit asks and a refusal ends the turn. */
+const CODEX_MODE = "read-only";
+
+const TOOL_ARGS: Record<CliTool, (prompt: string) => string[]> = {
   // --verbose is REQUIRED with --output-format stream-json; without it claude
   // errors to stderr and stdout stays empty. --json-schema takes the schema
   // inline and delivers the verdict as the result's structured_output.
@@ -106,26 +204,6 @@ const TOOL_ARGS: Record<Tool, (prompt: string, sandbox: CodexSandbox) => string[
     "--disable-builtin-mcps",
   ],
 };
-
-const USAGE = [
-  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>] [--criteria <names>|none]",
-  "       run-review.mts <codex|claude|copilot> --extract <output-file>",
-  "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
-  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
-  "       run-review.mts prepare <section>",
-  "       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)",
-  "the prompt gets a '## Companion review criteria' section naming the SKILL.md of every installed skill of this collection (the installer's",
-  "  records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',",
-  "  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;",
-  "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
-  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
-  "codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir",
-  "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
-  "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
-  "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
-  "       1 review FAILED - relaunch: no usable verdict, whatever the cause, a stall, or --wait timed out; never a clean pass;",
-  "       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository",
-].join("\n");
 
 const SCRATCH_PREFIX = "rubber-duck-";
 const PROMPT_DIR_PREFIX = "rubber-duck-prompt-";
@@ -529,25 +607,25 @@ function printCriteria(args: string[]): void {
 }
 
 interface Delivery {
-  /** The reviewer's argv for the codex sandbox the launch settled on; claude and copilot ignore the argument. */
-  args: (sandbox: CodexSandbox) => string[];
+  /** The reviewer's argv. */
+  args: string[];
 
   /** null: the prompt travels as argv and stdin is 'ignore'; otherwise the file served as the reviewer's stdin, EOF-terminated and complete by construction. */
   stdinFile: string | null;
 }
 
-function argvDelivery(tool: Tool, prompt: string): Delivery {
-  return { args: (sandbox) => TOOL_ARGS[tool](prompt, sandbox), stdinFile: null };
+function argvDelivery(tool: CliTool, prompt: string): Delivery {
+  return { args: TOOL_ARGS[tool](prompt), stdinFile: null };
 }
 
-/** codex reads "-" from stdin; claude -p reads stdin when no prompt argument
- * is given. copilot has no stdin form: -p requires the prompt argument. */
+/** claude -p reads stdin when no prompt argument is given. copilot has no stdin form: -p requires the
+ * prompt argument. codex takes the prompt in the ACP request, so stdin is the protocol's. */
 function stdinDelivery(tool: Tool, promptFile: string): Delivery {
-  if (tool === "codex") {
-    return { args: (sandbox) => TOOL_ARGS.codex("-", sandbox), stdinFile: promptFile };
-  }
   if (tool === "claude") {
-    return { args: (sandbox) => TOOL_ARGS.claude("", sandbox).slice(0, -1), stdinFile: promptFile };
+    return { args: TOOL_ARGS.claude("").slice(0, -1), stdinFile: promptFile };
+  }
+  if (tool === "codex") {
+    usageError("codex takes the prompt in the ACP request; drop --stdin-prompt");
   }
   usageError("copilot does not support --stdin-prompt (-p requires the prompt as an argument)");
 }
@@ -708,13 +786,13 @@ function recordStatus(
 }
 
 interface ReviewerHooks {
-  /** Fires once, on the reviewer's first stdout byte. */
+  /** Fires once, on the reviewer's first stdout byte or ACP event. */
   onLife?: () => void;
 
   /** The copy mode's progress line: the refusal and where the copy lives. */
   onFallback?: (message: string) => void;
 
-  /** The reviewer never ran: the spawn failed, or in copy mode the snapshot or the scratch home did; onDone never follows it. */
+  /** The reviewer never ran: the spawn failed, or in copy mode the snapshot did; onDone never follows it. */
   onSpawnError: (error: Error) => void;
 
   /** Receives the recorded status: "0" is the only success. */
@@ -728,15 +806,13 @@ interface CaptureFds {
   stdin: number | null;
 }
 
-/** What the copy mode adds to a run: the snapshot and the cwd inside it, and the scratch CODEX_HOME with the credentials as copied. */
+/** What the copy mode adds to a run: the snapshot and the cwd inside it. */
 interface CopyMode {
   copy: string;
   cwd: string;
-  codexHome: string;
-  originalAuth: Buffer | null;
 }
 
-/** What the stream watcher needs of its run: where the bytes go, what the close handler records, and what settling releases. */
+/** What a run holds while the reviewer works: where the bytes go, what the close handler records, and what settling releases. */
 interface Run {
   tool: Tool;
   scratch: Scratch;
@@ -748,11 +824,11 @@ interface Run {
   warn: (line: string) => void;
 }
 
-function openCaptureFds(delivery: Delivery, scratch: Scratch): CaptureFds {
+function openCaptureFds(stdinFile: string | null, scratch: Scratch): CaptureFds {
   let stdin: number | null = null;
-  if (delivery.stdinFile !== null) {
+  if (stdinFile !== null) {
     try {
-      stdin = openSync(delivery.stdinFile, "r");
+      stdin = openSync(stdinFile, "r");
     } catch (error) {
       usageError(`cannot open prompt file for stdin delivery: ${String(error)}`);
     }
@@ -761,8 +837,7 @@ function openCaptureFds(delivery: Delivery, scratch: Scratch): CaptureFds {
   return { out: openSync(scratch.outFile, "w"), err: openSync(scratch.errFile, "w"), stdin };
 }
 
-/** A failure removes what was built and names it, for the caller to report as a spawn failure. The home's
- * path is fixed before it is filled, so a fill that fails midway is removed with the copy. */
+/** A snapshot that failed midway is removed with the failure and named, for the caller to report as a spawn failure. */
 function prepareCopyMode(
   launch: Extract<Launch, { sandbox: "copy" }>,
   scratch: Scratch,
@@ -771,145 +846,142 @@ function prepareCopyMode(
   const snapshot = snapshotRepository(launch, scratch.dir, warn);
   if (!snapshot.ok) return snapshot;
 
-  const codexHome = join(scratch.dir, "codex-home");
-  try {
-    mkdirSync(codexHome);
-    const originalAuth = fillCodexHome(codexHome);
-    return {
-      ok: true,
-      copyMode: { copy: snapshot.copy, cwd: snapshot.cwd, codexHome, originalAuth },
-    };
-  } catch (error) {
-    removeTree(snapshot.copy, warn);
-    removeTree(codexHome, warn);
-    return { ok: false, reason: `scratch codex home failed: ${String(error)}` };
-  }
+  return { ok: true, copyMode: { copy: snapshot.copy, cwd: snapshot.cwd } };
 }
 
-/** Let go together on every path, the copy and the scratch home first: the home holds copied credentials, and
- * a token codex refreshed there goes back to the user's before it dies. */
+/** Let go together on every path: the copy, then the descriptors. */
 function releaseRun(
   fds: CaptureFds,
   copyMode: CopyMode | null,
   warn: (line: string) => void,
 ): void {
-  if (copyMode !== null) {
-    removeTree(copyMode.copy, warn);
-    returnRefreshedAuth(copyMode.codexHome, copyMode.originalAuth, warn);
-    removeTree(copyMode.codexHome, warn);
-  }
+  if (copyMode !== null) removeTree(copyMode.copy, warn);
 
   closeSync(fds.out);
   closeSync(fds.err);
   if (fds.stdin !== null) closeSync(fds.stdin);
 }
 
-/** Every byte from the reviewer winds the stall clock and lands in the capture. When the clock runs out, the
- * reviewer's whole process group is killed and the run is a stall: a stuck browser-extension host codex spawned
- * once held a silent review for three hours while a 3600 s wait ran. A spawn failure emits 'error' and may still
- * emit 'close', so the run settles once. */
-function watchReviewer(child: ReturnType<typeof spawn>, run: Run, hooks: ReviewerHooks): void {
-  let sawLife = false;
-  let stalled = false;
-  let stallClock: ReturnType<typeof setTimeout> | null = null;
-  const windStallClock = () => {
-    if (stallClock !== null) clearTimeout(stallClock);
-    stallClock = setTimeout(() => {
-      stalled = true;
+/** A warning lands in review.err, which outlives the run and is named by a failure, as well as on stderr (ignored for a detached monitor). */
+function warner(fds: CaptureFds): (line: string) => void {
+  return (line) => {
+    writeFileSync(fds.err, `${line}\n`);
+    process.stderr.write(`${line}\n`);
+  };
+}
+
+/** Every byte or event from the reviewer winds the stall clock. When it runs out, the reviewer's whole process
+ * group is killed and the run is a stall: a stuck browser-extension host codex spawned once held a silent review
+ * for three hours while a 3600 s wait ran. */
+function stallClock(
+  child: ReturnType<typeof spawn>,
+  run: Run,
+  onStall: () => void,
+): { wind: () => void; stop: () => void } {
+  let clock: ReturnType<typeof setTimeout> | null = null;
+  const wind = () => {
+    if (clock !== null) clearTimeout(clock);
+    clock = setTimeout(() => {
+      onStall();
       run.warn(
         `review stalled: no stream event for ${run.stallSeconds} s; killing the reviewer (pid ${child.pid})`,
       );
       killTree(child, "SIGKILL");
     }, run.stallSeconds * 1000);
   };
-  windStallClock();
+  wind();
+  return {
+    wind,
+    stop: () => {
+      if (clock !== null) clearTimeout(clock);
+    },
+  };
+}
 
-  // stdio[1] and stdio[2] are "pipe" in runReviewer's spawn call, so both streams
-  // exist; the null in their types only covers other stdio configurations.
+/** The one settling of a run: the status recorded, the copy and the descriptors released, the hook told. A spawn
+ * failure emits 'error' and may still emit 'close', and an ACP end and the adapter's close both arrive, so the
+ * first caller wins. */
+function settler(
+  run: Run,
+  hooks: ReviewerHooks,
+  clock: { stop: () => void },
+  onRelease: () => void = () => {},
+): { done: (status: string) => void; failed: (error: Error) => void } {
+  let settled = false;
+  const once = (handle: () => void) => {
+    if (settled) return;
+    settled = true;
+    clock.stop();
+    onRelease();
+    releaseRun(run.fds, run.copyMode, run.warn);
+    handle();
+  };
+  return {
+    done: (status) =>
+      once(() => {
+        recordStatus(run.scratch, run.tool, {
+          criteria: run.criteria,
+          status,
+          sandbox: run.sandbox,
+        });
+        hooks.onDone(status);
+      }),
+    failed: (error) => once(() => hooks.onSpawnError(error)),
+  };
+}
+
+function stallStatus(run: Run): string {
+  return `stalled: no stream event for ${run.stallSeconds} s`;
+}
+
+/** A CLI reviewer's stream is its stdout: every byte lands in the capture and winds the clock, and its exit code is the status. */
+function watchCli(child: ReturnType<typeof spawn>, run: Run, hooks: ReviewerHooks): void {
+  let sawLife = false;
+  let stalled = false;
+  const clock = stallClock(child, run, () => {
+    stalled = true;
+  });
+  const settle = settler(run, hooks, clock);
+  // stdio[1] and stdio[2] are "pipe" in the spawn call, so both streams exist; the null in their types only
+  // covers other stdio configurations.
   child.stdout!.on("data", (chunk: Buffer) => {
     if (!sawLife) {
       sawLife = true;
       hooks.onLife?.();
     }
-    windStallClock();
+    clock.wind();
     writeFileSync(run.fds.out, chunk);
   });
   child.stderr!.on("data", (chunk: Buffer) => {
-    windStallClock();
+    clock.wind();
     writeFileSync(run.fds.err, chunk);
   });
-
-  let settled = false;
-  const settle = (handle: () => void) => {
-    if (settled) return;
-    settled = true;
-    if (stallClock !== null) clearTimeout(stallClock);
-    releaseRun(run.fds, run.copyMode, run.warn);
-    handle();
-  };
-  child.on("error", (error) => {
-    settle(() => hooks.onSpawnError(error));
-  });
-  child.on("close", (code) => {
-    settle(() => {
-      const status = stalled
-        ? `stalled: no stream event for ${run.stallSeconds} s`
-        : String(code ?? "signal");
-      recordStatus(run.scratch, run.tool, { criteria: run.criteria, status, sandbox: run.sandbox });
-      hooks.onDone(status);
-    });
-  });
+  child.on("error", (error) => settle.failed(error));
+  child.on("close", (code) => settle.done(stalled ? stallStatus(run) : String(code ?? "signal")));
 }
 
-function runReviewer(
-  tool: Tool,
-  launch: Launch,
+function runCliReviewer(
+  tool: CliTool,
   delivery: Delivery,
   scratch: Scratch,
   rules: Rules,
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
   const criteria = rules.criteria.map((entry) => entry.name);
-  const fds = openCaptureFds(delivery, scratch);
-  const sandbox = launch.sandbox === "copy" ? "copy" : undefined;
-  recordStatus(scratch, tool, { criteria, sandbox });
-  // A warning lands in review.err, which outlives the run and is named by a
-  // failure, as well as on stderr (ignored for a detached monitor).
-  const warn = (line: string) => {
-    writeFileSync(fds.err, `${line}\n`);
-    process.stderr.write(`${line}\n`);
-  };
-
-  let copyMode: CopyMode | null = null;
-  let args = delivery.args("read-only");
-  let env: NodeJS.ProcessEnv | undefined;
-  if (launch.sandbox === "copy") {
-    const built = prepareCopyMode(launch, scratch, warn);
-    if (!built.ok) {
-      releaseRun(fds, null, warn);
-      hooks.onSpawnError(new Error(built.reason));
-      return null;
-    }
-    copyMode = built.copyMode;
-    env = { ...withoutGitEnv(process.env), CODEX_HOME: copyMode.codexHome };
-    args = delivery.args("danger-full-access");
-    hooks.onFallback?.(
-      `codex sandbox unavailable (${launch.reason}): reviewing an unsandboxed snapshot copy at ${copyMode.copy}`,
-    );
-  }
+  const fds = openCaptureFds(delivery.stdinFile, scratch);
+  recordStatus(scratch, tool, { criteria });
+  const warn = warner(fds);
 
   // spawn can also throw synchronously (e.g. a NUL byte in an argv element);
   // that must reach onSpawnError like an async spawn failure, not crash.
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(tool, args, {
-      cwd: copyMode?.cwd,
-      env,
+    child = spawn(tool, delivery.args, {
       stdio: [fds.stdin ?? "ignore", "pipe", "pipe"],
       detached: true,
     });
   } catch (error) {
-    releaseRun(fds, copyMode, warn);
+    releaseRun(fds, null, warn);
     hooks.onSpawnError(error instanceof Error ? error : new Error(String(error)));
     return null;
   }
@@ -918,31 +990,197 @@ function runReviewer(
     tool,
     scratch,
     criteria,
+    sandbox: undefined,
+    stallSeconds: rules.stallSeconds,
+    fds,
+    copyMode: null,
+    warn,
+  };
+  watchCli(child, run, hooks);
+  return child;
+}
+
+/** What codex may do under each confinement. Under its own read-only sandbox a command that asks is one the
+ * sandbox would refuse (a write, the network), so only reads and searches are allowed. Inside a snapshot copy
+ * nothing confines an allowed command, and the copy is what keeps a write out of the checkout, so commands
+ * are allowed there; a file edit is refused under both, since codex's edit tool writes where it is told, and
+ * so is a request whose kind no message named. */
+function policyFor(launch: Launch): PermissionPolicy {
+  const allowed = new Set(
+    launch.sandbox === "copy" ? ["read", "search", "execute", "fetch"] : ["read", "search"],
+  );
+  return (toolCall) => (allowed.has(toolCall.kind) ? "allow" : "deny");
+}
+
+/** How the adapter's close is read once the session settled: a stop or a failure the capture already carries,
+ * so the exit code is not the status; and when the adapter dies before the session settles, the session is
+ * given a moment to report the broken stream before the exit itself is written as the failure. */
+const ADAPTER_CLOSE_GRACE_MS = 1000;
+
+function runAcpReviewer(
+  launch: Launch,
+  prompt: string,
+  scratch: Scratch,
+  rules: Rules,
+  hooks: ReviewerHooks,
+): ReturnType<typeof spawn> | null {
+  const criteria = rules.criteria.map((entry) => entry.name);
+  const fds = openCaptureFds(null, scratch);
+  const sandbox = launch.sandbox === "copy" ? "copy" : undefined;
+  recordStatus(scratch, "codex", { criteria, sandbox });
+  const warn = warner(fds);
+
+  let copyMode: CopyMode | null = null;
+  if (launch.sandbox === "copy") {
+    const built = prepareCopyMode(launch, scratch, warn);
+    if (!built.ok) {
+      releaseRun(fds, null, warn);
+      hooks.onSpawnError(new Error(built.reason));
+      return null;
+    }
+    copyMode = built.copyMode;
+    hooks.onFallback?.(
+      `codex sandbox unavailable (${launch.reason}): reviewing a snapshot copy at ${copyMode.copy}`,
+    );
+  }
+
+  const run: Run = {
+    tool: "codex",
+    scratch,
+    criteria,
     sandbox,
     stallSeconds: rules.stallSeconds,
     fds,
     copyMode,
     warn,
   };
-  watchReviewer(child, run, hooks);
-  return child;
+  // A spawn failure settles the run and closes its descriptors before the session reports the broken stream,
+  // so a line after the settling has nowhere to go and is dropped.
+  const wound = { wind: () => {}, released: false };
+  let sawLife = false;
+  const capture = (line: Record<string, unknown>) => {
+    if (wound.released) return;
+    // Life is the adapter answering; the failure line is the launcher's own.
+    if (!sawLife && line.event !== "failed") {
+      sawLife = true;
+      hooks.onLife?.();
+    }
+    writeFileSync(fds.out, `${JSON.stringify(line)}\n`);
+  };
+  let session: ReturnType<typeof startAcpSession>;
+  try {
+    session = startAcpSession({
+      adapter: CODEX_ADAPTER,
+      args: [],
+      cwd: copyMode?.cwd,
+      env: copyMode === null ? undefined : withoutGitEnv(process.env),
+      mode: CODEX_MODE,
+      prompt,
+      policy: policyFor(launch),
+      capture: (line) => {
+        capture(line);
+        wound.wind();
+      },
+      stderr: (chunk) => {
+        if (wound.released) return;
+        writeFileSync(fds.err, chunk);
+        wound.wind();
+      },
+    });
+  } catch (error) {
+    releaseRun(fds, copyMode, warn);
+    hooks.onSpawnError(error instanceof Error ? error : new Error(String(error)));
+    return null;
+  }
+  wound.wind = watchAcp(session, run, hooks, capture, () => {
+    wound.released = true;
+  });
+  return session.child;
+}
+
+/** The session's end is the review's: a stop the verdict reads, or a failure the capture names. The adapter idles
+ * after the turn, so the launcher ends it, and the run settles once both the session and the adapter are done.
+ * Returns the stall clock's wind, for the capture and the stderr to call. */
+function watchAcp(
+  session: ReturnType<typeof startAcpSession>,
+  run: Run,
+  hooks: ReviewerHooks,
+  capture: (line: Record<string, unknown>) => void,
+  onRelease: () => void,
+): () => void {
+  const { child } = session;
+  let stalled = false;
+  let ended: AcpEnd | null = null;
+  let closed = false;
+  const clock = stallClock(child, run, () => {
+    stalled = true;
+  });
+  const settle = settler(run, hooks, clock, onRelease);
+  const maybeSettle = () => {
+    if (ended === null || !closed) return;
+    settle.done(stalled ? stallStatus(run) : "0");
+  };
+  session.done.then((end) => {
+    ended = end;
+    if (end.kind === "failed") capture({ event: "failed", reason: end.reason });
+    killTree(child, "SIGTERM");
+    maybeSettle();
+  });
+  child.on("error", (error) => settle.failed(error));
+  child.on("close", (code) => {
+    closed = true;
+    maybeSettle();
+    setTimeout(() => {
+      if (ended !== null) return;
+      ended = {
+        kind: "failed",
+        reason: `the adapter exited (${code ?? "signal"}) before the turn ended`,
+      };
+      capture({ event: "failed", reason: ended.reason });
+      maybeSettle();
+    }, ADAPTER_CLOSE_GRACE_MS);
+  });
+  return clock.wind;
+}
+
+/** What one launch runs: the tool, how codex is confined, and the prompt as the CLI delivery or as the ACP request's text. */
+interface Reviewer {
+  tool: Tool;
+  launch: Launch;
+  delivery: Delivery | null;
+  prompt: string;
+}
+
+/** The reviewer behind one tool: codex as an ACP session, the others as the CLI the delivery names. */
+function runReviewer(
+  reviewer: Reviewer,
+  scratch: Scratch,
+  rules: Rules,
+  hooks: ReviewerHooks,
+): ReturnType<typeof spawn> | null {
+  const { tool, launch, delivery, prompt } = reviewer;
+  if (tool === "codex") return runAcpReviewer(launch, prompt, scratch, rules, hooks);
+  if (delivery === null) throw new Error(`${tool} needs a delivery`);
+
+  return runCliReviewer(tool, delivery, scratch, rules, hooks);
 }
 
 function runForeground(
-  tool: Tool,
-  launch: Launch,
-  delivery: Delivery,
+  reviewer: Reviewer,
   scratch: Scratch,
   rules: Rules,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, rules, {
+  const { tool, launch } = reviewer;
+  return runReviewer(reviewer, scratch, rules, {
     onLife: () => process.stderr.write("review stream alive\n"),
     onFallback: (message) => process.stderr.write(`${message}\n`),
     onSpawnError: (error) => {
       // Nothing was captured; a retained empty scratch dir would be noise.
       removeTree(scratch.dir, (line) => process.stderr.write(`${line}\n`));
       if (isEnoent(error)) {
-        process.stderr.write(`reviewer binary not found: ${tool}\n`);
+        process.stderr.write(
+          `reviewer binary not found: ${tool === "codex" ? CODEX_ADAPTER : tool}\n`,
+        );
         process.exitCode = 2;
         return;
       }
@@ -975,15 +1213,13 @@ function runForeground(
 
 /** Detached monitor: capture the stream and record the exit status, silently. */
 function runCapture(
-  tool: Tool,
-  launch: Launch,
-  delivery: Delivery,
+  reviewer: Reviewer,
   scratch: Scratch,
   rules: Rules,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, rules, {
+  return runReviewer(reviewer, scratch, rules, {
     onSpawnError: (error) => {
-      recordStatus(scratch, tool, {
+      recordStatus(scratch, reviewer.tool, {
         criteria: rules.criteria.map((entry) => entry.name),
         status: isEnoent(error) ? "not-found" : `spawn failed: ${String(error)}`,
       });
@@ -1096,7 +1332,7 @@ function reportRecordedRun(
   criteria: string[],
 ): void {
   if (status === "not-found") {
-    process.stderr.write(`reviewer binary not found: ${tool}\n`);
+    process.stderr.write(`reviewer binary not found: ${tool === "codex" ? CODEX_ADAPTER : tool}\n`);
     process.exitCode = 2;
     return;
   }
@@ -1274,6 +1510,18 @@ function readPrompt(promptFile: string): string {
   return prompt;
 }
 
+/** How a CLI reviewer gets its prompt; codex gets it in the ACP request and has no delivery. */
+function deliveryFor(
+  tool: Tool,
+  stdinPrompt: boolean,
+  promptSnapshot: string,
+  fullPrompt: string,
+): Delivery | null {
+  if (tool === "codex") return null;
+
+  return stdinPrompt ? stdinDelivery(tool, promptSnapshot) : argvDelivery(tool, fullPrompt);
+}
+
 /** The reviewer run in this process: the foreground run that prints the verdict, or under `--capture` the
  * detached monitor's silent one. */
 function runInThisProcess(
@@ -1291,12 +1539,15 @@ function runInThisProcess(
   const fullPrompt = withCriteria(prompt, rules.criteria);
   const promptSnapshot = join(scratch.dir, "prompt.txt");
   writeFileSync(promptSnapshot, fullPrompt);
-  const delivery = options.stdinPrompt
-    ? stdinDelivery(tool, promptSnapshot)
-    : argvDelivery(tool, fullPrompt);
-  if (options.captureDir === null) return runForeground(tool, launch, delivery, scratch, rules);
+  const reviewer: Reviewer = {
+    tool,
+    launch,
+    delivery: deliveryFor(tool, options.stdinPrompt, promptSnapshot, fullPrompt),
+    prompt: fullPrompt,
+  };
+  if (options.captureDir === null) return runForeground(reviewer, scratch, rules);
 
-  return runCapture(tool, launch, delivery, scratch, rules);
+  return runCapture(reviewer, scratch, rules);
 }
 
 function launchCommand(tool: Tool, args: string[]): void {
