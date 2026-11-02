@@ -319,6 +319,42 @@ done
 exec "${REAL_GIT}" "$@"
 `;
 
+const FAKE_BUNDLED_CODEX = `#!/usr/bin/env bun
+// The codex the adapter bundles, found under a node_modules above the adapter: it answers the sandbox probe alone,
+// as the codex on PATH does, by STUB_SANDBOX.
+if (process.argv.slice(2).join(" ") !== "sandbox -- true") process.exit(64);
+if (process.env.STUB_SANDBOX === "bwrap") {
+  console.error("bwrap: Failed to make / slave: Permission denied");
+  process.exit(1);
+}
+process.exit(0);
+`;
+
+/** A PATH holding the adapter and no codex CLI, with the codex the adapter bundles or without; bash and bun ride along
+ * for the stubs and the bundle. */
+function adapterOnlyDir(bundledCodex: boolean): string {
+  const dir = temp.dir("run-review-adapter-only-");
+  for (const [name, body] of [
+    ["codex-acp", FAKE_ACP_ADAPTER],
+    ["git", FAKE_GIT],
+  ] as const) {
+    writeFileSync(join(dir, name), body);
+    chmodSync(join(dir, name), 0o755);
+  }
+  if (bundledCodex) {
+    const launcher = join(dir, "node_modules", "@openai", "codex", "bin", "codex.js");
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(
+      join(dir, "node_modules", "@openai", "codex", "package.json"),
+      '{"name":"@openai/codex"}\n',
+    );
+    writeFileSync(launcher, FAKE_BUNDLED_CODEX);
+  }
+  symlinkSync(process.execPath, join(dir, "bun"));
+  symlinkSync(Bun.which("bash") as string, join(dir, "bash"));
+  return dir;
+}
+
 const binDir = temp.dir("run-review-test-");
 const emptyBinDir = temp.dir("run-review-nobin-");
 // A reviewer-less PATH still holds bun: the launcher runs its bundle through the bun on PATH.
@@ -1245,6 +1281,28 @@ describe("run-review.mts", () => {
       expect(seen.aText).toBe("version https://git-lfs.github.com/spec/v1");
     },
   );
+
+  test("the adapter alone on PATH: the codex it bundles is probed, and its refusal is the copy", () => {
+    const repo = fixtureRepo();
+    const r = run(["codex", promptFile], { STUB_SANDBOX: "bwrap" }, adapterOnlyDir(true), repo);
+    expect(r.code).toBe(0);
+    expect(r.report().sandbox).toBe("copy");
+    expect(r.stderr).toContain(
+      "codex sandbox unavailable (bwrap: Failed to make / slave: Permission denied)",
+    );
+  });
+
+  test("the adapter alone on PATH with a bundled codex whose sandbox starts keeps the sandboxed launch", () => {
+    const r = run(["codex", promptFile], {}, adapterOnlyDir(true));
+    expect(r.code).toBe(0);
+    expect(r.report().sandbox).toBeUndefined();
+  });
+
+  test("the adapter alone on PATH and no codex anywhere: nothing to probe, the sandboxed launch", () => {
+    const r = run(["codex", promptFile], {}, adapterOnlyDir(false));
+    expect(r.code).toBe(0);
+    expect(r.report().sandbox).toBeUndefined();
+  });
 
   test("the sandbox probe passing keeps codex read-only: no copy, no fallback line", () => {
     const repo = fixtureRepo();
