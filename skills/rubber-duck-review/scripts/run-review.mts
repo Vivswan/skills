@@ -42,7 +42,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { AcpEnd, PermissionPolicy } from "./acp.mts";
 import { removeTree, snapshotRepository, withoutGitEnv } from "./copy-mode.mts";
-import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
+import type { Extraction, Tool } from "./verdict.mts";
 
 const USAGE = [
   "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stall <seconds>] [--criteria <names>|none]",
@@ -147,6 +147,7 @@ if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
 
 const { startAcpSession } = await import("./acp.mts");
+const { extractVerdict, isRecord, isTool } = await import("./verdict.mts");
 
 const SKILL_DIR = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
 const SKILLS_ROOT = dirname(SKILL_DIR);

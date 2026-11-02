@@ -36,6 +36,7 @@
     "mdast-util-to-string": "4.0.0",
     "micromark-extension-gfm": "3.0.0",
     "typescript": "^7.0.2",
-    "unist-util-visit": "5.2.0"
+    "unist-util-visit": "5.2.0",
+    "zod": "4.6.7"
   }
 }
