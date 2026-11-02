@@ -1,6 +1,6 @@
 # ACP Builders
 
-A builder that is not a Claude Code subagent (Codex, Gemini CLI, or a Claude Agent outside the Agent tool) runs as an ACP agent under `scripts/acp-runner.mts`. The runner spawns the adapter in the builder's worktree, holds one session open, and takes the lead's prompts over a control socket. The session's files sit beside the session-events daemons' files, in the same runtime directory.
+A builder that is not a Claude Code subagent (Codex, Gemini CLI, or a Claude Agent outside the Agent tool) runs as an ACP agent under `scripts/acp-runner.mts`. The runner spawns the adapter in the builder's worktree, holds one session open, and takes the lead's prompts over a control socket. The session's files sit beside the session-events daemons' files, where the fleet monitor reads them every poll (`references/fleet-monitor.md`, the `builder` rows).
 
 ```text
 lead  --acp-runner prompt-->  runner (the adapter's parent)  --session/prompt-->  codex-acp | claude-agent-acp | gemini --acp

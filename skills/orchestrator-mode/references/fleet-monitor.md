@@ -29,6 +29,7 @@ Under the daemon no turn is spent on "nothing changed yet", and no subagent swee
 | `session` | this session's transcript and subagents directory, found by `CLAUDE_CODE_SESSION_ID` under `~/.claude/projects` (the cwd's project tried first) |
 | `/abs/<sessionId>` | an absolute session directory, for another session's fleet |
 | `--repo <root>` | adds the worktree reading of that repository for every worktree no agent claims, by sidecar or by its own commands: what `sweep.mts` prints, every poll |
+| (always) | the ACP builders `acp-runner.mts` runs, read from their state files in the runtime directory, every poll: `references/acp-builders.md` |
 | `--quiet-after <minutes>` | how long an open turn with nothing pending stands before it is stuck (default 10) |
 
 The transcript reading is incremental: each poll reads what an `agent-*.jsonl` gained since the last. The interval is 60 s while something moves, backing off to 300 s. The command contract (`--help`) is quoted under The Daemon at the end of this page.
@@ -39,7 +40,7 @@ The fleet monitor is a role: watch the fleet, and report each transition with ho
 
 | Instrument | Reads | Harness | The pick |
 | --- | --- | --- | --- |
-| the `fleet-events` daemon | a session's agent transcripts, plus the worktrees with `--repo` | a Claude Code lead. File-sink mode (`--id <name>`, The Daemon below) changes only the delivery: every poll still reads a session transcript | the default wherever there is a session to read |
+| the `fleet-events` daemon | a session's agent transcripts, the ACP builders' state files, plus the worktrees with `--repo` | a Claude Code lead. File-sink mode (`--id <name>`, The Daemon below) changes only the delivery: every poll still reads a session transcript | the default wherever there is a session to read |
 | the monitor subagent | the sweep's worktree rows, plus the ledger | any harness, any worker: Codex, Copilot, a human | the fallback wherever there is no session to read. For workers without a Claude transcript its rows are the whole reading |
 
 Both say what moved and for how long, and the rest of this page reads the same rows either way. The daemon's events are What Arrives, and the subagent's brief is The Monitor Subagent.
@@ -70,6 +71,11 @@ A state is said once on entering and once on leaving. A stuck or idle alert is r
 | note | `head` | `worktree <branch>: head moved to <sha12>` | the `sha` field is the new head; content claims about the track are re-verified on it at its report |
 | note | `active` | `worktree <branch>: active again` | the idle ended: a worker is in the tree or the dirty tree changed |
 | note | `gone` | `worktree <branch>: gone` | discovery no longer lists it: a landed track swept, or a removed worktree; the `sha` field is its last head |
+| alert | `builder` | `builder <name>: idle, turn ended end_turn` | an ACP builder under `acp-runner.mts` finished its turn: the brief is answered, or the turn stopped short (`cancelled`, `refusal`); said once per turn. Its events log holds every update and permission |
+| alert | `builder` | `builder <name>: waiting on permission 6 min` | a permission request standing past five minutes: the adapter waits on something the runner's rule did not settle; read the events log |
+| alert | `builder` | `builder <name>: stuck 12 min, no update mid-turn` | past `--quiet-after` with no session update: a long command, or a stall |
+| alert | `builder` | `builder <name>: adapter ended (adapter exited 1)` | the adapter died under the runner; said once |
+| note | `builder` | `builder <name>: started`, `prompted`, `stopped`, `fine again`, `gone` | a runner first seen, a turn begun, a stop by the lead, a standing alert cleared, a state file gone |
 | alert | `trouble` | `fleet: <reason>` | the daemon could not take a reading: tooling trouble, never a quiet fleet; the `/session-events` skill's line after three failed polls is the same kind |
 | note | `restored` | `fleet: reading restored` | the reading that failed is back, and it covers the processes lsof could read: a sandboxed worker it cannot read is invisible, so its worktree can idle beside it |
 
@@ -77,7 +83,7 @@ A worktree an agent claims is not read at all: the transcript says everything th
 
 Paths compare by their real form, so a worktree named through a symlink (`/tmp/...` for git's `/private/tmp/...` on macOS) is claimed.
 
-What stays the lead's, by hand: content claims through `probe.mts`, standing state in `ledger.mts`, the PII grep at each builder report and at each landing gate, `baseline.mts` at landings, and every nudge and directive. Codex and Copilot workers write no Claude transcript, so for them the daemon has only the worktree reading, the same rows a monitor subagent sweeps.
+What stays the lead's, by hand: content claims through `probe.mts`, standing state in `ledger.mts`, the PII grep at each builder report and at each landing gate, `baseline.mts` at landings, and every nudge and directive. A Codex or Copilot worker outside the ACP runner writes no Claude transcript, so for it the daemon has only the worktree reading, the rows a monitor subagent sweeps; one under `acp-runner.mts` has the builder rows.
 
 The instruments live in this skill's `scripts/`; `fleet/git.mts` and `fleet/processes.mts` are the worktree readings the daemon and `sweep.mts` share. Runtime: bun. `baseline.mts` needs it, since on first run it bundles its one dependency, `diff`, into the skill's `.build` folder; `sweep.mts`, `probe.mts`, and `ledger.mts` also run on Node 24.3+.
 
@@ -470,6 +476,7 @@ the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET 
 targets: session (this session's transcript and subagents dir, found by CLAUDE_CODE_SESSION_ID under ~/.claude/projects), or an absolute path to a session directory
 --repo <root>            add the worktree reading for every worktree of this repository that no agent claims (absolute path)
 --quiet-after <minutes>  an open turn with nothing pending is stuck after this long (default 10)
+the ACP builders acp-runner.mts runs are read from the runtime directory every poll: a turn ended, a permission or a turn standing too long, an adapter gone
 the session-events skill must be installed beside this one; without it every command exits 2 naming the install: npx skills add Vivswan/skills -g --skill session-events
 files: <dir>/<pid>-<start>.fleet-events.{state.json,events.jsonl,log} and <dir>/<pid>.fleet-events.sock for a session; <id>.fleet-events.* for a file sink;
   <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>

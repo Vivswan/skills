@@ -21,6 +21,13 @@ import type {
 } from "../../session-events/scripts/session-events.mts";
 import { discoverWorktrees, type WorktreeRow, worktreeRow } from "./fleet/git.mts";
 import { attributeProcesses, type ProcessRow } from "./fleet/processes.mts";
+import {
+  isRunnerPhase,
+  type RunnerPhase,
+  type RunnerRead,
+  type RunnerState,
+  readRunnerStates,
+} from "./fleet/runners.mts";
 import { readTail } from "./fleet/transcript-tail.mts";
 import {
   type Activity,
@@ -58,6 +65,9 @@ const TOOL_GRACE_MINUTES = 10;
 
 // A pending call that names no timeout is stuck past this plain bound.
 const TOOL_STUCK_MINUTES = 30;
+
+// An ACP builder whose permission request stands this long is waiting on something the runner's policy did not settle.
+const PERMISSION_WAIT_MINUTES = 5;
 
 // A child whose own transcript has not moved for this long is stuck; a moving child never is.
 const CHILD_STILL_MINUTES = 30;
@@ -145,6 +155,14 @@ interface WorktreeEntry {
   said: Standing | null;
 }
 
+/** One ACP builder as the daemon remembers it: its state file, the writer's instance, the phase at the last reading, and what stands said. */
+interface RunnerEntry {
+  file: string;
+  instance: string;
+  phase: RunnerPhase | null;
+  said: Standing | Noted | null;
+}
+
 interface Trouble {
   text: string;
   url: string;
@@ -185,6 +203,9 @@ interface Target {
 
   /** The last reading of every unclaimed worktree, by path; one discovery no longer lists is dropped, with a `gone` note unless an agent claims it. */
   worktrees: Record<string, WorktreeEntry>;
+
+  /** The ACP builders read from the runtime directory, by runner name; one whose state file is gone is dropped with a `gone` note. */
+  runners: Record<string, RunnerEntry>;
 
   /** The trouble conditions in force, by key. */
   trouble: Record<string, StandingTrouble>;
@@ -233,8 +254,10 @@ class FleetReadError extends Error {
 }
 
 let base: typeof import("../../session-events/scripts/session-events.mts");
+let runtimeDir: typeof import("../../session-events/scripts/state.mts").runtimeDir;
 try {
   base = await import("../../session-events/scripts/session-events.mts");
+  ({ runtimeDir } = await import("../../session-events/scripts/state.mts"));
 } catch {
   console.error(
     `the session-events skill is not installed beside this one; install it beside this skill: ${INSTALL}`,
@@ -352,6 +375,7 @@ function parseTarget(args: string[]): Target {
     agents: {},
     lead: initialTranscript(),
     worktrees: {},
+    runners: {},
     trouble: {},
     subagentsListed: false,
   };
@@ -1122,6 +1146,194 @@ async function readWorktrees(
   return { events, busy };
 }
 
+// --- the ACP builders --------------------------------------------------------------
+
+type RunnerSituation =
+  | { kind: "fine" }
+  | { kind: "running" }
+  | { kind: "turn"; stop: string; at: string }
+  | { kind: "permission"; since: string }
+  | { kind: "stall"; since: string }
+  | { kind: "stopped" }
+  | { kind: "ended"; reason: string; at: string };
+
+function runnerSituation(
+  state: RunnerState,
+  quietAfterMinutes: number,
+  nowMs: number,
+): RunnerSituation {
+  const since = state.lastUpdateAt;
+  const held = since === null ? 0 : minutesBetween(nowMs, since);
+  switch (state.phase) {
+    case "ended":
+      if (state.reason === "stopped") return { kind: "stopped" };
+      return { kind: "ended", reason: state.reason ?? "unknown", at: state.endedAt ?? "" };
+    case "permission":
+      return since !== null && held >= PERMISSION_WAIT_MINUTES
+        ? { kind: "permission", since }
+        : { kind: "running" };
+    case "busy":
+      return since !== null && held >= quietAfterMinutes
+        ? { kind: "stall", since }
+        : { kind: "running" };
+    case "idle":
+      if (state.lastStop !== null) return { kind: "turn", stop: state.lastStop, at: since ?? "" };
+      return { kind: "fine" };
+    default:
+      return { kind: "fine" };
+  }
+}
+
+function runnerSituationKey(situation: RunnerSituation): string {
+  switch (situation.kind) {
+    case "turn":
+      return `turn:${situation.at}`;
+    case "permission":
+    case "stall":
+      return `${situation.kind}:${situation.since}`;
+    case "ended":
+      return `ended:${situation.at}`;
+    default:
+      return situation.kind;
+  }
+}
+
+function runnerSituationText(label: string, situation: RunnerSituation, nowMs: number): string {
+  switch (situation.kind) {
+    case "turn":
+      return `${label}: idle, turn ended ${situation.stop}`;
+    case "permission":
+      return `${label}: waiting on permission ${minutesBetween(nowMs, situation.since)} min`;
+    case "stall":
+      return `${label}: stuck ${minutesBetween(nowMs, situation.since)} min, no update mid-turn`;
+    case "ended":
+      return `${label}: adapter ended (${situation.reason})`;
+    case "stopped":
+      return `${label}: stopped`;
+    default:
+      return `${label}: fine again`;
+  }
+}
+
+function runnerStanding(
+  said: Standing | Noted | null,
+  situation: RunnerSituation,
+  label: string,
+  nowMs: number,
+  turnEnded: boolean,
+): { said: Standing | Noted | null; lines: [Level, string][] } {
+  // A turn's end is said when the runner comes to rest; the session updates an adapter sends while idle move lastUpdateAt without a new turn.
+  if (situation.kind === "turn" && !turnEnded && said?.level === "alert")
+    return { said, lines: [] };
+  if (situation.kind === "fine" || situation.kind === "running") {
+    const retract = said?.level === "alert";
+    return { said: null, lines: retract ? [["note", `${label}: fine again`]] : [] };
+  }
+  if (situation.kind === "stopped") {
+    if (said?.level === "note" && said.key === "stopped") return { said, lines: [] };
+    return { said: { level: "note", key: "stopped" }, lines: [["note", `${label}: stopped`]] };
+  }
+  const standing = said?.level === "alert" ? said : null;
+  const duration =
+    situation.kind === "permission" || situation.kind === "stall"
+      ? minutesBetween(nowMs, situation.since)
+      : null;
+  const next = restate(
+    standing,
+    runnerSituationKey(situation),
+    runnerSituationText(label, situation, nowMs),
+    duration,
+    nowMs,
+  );
+  return { said: next.said, lines: next.announce ? [["alert", next.said.text]] : [] };
+}
+
+function runnerTransition(
+  target: Target,
+  read: RunnerRead & { ok: true },
+  nowMs: number,
+): { events: EventInput[]; busy: boolean } {
+  const { name, file, state } = read;
+  const label = `builder ${name}`;
+  const url = fileUrl(file);
+  const event = (level: Level, text: string): EventInput => ({
+    kind: "builder",
+    level,
+    text,
+    url,
+    builder: name,
+  });
+  const events: EventInput[] = [];
+  // A runner restarted under the same name is a new builder: its predecessor's continuity would hide its start and its stop.
+  const known = Object.hasOwn(target.runners, name) ? target.runners[name] : undefined;
+  const previous = known?.instance === state.instance ? known : undefined;
+  const running = state.phase === "busy" || state.phase === "permission";
+  const wasRunning = previous?.phase === "busy" || previous?.phase === "permission";
+  if (previous === undefined && state.phase !== "ended")
+    events.push(event("note", `${label}: started`));
+  if (previous !== undefined && running && !wasRunning)
+    events.push(event("note", `${label}: prompted`));
+
+  const situation = runnerSituation(state, target.quietAfterMinutes, nowMs);
+  const turnEnded = previous === undefined || previous.phase !== "idle";
+  const standing = runnerStanding(previous?.said ?? null, situation, label, nowMs, turnEnded);
+  for (const [level, text] of standing.lines) events.push(event(level, text));
+  target.runners[name] = {
+    file,
+    instance: state.instance,
+    phase: state.phase,
+    said: standing.said,
+  };
+  return { events, busy: running };
+}
+
+function readRunners(
+  target: Target,
+  trouble: Map<string, Trouble>,
+  nowMs: number,
+): { events: EventInput[]; busy: boolean } {
+  let dir: string;
+  let reads: RunnerRead[];
+  try {
+    dir = runtimeDir();
+    reads = readRunnerStates(dir);
+  } catch (error) {
+    throw new FleetReadError(
+      "runners",
+      `fleet: cannot list the runtime directory: ${reasonOf(error)}`,
+      "",
+    );
+  }
+  const events: EventInput[] = [];
+  let busy = false;
+  const seen = new Set<string>();
+  for (const read of reads) {
+    seen.add(read.name);
+    if (!read.ok) {
+      trouble.set(`runner:${read.name}`, {
+        text: `fleet: builder ${read.name}: ${read.reason}`,
+        url: fileUrl(read.file),
+      });
+      continue;
+    }
+    const outcome = runnerTransition(target, read, nowMs);
+    events.push(...outcome.events);
+    busy ||= outcome.busy;
+  }
+  for (const [name, entry] of Object.entries(target.runners)) {
+    if (seen.has(name)) continue;
+    delete target.runners[name];
+    events.push({
+      kind: "builder",
+      level: "note",
+      text: `builder ${name}: gone`,
+      url: fileUrl(entry.file),
+      builder: name,
+    });
+  }
+  return { events, busy };
+}
+
 // --- the poll ----------------------------------------------------------------------
 
 /** The trouble events: each condition is an alert once when it begins, and a restored note once when it is gone. */
@@ -1151,6 +1363,7 @@ async function readFleet(
   draft: Target,
   nowMs: number,
   io: Io,
+  withRunners: boolean,
 ): Promise<{ events: EventInput[]; busy: boolean; trouble: Map<string, Trouble> }> {
   const trouble = new Map<string, Trouble>();
   let busy = false;
@@ -1175,6 +1388,10 @@ async function readFleet(
       : await readWorktrees(draft, draft.repo, trouble, nowMs);
   busy ||= worktrees.busy;
 
+  // The runners belong to the runtime directory, not to a target: one target per poll judges them, so two watches say each line once.
+  const runners = withRunners ? readRunners(draft, trouble, nowMs) : { events: [], busy: false };
+  busy ||= runners.busy;
+
   const transitions: EventInput[] = [];
   for (const agentId of agents.refreshed) {
     const entry = draft.agents[agentId] as AgentEntry;
@@ -1183,7 +1400,11 @@ async function readFleet(
   }
 
   draft.polls += 1;
-  return { events: [...agents.events, ...transitions, ...worktrees.events], busy, trouble };
+  return {
+    events: [...agents.events, ...transitions, ...worktrees.events, ...runners.events],
+    busy,
+    trouble,
+  };
 }
 
 /** The one trouble alert of a failed fleet-wide read, said on entering; the conditions already in force stay recorded. */
@@ -1208,12 +1429,18 @@ function troubleOnly(target: Target, failure: FleetReadError, nowMs: number): Po
  * commits the draft. An error that is not a read failure is the daemon's failed poll, which saves
  * nothing either.
  */
-async function pollTarget(target: Target, key: string, nowMs: number, io: Io): Promise<PollResult> {
+async function pollTarget(
+  target: Target,
+  key: string,
+  nowMs: number,
+  io: Io,
+  withRunners: boolean,
+): Promise<PollResult> {
   // The saved shape is read here, on the draft: a poll that fails leaves the saved target as it was.
   const draft = normalizeTarget(structuredClone(target), key, io);
   let outcome: Awaited<ReturnType<typeof readFleet>>;
   try {
-    outcome = await readFleet(draft, nowMs, io);
+    outcome = await readFleet(draft, nowMs, io, withRunners);
   } catch (error) {
     if (!(error instanceof FleetReadError)) throw error;
     io.log(error.message);
@@ -1303,16 +1530,38 @@ function normalizeTrouble(value: unknown): StandingTrouble | null {
   return { text: kept, url: str(saved.url) ?? "", since: str(saved.since) };
 }
 
-/** The four maps of a saved target, each read in the shape its version used; null when any is in no shape a version wrote. */
+/** A saved runner row; the map came after the other four, so a target saved without it has none. */
+function normalizeRunner(value: unknown): RunnerEntry | null {
+  const saved = record(value);
+  const file = str(saved?.file);
+  if (saved === null || file === null) return null;
+  return {
+    file,
+    instance: str(saved.instance) ?? "",
+    phase: isRunnerPhase(saved.phase) ? saved.phase : null,
+    said: normalizeSaid(saved.said),
+  };
+}
+
+/** The five maps of a saved target, each read in the shape its version used; null when any is in no shape a version wrote. */
 function normalizeMaps(
   raw: Record<string, unknown>,
-): Pick<Target, "lead" | "agents" | "worktrees" | "trouble"> | null {
+): Pick<Target, "lead" | "agents" | "worktrees" | "runners" | "trouble"> | null {
   const lead = normalizeTranscript(raw.lead);
   const agents = normalizeMap(raw.agents, normalizeAgent);
   const worktrees = normalizeMap(raw.worktrees, normalizeWorktree);
+  const runners = normalizeMap(raw.runners ?? {}, normalizeRunner);
   const trouble = normalizeMap(raw.trouble, normalizeTrouble);
-  if (lead === null || agents === null || worktrees === null || trouble === null) return null;
-  return { lead, agents, worktrees, trouble };
+  if (
+    lead === null ||
+    agents === null ||
+    worktrees === null ||
+    runners === null ||
+    trouble === null
+  ) {
+    return null;
+  }
+  return { lead, agents, worktrees, runners, trouble };
 }
 
 /**
@@ -1339,6 +1588,7 @@ function normalizeTarget(saved: Target, key: string, io: Io): Target {
       agents: {},
       lead: initialTranscript(),
       worktrees: {},
+      runners: {},
       trouble: {},
       subagentsListed: false,
     };
@@ -1357,8 +1607,8 @@ async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult
   const nowMs = Date.now();
   const events: EventInput[] = [];
   let busy = false;
-  for (const [key, target] of Object.entries(targets)) {
-    const result = await pollTarget(target, key, nowMs, io);
+  for (const [index, [key, target]] of Object.entries(targets).entries()) {
+    const result = await pollTarget(target, key, nowMs, io, index === 0);
     events.push(...result.events);
     busy ||= result.busy;
   }
@@ -1377,6 +1627,9 @@ function summary(target: Target): string[] {
   for (const entry of Object.values(maps.worktrees)) {
     if (entry.said !== null) standing.push(entry.said);
   }
+  for (const entry of Object.values(maps.runners)) {
+    if (entry.said?.level === "alert") standing.push(entry.said);
+  }
   standing.push(...Object.values(maps.trouble));
   const at = (since: string | null) =>
     since === null ? Number.NEGATIVE_INFINITY : Date.parse(since);
@@ -1391,6 +1644,7 @@ runEvents<Target>({
     "targets: session (this session's transcript and subagents dir, found by CLAUDE_CODE_SESSION_ID under ~/.claude/projects), or an absolute path to a session directory",
     "--repo <root>            add the worktree reading for every worktree of this repository that no agent claims (absolute path)",
     `--quiet-after <minutes>  an open turn with nothing pending is stuck after this long (default ${DEFAULT_QUIET_AFTER_MINUTES})`,
+    "the ACP builders acp-runner.mts runs are read from the runtime directory every poll: a turn ended, a permission or a turn standing too long, an adapter gone",
     `the session-events skill must be installed beside this one; without it every command exits 2 naming the install: ${INSTALL}`,
   ],
   parseTarget,
