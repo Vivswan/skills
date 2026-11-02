@@ -2,7 +2,7 @@
 // lead's commands, read back from the files the fleet monitor will read: the state's phases and
 // stop reasons, the events log, the owner's permission rule (every command runs, a file tool
 // inside the worktree runs, one outside is refused), busy and cancel, and the three exits.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -19,9 +19,11 @@ const SCRIPT = join(ROOT, "skills", "orchestrator-mode", "scripts", "acp-runner.
 const STUB = join(ROOT, "tests", "helpers", "acp-agent-stub.ts");
 const temp = tempDirs();
 
-// The adapter on PATH is a wrapper that runs the stub from its real path, where the SDK resolves.
 const binDir = temp.dir("acp-runner-bin-");
-writeFileSync(join(binDir, "codex-acp"), `#!/usr/bin/env bash\nexec bun "${STUB}" "$@"\n`);
+writeFileSync(
+  join(binDir, "codex-acp"),
+  `#!/usr/bin/env bash\n# The adapter runs the stub from its real path, where the SDK resolves.\nexec bun "${STUB}" "$@"\n`,
+);
 chmodSync(join(binDir, "codex-acp"), 0o755);
 
 const READ_ONLY_MODES = {
@@ -54,6 +56,23 @@ interface EventLine {
 }
 
 let names = 0;
+const live: { dir: string; proc: ReturnType<typeof Bun.spawn>; stop: () => void }[] = [];
+
+/** A runner a failed assertion left running would outlive its test: each is stopped here, and one that does not
+ * answer is killed with its adapter, whose pid the stub wrote. */
+afterEach(async () => {
+  for (const runner of live.splice(0)) {
+    if (runner.proc.exitCode !== null) continue;
+    runner.stop();
+    await Promise.race([runner.proc.exited, Bun.sleep(5_000)]);
+    if (runner.proc.exitCode === null) runner.proc.kill("SIGKILL");
+    try {
+      process.kill(Number(readFileSync(join(runner.dir, "pid"), "utf8")), "SIGKILL");
+    } catch {
+      // no adapter pid, or the adapter already gone
+    }
+  }
+});
 
 /** One runner against the stub: its own runtime dir, worktree, and scenario; the commands run through the same script. */
 function startRunner(scenario: object, flags: string[] = [], env: Record<string, string> = {}) {
@@ -113,6 +132,7 @@ function startRunner(scenario: object, flags: string[] = [], env: Record<string,
       stderr: result.stderr.toString(),
     };
   };
+  live.push({ dir, proc, stop: () => void command("stop") });
   return {
     name,
     dir,
@@ -484,7 +504,8 @@ describe("acp-runner.mts", () => {
         "--cwd must be an existing absolute directory",
       ],
       [["frobnicate", "--name", "b"], "unknown command: frobnicate"],
-      [["stop", "--name", "b", "--bogus"], "stop takes no argument: --bogus"],
+      [["stop", "--name", "b", "--bogus"], "Unknown option '--bogus'"],
+      [["stop", "--name", "b", "extra"], "stop takes no argument: extra"],
       [["prompt", "--name", "b"], "prompt needs <text> or --file <path>"],
     ] as [string[], string][]) {
       const result = run(...args);

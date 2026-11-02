@@ -9,6 +9,7 @@
 //
 // The permission rule is the owner's: a builder writes its own worktree and nothing else. Every
 // command runs; a file tool whose locations all sit inside the worktree runs; one outside is refused.
+// Messages name the source script by SELF: scripts/ and .build/ both sit one level under the skill.
 
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -34,6 +35,8 @@ import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable, Writable } from "node:stream";
+import { setTimeout as sleep } from "node:timers/promises";
+import { parseArgs } from "node:util";
 import type * as acpTypes from "@agentclientprotocol/sdk";
 
 const USAGE = [
@@ -44,7 +47,7 @@ const USAGE = [
   "  status --name <builder>                            print the state file as JSON",
   "  cancel --name <builder>                            interrupt the running turn",
   "  stop --name <builder>                              end the session and the adapter",
-  "--name is [a-z0-9-]{1,40}; --cwd is the builder's worktree, absolute; --adapter is last and takes the rest of the line",
+  "--name is [a-z0-9][a-z0-9-]{0,39}; --cwd is the builder's worktree, absolute; --adapter is last and takes the rest of the line",
   "--mode names a session mode the adapter advertises (codex-acp: read-only, workspace-write, agent, agent-full-access;",
   "  claude-agent-acp: default, acceptEdits, plan, auto, bypassPermissions); one it does not advertise is a usage error",
   "permissions: every command runs; a file tool whose locations all sit inside the worktree runs; one outside is refused",
@@ -52,7 +55,7 @@ const USAGE = [
   "files: <dir>/<name>.acp-runner.{state.json,events.jsonl,sock}; <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events,",
   "  else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>",
   "prints: start, one banner line, then nothing until it exits; prompt, one word: prompted, or busy while a turn runs;",
-  "  status, the state object; cancel and stop, one word: cancelled, stopped",
+  "  status, the state object; cancel, one word: cancelled, or the phase when no turn runs; stop, one word: stopped",
   "exits: 0 ok; 1 prompt refused (busy, or the runner still starting), or start ending because the adapter exited;",
   "       2 usage, a mode the adapter lacks, or a runner of this name already serving; 3 no runner answers for this name",
 ].join("\n");
@@ -137,6 +140,7 @@ function ensureBuilt(source: string): boolean {
 if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
 const acp = await import("@agentclientprotocol/sdk");
 
 const SOURCE = "acp-runner";
@@ -147,7 +151,6 @@ const LAUNCHER_POLL_MS = 1000;
 const SYMLINK_HOPS = 40;
 const EXIT_USAGE = 2;
 const EXIT_NO_RUNNER = 3;
-/** The source script, named in messages: both scripts/ and .build/ sit one level under the skill. */
 const SELF = join(dirname(dirname(import.meta.path)), "scripts", "acp-runner.mts");
 
 type Phase = "starting" | "idle" | "busy" | "permission" | "ended";
@@ -340,11 +343,21 @@ function adapterExited(child: ReturnType<typeof spawn>): boolean {
 // --- the runner, the process `start` becomes -------------------------------------------------
 
 class Runner {
+  /** The standing facts `status` prints, rewritten whole on every change. */
   private state: State;
+
+  /** The control socket's server, up once `start` listens. */
   private server: Server | null = null;
+
   /** The one shutdown in flight, which every stop caller awaits. */
   private stopping: Promise<void> | null = null;
+
+  /** The turn in flight, which a stop gives the grace to end once cancelled; null while idle. */
+  private running: Promise<void> | null = null;
+
+  /** Settles once the shutdown is done, for `start` to return on. */
   private readonly finished = Promise.withResolvers<void>();
+
   /** The adapter's exit, awaited by stop; taken at construction so an exit before stop is never missed. */
   private readonly exited: Promise<unknown>;
 
@@ -478,7 +491,9 @@ class Runner {
     if (this.state.phase !== "idle") return { ok: true, result: "busy" };
     this.save({ phase: "busy", lastUpdateAt: now() });
     this.event({ kind: "prompt", text });
-    void this.turn(text);
+    this.running = this.turn(text).finally(() => {
+      this.running = null;
+    });
     return { ok: true, result: "prompted" };
   }
 
@@ -497,7 +512,12 @@ class Runner {
   }
 
   private async shutdown(reason: string): Promise<void> {
-    if (this.state.phase === "busy" || this.state.phase === "permission") await this.cancel();
+    // The cancel gets the grace to reach an adapter that still reads and to end its turn; one that stopped reading
+    // never holds the stop past it.
+    if (this.running !== null) {
+      void this.cancel().catch(() => undefined);
+      await Promise.race([this.running, sleep(STOP_GRACE_MS)]);
+    }
     if (!adapterExited(this.child)) {
       this.child.stdin?.end();
       // An adapter that ignores SIGTERM goes by SIGKILL after the grace, while this process still runs.
@@ -563,49 +583,40 @@ class Runner {
 
 // --- start -------------------------------------------------------------------------------
 
-function takeOne(args: string[], at: number): string {
-  const value = args[at + 1];
-  if (value === undefined || value.startsWith("--")) usage(`${args[at]} requires a value`);
-  args.splice(at + 1, 1);
-  return value;
-}
-
-/** `--adapter` is last and owns the rest of the line, so an adapter's own `--flags` pass through. */
+/** `--adapter` is last and owns the rest of the line, so an adapter's own `--flags` pass through; node parses the
+ * runner's own, and its refusal (an unknown option, a value missing) is the usage error. */
 function parseStart(args: string[]): StartOptions {
-  const options: StartOptions = { name: "", cwd: "", adapter: [], mode: null, allowOutside: false };
-  const flags: Record<string, (at: number) => void> = {
-    "--name": (at) => {
-      options.name = requireName(takeOne(args, at));
-    },
-    "--cwd": (at) => {
-      options.cwd = takeOne(args, at);
-    },
-    "--mode": (at) => {
-      options.mode = takeOne(args, at);
-    },
-    "--allow-outside": () => {
-      options.allowOutside = true;
-    },
-    "--adapter": (at) => {
-      options.adapter = args.splice(at + 1);
-      if (options.adapter.length === 0) usage("--adapter requires a command");
-    },
+  const at = args.indexOf("--adapter");
+  const adapter = at === -1 ? [] : args.slice(at + 1);
+  let values: { name?: string; cwd?: string; mode?: string; "allow-outside"?: boolean };
+  try {
+    ({ values } = parseArgs({
+      args: at === -1 ? args : args.slice(0, at),
+      options: {
+        name: { type: "string" },
+        cwd: { type: "string" },
+        mode: { type: "string" },
+        "allow-outside": { type: "boolean" },
+      },
+      strict: true,
+      allowPositionals: false,
+    }));
+  } catch (error) {
+    usage(errorText(error));
+  }
+  if (values.name === undefined) usage("start requires --name");
+  if (adapter.length === 0) usage("start requires --adapter <command> [args...]");
+  const cwd = values.cwd ?? "";
+  if (!isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    usage(`--cwd must be an existing absolute directory, got ${JSON.stringify(cwd)}`);
+  }
+  return {
+    name: requireName(values.name),
+    cwd,
+    adapter,
+    mode: values.mode ?? null,
+    allowOutside: values["allow-outside"] === true,
   };
-  for (let at = 0; at < args.length; at += 1) {
-    const handler = flags[args[at] as string];
-    if (handler === undefined) usage(`unknown option: ${args[at]}`);
-    handler(at);
-  }
-  if (options.name === "") usage("start requires --name");
-  if (options.adapter.length === 0) usage("start requires --adapter <command> [args...]");
-  if (
-    !isAbsolute(options.cwd) ||
-    !existsSync(options.cwd) ||
-    !statSync(options.cwd).isDirectory()
-  ) {
-    usage(`--cwd must be an existing absolute directory, got ${JSON.stringify(options.cwd)}`);
-  }
-  return options;
 }
 
 async function connectOnce(path: string): Promise<Socket> {
@@ -736,39 +747,43 @@ async function request(files: Files, command: Command): Promise<Reply> {
   return JSON.parse(line) as Reply;
 }
 
-function takeValue(args: string[], name: string): string | undefined {
-  const at = args.indexOf(`--${name}`);
-  if (at === -1) return undefined;
-  const value = args[at + 1];
-  if (value === undefined || value.startsWith("--")) usage(`--${name} requires a value`);
-  args.splice(at, 2);
-  return value;
-}
-
-function promptText(args: string[]): string {
-  const file = takeValue(args, "file");
-  if (file !== undefined) {
-    if (args.length > 0) usage(`prompt takes <text> or --file <path>, not both: ${args.join(" ")}`);
-    return readFileSync(file, "utf8");
-  }
-  const text = args.join(" ");
-  if (text.trim() === "") usage("prompt needs <text> or --file <path>");
-  return text;
-}
-
-/** The command as the socket carries it, every argument checked before the runner is contacted. */
-function clientRequest(command: string, args: string[]): Command {
-  if (command === "prompt") return { command: "prompt", text: promptText(args) };
-  if (command !== "status" && command !== "cancel" && command !== "stop") {
+/** The command as the socket carries it, every argument checked before the runner is contacted: node parses the
+ * flags, a text is the positionals, and its refusal (an unknown option, a value missing) is the usage error. */
+function clientRequest(command: string, args: string[]): { name: string; request: Command } {
+  if (command !== "prompt" && command !== "status" && command !== "cancel" && command !== "stop") {
     usage(`unknown command: ${command}`);
   }
-  if (args.length > 0) usage(`${command} takes no argument: ${args.join(" ")}`);
-  return { command };
+  let values: { name?: string; file?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args,
+      options: { name: { type: "string" }, file: { type: "string" } },
+      strict: true,
+      allowPositionals: true,
+    }));
+  } catch (error) {
+    usage(errorText(error));
+  }
+  const name = requireName(values.name);
+  if (command !== "prompt") {
+    const extra = values.file === undefined ? positionals : [...positionals, "--file"];
+    if (extra.length > 0) usage(`${command} takes no argument: ${extra.join(" ")}`);
+    return { name, request: { command } };
+  }
+  if (values.file !== undefined) {
+    if (positionals.length > 0) {
+      usage(`prompt takes <text> or --file <path>, not both: ${positionals.join(" ")}`);
+    }
+    return { name, request: { command: "prompt", text: readFileSync(values.file, "utf8") } };
+  }
+  const text = positionals.join(" ");
+  if (text.trim() === "") usage("prompt needs <text> or --file <path>");
+  return { name, request: { command: "prompt", text } };
 }
 
 async function clientCommand(command: string, args: string[]): Promise<number> {
-  const name = requireName(takeValue(args, "name"));
-  const request_ = clientRequest(command, args);
+  const { name, request: request_ } = clientRequest(command, args);
   const reply = await request(filesOf(runtimeDir(), name), request_);
   if (!reply.ok) {
     process.stderr.write(`${reply.error}\n`);

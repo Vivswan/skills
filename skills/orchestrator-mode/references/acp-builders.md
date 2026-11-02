@@ -51,7 +51,7 @@ usage: acp-runner.mts <command> [options]
   status --name <builder>                            print the state file as JSON
   cancel --name <builder>                            interrupt the running turn
   stop --name <builder>                              end the session and the adapter
---name is [a-z0-9-]{1,40}; --cwd is the builder's worktree, absolute; --adapter is last and takes the rest of the line
+--name is [a-z0-9][a-z0-9-]{0,39}; --cwd is the builder's worktree, absolute; --adapter is last and takes the rest of the line
 --mode names a session mode the adapter advertises (codex-acp: read-only, workspace-write, agent, agent-full-access;
   claude-agent-acp: default, acceptEdits, plan, auto, bypassPermissions); one it does not advertise is a usage error
 permissions: every command runs; a file tool whose locations all sit inside the worktree runs; one outside is refused
@@ -59,7 +59,7 @@ permissions: every command runs; a file tool whose locations all sit inside the 
 files: <dir>/<name>.acp-runner.{state.json,events.jsonl,sock}; <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events,
   else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
 prints: start, one banner line, then nothing until it exits; prompt, one word: prompted, or busy while a turn runs;
-  status, the state object; cancel and stop, one word: cancelled, stopped
+  status, the state object; cancel, one word: cancelled, or the phase when no turn runs; stop, one word: stopped
 exits: 0 ok; 1 prompt refused (busy, or the runner still starting), or start ending because the adapter exited;
        2 usage, a mode the adapter lacks, or a runner of this name already serving; 3 no runner answers for this name
 ```
