@@ -1,3 +1,7 @@
 # Repo-owned typos config, layered under the fleet's.
 [files]
 extend-exclude = []
+
+[default.extend-identifiers]
+# The ACP SDK's newline-delimited JSON stream; `nd` is not `and` here.
+ndJsonStream = "ndJsonStream"
