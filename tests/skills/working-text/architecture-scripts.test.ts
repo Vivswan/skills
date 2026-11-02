@@ -441,10 +441,89 @@ describe("self-building scripts", () => {
     expect(statSync(bundle).mtimeMs).toBeGreaterThan(second);
   });
 
+  /** The pid a spawned entry's bundle prints as its first line, or the entry's stderr as the failure. */
+  async function bundlePidOf(proc: ReturnType<typeof Bun.spawn>): Promise<number> {
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+    let seen = "";
+    while (!/bundle \d+\n/.test(seen)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += new TextDecoder().decode(value);
+    }
+    const pid = Number(/bundle (\d+)/.exec(seen)?.[1]);
+    if (pid > 0) return pid;
+    throw new Error(
+      `no bundle pid in ${JSON.stringify(seen)}: ${await new Response(proc.stderr as ReadableStream).text()}`,
+    );
+  }
+
+  /** Whether `pid` is gone within `ms`. */
+  async function gone(pid: number, ms: number): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return true;
+      }
+      await Bun.sleep(50);
+    }
+    return false;
+  }
+
+  function killQuietly(pid: number): void {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+
+  test(
+    "a signal to the source run reaches the bundle, which ends, and the run ends by the same signal",
+    async () => {
+      const root = copiedSkill("signal");
+      // The entry carries docs-probe.mts's imports and block verbatim, through the guard; its program says its
+      // pid and waits to be ended.
+      const probeSource = readFileSync(join(root, "scripts", "docs-probe.mts"), "utf8");
+      const guardComment = probeSource.indexOf("// Only the command builds");
+      const guardEnd = probeSource.indexOf("\n", probeSource.indexOf("\n", guardComment) + 1) + 1;
+      const entry = join(root, "scripts", "wait.mts");
+      writeFileSync(
+        entry,
+        `${probeSource.slice(0, guardEnd)}\nconsole.log(\`bundle \${process.pid}\`);\nsetInterval(() => {}, 1000);\n`,
+      );
+      const proc = Bun.spawn([process.execPath, entry], {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      let bundlePid = 0;
+      try {
+        bundlePid = await bundlePidOf(proc);
+        proc.kill("SIGTERM");
+        // A wrapper that swallowed the signal would wait forever: the bound turns that into a failure the finally cleans.
+        const ended = await Promise.race([
+          proc.exited,
+          Bun.sleep(10_000).then(() => "still running"),
+        ]);
+        expect(ended).not.toBe("still running");
+        expect(proc.signalCode).toBe("SIGTERM");
+        expect(await gone(bundlePid, 5_000)).toBe(true);
+      } finally {
+        // Whatever the assertions did, neither process outlives the test.
+        proc.kill("SIGKILL");
+        if (bundlePid > 0) killQuietly(bundlePid);
+      }
+    },
+    CLI_TIMEOUT,
+  );
+
   test("an entry below scripts/ finds the skill root and bundles to the same path under .build", () => {
     const root = copiedSkill("nested-entry");
     const head = readFileSync(join(root, "scripts", "architecture", "sources.mts"), "utf8");
-    const guard = "if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();\n";
+    const guard =
+      "if (import.meta.main && (await ensureBuilt(import.meta.path))) process.exit();\n";
     const prefix = head.slice(0, head.indexOf(guard) + guard.length);
     const entry = join(root, "scripts", "nested", "entry.mts");
     mkdirSync(join(root, "scripts", "nested"));

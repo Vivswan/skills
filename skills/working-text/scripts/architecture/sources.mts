@@ -2,7 +2,7 @@
 // and every relative specifier it names, resolved to a file. lint.mts walks the
 // import graph through it; check-page.mts reads a file's exported names.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   cpSync,
@@ -77,19 +77,39 @@ function build(source: string, scripts: string, skill: string, built: string): b
   }
 }
 
-function ensureBuilt(source: string): boolean {
-  if (!source.endsWith(".mts")) return false;
+function ensureBuilt(source: string): Promise<boolean> {
+  if (!source.endsWith(".mts")) return Promise.resolve(false);
   const { scripts, skill, built } = buildPaths(source);
   if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
-  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
-  // A bundle killed by a signal has no status: die of the same signal.
-  if (run.signal) process.kill(process.pid, run.signal);
-  process.exitCode = run.status ?? 1;
-  return true;
+  // The bundle runs on this process's stdio, and a signal to this process goes on to it; this process then ends as
+  // the bundle did, by its status, or by the same signal once the forwarding is off and the signal's default is back.
+  const run = spawn("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  const forward = (signal: NodeJS.Signals) => {
+    run.kill(signal);
+  };
+  for (const signal of signals) process.on(signal, forward);
+  return new Promise((resolve) => {
+    const settle = (status: number | null, signal: NodeJS.Signals | null) => {
+      for (const name of signals) process.off(name, forward);
+      if (signal !== null) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exitCode = status ?? 1;
+      resolve(true);
+    };
+    run.on("exit", settle);
+    // A bundle that never started (no bun on PATH) emits error and no exit: that is the run's failure.
+    run.on("error", (error) => {
+      console.error(String(error));
+      settle(1, null);
+    });
+  });
 }
 
 // Only the command builds; a test or a sibling importing this file must not.
-if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+if (import.meta.main && (await ensureBuilt(import.meta.path))) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
 
