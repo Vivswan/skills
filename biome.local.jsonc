@@ -2,7 +2,10 @@
 // reasons. The managed biome.json extends this file and applies last, so the floor cannot be lowered here; the one
 // relaxation is a per-path `overrides` entry below with its reason beside it (docs/modules/typescript.md).
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.11/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
+  // biome 2.6 formats Markdown by default. The pages are prose the docs probe and vale read, and a managed page
+  // arrives formatted by the platform, so the Markdown formatter stays off here.
+  "markdown": { "formatter": { "enabled": false } },
   "vcs": {
     "enabled": true,
     "clientKind": "git",
