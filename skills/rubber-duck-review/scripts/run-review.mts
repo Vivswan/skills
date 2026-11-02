@@ -4,8 +4,9 @@
  * Each reviewer CLI has a trap the launch retires; the usage text is USAGE below.
  *
  *   prompt through a shell       -> backticks and $(...) expand: spawn from an argv array
- *   stdin left open              -> codex and claude block forever: 'ignore', or a file (EOF-ended)
- *   codex narrates in the schema -> an empty verdict reads as clean: a tool call must precede it
+ *   stdin left open              -> a CLI reviewer blocks forever: 'ignore' for copilot, the protocol for an adapter
+ *   a reviewer narrates first    -> an empty verdict reads as clean: a tool call must precede it
+ *   a reviewer asks to write     -> the review refuses, the adapter ends the turn: the refusal is the failure's reason
  *   predictable prompt path      -> one agent overwrites another's: prepare mints a private dir
  *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
@@ -13,14 +14,15 @@
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
  *   the stream goes silent       -> a stuck child held one run for hours: --stall kills the reviewer's process group
  *   criteria pasted by hand      -> thirty rounds passed what the house rules forbid: the launcher names this collection's pages
+ *   the bundle runs from .build/ -> paths off import.meta would miss scripts/: the skill root is two levels up either way
  */
 
 import { spawn, spawnSync } from "node:child_process";
 import type { Dirent } from "node:fs";
 import {
-  chmodSync,
   closeSync,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -32,18 +34,120 @@ import {
   renameSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import type { AcpEnd, PermissionPolicy } from "./acp.mts";
+import { removeTree, snapshotRepository, withoutGitEnv } from "./copy-mode.mts";
 import { type Extraction, extractVerdict, isRecord, isTool, type Tool } from "./verdict.mts";
 
-// The skill's directory is resolved through any install symlink, so its siblings are the installed skills.
+const USAGE = [
+  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stall <seconds>] [--criteria <names>|none]",
+  "codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode: a file edit it asks for is refused, codex ends the turn, and the review fails naming the refusal",
+  "claude runs through the claude-agent-acp adapter on PATH (npm install -g @agentclientprotocol/claude-agent-acp) in its plan mode: its read-only tools run unasked, and whatever asks (a write, a plan approval) is refused",
+  "       run-review.mts <codex|claude|copilot> --extract <output-file>",
+  "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
+  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
+  "       run-review.mts prepare <section>",
+  "       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)",
+  "the prompt gets a '## Companion review criteria' section naming the SKILL.md of every installed skill of this collection (the installer's",
+  "  records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',",
+  "  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;",
+  "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
+  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
+  "codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are",
+  "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
+  "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
+  "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
+  "       1 review FAILED - relaunch: no usable verdict, whatever the cause, a stall, or --wait timed out; never a clean pass;",
+  "       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository",
+].join("\n");
 
-const SCHEMA_FILE = join(dirname(fileURLToPath(import.meta.url)), "verdict-schema.json");
+if (import.meta.main && (process.argv[2] === "--help" || process.argv[2] === "-h")) {
+  process.stdout.write(`${USAGE}\n`);
+  process.exit(0);
+}
+
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
+  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
+}
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
+}
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, scripts: string, skill: string, built: string): boolean {
+  // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
+  // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
+  mkdirSync(join(skill, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
+  try {
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function ensureBuilt(source: string): boolean {
+  if (!source.endsWith(".mts")) return false;
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
+  const run = spawnSync("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  // A bundle killed by a signal has no status: die of the same signal.
+  if (run.signal) process.kill(process.pid, run.signal);
+  process.exitCode = run.status ?? 1;
+  return true;
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && ensureBuilt(import.meta.path)) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
+const { startAcpSession } = await import("./acp.mts");
+
 const SKILL_DIR = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
 const SKILLS_ROOT = dirname(SKILL_DIR);
 const PLUGIN_MANIFEST = join(dirname(SKILLS_ROOT), ".claude-plugin", "plugin.json");
@@ -52,42 +156,19 @@ const COMPANION_HEADING = "## Companion review criteria";
 const COMPANION_INSTRUCTION =
   "Read the `## Review Criteria` section of each page below and apply it as part of this review:";
 
-/** Read once at launch; a missing or malformed schema beside the script is a
- * broken install, not a review failure. */
-function schemaText(): string {
-  return readFileSync(SCHEMA_FILE, "utf-8");
-}
+/** copilot runs as a CLI; codex and claude run as ACP sessions (acp.mts) and have no argv: ACP_REVIEWERS names the
+ * adapter on PATH that serves each and the session mode the review needs. */
+type CliTool = Extract<Tool, "copilot">;
+type AcpTool = Exclude<Tool, "copilot">;
 
-/** codex's filesystem policy for the review: read-only under its own sandbox,
- * or none at all inside a snapshot copy when that sandbox cannot start. */
-type CodexSandbox = "read-only" | "danger-full-access";
+const ACP_REVIEWERS: Record<AcpTool, { adapter: string; mode: string }> = {
+  // read-only: commands ask before they run, a file edit asks, and a refusal ends the turn.
+  codex: { adapter: "codex-acp", mode: "read-only" },
+  // plan: the read-only tools run unasked, a write or a plan approval asks, and a refusal ends the turn.
+  claude: { adapter: "claude-agent-acp", mode: "plan" },
+};
 
-const TOOL_ARGS: Record<Tool, (prompt: string, sandbox: CodexSandbox) => string[]> = {
-  // --sandbox read-only: the reviewer can grep/diff/typecheck but not write.
-  // --output-schema: the final message must be the verdict object.
-  codex: (prompt, sandbox) => [
-    "exec",
-    "--json",
-    "--sandbox",
-    sandbox,
-    "--output-schema",
-    SCHEMA_FILE,
-    prompt,
-  ],
-  // --verbose is REQUIRED with --output-format stream-json; without it claude
-  // errors to stderr and stdout stays empty. --json-schema takes the schema
-  // inline and delivers the verdict as the result's structured_output.
-  claude: (prompt) => [
-    "-p",
-    "--permission-mode",
-    "plan",
-    "--verbose",
-    "--output-format",
-    "stream-json",
-    "--json-schema",
-    schemaText(),
-    prompt,
-  ],
+const TOOL_ARGS: Record<CliTool, (prompt: string) => string[]> = {
   // -p consumes the next argument, so the prompt must immediately follow it.
   // -s strips the model/stats decoration so stdout is only the response.
   // --available-tools is a visibility allow-list: view/rg/glob are the read
@@ -105,26 +186,6 @@ const TOOL_ARGS: Record<Tool, (prompt: string, sandbox: CodexSandbox) => string[
   ],
 };
 
-const USAGE = [
-  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>] [--criteria <names>|none]",
-  "       run-review.mts <codex|claude|copilot> --extract <output-file>",
-  "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
-  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
-  "       run-review.mts prepare <section>",
-  "       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)",
-  "the prompt gets a '## Companion review criteria' section naming the SKILL.md of every installed skill of this collection (the installer's",
-  "  records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',",
-  "  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;",
-  "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
-  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
-  "codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir",
-  "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
-  "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
-  "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
-  "       1 review FAILED - relaunch: no usable verdict, whatever the cause, a stall, or --wait timed out; never a clean pass;",
-  "       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository",
-].join("\n");
-
 const SCRATCH_PREFIX = "rubber-duck-";
 const PROMPT_DIR_PREFIX = "rubber-duck-prompt-";
 const SCRATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -135,7 +196,6 @@ const WHOLE_SECONDS = /^[1-9][0-9]*$/;
 const MAX_TIMER_SECONDS = 2147483;
 const FLAGS = {
   background: { type: "boolean" },
-  "stdin-prompt": { type: "boolean" },
   capture: { type: "string" },
   stall: { type: "string" },
   criteria: { type: "string" },
@@ -143,20 +203,11 @@ const FLAGS = {
   timeout: { type: "string" },
 } as const;
 
-const LAUNCH_FLAGS = ["background", "stdin-prompt", "capture", "stall", "criteria"] as const;
+const LAUNCH_FLAGS = ["background", "capture", "stall", "criteria"] as const;
 const EXTRACT_FLAGS = ["wait", "timeout"] as const;
 const STALL_STATUS = /^stalled: /;
 const MINT_MARKER = ".minted-by-run-review";
 const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const REVISION_FILES = [
-  "ORIG_HEAD",
-  "FETCH_HEAD",
-  "MERGE_HEAD",
-  "CHERRY_PICK_HEAD",
-  "REVERT_HEAD",
-  "REBASE_HEAD",
-];
-
 /** Thrown after exit output is queued, so `never`-typed helpers stay honest. */
 class SilentExit extends Error {}
 
@@ -535,28 +586,13 @@ function printCriteria(args: string[]): void {
   process.stdout.write(companionBlock(selectCriteria(spec)));
 }
 
+/** The CLI reviewer's argv; the prompt travels as one element, so backticks and $() stay literal. */
 interface Delivery {
-  /** The reviewer's argv for the codex sandbox the launch settled on; claude and copilot ignore the argument. */
-  args: (sandbox: CodexSandbox) => string[];
-
-  /** null: the prompt travels as argv and stdin is 'ignore'; otherwise the file served as the reviewer's stdin, EOF-terminated and complete by construction. */
-  stdinFile: string | null;
+  args: string[];
 }
 
-function argvDelivery(tool: Tool, prompt: string): Delivery {
-  return { args: (sandbox) => TOOL_ARGS[tool](prompt, sandbox), stdinFile: null };
-}
-
-/** codex reads "-" from stdin; claude -p reads stdin when no prompt argument
- * is given. copilot has no stdin form: -p requires the prompt argument. */
-function stdinDelivery(tool: Tool, promptFile: string): Delivery {
-  if (tool === "codex") {
-    return { args: (sandbox) => TOOL_ARGS.codex("-", sandbox), stdinFile: promptFile };
-  }
-  if (tool === "claude") {
-    return { args: (sandbox) => TOOL_ARGS.claude("", sandbox).slice(0, -1), stdinFile: promptFile };
-  }
-  usageError("copilot does not support --stdin-prompt (-p requires the prompt as an argument)");
+function argvDelivery(tool: CliTool, prompt: string): Delivery {
+  return { args: TOOL_ARGS[tool](prompt) };
 }
 
 /** How the reviewer is confined. `read-only` is every reviewer's own sandbox.
@@ -608,290 +644,6 @@ function planLaunch(tool: Tool): Launch {
   const outside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
   const subdir = outside ? "" : rel;
   return { sandbox: "copy", reason: refusal, root, subdir };
-}
-
-interface GitOptions {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  input?: Buffer;
-}
-
-/** Runs one git command and returns its stdout. A failure throws, naming the
- * command and what git said; with `absentOk`, exit 1 is git's "nothing to
- * say" (`config --get` of an unset key) and returns null. Node passes `input`
- * only through a piped stdin (an ignored one drops it; bun passes it either
- * way). */
-function git(args: string[], options?: GitOptions & { absentOk?: false }): Buffer;
-function git(args: string[], options: GitOptions & { absentOk: true }): Buffer | null;
-function git(args: string[], options: GitOptions & { absentOk?: boolean } = {}): Buffer | null {
-  const result = spawnSync("git", args, {
-    cwd: options.cwd,
-    env: options.env,
-    input: options.input,
-    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-    maxBuffer: Number.MAX_SAFE_INTEGER,
-  });
-  if (result.status === 0) return result.stdout;
-  if (result.status === 1 && options.absentOk === true) return null;
-  const detail = result.error?.message ?? result.stderr.toString().trim();
-  throw new Error(`git ${args.join(" ")}: ${detail}`);
-}
-
-/** The copy is what git has committed or would commit, its object store
- * shared with the checkout through an alternates link, so `git diff --cached`
- * and `git diff <base>...HEAD` there show the change the prompt names. A
- * `cp -a` of the toplevel also carried the ignored trees (virtualenvs, nested
- * worktrees) and failed midway on a checkout of gigabytes; a linked worktree
- * is no copy, its `.git` points into the repository. SKILL.md names what
- * travels and what stays behind. */
-function snapshotRepository(
-  launch: Extract<Launch, { sandbox: "copy" }>,
-  scratch: Scratch,
-  warn: (line: string) => void,
-) {
-  const copy = join(scratch.dir, "repo");
-  try {
-    buildSnapshot(copy);
-  } catch (error) {
-    // A copy that failed midway is still a copy: it goes with the failure,
-    // not into a capture dir that is kept for a day.
-    removeTree(copy, warn);
-    const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false as const, reason: `snapshot of ${launch.root} failed: ${detail}` };
-  }
-  // The cwd's twin is a directory inside the copy when the cwd holds something
-  // tracked; from an untracked or ignored directory, or one a staged file or
-  // symlink replaced (itself or an ancestor), the reviewer starts at the
-  // copy's root.
-  return { ok: true as const, copy, cwd: directoryInside(copy, launch.subdir) ?? copy };
-}
-
-/** The real path of `copy/subdir` when it is a directory inside the copy,
- * else null: a missing path, a path under a file (ENOTDIR), or one a staged
- * symlink on the way (the leaf or an ancestor) resolves out of the copy, into
- * the live checkout. The resolved path decides, never the lexical one. */
-function directoryInside(copy: string, subdir: string): string | null {
-  try {
-    const root = realpathSync(copy);
-    const real = realpathSync(join(copy, subdir));
-    const inside = real === root || real.startsWith(`${root}${sep}`);
-    return inside && statSync(real).isDirectory() ? real : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The remote's effective fetch URL (the first of several, `insteadOf`
- * applied), made absolute when it is a relative local path, since the copy
- * lives elsewhere. git reads such a path from the top level, and its local
- * transport is a chdir into the path and a discovery there, so the same
- * chdir asks git for the repository it finds (symlinks and `..` as the
- * kernel reads them). A `~` path git expands itself, in the copy too, and a
- * path with no repository is left as it is. */
-function absoluteRemoteUrl(remote: string): string {
-  const url = git(["ls-remote", "--get-url", remote]).toString().trim();
-  const isLocalPath = !/^[a-z][a-z0-9+.-]*:\/\//i.test(url) && !/^[^/]+:/.test(url);
-  if (!isLocalPath || isAbsolute(url) || url.startsWith("~")) return url;
-  const top = git(["rev-parse", "--show-toplevel"]).toString().trim();
-  const discover = [
-    "-C",
-    top,
-    "-C",
-    url,
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ];
-  try {
-    return git(discover, { env: withoutGitEnv(process.env) })
-      .toString()
-      .trim();
-  } catch {
-    return url;
-  }
-}
-
-/** The config that makes the copy fetch from the checkout's promisor remotes
- * as the checkout would (a partial clone reads a blob it lacks from them on
- * first use): each promisor remote's flag, its effective fetch URL, and its
- * partial-clone filter. git answers every question, so its boolean spellings
- * and URL rewrites hold. */
-function promisorConfig(): [string, string][] {
-  const config: [string, string][] = [];
-  for (const remote of git(["remote"]).toString().split("\n").filter(Boolean)) {
-    const promisorKey = `remote.${remote}.promisor`;
-    const promisor = git(["config", "--type=bool", "--get", promisorKey], { absentOk: true });
-    if (promisor?.toString().trim() !== "true") continue;
-    config.push([promisorKey, "true"]);
-    config.push([`remote.${remote}.url`, absoluteRemoteUrl(remote)]);
-    const filterKey = `remote.${remote}.partialclonefilter`;
-    const filter = git(["config", "--get", filterKey], { absentOk: true });
-    if (filter !== null) config.push([filterKey, filter.toString().trim()]);
-  }
-  return config;
-}
-
-/** Reads of the checkout run where the launcher runs, with its environment:
- * a `GIT_DIR` there, relative or absolute, may be how the caller names the
- * repository. Every write into the copy drops the `GIT_*` variables, or it
- * would land in the checkout. */
-function buildSnapshot(copy: string): void {
-  const read = (...args: string[]) => git(args).toString().trim();
-  const copyEnv = withoutGitEnv(process.env);
-  const write = (args: string[], input?: Buffer) => git(args, { cwd: copy, env: copyEnv, input });
-
-  const objectFormat = read("rev-parse", "--show-object-format");
-  const objects = read("rev-parse", "--path-format=absolute", "--git-path", "objects");
-  const shallow = read("rev-parse", "--path-format=absolute", "--git-path", "shallow");
-  const index = read("rev-parse", "--path-format=absolute", "--git-path", "index");
-  const gitDir = read("rev-parse", "--absolute-git-dir");
-  const refs = git(["for-each-ref", "--format=update %(refname) %(objectname)"]);
-  // Empty for a detached HEAD; an unborn branch has a name and no commit.
-  const branch = read("branch", "--show-current");
-
-  mkdirSync(copy);
-  write(["init", "-q", `--object-format=${objectFormat}`]);
-  writeFileSync(join(copy, ".git", "objects", "info", "alternates"), `${objects}\n`);
-  // A shallow clone's boundary travels too, or a walk of the history in the
-  // copy dies at the first missing parent.
-  if (existsSync(shallow)) copyFileSync(shallow, join(copy, ".git", "shallow"));
-  write(["update-ref", "--stdin"], refs);
-  if (branch === "") {
-    write(["update-ref", "--no-deref", "HEAD", read("rev-parse", "--verify", "HEAD")]);
-  } else {
-    write(["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
-  }
-  // A branch diff in the copy may need a blob the checkout never read (a base
-  // blob of a partial clone): with the promisor remotes along, the copy fetches
-  // it as the checkout would, into its own store.
-  for (const [key, value] of promisorConfig()) {
-    write(["config", key, value]);
-  }
-  // Outside refs/, yet a prompt may name one as a diff base: the tip before a reset or rebase, the last fetch, the heads of an operation in progress.
-  for (const name of REVISION_FILES) {
-    if (existsSync(join(gitDir, name))) copyFileSync(join(gitDir, name), join(copy, ".git", name));
-  }
-  // The index file itself, so an intent-to-add, skip-worktree, or unmerged
-  // entry keeps its flags (a listing of the entries would stage an
-  // intent-to-add file outright); a split index's shared halves sit beside it.
-  if (existsSync(index)) copyFileSync(index, join(copy, ".git", "index"));
-  for (const name of readdirSync(gitDir)) {
-    if (name.startsWith("sharedindex.")) copyFileSync(join(gitDir, name), join(copy, ".git", name));
-  }
-  // The working tree as the checkout's own: a skip-worktree entry stays
-  // absent, as under sparse checkout, where a partial clone may not even hold
-  // its blob. `-u` points the copied stat data at the files just written, or
-  // every status re-hashes them. Large-file pointers stay pointers: a smudge
-  // filter would fetch what a review never reads.
-  git(["checkout-index", "-a", "-u"], { cwd: copy, env: { ...copyEnv, GIT_LFS_SKIP_SMUDGE: "1" } });
-}
-
-/** `force` skips what is missing, not what a tree's own modes refuse (a
- * populated 0555 directory copied as-is), so a refusal gets one retry with
- * every directory in the tree made writable by its owner first. What still
- * refuses is reported through `warn` and must never take the verdict or the
- * failure with it. */
-function removeTree(path: string, warn: (line: string) => void): void {
-  try {
-    rmSync(path, { recursive: true, force: true });
-    return;
-  } catch {
-    // retried below with the modes repaired
-  }
-  try {
-    makeDirectoriesWritable(path);
-    rmSync(path, { recursive: true, force: true });
-  } catch (error) {
-    warn(`not removed ${path}: ${String(error)}`);
-  }
-}
-
-function makeDirectoriesWritable(path: string): void {
-  const stat = lstatSync(path);
-  if (!stat.isDirectory()) return;
-  chmodSync(path, stat.mode | 0o700);
-  for (const entry of readdirSync(path, { withFileTypes: true })) {
-    if (entry.isDirectory()) makeDirectoriesWritable(join(path, entry.name));
-  }
-}
-
-/** `GIT_DIR` and its siblings name the real repository by absolute path, and
- * `GIT_CONFIG_COUNT` with a `core.worktree` entry does the same by another
- * route, so a reviewer inheriting any `GIT_*` variable could read the live
- * index from inside the copy. Discovery from the copy's cwd is what the
- * snapshot is for, so none of them travel. */
-function withoutGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const stripped: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(env)) {
-    if (!name.toUpperCase().startsWith("GIT_")) stripped[name] = value;
-  }
-  return stripped;
-}
-
-const CODEX_HOME_FILES = ["config.toml", "auth.json"];
-const CODEX_AUTH_FILE = "auth.json";
-const CODEX_SESSIONS_DIR = "sessions";
-
-/** Absolute, since the sessions link below is read from inside the scratch home, not from the cwd. */
-function realCodexHome(): string {
-  return resolve(process.env.CODEX_HOME ?? join(homedir(), ".codex"));
-}
-
-/** Fills `home` (already created) as the reviewer's scratch CODEX_HOME. codex marks the directory it is launched
- * in as a trusted project by writing a block into its config file, and a copy has a fresh path every review, so
- * the user's own config would grow by one block per run; in the scratch home the trust write dies with it.
- *
- *   config.toml, auth.json  -> copied, each only when it exists
- *   sessions/               -> linked to the user's own (created if missing): the transcripts codex writes there are the user's review logs
- *
- * Everything else codex writes (its sqlite state, the trust block) stays scratch.
- * Returns the credentials bytes as copied, so a later refresh is told apart from them. */
-function fillCodexHome(home: string): Buffer | null {
-  const real = realCodexHome();
-  let auth: Buffer | null = null;
-  for (const name of CODEX_HOME_FILES) {
-    const source = join(real, name);
-    if (!statSync(source, { throwIfNoEntry: false })?.isFile()) continue;
-    copyFileSync(source, join(home, name));
-    if (name === CODEX_AUTH_FILE) auth = readFileSync(join(home, name));
-  }
-  const realSessions = join(real, CODEX_SESSIONS_DIR);
-  mkdirSync(realSessions, { recursive: true });
-  symlinkSync(realSessions, join(home, CODEX_SESSIONS_DIR));
-  return auth;
-}
-
-/** codex refreshes expiring login tokens into auth.json and expects the
- * refreshed file to persist, so a scratch copy that changed goes back to the
- * user's home by write-then-rename. Only when the user's file still holds the
- * bytes this review copied: a parallel review that refreshed first must not
- * be rolled back by an unchanged or older copy. The config never goes back:
- * its only change is the trust block the scratch home exists to absorb. */
-function returnRefreshedAuth(
-  home: string,
-  original: Buffer | null,
-  warn: (line: string) => void,
-): void {
-  if (original === null) return;
-  const scratchAuth = join(home, CODEX_AUTH_FILE);
-  const realAuth = join(realCodexHome(), CODEX_AUTH_FILE);
-  if (!statSync(scratchAuth, { throwIfNoEntry: false })?.isFile()) return;
-  if (!statSync(realAuth, { throwIfNoEntry: false })?.isFile()) return;
-  try {
-    const refreshed = readFileSync(scratchAuth);
-    if (refreshed.equals(original)) return;
-    if (!readFileSync(realAuth).equals(original)) {
-      warn(
-        `codex credentials changed elsewhere during the review; the scratch refresh is not returned to ${realAuth}`,
-      );
-      return;
-    }
-    const pending = `${realAuth}.rubber-duck-tmp`;
-    writeFileSync(pending, refreshed, { mode: 0o600 });
-    renameSync(pending, realAuth);
-  } catch (error) {
-    warn(`refreshed codex credentials not returned to ${realAuth}: ${String(error)}`);
-  }
 }
 
 /** A kill of this process reaches the reviewer, so neither it nor its copy
@@ -999,35 +751,32 @@ function recordStatus(
 }
 
 interface ReviewerHooks {
-  /** Fires once, on the reviewer's first stdout byte. */
+  /** Fires once, on the reviewer's first stdout byte or ACP event. */
   onLife?: () => void;
 
   /** The copy mode's progress line: the refusal and where the copy lives. */
   onFallback?: (message: string) => void;
 
-  /** The reviewer never ran: the spawn failed, or in copy mode the snapshot or the scratch home did; onDone never follows it. */
+  /** The reviewer never ran: the spawn failed, or in copy mode the snapshot did; onDone never follows it. */
   onSpawnError: (error: Error) => void;
 
   /** Receives the recorded status: "0" is the only success. */
   onDone: (status: string) => void;
 }
 
-/** The descriptors one run holds until it settles: the stream capture, its stderr, and the prompt file when the delivery is by stdin. */
+/** The descriptors one run holds until it settles: the stream capture and its stderr. */
 interface CaptureFds {
   out: number;
   err: number;
-  stdin: number | null;
 }
 
-/** What the copy mode adds to a run: the snapshot and the cwd inside it, and the scratch CODEX_HOME with the credentials as copied. */
+/** What the copy mode adds to a run: the snapshot and the cwd inside it. */
 interface CopyMode {
   copy: string;
   cwd: string;
-  codexHome: string;
-  originalAuth: Buffer | null;
 }
 
-/** What the stream watcher needs of its run: where the bytes go, what the close handler records, and what settling releases. */
+/** What a run holds while the reviewer works: where the bytes go, what the close handler records, and what settling releases. */
 interface Run {
   tool: Tool;
   scratch: Scratch;
@@ -1039,141 +788,227 @@ interface Run {
   warn: (line: string) => void;
 }
 
-function openCaptureFds(delivery: Delivery, scratch: Scratch): CaptureFds {
-  let stdin: number | null = null;
-  if (delivery.stdinFile !== null) {
-    try {
-      stdin = openSync(delivery.stdinFile, "r");
-    } catch (error) {
-      usageError(`cannot open prompt file for stdin delivery: ${String(error)}`);
-    }
-  }
-
-  return { out: openSync(scratch.outFile, "w"), err: openSync(scratch.errFile, "w"), stdin };
+function openCaptureFds(scratch: Scratch): CaptureFds {
+  return { out: openSync(scratch.outFile, "w"), err: openSync(scratch.errFile, "w") };
 }
 
-/** A failure removes what was built and names it, for the caller to report as a spawn failure. The home's
- * path is fixed before it is filled, so a fill that fails midway is removed with the copy. */
+/** A snapshot that failed midway is removed with the failure and named, for the caller to report as a spawn failure. */
 function prepareCopyMode(
   launch: Extract<Launch, { sandbox: "copy" }>,
   scratch: Scratch,
   warn: (line: string) => void,
 ): { ok: true; copyMode: CopyMode } | { ok: false; reason: string } {
-  const snapshot = snapshotRepository(launch, scratch, warn);
+  const snapshot = snapshotRepository(launch, scratch.dir, warn);
   if (!snapshot.ok) return snapshot;
 
-  const codexHome = join(scratch.dir, "codex-home");
-  try {
-    mkdirSync(codexHome);
-    const originalAuth = fillCodexHome(codexHome);
-    return {
-      ok: true,
-      copyMode: { copy: snapshot.copy, cwd: snapshot.cwd, codexHome, originalAuth },
-    };
-  } catch (error) {
-    removeTree(snapshot.copy, warn);
-    removeTree(codexHome, warn);
-    return { ok: false, reason: `scratch codex home failed: ${String(error)}` };
-  }
+  return { ok: true, copyMode: { copy: snapshot.copy, cwd: snapshot.cwd } };
 }
 
-/** Let go together on every path, the copy and the scratch home first: the home holds copied credentials, and
- * a token codex refreshed there goes back to the user's before it dies. */
+/** Let go together on every path: the copy, then the descriptors. */
 function releaseRun(
   fds: CaptureFds,
   copyMode: CopyMode | null,
   warn: (line: string) => void,
 ): void {
-  if (copyMode !== null) {
-    removeTree(copyMode.copy, warn);
-    returnRefreshedAuth(copyMode.codexHome, copyMode.originalAuth, warn);
-    removeTree(copyMode.codexHome, warn);
-  }
+  if (copyMode !== null) removeTree(copyMode.copy, warn);
 
   closeSync(fds.out);
   closeSync(fds.err);
-  if (fds.stdin !== null) closeSync(fds.stdin);
 }
 
-/** Every byte from the reviewer winds the stall clock and lands in the capture. When the clock runs out, the
- * reviewer's whole process group is killed and the run is a stall: a stuck browser-extension host codex spawned
- * once held a silent review for three hours while a 3600 s wait ran. A spawn failure emits 'error' and may still
- * emit 'close', so the run settles once. */
-function watchReviewer(child: ReturnType<typeof spawn>, run: Run, hooks: ReviewerHooks): void {
-  let sawLife = false;
-  let stalled = false;
-  let stallClock: ReturnType<typeof setTimeout> | null = null;
-  const windStallClock = () => {
-    if (stallClock !== null) clearTimeout(stallClock);
-    stallClock = setTimeout(() => {
-      stalled = true;
+/** A warning lands in review.err, which outlives the run and is named by a failure, as well as on stderr (ignored for a detached monitor). */
+function warner(fds: CaptureFds): (line: string) => void {
+  return (line) => {
+    writeFileSync(fds.err, `${line}\n`);
+    process.stderr.write(`${line}\n`);
+  };
+}
+
+/** Every byte or event from the reviewer winds the stall clock. When it runs out, the reviewer's whole process
+ * group is killed and the run is a stall: a stuck browser-extension host codex spawned once held a silent review
+ * for three hours while a 3600 s wait ran. */
+function stallClock(
+  child: ReturnType<typeof spawn>,
+  run: Run,
+  onStall: () => void,
+): { wind: () => void; stop: () => void } {
+  let clock: ReturnType<typeof setTimeout> | null = null;
+  const wind = () => {
+    if (clock !== null) clearTimeout(clock);
+    clock = setTimeout(() => {
+      onStall();
       run.warn(
         `review stalled: no stream event for ${run.stallSeconds} s; killing the reviewer (pid ${child.pid})`,
       );
       killTree(child, "SIGKILL");
     }, run.stallSeconds * 1000);
   };
-  windStallClock();
+  wind();
+  return {
+    wind,
+    stop: () => {
+      if (clock !== null) clearTimeout(clock);
+    },
+  };
+}
 
-  // stdio[1] and stdio[2] are "pipe" in runReviewer's spawn call, so both streams
-  // exist; the null in their types only covers other stdio configurations.
+/** The one settling of a run: the status recorded, the copy and the descriptors released, the hook told. A spawn
+ * failure emits 'error' and may still emit 'close', and an ACP end and the adapter's close both arrive, so the
+ * first caller wins. */
+function settler(
+  run: Run,
+  hooks: ReviewerHooks,
+  clock: { stop: () => void },
+  onRelease: () => void = () => {},
+): { done: (status: string) => void; failed: (error: Error) => void } {
+  let settled = false;
+  const once = (handle: () => void) => {
+    if (settled) return;
+    settled = true;
+    clock.stop();
+    onRelease();
+    releaseRun(run.fds, run.copyMode, run.warn);
+    handle();
+  };
+  return {
+    done: (status) =>
+      once(() => {
+        recordStatus(run.scratch, run.tool, {
+          criteria: run.criteria,
+          status,
+          sandbox: run.sandbox,
+        });
+        hooks.onDone(status);
+      }),
+    failed: (error) => once(() => hooks.onSpawnError(error)),
+  };
+}
+
+function stallStatus(run: Run): string {
+  return `stalled: no stream event for ${run.stallSeconds} s`;
+}
+
+/** A CLI reviewer's stream is its stdout: every byte lands in the capture and winds the clock, and its exit code is the status. */
+function watchCli(child: ReturnType<typeof spawn>, run: Run, hooks: ReviewerHooks): void {
+  let sawLife = false;
+  let stalled = false;
+  const clock = stallClock(child, run, () => {
+    stalled = true;
+  });
+  const settle = settler(run, hooks, clock);
+  // stdio[1] and stdio[2] are "pipe" in the spawn call, so both streams exist; the null in their types only
+  // covers other stdio configurations.
   child.stdout!.on("data", (chunk: Buffer) => {
     if (!sawLife) {
       sawLife = true;
       hooks.onLife?.();
     }
-    windStallClock();
+    clock.wind();
     writeFileSync(run.fds.out, chunk);
   });
   child.stderr!.on("data", (chunk: Buffer) => {
-    windStallClock();
+    clock.wind();
     writeFileSync(run.fds.err, chunk);
   });
-
-  let settled = false;
-  const settle = (handle: () => void) => {
-    if (settled) return;
-    settled = true;
-    if (stallClock !== null) clearTimeout(stallClock);
-    releaseRun(run.fds, run.copyMode, run.warn);
-    handle();
-  };
-  child.on("error", (error) => {
-    settle(() => hooks.onSpawnError(error));
-  });
-  child.on("close", (code) => {
-    settle(() => {
-      const status = stalled
-        ? `stalled: no stream event for ${run.stallSeconds} s`
-        : String(code ?? "signal");
-      recordStatus(run.scratch, run.tool, { criteria: run.criteria, status, sandbox: run.sandbox });
-      hooks.onDone(status);
-    });
-  });
+  child.on("error", (error) => settle.failed(error));
+  child.on("close", (code) => settle.done(stalled ? stallStatus(run) : String(code ?? "signal")));
 }
 
-function runReviewer(
-  tool: Tool,
-  launch: Launch,
+function runCliReviewer(
+  tool: CliTool,
   delivery: Delivery,
   scratch: Scratch,
   rules: Rules,
   hooks: ReviewerHooks,
 ): ReturnType<typeof spawn> | null {
   const criteria = rules.criteria.map((entry) => entry.name);
-  const fds = openCaptureFds(delivery, scratch);
+  const fds = openCaptureFds(scratch);
+  recordStatus(scratch, tool, { criteria });
+  const warn = warner(fds);
+
+  // spawn can also throw synchronously (e.g. a NUL byte in an argv element);
+  // that must reach onSpawnError like an async spawn failure, not crash.
+  let child: ReturnType<typeof spawn>;
+  try {
+    // stdin is 'ignore', never an open pipe a reviewer could wait on.
+    child = spawn(tool, delivery.args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
+  } catch (error) {
+    releaseRun(fds, null, warn);
+    hooks.onSpawnError(error instanceof Error ? error : new Error(String(error)));
+    return null;
+  }
+
+  const run: Run = {
+    tool,
+    scratch,
+    criteria,
+    sandbox: undefined,
+    stallSeconds: rules.stallSeconds,
+    fds,
+    copyMode: null,
+    warn,
+  };
+  watchCli(child, run, hooks);
+  return child;
+}
+
+/** realpath(3) over `relative` from `root`, as codex canonicalizes CODEX_HOME: each symlink is followed before a later
+ * `..` steps out of it. bun's realpathSync drops `link/..` by the text first, landing beside the link, not in its target. */
+function physicalPath(root: string, relative: string): string {
+  let current = root;
+  for (const part of relative.split("/")) {
+    if (part === "" || part === ".") continue;
+    current = part === ".." ? dirname(current) : realpathSync(`${current}/${part}`);
+  }
+  return current;
+}
+
+/** The adapter's environment inside the copy: no GIT_* variable, which would name the live repository, and a relative
+ * CODEX_HOME made absolute from the launcher's cwd, as codex reads it there; a path realpath cannot walk is taken by
+ * its text. An empty one is unset to codex. */
+function copyEnv(): NodeJS.ProcessEnv {
+  const env = withoutGitEnv(process.env);
+  if (env.CODEX_HOME && !isAbsolute(env.CODEX_HOME)) {
+    try {
+      env.CODEX_HOME = physicalPath(process.cwd(), env.CODEX_HOME);
+    } catch {
+      env.CODEX_HOME = resolve(process.cwd(), env.CODEX_HOME);
+    }
+  }
+  return env;
+}
+
+/** What a reviewer may do when it asks. claude's plan mode runs its read-only tools unasked, so whatever asks is
+ * a write or a plan approval: refused. codex under its own read-only sandbox asks for a command the sandbox
+ * would refuse (a write, the network), so only reads and searches are allowed there; inside the snapshot copy
+ * nothing confines an allowed command, and the copy is what keeps a write out of the checkout, so commands are
+ * allowed; a file edit is refused under every confinement, and so is a request whose kind no message named. */
+function policyFor(tool: AcpTool, launch: Launch): PermissionPolicy {
+  if (tool === "claude") return () => "deny";
+
+  const allowed = new Set(
+    launch.sandbox === "copy" ? ["read", "search", "execute", "fetch"] : ["read", "search"],
+  );
+  return (toolCall) => (allowed.has(toolCall.kind) ? "allow" : "deny");
+}
+
+const ADAPTER_CLOSE_GRACE_MS = 1000;
+
+function runAcpReviewer(
+  tool: AcpTool,
+  launch: Launch,
+  prompt: string,
+  scratch: Scratch,
+  rules: Rules,
+  hooks: ReviewerHooks,
+): ReturnType<typeof spawn> | null {
+  const criteria = rules.criteria.map((entry) => entry.name);
+  const fds = openCaptureFds(scratch);
   const sandbox = launch.sandbox === "copy" ? "copy" : undefined;
   recordStatus(scratch, tool, { criteria, sandbox });
-  // A warning lands in review.err, which outlives the run and is named by a
-  // failure, as well as on stderr (ignored for a detached monitor).
-  const warn = (line: string) => {
-    writeFileSync(fds.err, `${line}\n`);
-    process.stderr.write(`${line}\n`);
-  };
+  const warn = warner(fds);
 
   let copyMode: CopyMode | null = null;
-  let args = delivery.args("read-only");
-  let env: NodeJS.ProcessEnv | undefined;
   if (launch.sandbox === "copy") {
     const built = prepareCopyMode(launch, scratch, warn);
     if (!built.ok) {
@@ -1182,27 +1017,9 @@ function runReviewer(
       return null;
     }
     copyMode = built.copyMode;
-    env = { ...withoutGitEnv(process.env), CODEX_HOME: copyMode.codexHome };
-    args = delivery.args("danger-full-access");
     hooks.onFallback?.(
-      `codex sandbox unavailable (${launch.reason}): reviewing an unsandboxed snapshot copy at ${copyMode.copy}`,
+      `codex sandbox unavailable (${launch.reason}): reviewing a snapshot copy at ${copyMode.copy}`,
     );
-  }
-
-  // spawn can also throw synchronously (e.g. a NUL byte in an argv element);
-  // that must reach onSpawnError like an async spawn failure, not crash.
-  let child: ReturnType<typeof spawn>;
-  try {
-    child = spawn(tool, args, {
-      cwd: copyMode?.cwd,
-      env,
-      stdio: [fds.stdin ?? "ignore", "pipe", "pipe"],
-      detached: true,
-    });
-  } catch (error) {
-    releaseRun(fds, copyMode, warn);
-    hooks.onSpawnError(error instanceof Error ? error : new Error(String(error)));
-    return null;
   }
 
   const run: Run = {
@@ -1215,25 +1032,137 @@ function runReviewer(
     copyMode,
     warn,
   };
-  watchReviewer(child, run, hooks);
-  return child;
+  // A spawn failure settles the run and closes its descriptors before the session reports the broken stream,
+  // so a line after the settling has nowhere to go and is dropped.
+  const wound = { wind: () => {}, released: false };
+  let sawLife = false;
+  const capture = (line: Record<string, unknown>) => {
+    if (wound.released) return;
+    // Life is the adapter answering; the failure line is the launcher's own.
+    if (!sawLife && line.event !== "failed") {
+      sawLife = true;
+      hooks.onLife?.();
+    }
+    writeFileSync(fds.out, `${JSON.stringify(line)}\n`);
+  };
+  let session: ReturnType<typeof startAcpSession>;
+  try {
+    session = startAcpSession({
+      adapter: ACP_REVIEWERS[tool].adapter,
+      args: [],
+      cwd: copyMode?.cwd,
+      env: copyMode === null ? undefined : copyEnv(),
+      mode: ACP_REVIEWERS[tool].mode,
+      prompt,
+      policy: policyFor(tool, launch),
+      capture: (line) => {
+        capture(line);
+        wound.wind();
+      },
+      stderr: (chunk) => {
+        if (wound.released) return;
+        writeFileSync(fds.err, chunk);
+        wound.wind();
+      },
+    });
+  } catch (error) {
+    releaseRun(fds, copyMode, warn);
+    hooks.onSpawnError(error instanceof Error ? error : new Error(String(error)));
+    return null;
+  }
+  wound.wind = watchAcp(session, run, hooks, capture, () => {
+    wound.released = true;
+  });
+  return session.child;
+}
+
+/** The session's end is the review's: a stop the verdict reads, or a failure the capture names. The adapter idles
+ * after the turn, so the launcher ends it, and the run settles once both the session and the adapter are done.
+ * An adapter that dies first gets ADAPTER_CLOSE_GRACE_MS for the session to report the broken stream before the
+ * exit itself is written as the failure. Returns the stall clock's wind, for the capture and the stderr to call. */
+function watchAcp(
+  session: ReturnType<typeof startAcpSession>,
+  run: Run,
+  hooks: ReviewerHooks,
+  capture: (line: Record<string, unknown>) => void,
+  onRelease: () => void,
+): () => void {
+  const { child } = session;
+  let stalled = false;
+  let ended: AcpEnd | null = null;
+  let closed = false;
+  const clock = stallClock(child, run, () => {
+    stalled = true;
+  });
+  const settle = settler(run, hooks, clock, onRelease);
+  const maybeSettle = () => {
+    if (ended === null || !closed) return;
+    settle.done(stalled ? stallStatus(run) : "0");
+  };
+  session.done.then((end) => {
+    ended = end;
+    if (end.kind === "failed") capture({ event: "failed", reason: end.reason });
+    killTree(child, "SIGTERM");
+    maybeSettle();
+  });
+  child.on("error", (error) => settle.failed(error));
+  child.on("close", (code) => {
+    closed = true;
+    maybeSettle();
+    setTimeout(() => {
+      if (ended !== null) return;
+      ended = {
+        kind: "failed",
+        reason: `the adapter exited (${code ?? "signal"}) before the turn ended`,
+      };
+      capture({ event: "failed", reason: ended.reason });
+      maybeSettle();
+    }, ADAPTER_CLOSE_GRACE_MS);
+  });
+  return clock.wind;
+}
+
+/** What one launch runs: the tool, how codex is confined, and the prompt as the CLI delivery or as the ACP request's text. */
+interface Reviewer {
+  tool: Tool;
+  launch: Launch;
+  delivery: Delivery | null;
+  prompt: string;
+}
+
+/** The binary a tool needs on PATH: its adapter for an ACP reviewer, itself for a CLI one. */
+function binaryOf(tool: Tool): string {
+  return tool === "copilot" ? tool : ACP_REVIEWERS[tool].adapter;
+}
+
+/** The reviewer behind one tool: copilot as the CLI the delivery names, the others as an ACP session. */
+function runReviewer(
+  reviewer: Reviewer,
+  scratch: Scratch,
+  rules: Rules,
+  hooks: ReviewerHooks,
+): ReturnType<typeof spawn> | null {
+  const { tool, launch, delivery, prompt } = reviewer;
+  if (tool !== "copilot") return runAcpReviewer(tool, launch, prompt, scratch, rules, hooks);
+  if (delivery === null) throw new Error(`${tool} needs a delivery`);
+
+  return runCliReviewer(tool, delivery, scratch, rules, hooks);
 }
 
 function runForeground(
-  tool: Tool,
-  launch: Launch,
-  delivery: Delivery,
+  reviewer: Reviewer,
   scratch: Scratch,
   rules: Rules,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, rules, {
+  const { tool, launch } = reviewer;
+  return runReviewer(reviewer, scratch, rules, {
     onLife: () => process.stderr.write("review stream alive\n"),
     onFallback: (message) => process.stderr.write(`${message}\n`),
     onSpawnError: (error) => {
       // Nothing was captured; a retained empty scratch dir would be noise.
       removeTree(scratch.dir, (line) => process.stderr.write(`${line}\n`));
       if (isEnoent(error)) {
-        process.stderr.write(`reviewer binary not found: ${tool}\n`);
+        process.stderr.write(`reviewer binary not found: ${binaryOf(tool)}\n`);
         process.exitCode = 2;
         return;
       }
@@ -1266,15 +1195,13 @@ function runForeground(
 
 /** Detached monitor: capture the stream and record the exit status, silently. */
 function runCapture(
-  tool: Tool,
-  launch: Launch,
-  delivery: Delivery,
+  reviewer: Reviewer,
   scratch: Scratch,
   rules: Rules,
 ): ReturnType<typeof spawn> | null {
-  return runReviewer(tool, launch, delivery, scratch, rules, {
+  return runReviewer(reviewer, scratch, rules, {
     onSpawnError: (error) => {
-      recordStatus(scratch, tool, {
+      recordStatus(scratch, reviewer.tool, {
         criteria: rules.criteria.map((entry) => entry.name),
         status: isEnoent(error) ? "not-found" : `spawn failed: ${String(error)}`,
       });
@@ -1287,7 +1214,6 @@ function runBackground(
   tool: Tool,
   launch: Launch,
   prompt: string,
-  stdinPrompt: boolean,
   rules: Rules,
   criteriaSpec: string | null,
 ): void {
@@ -1313,7 +1239,6 @@ function runBackground(
     String(rules.stallSeconds),
   ];
   if (criteriaSpec !== null) monitorArgs.push("--criteria", criteriaSpec);
-  if (stdinPrompt) monitorArgs.push("--stdin-prompt");
   const monitor = spawn(process.execPath, monitorArgs, { detached: true, stdio: "ignore" });
   monitor.on("error", (error) => {
     process.stderr.write(`review FAILED - relaunch (failed to detach monitor: ${String(error)})\n`);
@@ -1387,7 +1312,7 @@ function reportRecordedRun(
   criteria: string[],
 ): void {
   if (status === "not-found") {
-    process.stderr.write(`reviewer binary not found: ${tool}\n`);
+    process.stderr.write(`reviewer binary not found: ${binaryOf(tool)}\n`);
     process.exitCode = 2;
     return;
   }
@@ -1521,7 +1446,6 @@ function extractCommand(tool: Tool, args: string[]): void {
 
 interface LaunchOptions {
   background: boolean;
-  stdinPrompt: boolean;
   captureDir: string | null;
   stallSeconds: number;
   criteriaSpec: string | null;
@@ -1545,7 +1469,6 @@ function launchOptions(args: string[]): LaunchOptions {
 
   return {
     background,
-    stdinPrompt: values["stdin-prompt"] === true,
     captureDir,
     stallSeconds,
     criteriaSpec: values.criteria ?? null,
@@ -1565,6 +1488,11 @@ function readPrompt(promptFile: string): string {
   return prompt;
 }
 
+/** How the CLI reviewer gets its prompt; an ACP reviewer gets it in the request and has no delivery. */
+function deliveryFor(tool: Tool, fullPrompt: string): Delivery | null {
+  return tool === "copilot" ? argvDelivery(tool, fullPrompt) : null;
+}
+
 /** The reviewer run in this process: the foreground run that prints the verdict, or under `--capture` the
  * detached monitor's silent one. */
 function runInThisProcess(
@@ -1582,17 +1510,20 @@ function runInThisProcess(
   const fullPrompt = withCriteria(prompt, rules.criteria);
   const promptSnapshot = join(scratch.dir, "prompt.txt");
   writeFileSync(promptSnapshot, fullPrompt);
-  const delivery = options.stdinPrompt
-    ? stdinDelivery(tool, promptSnapshot)
-    : argvDelivery(tool, fullPrompt);
-  if (options.captureDir === null) return runForeground(tool, launch, delivery, scratch, rules);
+  const reviewer: Reviewer = {
+    tool,
+    launch,
+    delivery: deliveryFor(tool, fullPrompt),
+    prompt: fullPrompt,
+  };
+  if (options.captureDir === null) return runForeground(reviewer, scratch, rules);
 
-  return runCapture(tool, launch, delivery, scratch, rules);
+  return runCapture(reviewer, scratch, rules);
 }
 
 function launchCommand(tool: Tool, args: string[]): void {
   const options = launchOptions(args);
-  const { background, stdinPrompt, captureDir, criteriaSpec, promptFile } = options;
+  const { background, captureDir, criteriaSpec, promptFile } = options;
   if (captureDir === null) requireMintedPrompt(promptFile);
   else requireCaptureProvenance(tool, promptFile, captureDir);
   const prompt = readPrompt(promptFile);
@@ -1602,10 +1533,6 @@ function launchCommand(tool: Tool, args: string[]): void {
     criteria: selectCriteria(criteriaSpec),
   };
 
-  // stdinDelivery owns the copilot rejection; validate up front (against the
-  // caller's path) so a bad tool/flag combination is a parent-side usage
-  // error even for --background, not a silent failure in the monitor.
-  if (stdinPrompt) stdinDelivery(tool, promptFile);
   // The parent of a --background launch runs no reviewer; every other
   // process forwards its kill to the one it is about to launch, listening
   // from here so the probe and the snapshot below are covered too.
@@ -1616,7 +1543,7 @@ function launchCommand(tool: Tool, args: string[]): void {
   const launch = planLaunch(tool);
   if (captureDir === null) purgeStaleScratch();
   if (background) {
-    runBackground(tool, launch, prompt, stdinPrompt, rules, criteriaSpec);
+    runBackground(tool, launch, prompt, rules, criteriaSpec);
     return;
   }
 

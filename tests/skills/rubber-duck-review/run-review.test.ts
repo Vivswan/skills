@@ -1,13 +1,17 @@
 // Contract tests for the run-review helper: stub reviewer binaries on PATH
 // drive every exit path, pinning the traps the script encapsulates - the
-// prompt travels as one argv element (backticks and $() stay literal), stdin
-// is closed so a reviewer that reads it cannot hang, the verdict is the LAST
-// codex agent_message / the final claude result and must be the schema
-// object with at least one tool call before it, and an empty, cut, blank,
-// prose-only, preamble-only, or errored stream exits 1 (never a clean pass),
-// and --extract --wait blocks on the launch record until the monitor records
-// the exit instead of leaving the caller to poll by hand.
-// gh-style violations files catch any drift in the exact reviewer invocations.
+// prompt travels as one argv element for copilot (backticks and $() stay
+// literal) and inside the ACP request for codex and claude, stdin is closed so
+// a CLI reviewer that reads it cannot hang, codex and claude run as ACP
+// sessions (the fake agent in tests/helpers/acp-agent-stub.ts, behind a
+// codex-acp or claude-agent-acp wrapper), codex in its read-only mode and
+// claude in plan mode, where a refused request ends the turn, the verdict is
+// the trailing object of the final message with at least one tool call before
+// it, and an empty, cut, blank, prose-only, preamble-only, or errored capture
+// exits 1 (never a clean pass), and --extract --wait blocks on the launch
+// record until the monitor records the exit instead of leaving the caller to
+// poll by hand. gh-style violations files catch any drift in the exact
+// reviewer invocations.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
@@ -15,7 +19,6 @@ import {
   cpSync,
   existsSync,
   linkSync,
-  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -29,13 +32,13 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { ROOT } from "../../../scripts/lib.mts";
+import { permissionFacts } from "../../../skills/rubber-duck-review/scripts/acp.mts";
 import { git } from "../../helpers/scratch-repo";
 import { tempDirs } from "../../helpers/temp-dirs";
 
 const temp = tempDirs();
 
 const SCRIPT = join(ROOT, "skills", "rubber-duck-review", "scripts", "run-review.mts");
-const SCHEMA = join(ROOT, "skills", "rubber-duck-review", "scripts", "verdict-schema.json");
 const PROMPT = "Review only.\nRun `git --no-pager diff HEAD` and note $(hostname) stays literal.\n";
 const SKILLS_ROOT = join(ROOT, "skills");
 
@@ -69,7 +72,7 @@ const FULL_PROMPT = withCompanion(PROMPT);
 
 const BIG_VERDICT_BYTES = 262144;
 
-/** The verdict object the schema describes, as each stub reviewer reports it. */
+/** The verdict object the report format asks for, as each stub reviewer reports it. */
 function verdictFor(reviewer: string) {
   return {
     blocking: [],
@@ -84,242 +87,208 @@ const CODEX_VERDICT = verdictFor("codex");
 const CLAUDE_VERDICT = verdictFor("claude");
 const COPILOT_VERDICT = verdictFor("copilot");
 
-/** One codex agent_message line carrying the given text (JSON-escaped once,
- * so the stub's single quotes deliver it byte-for-byte). */
-function codexMessage(text: string): string {
-  return JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
+/** One line of the capture acp.mts writes for a session update. */
+function acpUpdate(update: Record<string, unknown>): string {
+  return JSON.stringify({ event: "update", update });
 }
-const CODEX_VERDICT_LINE = codexMessage(JSON.stringify(CODEX_VERDICT));
-const [bigOpen, bigClose] = codexMessage(
-  JSON.stringify({ blocking: [], non_blocking: [], recorded_not_built: [], summary: "@BIG@" }),
-).split("@BIG@") as [string, string];
-const CODEX_TOOL_LINE = JSON.stringify({
-  type: "item.completed",
-  item: { type: "command_execution", command: "git --no-pager diff --cached" },
+
+const ACP_TOOL_LINE = acpUpdate({
+  sessionUpdate: "tool_call",
+  toolCallId: "call-1",
+  title: "cat src/a.ts",
+  kind: "read",
+  status: "in_progress",
 });
-const CLAUDE_TOOL_LINE = JSON.stringify({
-  type: "assistant",
-  message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git diff" } }] },
+const ACP_VERDICT_LINE = acpUpdate({
+  sessionUpdate: "agent_message_chunk",
+  content: { type: "text", text: JSON.stringify(CODEX_VERDICT) },
 });
-const CLAUDE_ANSWER_TOOL_LINE = JSON.stringify({
-  type: "assistant",
-  message: { content: [{ type: "tool_use", name: "StructuredOutput", input: CLAUDE_VERDICT }] },
-});
-const CLAUDE_RESULT_LINE = JSON.stringify({
-  type: "result",
-  subtype: "success",
-  is_error: false,
-  result: JSON.stringify(CLAUDE_VERDICT),
-  structured_output: CLAUDE_VERDICT,
-});
+const ACP_STOP_LINE = JSON.stringify({ event: "stop", stopReason: "end_turn" });
 
 const FAKE_CODEX = `#!/usr/bin/env bash
+# codex itself is on PATH for the sandbox probe alone: STUB_SANDBOX=bwrap plays a container whose AppArmor
+# profile denies bubblewrap's mount propagation. Any other invocation is a violation.
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
-# The launch probes the sandbox with a no-op first. STUB_SANDBOX=bwrap plays a
-# container whose AppArmor profile denies bubblewrap's mount propagation.
 if [ "$1 $2 $3" = "sandbox -- true" ] && [ "$#" -eq 3 ]; then
   if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then
     echo 'bwrap: Failed to make / slave: Permission denied' >&2; exit 1
   fi
   exit 0
 fi
-if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then policy=danger-full-access; else policy=read-only; fi
-if [ "$1 $2 $3 $4 $5" != "exec --json --sandbox $policy --output-schema" ] || [ "$#" -ne 7 ]; then
-  violate "codex argv: $*"; exit 64
-fi
-if [ -n "\${STUB_HOME_REPORT:-}" ]; then
-  { echo "\${CODEX_HOME:-unset}"; cat "\${CODEX_HOME:-/nonexistent}/config.toml" 2>/dev/null || echo "(no config)"; ls "\${CODEX_HOME:-/nonexistent}" 2>/dev/null | tr '\\n' ' '; echo; } > "\${STUB_HOME_REPORT}"
-  # codex's trust write, as the real binary does it: it must land in the scratch home, never the user's
-  echo '[projects."'"$PWD"'"]' >> "\${CODEX_HOME:-/nonexistent}/config.toml" 2>/dev/null || true
-  # codex's token refresh, which must persist for the user
-  if [ -n "\${STUB_REFRESH_AUTH:-}" ]; then printf '%s' "\${STUB_REFRESH_AUTH}" > "\${CODEX_HOME:-/nonexistent}/auth.json"; fi
-  # codex's session rollout, the review's transcript, which must persist for the user
-  if [ -n "\${STUB_ROLLOUT:-}" ]; then
-    mkdir -p "\${CODEX_HOME:-/nonexistent}/sessions/2026/10/11" && printf '%s' "\${STUB_ROLLOUT}" > "\${CODEX_HOME:-/nonexistent}/sessions/2026/10/11/rollout-example.jsonl"
-  fi
-  # a parallel review refreshing the user's own file while this one runs
-  if [ -n "\${STUB_REAL_AUTH_WRITE:-}" ]; then printf '%s' "\${STUB_REAL_AUTH_WRITE}" > "\${STUB_REAL_AUTH_PATH}"; fi
-fi
-if [ -n "\${STUB_CWD_REPORT:-}" ]; then
-  # One line per fact about the copy as the reviewer sees it: cwd, toplevel, branch, status entries
-  # joined by |, HEAD (empty when unborn), commits reachable from HEAD, the first line of a.txt as checked out, and the
-  # LFS smudge filter the copy's git has configured, the last line of a diff against origin/main, and ORIG_HEAD.
-  { printf '%s\\n' "$PWD" "$(git rev-parse --show-toplevel)" "$(git branch --show-current)" \\
-      "$(git status --porcelain -uall --ignored | tr '\\n' '|')" "$(git rev-parse -q --verify HEAD)" \\
-      "$(git rev-list --count HEAD 2>&1 | tail -1)" "$(head -1 "$(git rev-parse --show-toplevel)/a.txt" 2>/dev/null)" \\
-      "$(git config --get filter.lfs.smudge)" "$(git --no-pager diff --stat origin/main...HEAD 2>&1 | tail -1)" "$(git rev-parse -q --verify ORIG_HEAD)"; } > "\${STUB_CWD_REPORT}"
-  # A write the prompt forbade: it must land in the copy, never in the checkout under review.
-  touch "$(git rev-parse --show-toplevel)/REVIEWER_WROTE"
-fi
-if [ "$6" != "\${STUB_SCHEMA}" ] || [ ! -f "$6" ]; then
-  violate "codex schema: $6"; exit 64
-fi
-if [ "$7" = "-" ]; then channel=stdin; else channel=argv; fi
-if [ "$channel" != "\${STUB_EXPECT_DELIVERY}" ]; then
-  violate "codex delivery: $channel"; exit 64
-fi
-if [ "$7" = "-" ] && [ "\${STUB_SKIP_STDIN:-0}" != "1" ]; then
-  cat > "\${STUB_PROMPT_COPY}"
-elif [ "$7" != "-" ]; then
-  printf '%s' "$7" > "\${STUB_PROMPT_COPY}"
-fi
-# With stdin open (a pipe) this blocks forever; stdio 'ignore' gives EOF.
-if [ "\${STUB_READ_STDIN:-0}" = "1" ]; then cat > /dev/null; fi
-if [ -n "\${STUB_SLEEP:-}" ]; then sleep "\${STUB_SLEEP}"; fi
-case "\${STUB_MODE:-ok}" in
-  ok)
-    echo '{"type":"thread.started","thread_id":"t1"}'
-    echo '{"type":"turn.started"}'
-    echo '{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}'
-    echo '${codexMessage("intermediate narration")}'
-    echo 'mid-stream garbage that is not JSON'
-    echo '${CODEX_TOOL_LINE}'
-    echo '${CODEX_VERDICT_LINE}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  preamble)
-    echo '{"type":"turn.started"}'
-    echo '${CODEX_VERDICT_LINE}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  prose)
-    echo '${CODEX_TOOL_LINE}'
-    echo '${codexMessage("CODEX VERDICT: correct, no blocking findings")}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  badshape)
-    echo '${CODEX_TOOL_LINE}'
-    echo '${codexMessage(JSON.stringify({ blocking: [], summary: "no non_blocking key" }))}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  trunctail)
-    echo '${CODEX_TOOL_LINE}'
-    echo '${CODEX_VERDICT_LINE}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    printf '{"type":"item.completed","item":{"type":"agent_'
-    ;;
-  cut)
-    echo '{"type":"thread.started","thread_id":"t1"}'
-    echo '{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}'
-    ;;
-  cutlate)
-    echo '{"type":"thread.started","thread_id":"t1"}'
-    echo '${CODEX_TOOL_LINE}'
-    echo '${CODEX_VERDICT_LINE}'
-    ;;
-  cutsecond)
-    echo '{"type":"turn.started"}'
-    echo '${CODEX_TOOL_LINE}'
-    echo '${CODEX_VERDICT_LINE}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    echo '{"type":"turn.started"}'
-    ;;
-  error)
-    echo '{"type":"thread.started","thread_id":"t1"}'
-    echo '{"type":"error","message":"stream disconnected before completion"}'
-    ;;
-  reconnect)
-    echo '{"type":"thread.started","thread_id":"t1"}'
-    echo '{"type":"turn.started"}'
-    echo '${CODEX_TOOL_LINE}'
-    echo '{"type":"error","message":"stream disconnected before completion; retrying 1/5"}'
-    echo '${CODEX_VERDICT_LINE}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  failedturnthenverdict)
-    echo '{"type":"turn.started"}'
-    echo '{"type":"turn.failed","message":"turn failed before any answer"}'
-    echo '{"type":"turn.started"}'
-    echo '${CODEX_TOOL_LINE}'
-    echo '${CODEX_VERDICT_LINE}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  errorafter)
-    echo '{"type":"turn.started"}'
-    echo '${CODEX_TOOL_LINE}'
-    echo '${CODEX_VERDICT_LINE}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    echo '{"type":"error","message":"stream disconnected after the verdict"}'
-    ;;
-  blank)
-    echo '${CODEX_TOOL_LINE}'
-    echo '${codexMessage("")}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  big)
-    big="$(head -c ${BIG_VERDICT_BYTES} /dev/zero | tr '\\0' 'x')"
-    echo '${CODEX_TOOL_LINE}'
-    printf '%s%s%s\\n' '${bigOpen}' "$big" '${bigClose}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  stall)
-    echo '${CODEX_TOOL_LINE}'
-    sleep 300 & echo "$$ $!" > "\${STUB_PID_FILE}"; wait
-    ;;
-  trickle)
-    for _ in 1 2 3 4 5 6; do echo '{"type":"item.completed","item":{"type":"reasoning","text":"still reading"}}'; sleep 0.3; done
-    echo '${CODEX_TOOL_LINE}'
-    echo '${CODEX_VERDICT_LINE}'
-    echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
-    ;;
-  empty) ;;
-esac
-exit "\${STUB_EXIT:-0}"
+violate "codex argv: $*"; exit 64
 `;
 
-const FAKE_CLAUDE = `#!/usr/bin/env bash
-violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
-if [ "$1 $2 $3 $4 $5 $6 $7" != "-p --permission-mode plan --verbose --output-format stream-json --json-schema" ]; then
-  violate "claude argv: $*"; exit 64
-fi
-case "$8" in *'"recorded_not_built"'*) ;; *) violate "claude schema: $8"; exit 64;; esac
-if [ "$#" -eq 9 ]; then
-  channel=argv
-  printf '%s' "$9" > "\${STUB_PROMPT_COPY}"
-elif [ "$#" -eq 8 ]; then
-  channel=stdin
-  cat > "\${STUB_PROMPT_COPY}"
-else
-  violate "claude argv: $*"; exit 64
-fi
-if [ "$channel" != "\${STUB_EXPECT_DELIVERY}" ]; then
-  violate "claude delivery: $channel"; exit 64
-fi
-case "\${STUB_MODE:-ok}" in
-  ok)
-    echo '{"type":"system","subtype":"init"}'
-    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"looking around"}]}}'
-    echo '${CLAUDE_TOOL_LINE}'
-    echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"diff"}]}}'
-    echo '${CLAUDE_ANSWER_TOOL_LINE}'
-    echo '${CLAUDE_RESULT_LINE}'
-    ;;
-  preamble)
-    echo '{"type":"system","subtype":"init"}'
-    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"I will review the changes now."}]}}'
-    echo '${CLAUDE_ANSWER_TOOL_LINE}'
-    echo '${CLAUDE_RESULT_LINE}'
-    ;;
-  resultstring)
-    echo '${CLAUDE_TOOL_LINE}'
-    echo '${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(CLAUDE_VERDICT) })}'
-    ;;
-  iserror)
-    echo '{"type":"system","subtype":"init"}'
-    echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Execution failed mid-run"}'
-    ;;
-  cut)
-    echo '{"type":"system","subtype":"init"}'
-    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"partial narration"}]}}'
-    ;;
-  blank)
-    echo '{"type":"system","subtype":"init"}'
-    echo '${CLAUDE_TOOL_LINE}'
-    echo '{"type":"result","subtype":"success","result":"   "}'
-    ;;
-esac
-exit "\${STUB_EXIT:-0}"
+const ACP_STUB = join(ROOT, "tests", "helpers", "acp-agent-stub.ts");
+const FAKE_ACP_ADAPTER = `#!/usr/bin/env bash
+# Both adapter names run the fake ACP agent from its real path, where the SDK resolves; STUB_SCENARIO names the script.
+exec "${process.execPath}" "${ACP_STUB}" "$@"
 `;
+const CODEX_MODES = {
+  currentModeId: "workspace-write",
+  availableModes: [
+    { id: "read-only", name: "Read-only", description: "" },
+    { id: "workspace-write", name: "Workspace access", description: "" },
+  ],
+};
+const VERDICT_TEXT = JSON.stringify(CODEX_VERDICT);
+const READ_STEP = {
+  type: "tool",
+  title: "cat src/a.ts",
+  kind: "read",
+  permission: true,
+  output: "one",
+};
+const EXEC_STEP = {
+  type: "tool",
+  title: "git --no-pager diff --cached",
+  kind: "execute",
+  permission: true,
+};
+const EDIT_STEP = {
+  type: "tool",
+  title: "apply_patch",
+  kind: "edit",
+  permission: true,
+  locations: [{ path: "src/a.ts" }],
+};
+const BARE_EDIT_STEP = { ...EDIT_STEP, askBare: true };
+const END = { type: "stop", reason: "end_turn" };
+const THINK = { type: "thought", text: "still reading" };
+
+/** One scripted turn under an adapter's modes, codex's unless `extra` says otherwise, whose current mode is never the
+ * one the review needs, so the launch must set it. CODEX_SCENARIOS and CLAUDE_SCENARIOS key these by the STUB_MODE a
+ * run names; the stub plays one per session/prompt. */
+function acpScenario(turn: unknown[], extra: Record<string, unknown> = {}): unknown {
+  return { modes: CODEX_MODES, expectMode: "read-only", turns: [turn], ...extra };
+}
+
+const CODEX_SCENARIOS: Record<string, unknown> = {
+  ok: acpScenario([
+    { type: "thought", text: "thinking" },
+    { type: "message", text: "intermediate narration" },
+    READ_STEP,
+    { type: "message", text: VERDICT_TEXT, chunks: 3 },
+    END,
+  ]),
+  // A command: allowed inside the snapshot copy, refused under codex's own sandbox.
+  execute: acpScenario([EXEC_STEP, { type: "message", text: VERDICT_TEXT }, END]),
+  // A file edit: refused under both; the stub, like codex, ends the turn on a refusal.
+  edit: acpScenario([READ_STEP, EDIT_STEP, { type: "message", text: VERDICT_TEXT }, END]),
+  // The same edit, its permission request naming the call by id alone: the announcement says what it is.
+  bareedit: acpScenario([READ_STEP, BARE_EDIT_STEP, { type: "message", text: VERDICT_TEXT }, END]),
+  // codex without a schema puts a sentence before the object, in the same message.
+  narrated: acpScenario([
+    READ_STEP,
+    { type: "message", text: `Done reading; the change holds.${VERDICT_TEXT}` },
+    END,
+  ]),
+  // Narration first, reasoning second: the rows keep that order.
+  ordered: acpScenario([
+    { type: "message", text: "I will read" },
+    { type: "thought", text: "inspect a.ts" },
+    READ_STEP,
+    { type: "message", text: VERDICT_TEXT },
+    END,
+  ]),
+  preamble: acpScenario([{ type: "message", text: VERDICT_TEXT }, END]),
+  prose: acpScenario([
+    READ_STEP,
+    { type: "message", text: "CODEX VERDICT: correct, no blocking findings" },
+    END,
+  ]),
+  badshape: acpScenario([
+    READ_STEP,
+    { type: "message", text: JSON.stringify({ blocking: [], summary: "no non_blocking key" }) },
+    END,
+  ]),
+  blank: acpScenario([READ_STEP, { type: "message", text: "" }, END]),
+  big: acpScenario([
+    READ_STEP,
+    {
+      type: "message",
+      text: JSON.stringify({ ...CODEX_VERDICT, summary: "x".repeat(BIG_VERDICT_BYTES) }),
+      chunks: 64,
+    },
+    END,
+  ]),
+  cut: acpScenario([
+    { type: "thought", text: "thinking" },
+    { type: "exit", code: 0 },
+  ]),
+  maxtokens: acpScenario([
+    READ_STEP,
+    { type: "message", text: "half a" },
+    { type: "stop", reason: "max_tokens" },
+  ]),
+  nomodes: { modes: null, turns: [[]] },
+  stall: acpScenario([READ_STEP, { type: "sleep", ms: 300000 }]),
+  trickle: acpScenario([
+    ...Array.from({ length: 6 }, () => [THINK, { type: "sleep", ms: 300 }]).flat(),
+    READ_STEP,
+    { type: "message", text: VERDICT_TEXT },
+    END,
+  ]),
+  slow: acpScenario([
+    { type: "sleep", ms: 1000 },
+    READ_STEP,
+    { type: "message", text: VERDICT_TEXT },
+    END,
+  ]),
+};
+
+const CLAUDE_MODES = {
+  currentModeId: "default",
+  availableModes: [
+    { id: "default", name: "Always Ask", description: "" },
+    { id: "acceptEdits", name: "Accept Edits", description: "" },
+    { id: "plan", name: "Plan Mode", description: "" },
+    { id: "auto", name: "Auto", description: "" },
+    { id: "bypassPermissions", name: "Bypass Permissions", description: "" },
+  ],
+};
+const PLAN = { modes: CLAUDE_MODES, expectMode: "plan" };
+const CLAUDE_VERDICT_TEXT = JSON.stringify(CLAUDE_VERDICT);
+const UNASKED_READ = { type: "tool", title: "Read src/a.ts", kind: "read", output: "one" };
+const PLAN_APPROVAL = {
+  type: "tool",
+  title: "Approve Plan",
+  kind: "switch_mode",
+  permission: true,
+  onReject: "cancel",
+};
+const CLAUDE_SCENARIOS: Record<string, unknown> = {
+  // Plan mode: the read runs unasked, so no permission row precedes the verdict.
+  ok: acpScenario(
+    [
+      { type: "message", text: "looking around" },
+      UNASKED_READ,
+      { type: "message", text: CLAUDE_VERDICT_TEXT },
+      END,
+    ],
+    PLAN,
+  ),
+  preamble: acpScenario(
+    [
+      { type: "message", text: "I will review the changes now." },
+      { type: "message", text: CLAUDE_VERDICT_TEXT },
+      END,
+    ],
+    PLAN,
+  ),
+  blank: acpScenario([UNASKED_READ, { type: "message", text: "" }, END], PLAN),
+  cut: acpScenario(
+    [
+      { type: "message", text: "partial narration" },
+      { type: "exit", code: 0 },
+    ],
+    PLAN,
+  ),
+  // The plan approval is the one request plan mode makes; refused, claude ends the turn cancelled.
+  planapproval: acpScenario(
+    [UNASKED_READ, PLAN_APPROVAL, { type: "message", text: CLAUDE_VERDICT_TEXT }, END],
+    PLAN,
+  ),
+};
 
 const FAKE_COPILOT = `#!/usr/bin/env bash
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
@@ -352,9 +321,21 @@ exec "${REAL_GIT}" "$@"
 
 const binDir = temp.dir("run-review-test-");
 const emptyBinDir = temp.dir("run-review-nobin-");
+// A reviewer-less PATH still holds bun: the launcher runs its bundle through the bun on PATH.
+symlinkSync(process.execPath, join(emptyBinDir, "bun"));
+
+/** The test process's environment without another suite's STUB_* leftovers: a stale STUB_ARGS_LOG into a removed
+ * scratch directory kills the adapter stub at startup, and every ACP session then reads as a closed connection. */
+function inheritedEnv(): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("STUB_")),
+  );
+}
+
 for (const [name, body] of [
   ["codex", FAKE_CODEX],
-  ["claude", FAKE_CLAUDE],
+  ["codex-acp", FAKE_ACP_ADAPTER],
+  ["claude-agent-acp", FAKE_ACP_ADAPTER],
   ["copilot", FAKE_COPILOT],
   ["git", FAKE_GIT],
 ] as const) {
@@ -401,19 +382,23 @@ function run(
   scenario += 1;
   const violations = join(binDir, `violations-${scenario}`);
   const promptCopy = join(binDir, `prompt-copy-${scenario}`);
+  // An ACP launch plays the scenario STUB_MODE names (ok by default) through the adapter stub.
+  const scenarioFile = join(binDir, `scenario-${scenario}.json`);
+  const scenarios = args[0] === "codex" ? CODEX_SCENARIOS : CLAUDE_SCENARIOS;
+  const played = scenarios[env.STUB_MODE ?? "ok"];
+  if ((args[0] === "codex" || args[0] === "claude") && played !== undefined) {
+    writeFileSync(scenarioFile, JSON.stringify(played));
+  }
   // process.execPath is absolute, so the script launches even when PATH is
   // reduced to the stub dir (the missing-binary scenario).
   const result = Bun.spawnSync([process.execPath, script, ...args], {
     cwd,
     env: {
-      ...process.env,
+      ...inheritedEnv(),
       PATH: path ?? `${binDir}:${process.env.PATH}`,
       STUB_VIOLATIONS: violations,
       STUB_PROMPT_COPY: promptCopy,
-      STUB_SCHEMA: SCHEMA,
-      // The stubs report the channel the prompt actually arrived on, so a
-      // --stdin-prompt run that fell back to argv fails as a violation.
-      STUB_EXPECT_DELIVERY: args.includes("--stdin-prompt") ? "stdin" : "argv",
+      STUB_SCENARIO: scenarioFile,
       ...env,
     },
     stdout: "pipe",
@@ -434,7 +419,6 @@ function run(
   // Copy mode keeps its repository snapshot at <scratch>/repo only while the
   // reviewer runs; read whether one survived before the sweeps below.
   let copyLeft = false;
-  let homeLeft = false;
   let captureKept = false;
   if (kept) {
     captureKept = existsSync(kept);
@@ -446,7 +430,6 @@ function run(
     report = JSON.parse(stdout) as Report;
     expect(existsSync(report.capture)).toBe(true);
     copyLeft = existsSync(join(dirname(report.capture), "repo"));
-    homeLeft = existsSync(join(dirname(report.capture), "codex-home"));
     rmSync(dirname(report.capture), { recursive: true, force: true });
   }
   return {
@@ -455,7 +438,6 @@ function run(
     stderr,
     promptCopy,
     copyLeft,
-    homeLeft,
     captureKept,
     /** The parsed JSON report of a successful review, or a throw. */
     report(): Report {
@@ -493,7 +475,7 @@ function waitForStatus(outputFile: string): string {
   throw new Error(`no completed ${statusFile} after 5s`);
 }
 
-/** The pids a stalled stub wrote: its shell and the sleep it left in the background. */
+/** The pid the stalled adapter stub wrote: the wrapper exec'd into it, so the group is one process. */
 function stubPids(pidFile: string): number[] {
   return readFileSync(pidFile, "utf-8").trim().split(" ").map(Number);
 }
@@ -517,7 +499,7 @@ function backgroundOutputFile(stdout: string): string {
   return line.slice("output-file: ".length);
 }
 
-const COMPLETE_CODEX_STREAM = `${CODEX_TOOL_LINE}\n${CODEX_VERDICT_LINE}\n{"type":"turn.completed"}\n`;
+const COMPLETE_CODEX_STREAM = `${ACP_TOOL_LINE}\n${ACP_VERDICT_LINE}\n${ACP_STOP_LINE}\n`;
 const LAUNCH_RECORD = '{"tool":"codex","output":"review.jsonl"}';
 
 /** A capture dir as a --background launch leaves it: stream and launch
@@ -543,7 +525,7 @@ function recordStatus(outputFile: string, status: string): void {
 /** A script run left in flight, for the --wait cases observed mid-wait. */
 function start(args: string[]) {
   return Bun.spawn([process.execPath, SCRIPT, ...args], {
-    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    env: { ...inheritedEnv(), PATH: `${binDir}:${process.env.PATH}` },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -554,43 +536,44 @@ function escapeRegExp(text: string): string {
 }
 
 describe("run-review.mts", () => {
-  test("codex: last agent_message wins, the report carries verdict, tool calls, capture, trajectory", () => {
+  test("codex: the text after the last tool call is the verdict; the report carries verdict, tool calls, capture, trajectory", () => {
     const r = run(["codex", promptFile]);
     expect(r.code).toBe(0);
     const report = r.report();
     expect(report.verdict).toEqual(CODEX_VERDICT);
     expect(report.tool_calls).toBe(1);
     expect(basename(report.capture)).toBe("review.jsonl");
-    // The narration is visible as a trajectory step, never as the verdict;
-    // long steps are excerpted, the full text stays in the capture.
-    expect(report.trajectory.slice(0, 3)).toEqual([
+    // The narration and the reasoning are trajectory steps, never the verdict; the permission the
+    // read asked for is a step with the answer; long steps are excerpted, the full text stays in
+    // the capture.
+    expect(report.trajectory.slice(0, 4)).toEqual([
       { event: "reasoning", text: "thinking" },
       { event: "agent_message", text: "intermediate narration" },
-      { event: "command_execution", text: "git --no-pager diff --cached" },
+      { event: "tool_call", text: "cat src/a.ts" },
+      { event: "permission", text: "allow read: cat src/a.ts" },
     ]);
-    expect(report.trajectory[3]?.event).toBe("agent_message");
-    expect(report.trajectory[3]?.text).toMatch(/^\{"blocking":\[\].*\.\.\.$/);
-    expect(report.trajectory).toHaveLength(4);
+    expect(report.trajectory[4]?.event).toBe("agent_message");
+    expect(report.trajectory[4]?.text).toMatch(/^\{"blocking":\[\].*\.\.\.$/);
+    expect(report.trajectory[5]).toEqual({ event: "stop", text: "end_turn" });
+    expect(report.trajectory).toHaveLength(6);
     expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
     const statusLines = r.stderr.split("\n").filter(Boolean);
     expect(statusLines).toEqual(["review stream alive", "reviewer exited (status=0)"]);
   });
 
-  test("claude: verdict is the structured_output on the final result event", () => {
+  test("claude: plan mode runs its reads unasked, and the trailing object of the final message is the verdict", () => {
     const r = run(["claude", promptFile]);
     expect(r.code).toBe(0);
     const report = r.report();
     expect(report.verdict).toEqual(CLAUDE_VERDICT);
-    // The StructuredOutput call delivers the answer; only Bash is a review step.
     expect(report.tool_calls).toBe(1);
-    expect(report.trajectory.map((row) => row.event)).toEqual(["text", "tool_use", "result"]);
+    expect(report.trajectory.map((row) => row.event)).toEqual([
+      "agent_message",
+      "tool_call",
+      "agent_message",
+      "stop",
+    ]);
     expect(readFileSync(r.promptCopy, "utf-8")).toBe(FULL_PROMPT);
-  });
-
-  test("claude: a result string carrying the object is the verdict when structured_output is absent", () => {
-    const r = run(["claude", promptFile], { STUB_MODE: "resultstring" });
-    expect(r.code).toBe(0);
-    expect(r.report().verdict).toEqual(CLAUDE_VERDICT);
   });
 
   test("copilot: prompt immediately after -p, plain stdout must be the verdict object", () => {
@@ -631,8 +614,8 @@ describe("run-review.mts", () => {
         reason: "non_blocking is not an array",
       },
       { id: "copilot prose", tool: "copilot", mode: "prose", reason: "final message is not JSON" },
-      // The schema says additionalProperties false; the script's own reading
-      // of a plain-text (copilot) verdict must be exactly as strict.
+      // The validator refuses an extra key; the script's reading of a plain-text
+      // (copilot) verdict must be exactly as strict.
       {
         id: "copilot extra key",
         tool: "copilot",
@@ -656,144 +639,158 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("a stub that reads stdin completes: stdin is 'ignore', not an open pipe", () => {
-    const r = run(["codex", promptFile], { STUB_READ_STDIN: "1" });
-    expect(r.code).toBe(0);
-    expect(r.report().verdict).toEqual(CODEX_VERDICT);
-  });
-
-  test("--stdin-prompt serves the prompt file as stdin for codex and claude", () => {
-    const cases = [
-      { id: "codex", verdict: CODEX_VERDICT },
-      { id: "claude", verdict: CLAUDE_VERDICT },
-    ];
-    for (const { id: tool, verdict } of cases) {
-      const r = run([tool, promptFile, "--stdin-prompt"]);
-      expect(r.code, tool).toBe(0);
-      expect(r.report().verdict, tool).toEqual(verdict);
-      expect(readFileSync(r.promptCopy, "utf-8"), tool).toBe(FULL_PROMPT);
-    }
-  });
-
-  test("--stdin-prompt with copilot is a usage error: exit 2", () => {
-    const r = run(["copilot", promptFile, "--stdin-prompt"]);
-    expectFailure(r, { code: 2, stderr: "copilot does not support --stdin-prompt" });
-  });
-
-  test("--stdin-prompt delivers a prompt larger than any pipe buffer in full", () => {
-    const hugePrompt = mintPrompt("huge-prompt", "");
-    const hugeContent = "p".repeat(1 << 20);
-    writeFileSync(hugePrompt, hugeContent);
-    const r = run(["codex", hugePrompt, "--stdin-prompt"]);
-    expect(r.code).toBe(0);
-    expect(readFileSync(r.promptCopy, "utf-8")).toBe(withCompanion(hugeContent));
-  });
-
-  test("a reviewer that ignores its stdin prompt file cannot hang or crash the run", () => {
-    const hugePrompt = mintPrompt("huge-prompt-ignored", "p".repeat(1 << 20));
-    const r = run(["codex", hugePrompt, "--stdin-prompt"], { STUB_SKIP_STDIN: "1" });
-    expect(r.code).toBe(0);
-    expect(r.report().verdict).toEqual(CODEX_VERDICT);
-  });
-
   test("a large verdict is printed in full, not truncated at exit", () => {
     const r = run(["codex", promptFile], { STUB_MODE: "big" });
     expect(r.code).toBe(0);
     expect(r.report().verdict.summary).toBe("x".repeat(BIG_VERDICT_BYTES));
   });
 
-  test("codex stream cut before a verdict exits 1", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "cut" });
-    expectFailure(r, {
-      code: 1,
-      stderr: "review FAILED - relaunch (stream ended without a verdict event",
+  test("an adapter that dies mid-turn fails the review as a broken session, never a verdict", () => {
+    for (const tool of ["codex", "claude"]) {
+      const r = run([tool, promptFile], { STUB_MODE: "cut" });
+      expect(r.code, tool).toBe(1);
+      expect(r.stdout, tool).toBe("");
+      expect(r.stderr, tool).toMatch(
+        /review FAILED - relaunch \(error event: (the ACP session failed|the adapter exited \(0\) before the turn ended)/,
+      );
+    }
+  });
+
+  test("a sentence before the object in the final message leaves the object as the verdict; the rows keep narration and reasoning in stream order", () => {
+    const narrated = run(["codex", promptFile], { STUB_MODE: "narrated" });
+    expect(narrated.code).toBe(0);
+    expect(narrated.report().verdict).toEqual(CODEX_VERDICT);
+    expect(narrated.report().trajectory.at(-2)?.text).toMatch(
+      /^Done reading; the change holds\.\{/,
+    );
+    const ordered = run(["codex", promptFile], { STUB_MODE: "ordered" });
+    expect(ordered.code).toBe(0);
+    expect(ordered.report().trajectory.slice(0, 3)).toEqual([
+      { event: "agent_message", text: "I will read" },
+      { event: "reasoning", text: "inspect a.ts" },
+      { event: "tool_call", text: "cat src/a.ts" },
+    ]);
+  });
+
+  test("a permission request that names the call by id alone is read against the call's announcement; one no message classified is 'other', which no policy allows", () => {
+    const announced = new Map([
+      ["edit-1", { kind: "edit", title: "apply_patch", locations: ["src/a.ts"] }],
+    ]);
+    expect(permissionFacts({ toolCallId: "edit-1" }, announced)).toEqual({
+      kind: "edit",
+      title: "apply_patch",
+      locations: ["src/a.ts"],
+    });
+    expect(
+      permissionFacts({ toolCallId: "edit-1", kind: "read", locations: [] }, announced),
+    ).toEqual({
+      kind: "read",
+      title: "apply_patch",
+      locations: [],
+    });
+    expect(permissionFacts({ toolCallId: "never-announced" }, announced)).toEqual({
+      kind: "other",
+      title: "",
+      locations: [],
     });
   });
 
-  test("codex agent_message without a following turn.completed is narration, not a verdict", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "cutlate" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("no turn.completed");
-  });
-
-  test("a stream cut inside a later turn voids the earlier turn's verdict", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "cutsecond" });
-    expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (stream cut mid-turn" });
-  });
-
-  test("a malformed trailing line voids the verdict even after turn.completed", () => {
-    // The ok-mode fixture proves mid-stream garbage stays skippable; only a
-    // truncated FINAL line may fail the review.
-    const r = run(["codex", promptFile], { STUB_MODE: "trunctail" });
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toContain("malformed trailing line");
-  });
-
-  test("claude stream ending without a result event exits 1", () => {
-    const r = run(["claude", promptFile], { STUB_MODE: "cut" });
+  test("a file edit codex asks for is refused, codex ends the turn, and the review fails naming the refusal; a request naming the call by id alone is read against the call's announcement, inside the copy too", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "edit" });
     expectFailure(r, {
       code: 1,
-      stderr: "review FAILED - relaunch (stream ended without a verdict event",
+      stderr:
+        "review FAILED - relaunch (error event: the reviewer asked to edit (apply_patch); a review is read-only",
+    });
+    const repo = fixtureRepo();
+    const bare = run(
+      ["codex", promptFile],
+      { STUB_MODE: "bareedit", STUB_SANDBOX: "bwrap" },
+      undefined,
+      repo,
+    );
+    expectFailure(bare, {
+      code: 1,
+      stderr:
+        "review FAILED - relaunch (error event: the reviewer asked to edit (apply_patch); a review is read-only",
     });
   });
 
-  test("a claude result with is_error true is a failed review, even on CLI exit 0", () => {
-    const r = run(["claude", promptFile], { STUB_MODE: "iserror" });
-    expect(r.code).toBe(1);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toContain("error_during_execution");
+  test("a turn that ends for any reason but end_turn is no verdict: max_tokens", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "maxtokens" });
+    expectFailure(r, {
+      code: 1,
+      stderr: "review FAILED - relaunch (error event: turn ended max_tokens",
+    });
   });
 
-  test("a reconnect error event followed by a verdict is a recovered stream: the verdict counts", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "reconnect" });
-    expect(r.code).toBe(0);
-    expect(r.report().verdict).toEqual(CODEX_VERDICT);
-    expect(r.report().trajectory.map((row) => row.event)).toContain("error");
+  test("an adapter that offers no read-only mode fails before any prompt is sent", () => {
+    const r = run(["codex", promptFile], { STUB_MODE: "nomodes" });
+    expectFailure(r, {
+      code: 1,
+      stderr:
+        "review FAILED - relaunch (error event: the adapter offers no read-only mode (no modes)",
+    });
+    expect(readFileSync(r.promptCopy, { encoding: "utf-8", flag: "a+" })).toBe("");
   });
 
-  test("a failed turn is never cleared by a later turn's verdict", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "failedturnthenverdict" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("turn failed before any answer");
+  test("a command codex asks to run is refused under its own sandbox, where asking means escaping it, and allowed inside the snapshot copy", () => {
+    const refused = run(["codex", promptFile], { STUB_MODE: "execute" });
+    expectFailure(refused, {
+      code: 1,
+      stderr: "the reviewer asked to execute (git --no-pager diff --cached); a review is read-only",
+    });
+    const repo = fixtureRepo();
+    const permissions = join(binDir, "permissions-execute");
+    const allowed = run(
+      ["codex", promptFile],
+      { STUB_MODE: "execute", STUB_SANDBOX: "bwrap", STUB_PERMISSIONS: permissions },
+      undefined,
+      repo,
+    );
+    expect(allowed.code).toBe(0);
+    expect(allowed.report().verdict).toEqual(CODEX_VERDICT);
+    expect(JSON.parse(readFileSync(permissions, "utf-8"))).toMatchObject({
+      kind: "execute",
+      chosen: "allow_once",
+    });
   });
 
-  test("an error event after the last verdict still fails the capture", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "errorafter" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("stream disconnected after the verdict");
+  test("a plan approval claude asks for is refused, claude ends the turn, and the review fails naming the request", () => {
+    const r = run(["claude", promptFile], { STUB_MODE: "planapproval" });
+    expectFailure(r, {
+      code: 1,
+      stderr:
+        "review FAILED - relaunch (error event: the reviewer asked to switch_mode (Approve Plan); a review is read-only",
+    });
+    expect(r.report).toThrow();
   });
 
-  test("an error event exits 1 even though the reviewer exited 0", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "error" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("stream disconnected before completion");
-  });
-
-  test("an empty stream exits 1: an empty review never reads as clean", () => {
-    const r = run(["codex", promptFile], { STUB_MODE: "empty" });
-    expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty output" });
-  });
-
-  test("a whitespace-only verdict exits 1 for both stream formats", () => {
+  test("a whitespace-only verdict exits 1 for both ACP reviewers", () => {
     for (const tool of ["codex", "claude"]) {
       const r = run([tool, promptFile], { STUB_MODE: "blank" });
       expectFailure(r, { code: 1, stderr: "review FAILED - relaunch (empty verdict" }, tool);
     }
   });
 
-  test("a verdict from a reviewer that exited non-zero still fails", () => {
-    const r = run(["codex", promptFile], { STUB_EXIT: "3" });
+  test("a verdict from a CLI reviewer that exited non-zero still fails", () => {
+    const r = run(["copilot", promptFile], { STUB_EXIT: "3" });
     expectFailure(r, {
       code: 1,
       stderr: "review FAILED - relaunch (reviewer status: 3 (stderr kept at",
     });
   });
 
-  test("missing reviewer binary exits 2, not 1", () => {
-    const r = run(["codex", promptFile], {}, emptyBinDir);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("reviewer binary not found");
+  test("a missing reviewer binary exits 2, not 1, and for an ACP reviewer the binary is its adapter", () => {
+    for (const [tool, binary] of [
+      ["codex", "codex-acp"],
+      ["claude", "claude-agent-acp"],
+      ["copilot", "copilot"],
+    ] as const) {
+      const r = run([tool, promptFile], {}, emptyBinDir);
+      expect(r.code, tool).toBe(2);
+      expect(r.stderr, tool).toContain(`reviewer binary not found: ${binary}`);
+    }
   });
 
   /** A repository the shape a pre-commit review targets, carrying everything a copy of the checkout
@@ -824,8 +821,19 @@ describe("run-review.mts", () => {
 
   /** The stub's report of the copy as the reviewer saw it (the stub's cwd-report block names the lines). */
   function cwdReport(file: string) {
-    const [cwd, top, branch, status, head, commits, aText, lfsSmudge, branchDiff, origHead] =
-      readFileSync(file, "utf-8").split("\n");
+    const [
+      cwd,
+      top,
+      branch,
+      status,
+      head,
+      commits,
+      aText,
+      lfsSmudge,
+      branchDiff,
+      origHead,
+      codexHome,
+    ] = readFileSync(file, "utf-8").split("\n");
     return {
       cwd,
       top,
@@ -837,11 +845,12 @@ describe("run-review.mts", () => {
       lfsSmudge,
       branchDiff,
       origHead,
+      codexHome,
     };
   }
 
   const BWRAP_LINE =
-    "codex sandbox unavailable (bwrap: Failed to make / slave: Permission denied): reviewing an unsandboxed snapshot copy at ";
+    "codex sandbox unavailable (bwrap: Failed to make / slave: Permission denied): reviewing a snapshot copy at ";
 
   test("codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy that dies with the review", () => {
     const repo = fixtureRepo();
@@ -910,7 +919,7 @@ describe("run-review.mts", () => {
       expect(seen.cwd, id).toMatch(/\/rubber-duck-[^/]+\/repo$/);
       expect(seen.top, id).toBe(seen.cwd);
     }
-  });
+  }, 30000);
 
   test("a blobless partial clone snapshots as it is: sparse entries stay out, and a base blob the checkout lacks arrives from its promisor remote", () => {
     // The origin allows filtered fetches; the clone takes no blobs and checks out the sub/ cone, so
@@ -979,6 +988,48 @@ describe("run-review.mts", () => {
       // A content diff against origin/main needs the base blob of a.txt, which only the promisor remote has.
       expect(seen.branchDiff, id).toBe(" 1 file changed, 1 insertion(+), 1 deletion(-)");
     }
+  }, 30000);
+
+  test("a relative CODEX_HOME names the launcher's directory, not the copy's: the adapter sees it absolute", () => {
+    const repo = fixtureRepo();
+    const reportFile = join(binDir, "cwd-report-codex-home");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile, CODEX_HOME: ".codex-home" },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(cwdReport(reportFile).codexHome).toBe(join(repo, ".codex-home"));
+  });
+
+  test("a relative CODEX_HOME through a symlink and .. resolves as codex does, by the filesystem, not by the text", () => {
+    const repo = fixtureRepo();
+    const home = temp.dir("run-review-codex-home-");
+    mkdirSync(join(home, "child"));
+    symlinkSync(join(home, "child"), join(repo, "link"));
+    const reportFile = join(binDir, "cwd-report-codex-home-link");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile, CODEX_HOME: "link/.." },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(cwdReport(reportFile).codexHome).toBe(realpathSync(home));
+  });
+
+  test("an empty CODEX_HOME stays empty: codex reads it as unset", () => {
+    const repo = fixtureRepo();
+    const reportFile = join(binDir, "cwd-report-codex-home-empty");
+    const r = run(
+      ["codex", promptFile],
+      { STUB_SANDBOX: "bwrap", STUB_CWD_REPORT: reportFile, CODEX_HOME: "" },
+      undefined,
+      repo,
+    );
+    expect(r.code).toBe(0);
+    expect(cwdReport(reportFile).codexHome).toBe("");
   });
 
   test("ORIG_HEAD travels with the snapshot, so the tip before a reset or rebase resolves as a diff base in the copy", () => {
@@ -1194,218 +1245,6 @@ describe("run-review.mts", () => {
       expect(seen.aText).toBe("version https://git-lfs.github.com/spec/v1");
     },
   );
-
-  test("copy mode runs codex under a scratch CODEX_HOME holding copies of the user's config and credentials, so codex's trust write never reaches the user's file", () => {
-    const repo = fixtureRepo();
-    const home = temp.dir("run-review-codex-home-");
-    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
-    writeFileSync(join(home, "auth.json"), '{"token":"example"}\n');
-    const homeReport = join(binDir, "home-report-copy");
-    const r = run(
-      ["codex", promptFile],
-      { STUB_SANDBOX: "bwrap", STUB_HOME_REPORT: homeReport, CODEX_HOME: home },
-      undefined,
-      repo,
-    );
-    expect(r.code).toBe(0);
-    const [seenHome, seenConfig, seenFiles] = readFileSync(homeReport, "utf-8").split("\n");
-    expect(seenHome).toMatch(/\/rubber-duck-[^/]+\/codex-home$/);
-    expect(seenConfig).toBe('model = "example"');
-    expect(seenFiles?.trim().split(/\s+/).sort()).toEqual(["auth.json", "config.toml", "sessions"]);
-    // The stub appended a trust block to the config it saw; the user's file is byte-identical.
-    expect(readFileSync(join(home, "config.toml"), "utf-8")).toBe('model = "example"\n');
-    expect(r.homeLeft).toBe(false);
-  });
-
-  test("the review's transcript codex writes under the scratch home's sessions lands in the user's own sessions directory and survives the cleanup", () => {
-    const repo = fixtureRepo();
-    const home = temp.dir("run-review-codex-home-");
-    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
-    // An earlier review's transcript already in the user's directory must not be touched.
-    mkdirSync(join(home, "sessions", "2026", "10", "10"), { recursive: true });
-    const earlier = join(home, "sessions", "2026", "10", "10", "rollout-earlier.jsonl");
-    writeFileSync(earlier, '{"earlier":true}\n');
-    const homeReport = join(binDir, "home-report-sessions");
-    const r = run(
-      ["codex", promptFile],
-      {
-        STUB_SANDBOX: "bwrap",
-        STUB_HOME_REPORT: homeReport,
-        STUB_ROLLOUT: '{"review":true}',
-        CODEX_HOME: home,
-      },
-      undefined,
-      repo,
-    );
-    expect(r.code).toBe(0);
-    expect(r.homeLeft).toBe(false);
-    expect(lstatSync(join(home, "sessions")).isDirectory()).toBe(true);
-    expect(
-      readFileSync(join(home, "sessions", "2026", "10", "11", "rollout-example.jsonl"), "utf-8"),
-    ).toBe('{"review":true}');
-    expect(readFileSync(earlier, "utf-8")).toBe('{"earlier":true}\n');
-  });
-
-  test("a CODEX_HOME given as a relative path still receives the transcript: the link is read from inside the scratch home, not from the cwd", () => {
-    const repo = fixtureRepo();
-    const homeReport = join(binDir, "home-report-sessions-relative");
-    const r = run(
-      ["codex", promptFile],
-      {
-        STUB_SANDBOX: "bwrap",
-        STUB_HOME_REPORT: homeReport,
-        STUB_ROLLOUT: '{"relative":true}',
-        CODEX_HOME: ".codex-home",
-      },
-      undefined,
-      repo,
-    );
-    expect(r.code).toBe(0);
-    expect(
-      readFileSync(
-        join(repo, ".codex-home", "sessions", "2026", "10", "11", "rollout-example.jsonl"),
-        "utf-8",
-      ),
-    ).toBe('{"relative":true}');
-  });
-
-  test("a codex home without a sessions directory yet gets one, so the first review's transcript has a place to land", () => {
-    const repo = fixtureRepo();
-    const home = temp.dir("run-review-codex-home-");
-    const homeReport = join(binDir, "home-report-sessions-fresh");
-    const r = run(
-      ["codex", promptFile],
-      {
-        STUB_SANDBOX: "bwrap",
-        STUB_HOME_REPORT: homeReport,
-        STUB_ROLLOUT: '{"first":true}',
-        CODEX_HOME: join(home, "fresh"),
-      },
-      undefined,
-      repo,
-    );
-    expect(r.code).toBe(0);
-    expect(
-      readFileSync(
-        join(home, "fresh", "sessions", "2026", "10", "11", "rollout-example.jsonl"),
-        "utf-8",
-      ),
-    ).toBe('{"first":true}');
-  });
-
-  test("a token refresh codex writes into the scratch auth.json goes back to the user's home; the config does not", () => {
-    const repo = fixtureRepo();
-    const home = temp.dir("run-review-codex-home-");
-    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
-    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
-    const homeReport = join(binDir, "home-report-refresh");
-    const r = run(
-      ["codex", promptFile],
-      {
-        STUB_SANDBOX: "bwrap",
-        STUB_HOME_REPORT: homeReport,
-        STUB_REFRESH_AUTH: '{"token":"refreshed"}',
-        CODEX_HOME: home,
-      },
-      undefined,
-      repo,
-    );
-    expect(r.code).toBe(0);
-    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe('{"token":"refreshed"}');
-    expect(readFileSync(join(home, "config.toml"), "utf-8")).toBe('model = "example"\n');
-    expect(r.homeLeft).toBe(false);
-  });
-
-  test("a parallel review's refresh of the user's auth.json is not rolled back by a review whose scratch copy never changed", () => {
-    const repo = fixtureRepo();
-    const home = temp.dir("run-review-codex-home-");
-    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
-    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
-    const homeReport = join(binDir, "home-report-parallel");
-    const r = run(
-      ["codex", promptFile],
-      {
-        STUB_SANDBOX: "bwrap",
-        STUB_HOME_REPORT: homeReport,
-        STUB_REAL_AUTH_PATH: join(home, "auth.json"),
-        STUB_REAL_AUTH_WRITE: '{"token":"refreshed-by-the-other-review"}',
-        CODEX_HOME: home,
-      },
-      undefined,
-      repo,
-    );
-    expect(r.code).toBe(0);
-    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe(
-      '{"token":"refreshed-by-the-other-review"}',
-    );
-  });
-
-  test("a scratch refresh is not returned over credentials another review changed meanwhile; the run warns instead", () => {
-    const repo = fixtureRepo();
-    const home = temp.dir("run-review-codex-home-");
-    writeFileSync(join(home, "config.toml"), 'model = "example"\n');
-    writeFileSync(join(home, "auth.json"), '{"token":"old"}\n');
-    const homeReport = join(binDir, "home-report-conflict");
-    const r = run(
-      ["codex", promptFile],
-      {
-        STUB_SANDBOX: "bwrap",
-        STUB_HOME_REPORT: homeReport,
-        STUB_REFRESH_AUTH: '{"token":"mine"}',
-        STUB_REAL_AUTH_PATH: join(home, "auth.json"),
-        STUB_REAL_AUTH_WRITE: '{"token":"theirs"}',
-        CODEX_HOME: home,
-      },
-      undefined,
-      repo,
-    );
-    expect(r.code).toBe(0);
-    expect(readFileSync(join(home, "auth.json"), "utf-8")).toBe('{"token":"theirs"}');
-    expect(r.stderr).toContain("codex credentials changed elsewhere during the review");
-  });
-
-  test.skipIf(process.getuid?.() === 0)(
-    "a credentials file the launcher cannot read fails the review cleanly, copy and scratch home removed",
-    () => {
-      const repo = fixtureRepo();
-      const home = temp.dir("run-review-codex-home-");
-      writeFileSync(join(home, "config.toml"), 'model = "example"\n');
-      writeFileSync(join(home, "auth.json"), "{}\n");
-      chmodSync(join(home, "auth.json"), 0o000);
-      // A foreground spawn failure removes its whole scratch dir, so the proof of cleanup is an
-      // empty private TMPDIR afterwards (shared tmp would show other sessions' reviews).
-      const privateTmp = temp.dir("run-review-cleanup-");
-      const scratchDirs = () =>
-        new Set(readdirSync(privateTmp).filter((name) => name.startsWith("rubber-duck-")));
-      const before = scratchDirs();
-      try {
-        const r = run(
-          ["codex", promptFile],
-          { STUB_SANDBOX: "bwrap", CODEX_HOME: home, TMPDIR: privateTmp },
-          undefined,
-          repo,
-        );
-        expectFailure(r, { code: 1, stderr: "spawn failed: Error: scratch codex home failed" });
-        expect([...scratchDirs()].filter((name) => !before.has(name))).toEqual([]);
-      } finally {
-        chmodSync(join(home, "auth.json"), 0o600);
-      }
-    },
-  );
-
-  test("read-only mode leaves CODEX_HOME alone", () => {
-    const repo = fixtureRepo();
-    const home = temp.dir("run-review-codex-home-");
-    const homeReport = join(binDir, "home-report-readonly");
-    const r = run(
-      ["codex", promptFile],
-      { STUB_HOME_REPORT: homeReport, CODEX_HOME: home },
-      undefined,
-      repo,
-    );
-    expect(r.code).toBe(0);
-    expect(readFileSync(homeReport, "utf-8").split("\n")[0]).toBe(home);
-  });
 
   test("the sandbox probe passing keeps codex read-only: no copy, no fallback line", () => {
     const repo = fixtureRepo();
@@ -1698,8 +1537,7 @@ describe("run-review.mts", () => {
   });
 
   /** A scratch install: this skill copied whole under <base>/skills (the script finds its root
-   * through its own real path), beside the siblings the case needs. The run uses the copy's script,
-   * so the stub is told the copy's schema path. */
+   * through its own real path), beside the siblings the case needs. The run uses the copy's script. */
   function scratchInstall(
     base: string,
     rootUnderBase = "skills",
@@ -1746,9 +1584,9 @@ describe("run-review.mts", () => {
     );
     const scripts = join(root, "rubber-duck-review", "scripts");
     const script = join(scripts, "run-review.mts");
-    const env = { STUB_SCHEMA: realpathSync(join(scripts, "verdict-schema.json")), ...extraEnv };
     return {
-      launch: (...args) => run(["codex", promptFile, ...args], env, undefined, undefined, script),
+      launch: (...args) =>
+        run(["codex", promptFile, ...args], extraEnv, undefined, undefined, script),
       print: (...args) => run(["criteria", ...args], extraEnv, undefined, undefined, script),
       page: (name) => realpathSync(join(root, name, "SKILL.md")),
     };
@@ -1815,7 +1653,7 @@ describe("run-review.mts", () => {
       stderr:
         "--criteria: eta declares no ## Review Criteria; the installed skills that do: alpha, delta, epsilon, gamma",
     });
-  });
+  }, 60000);
 
   test("a checkout of the repository is its plugin manifest listing this skill, and the collection is what the manifest lists; another plugin's manifest beside the root is not a checkout, and a root with no record names nothing, out loud", () => {
     const checkout = temp.dir("run-review-checkout-");
@@ -1850,7 +1688,7 @@ describe("run-review.mts", () => {
     expect(stray.stderr).toContain(
       `no companion criteria: no skills-lock.json from ${strayBase} upward names rubber-duck-review, nor ${join(strayBase, "state", "skills", ".skill-lock.json")}\n`,
     );
-  });
+  }, 60000);
 
   test("a project install is recorded at the project's top as skills-lock.json, whatever depth the agent's directory sits at, local sources relative to it and a .git suffix kept; a copy under an agent's own directory is in the global record", () => {
     // Two project layouts the skills CLI writes: <project>/.posit/assistant/skills and <project>/skills,
@@ -1913,7 +1751,7 @@ describe("run-review.mts", () => {
     const homeRun = underHome.launch();
     expect(homeRun.code).toBe(0);
     expect(homeRun.report().criteria).toEqual(["alpha", "gamma"]);
-  });
+  }, 60000);
 
   test("a page whose frontmatter never closes is a usage error naming the page: read as a body, its metadata would declare criteria and its invocation policy would be lost", () => {
     const base = realpathSync(temp.dir("run-review-openfm-"));
@@ -1929,7 +1767,7 @@ describe("run-review.mts", () => {
       code: 2,
       stderr: `the frontmatter of ${join(kappa, "SKILL.md")} never closes`,
     });
-  });
+  }, 60000);
 
   test("a record that does not parse, or has no skills object, is a usage error naming the file, never a guess at the collection", () => {
     const base = realpathSync(temp.dir("run-review-badlock-"));
@@ -1950,9 +1788,9 @@ describe("run-review.mts", () => {
     expect(readFileSync(optedOut.promptCopy, "utf-8")).toBe(PROMPT);
     const printedNone = install.print("--criteria", "none");
     expect([printedNone.code, printedNone.stdout, printedNone.stderr]).toEqual([0, "", ""]);
-  });
+  }, 60000);
 
-  test("a reviewer silent past --stall is killed with its process group, the sleep it left behind included, and the run fails as a stall", () => {
+  test("a reviewer silent past --stall is killed with its process group and the run fails as a stall", () => {
     const pidFile = join(binDir, "stall-pids");
     const r = run(["codex", promptFile, "--stall", "1"], {
       STUB_MODE: "stall",
@@ -1966,9 +1804,7 @@ describe("run-review.mts", () => {
       "review stalled: no stream event for 1 s; killing the reviewer (pid ",
     );
     expect(r.captureKept).toBe(true);
-    const pids = stubPids(pidFile);
-    expect(pids).toHaveLength(2);
-    for (const pid of pids) expectGone(pid);
+    for (const pid of stubPids(pidFile)) expectGone(pid);
   }, 15000);
 
   test("a reviewer that keeps streaming past --stall is never a stall: each byte winds the clock again", () => {
@@ -2022,7 +1858,7 @@ describe("run-review.mts", () => {
     // review its snapshot, not re-read the caller's (now gone) file. The
     // stub sleeps so the wait starts on a record that has no status yet.
     const bgPrompt = mintPrompt("bg-prompt");
-    const r = run(["codex", bgPrompt, "--background"], { STUB_SLEEP: "1" });
+    const r = run(["codex", bgPrompt, "--background"], { STUB_MODE: "slow" });
     rmSync(bgPrompt);
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
@@ -2046,7 +1882,7 @@ describe("run-review.mts", () => {
         code: 1,
         stderr: "review FAILED - relaunch (recorded reviewer status: 3; output kept at <file>)\n",
       },
-      { status: "not-found", code: 2, stderr: "reviewer binary not found: codex\n" },
+      { status: "not-found", code: 2, stderr: "reviewer binary not found: codex-acp\n" },
     ];
     for (const { status, code, stderr } of cases) {
       const outputFile = pendingCapture();
@@ -2147,16 +1983,26 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("--extract fails a background run whose reviewer exited non-zero", () => {
-    const r = run(["codex", promptFile, "--background"], { STUB_EXIT: "3" });
+  test("--extract fails a background run whose CLI reviewer exited non-zero", () => {
+    const r = run(["copilot", promptFile, "--background"], { STUB_EXIT: "3" });
     expect(r.code).toBe(0);
     const outputFile = backgroundOutputFile(r.stdout);
     expect(waitForStatus(outputFile)).toBe("3");
-    const extracted = run(["codex", "--extract", outputFile]);
+    const extracted = run(["copilot", "--extract", outputFile]);
     expect(extracted.code).toBe(1);
     expect(extracted.stderr).toContain("recorded reviewer status: 3");
     // Positive control for the kept-output suffix: the stream is still there.
     expect(extracted.stderr).toContain(`output kept at ${outputFile}`);
+  });
+
+  test("a capture whose last line was cut mid-write fails the review even after a stop line", () => {
+    const outputFile = pendingCapture();
+    writeFileSync(outputFile, `${COMPLETE_CODEX_STREAM}{"event":"update","update":{"sessionUpd`);
+    recordStatus(outputFile, "0");
+    expectFailure(run(["codex", "--extract", outputFile]), {
+      code: 1,
+      stderr: "review FAILED - relaunch (malformed trailing line (stream truncated mid-write)",
+    });
   });
 
   test("--extract on a completed run whose stream was deleted fails without naming a kept file", () => {

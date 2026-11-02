@@ -1,0 +1,7 @@
+{
+  "name": "rubber-duck-review-skill-dependencies",
+  "private": true,
+  "dependencies": {
+    "@agentclientprotocol/sdk": "2.1.0"
+  }
+}

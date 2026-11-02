@@ -29,15 +29,18 @@ Use this skill when someone asks for:
   - If you are currently using **Claude** -> `codex`, fallback `copilot`.
   - If you are currently using **Codex or GitHub Copilot** -> `claude`, fallback `copilot`.
 - **Never** let the reviewer write files, edit code, or run unrestricted shell commands.
-  - The script enforces read-only flags: `--sandbox read-only` (codex) / `--permission-mode plan` (claude) / a read-only tool allow-list (copilot).
+  - The script enforces read-only, per reviewer:
+    - codex: an ACP session in its `read-only` mode. A read or a search it asks for is allowed, anything else (a file edit, a command under a working sandbox) is refused, and codex ends the turn on a refusal.
+    - claude: an ACP session in Claude Code's `plan` mode. Its read-only tools run unasked, and whatever asks (a write, a plan approval) is refused and ends the turn.
+    - copilot: a read-only tool allow-list.
   - Read-only still lets the reviewer self-check: it can run read-only commands (grep, `git diff`, typecheck) but writes are blocked. copilot can only read and grep files. That self-checking makes findings concrete.
   - Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.
-  - Where codex's own sandbox cannot start, the script reviews an unsandboxed snapshot copy instead (step 4). That is an exception to this rule with no enforced filesystem confinement: the prompt's review-only instruction is the only guard, and the copy keeps a write it forbade out of the checkout under review by path alone.
+  - Where codex's own sandbox cannot start, the script reviews a snapshot copy instead (step 4) and allows the commands codex asks to run there. Nothing confines a command inside the copy: the copy keeps a write it forbade out of the checkout under review by path alone, and a file edit through codex's own tool is refused under both.
 
 ### 2. Large change sets: fan out one review per section
 
 - A single broad review of a big diff is shallower than several focused ones. Split the change into logical **sections** (each new command/module, each script, the CI/release config, a parity pair). Run one review per section in parallel, each scoped to its files.
-- **Run only as many at once as the machine and the reviewer backend handle without stalling.** About three is a safe start. Many simultaneous `codex exec` processes can saturate the backend and hang. A stalled batch gets smaller, never larger.
+- **Run only as many at once as the machine and the reviewer backend handle without stalling.** About three is a safe start. Many simultaneous codex sessions can saturate the backend and hang. A stalled batch gets smaller, never larger.
 - **A silent reviewer is killed by the launcher.** Every launch carries `--stall <seconds>` (default 900): a stream with no byte for that long gets its reviewer killed, process group included, and the review fails as `stalled: no stream event for 900 s`. Relaunch that one review once. Specimen: a codex round sat three hours behind a stuck browser-extension host it had spawned, silent, while a 3600 s wait ran.
 
 ### 3. Craft the prompt
@@ -74,7 +77,7 @@ Use this skill when someone asks for:
   - `--criteria <name>[,<name>]` names the given skills alone, any installed one that declares the heading, for the one exception: someone else's PR, where the `/reply-and-review-discipline` skill's lens choice names them. `--criteria none` appends nothing. A name that declares no section is a usage error naming the ones that do.
   - The report's `criteria` field lists the names that went in, so a converged report can cite its rubric (step 7).
 - Ask for **prioritized** findings (blocking vs non-blocking), and ask it to say so plainly if the code is correct. This keeps re-reviews terminable.
-- The report is one JSON object: `blocking` and `non_blocking` arrays of `{where, claim, evidence}`, a `recorded_not_built` string array, and a `summary`. Paste the report-format block from the template. The script enforces the shape for codex and claude through `scripts/verdict-schema.json`, and copilot has only the prompt to go on.
+- The report is one JSON object: `blocking` and `non_blocking` arrays of `{where, claim, evidence}`, a `recorded_not_built` string array, and a `summary`. Paste the report-format block from the template. Every reviewer has only the prompt to go on, and the script's own reading of the final message holds each to the same contract.
 - If the user has already declined or reverted something in this thread, add a short `Already decided / out of scope` section so the reviewer does not keep re-raising it.
 - On a re-review, state which fixes were already applied so it focuses on what remains.
 
@@ -85,16 +88,18 @@ For a reusable prompt template, see `references/reviewer-prompt.md`.
 This skill ships `scripts/run-review.mts` (the path is relative to the installed skill folder, not the repo under review). It encapsulates the launch pitfalls:
 
 - spawns the reviewer from an argv array with no shell in between (backticks and `$(...)` in the prompt stay literal)
-- closes stdin (both `codex exec` and `claude -p` block forever waiting on open stdin)
+- closes copilot's stdin (an open pipe blocks a CLI reviewer forever); the ACP adapters' stdin carries the protocol
 - captures the full stream to a scratch file under the OS tmp dir (never the working tree)
-- passes each reviewer's required flags, including the verdict schema (`scripts/verdict-schema.json`) for codex and claude, so the final message cannot be free text
-- extracts the verdict and refuses one with no tool call before it. codex fills its narration into the schema too, so a turn that ends at "I will review now" is a valid-looking empty verdict. The missing reads are what expose it
+- passes copilot its read-only tool allow-list, and codex and claude the session mode the review needs
+- extracts the verdict and refuses one with no tool call before it. codex narrates before it reads, so a turn that ends at "I will review now" is a verdict-shaped answer with no review behind it. The missing reads are what expose it
 - prints one JSON report: the verdict, the tool-call count, the path of the kept capture, and a compact trajectory (one row per reviewer step) so you can see what the reviewer did without opening the stream
 
 `bun "<skill-dir>/scripts/run-review.mts" --help`:
 
 ```text usage=skills/rubber-duck-review/scripts/run-review.mts
-usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stdin-prompt] [--stall <seconds>] [--criteria <names>|none]
+usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stall <seconds>] [--criteria <names>|none]
+codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode: a file edit it asks for is refused, codex ends the turn, and the review fails naming the refusal
+claude runs through the claude-agent-acp adapter on PATH (npm install -g @agentclientprotocol/claude-agent-acp) in its plan mode: its read-only tools run unasked, and whatever asks (a write, a plan approval) is refused
        run-review.mts <codex|claude|copilot> --extract <output-file>
        run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)
        run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)
@@ -105,7 +110,7 @@ the prompt gets a '## Companion review criteria' section naming the SKILL.md of 
   except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;
   --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names
 scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones
-codex whose bubblewrap sandbox cannot start reviews an unsandboxed snapshot copy of the repository inside its scratch dir
+codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are
 a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s
 prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>
 exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);
@@ -132,24 +137,21 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 ```
 
 - Reviewer argument:
-  - `codex`: runs `codex exec --json --sandbox read-only --output-schema <schema>`.
+  - `codex`: runs the `codex-acp` adapter on PATH (`npm install -g @agentclientprotocol/codex-acp`) as an ACP session in codex's `read-only` mode. The prompt travels in the request, and every session update and permission request lands in the capture.
+    - A file edit codex asks for is refused. codex ends the turn on a refusal, so the review fails naming it: `the reviewer asked to edit (apply_patch); a review is read-only`.
+    - No schema flag holds codex to the object, so its final message may put a sentence before it; the trailing object of that message is the verdict, and the sentence stays in the trajectory.
+    - Under codex's own sandbox a command that asks is one the sandbox would refuse (a write, the network), so it is refused too; reads and searches are allowed. Inside the snapshot copy (next) commands are allowed, since the copy is what keeps a write out of the checkout.
     - The launch first probes the sandbox with `codex sandbox -- true`. codex runs every sandboxed command under bubblewrap, and a container whose AppArmor profile denies mount propagation refuses it at start: `bwrap: Failed to make / slave: Permission denied`.
-    - That refusal alone switches the launch. The script snapshots the repository through git into the review's scratch dir and runs codex with `--sandbox danger-full-access` inside that copy, from the cwd's twin there (the copy's root when the cwd holds nothing tracked).
-    - The snapshot is what git has committed or would commit: HEAD under its branch name, every ref (`ORIG_HEAD` and `FETCH_HEAD` included), and the index checked out as the working tree, sharing the checkout's object store. A partial clone's promisor remote travels, so a blob the checkout never fetched arrives on first read. So `git diff --cached` and `git diff <base>...HEAD` show the same change there.
-    - Nothing else travels: unstaged edits, untracked files, ignored trees (installed dependencies, nested worktrees), submodule contents, and the checkout's config stay behind, Git LFS files stay pointers, and a sparse checkout stays sparse. A checkout of gigabytes snapshots in the size of its tracked files, and a typecheck or test that needs installed dependencies cannot run in the copy.
-    - The copy is removed when the reviewer exits (what refuses removal is reported as `not removed` in `review.err`), and the report and the launch record carry `sandbox: "copy"`. A stderr line names the refusal and the copy's path.
-    - The reviewer runs under a scratch `CODEX_HOME` holding copies of the user's `config.toml` and `auth.json`. codex marks the directory it launches in as a trusted project by writing to its config, and a copy has a fresh path every review, so that write lands in the scratch home and dies with it.
-    - The user's own config is never written. A token refresh codex writes into the scratch `auth.json` does go back to the user's file, since codex expects it to persist.
-    - The scratch home's `sessions` directory is a link to the user's own, so the review's transcript (codex's session rollout) lands in the user's home as in a read-only launch and survives the cleanup.
-    - Outside a git repository there is nothing to snapshot: exit 2. Any other probe failure (a codex too old for the subcommand) keeps the read-only launch.
-  - `claude`: runs `claude -p --permission-mode plan --verbose --output-format stream-json --json-schema <schema>` (`--verbose` is required with `stream-json`).
+    - That refusal alone switches the launch. The script snapshots the repository through git into the review's scratch dir and runs the session from the cwd's twin there (the copy's root when the cwd holds nothing tracked).
+    - The copy is what git has committed or would commit: HEAD, the refs, the index with its flags, the tracked files as checked out, with the object store shared through an alternates link. Untracked files, ignored trees, and nested worktrees stay behind, and `git diff --cached` or `git diff <base>...HEAD` in the copy show the change the prompt names.
+    - The copy is removed when the reviewer exits, its own directory modes repaired first where they refuse (what still refuses is reported as `not removed` in `review.err`), and the report and the launch record carry `sandbox: "copy"`. A stderr line names the refusal and the copy's path.
+    - The adapter reads the user's own codex home: it writes no trust block for the launch directory, so no scratch home stands in, and a token refresh persists as codex expects. The session's transcript lands in the user's codex sessions as in any launch.
+    - Outside a git repository there is nothing to snapshot: exit 2. Any other probe failure (a codex too old for the subcommand, or no `codex` CLI on PATH beside the adapter) keeps the sandboxed launch, so in a container that denies bubblewrap, install codex beside the adapter for the probe to see.
+  - `claude`: runs the `claude-agent-acp` adapter on PATH (`npm install -g @agentclientprotocol/claude-agent-acp`) as an ACP session in Claude Code's `plan` mode: its read-only tools run unasked, and a write or a plan approval asks and is refused; claude then ends the turn, and the review fails naming it.
   - `copilot`: runs `copilot -p <prompt> -s --available-tools=view,rg,glob --deny-tool=write --deny-tool=shell --disable-builtin-mcps`. Last-resort fallback, so prefer codex/claude. Its limits:
     - The read-only tool allow-list lets it read and grep files, but it cannot shell out, write, reach MCP servers, or spawn subagents.
     - No shell means no `git diff` and no typecheck, so name the files to read.
     - It does not stream JSON, so there is no liveness signal, no trajectory in the report, and no tool-call check on its verdict. It has no schema flag, so only the prompt asks it for the JSON object.
-- `--stdin-prompt` (codex/claude only): add it if the environment rejects the prompt as a command argument, or the prompt is very large. The prompt file itself is served as the reviewer's stdin.
-
-  A file fd is EOF-terminated, so it cannot hang. The stdin hang trap is an open pipe, not a used stdin.
 - `--criteria <name>[,<name>]` or `--criteria none`: which installed skills' Review Criteria pages the launcher names in the prompt (step 3). Absent, this collection's declaring skills.
 - `--stall <seconds>` (default 900): how long the captured stream may stay silent before the launcher kills the reviewer and its process group and fails the review as stalled. Every byte on stdout or stderr resets it, so a slow review that keeps talking is never a stall. Raise it for a reviewer that prints nothing until the end (copilot) on a very large change.
 - Foreground (the default) blocks until the reviewer exits, so give the tool call a generous explicit timeout. Subagents (worktree builders, spawned workers) run the launch foreground under one, or `--background` and then wait in bounded foreground calls (step 5): a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
