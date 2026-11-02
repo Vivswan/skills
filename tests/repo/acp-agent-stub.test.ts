@@ -26,25 +26,26 @@ interface Seen {
   permissions: string[];
 }
 
-/** A _session/steering request: mid-turn when `afterMs` is set (that long after the first prompt starts), else idle, right after the prompt `afterPrompt` indexes (the last by default). */
+/** A _session/steering request: mid-turn when `afterMs` is set (that long after the first prompt starts), else idle,
+ * right after the prompt `afterPrompt` indexes (the last by default), followed by a wait of `settleMs` for the turn
+ * the steer started. */
 interface Steer {
   text: string;
   afterMs?: number;
   afterPrompt?: number;
-  /** How long to wait after an idle steer, for the turn it started to finish. */
   settleMs?: number;
   idleBehavior?: string;
 }
 
-/** One session against the stub through the SDK's client; what it saw, with every field the assertions read. */
+/** One session against the stub through the SDK's client: the mode to set, the answer to every permission request,
+ * the prompts in order, the steers, and two timings against the first prompt's start: `cancelAfterMs` sends
+ * session/cancel, `overlapAfterMs` sends a second prompt and records how the stub answered it. */
 interface DriveOptions {
   mode?: string;
   answer: string;
   prompts: string[];
   steers?: Steer[];
-  /** Sends session/cancel this long after the first prompt starts. */
   cancelAfterMs?: number;
-  /** Sends a second prompt this long after the first starts, and records how the stub answered it. */
   overlapAfterMs?: number;
 }
 

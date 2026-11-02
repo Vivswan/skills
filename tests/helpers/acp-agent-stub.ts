@@ -1,29 +1,8 @@
 #!/usr/bin/env bun
 // A fake ACP agent for the tests, reached through a wrapper on PATH under an adapter's name
 // (codex-acp, claude-agent-acp): the SDK's own agent() builder over stdio, a scripted turn per
-// session/prompt, and a violations file for anything off-script. The scenario file says what the
-// agent advertises and what each turn does:
-//
-//   {
-//     "steering": false,                       advertise _meta.steering in the initialize response and accept
-//                                              _session/steering: injected while a turn runs, else promptRequired
-//                                              when the request asks for it, else a new turn from the next script
-//     "modes": { "currentModeId": "read-only", "availableModes": [{ "id": "read-only", "name": "Read-only" }] },
-//     "expectMode": "read-only",               the id session/set_mode must carry; any other is a violation
-//     "turns": [ [ <step>, ... ], ... ]        one list per session/prompt, in order
-//   }
-//
-// Steps, run in order within a turn:
-//   { "type": "message", "text": "...", "chunks": 3 }      agent_message_chunk, the text split into chunks
-//   { "type": "thought", "text": "..." }                   agent_thought_chunk
-//   { "type": "tool", "title": "git diff", "kind": "execute", "permission": true, "output": "...",
-//     "onReject": "cancel" }                               tool_call, then session/request_permission when
-//                                                           permission is set; a rejection either ends the turn
-//                                                           with stopReason cancelled (codex) or marks the call
-//                                                           failed and goes on ("continue", claude)
-//   { "type": "stop", "reason": "end_turn" }               the prompt's response; end_turn when no step says
-//   { "type": "exit", "code": 1 }                          the adapter dies mid-turn
-//   { "type": "sleep", "ms": 300 }                         silence
+// session/prompt, and a violations file for anything off-script. STUB_SCENARIO names the script:
+// a Scenario (below) of Steps.
 //
 // Environment:
 //   STUB_SCENARIO     the scenario file (required)
@@ -50,6 +29,17 @@ interface ToolStep {
   onReject?: "cancel" | "continue";
   locations?: { path: string }[];
 }
+
+/** One step of a turn, run in order:
+ *   { "type": "message", "text": "...", "chunks": 3 }      agent_message_chunk, the text split into chunks
+ *   { "type": "thought", "text": "..." }                   agent_thought_chunk
+ *   { "type": "tool", "title": "git diff", "kind": "execute", "permission": true, "output": "...",
+ *     "onReject": "cancel" }                               tool_call, then session/request_permission when permission
+ *                                                           is set; a rejection ends the turn with stopReason cancelled
+ *                                                           (codex) or marks the call failed and goes on ("continue", claude)
+ *   { "type": "stop", "reason": "end_turn" }               the prompt's response; end_turn when no step says
+ *   { "type": "exit", "code": 1 }                          the adapter dies mid-turn
+ *   { "type": "sleep", "ms": 300 }                         silence */
 type Step =
   | { type: "message"; text: string; chunks?: number }
   | { type: "thought"; text: string }
@@ -58,6 +48,15 @@ type Step =
   | { type: "exit"; code: number }
   | { type: "sleep"; ms: number };
 
+/** The scenario file: what the agent advertises and what each turn does.
+ *   {
+ *     "steering": true,                        advertise _meta.steering in the initialize response and accept
+ *                                              _session/steering: injected while a turn runs, else promptRequired
+ *                                              when the request asks for it, else a new turn from the next script
+ *     "modes": { "currentModeId": "read-only", "availableModes": [{ "id": "read-only", "name": "Read-only" }] },
+ *     "expectMode": "read-only",               the id session/set_mode must carry; any other is a violation
+ *     "turns": [ [ <step>, ... ], ... ]        one list per session/prompt, in order
+ *   } */
 interface Scenario {
   steering?: boolean;
   modes?: acp.NewSessionResponse["modes"];
