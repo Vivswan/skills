@@ -12,14 +12,14 @@ metadata:
 
 Six rules, each distilled from a false conclusion nearly shipped in production:
 
-| # | Rule | The failure it kills |
-| --- | --- | --- |
-| 1 | Evidence or error, never a bare zero | one 0 for both "absent" and "I failed to look" |
-| 2 | Positive control before trusting a zero | a blind instrument answering the wrong question truthfully |
-| 3 | Suspect the instrument first | a plausible number measuring the wrong thing |
-| 4 | The postcondition is the truth | success logs over a state that never changed |
-| 5 | Two observations to look, re-measure to send | a report racing the state it describes |
-| 6 | Negative control for checkers | a gate that cannot go red |
+| #   | Rule                                         | The failure it kills                                       |
+| --- | -------------------------------------------- | ---------------------------------------------------------- |
+| 1   | Evidence or error, never a bare zero         | one 0 for both "absent" and "I failed to look"             |
+| 2   | Positive control before trusting a zero      | a blind instrument answering the wrong question truthfully |
+| 3   | Suspect the instrument first                 | a plausible number measuring the wrong thing               |
+| 4   | The postcondition is the truth               | success logs over a state that never changed               |
+| 5   | Two observations to look, re-measure to send | a report racing the state it describes                     |
+| 6   | Negative control for checkers                | a gate that cannot go red                                  |
 
 ## 1. Evidence or error, never a bare zero
 

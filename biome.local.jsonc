@@ -3,9 +3,9 @@
 // relaxation is a per-path `overrides` entry below with its reason beside it (docs/modules/typescript.md).
 {
   "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
-  // biome 2.6 formats Markdown by default. The pages are prose the docs probe and vale read, and a managed page
-  // arrives formatted by the platform, so the Markdown formatter stays off here.
-  "markdown": { "formatter": { "enabled": false } },
+  // biome 2.6 formats Markdown. Its parser reads the pages' YAML frontmatter only when told to; unparsed, the
+  // formatter rewrote the frontmatter's indentation and the metadata the skill and memory contracts read.
+  "markdown": { "parser": { "frontmatter": true } },
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -57,6 +57,35 @@
     {
       "includes": ["tests/**"],
       "linter": { "rules": { "complexity": { "noExcessiveLinesPerFunction": "off" } } }
+    },
+    // A page the platform manages or mirrors (.github/repo-platform-manifest.json) arrives in the platform's format:
+    // the platform's check holds it to the hash it wrote, and the next sync writes it again.
+    {
+      "includes": [
+        ".github/instructions/review.instructions.md",
+        "AGENTS.md",
+        "LICENSE.md",
+        "skills/claude-remote-peers/LICENSE.md",
+        "skills/code-standards/LICENSE.md",
+        "skills/codex-browser-fix/LICENSE.md",
+        "skills/craft-skills-and-memories/LICENSE.md",
+        "skills/natural-writing/LICENSE.md",
+        "skills/never-twice/LICENSE.md",
+        "skills/no-invalid-states/LICENSE.md",
+        "skills/orchestrator-mode/LICENSE.md",
+        "skills/pr-and-issue-discipline/LICENSE.md",
+        "skills/pr-landing-discipline/LICENSE.md",
+        "skills/project-naming/LICENSE.md",
+        "skills/reply-and-review-discipline/LICENSE.md",
+        "skills/rubber-duck-review/LICENSE.md",
+        "skills/session-events/LICENSE.md",
+        "skills/verify-with-controls/LICENSE.md",
+        "skills/watch-github/LICENSE.md",
+        "skills/working-text/LICENSE.md",
+        "skills/worktree-hygiene/LICENSE.md",
+        "template/LICENSE.md"
+      ],
+      "formatter": { "enabled": false }
     }
   ]
 }

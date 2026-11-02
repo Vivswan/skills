@@ -13,7 +13,10 @@ In `biome.json`:
   "linter": {
     "rules": {
       "complexity": {
-        "noExcessiveCognitiveComplexity": { "level": "warn", "options": { "maxAllowedComplexity": 15 } },
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": { "maxAllowedComplexity": 15 }
+        },
         "noExcessiveLinesPerFunction": { "level": "warn", "options": { "maxLines": 80 } },
         "useMaxParams": { "level": "warn", "options": { "max": 6 } }
       },
@@ -50,7 +53,10 @@ Biome has no rule for function order (`noInvalidUseBeforeDeclaration` lets a hoi
 {
   "rules": {
     "no-use-before-define": "off",
-    "@typescript-eslint/no-use-before-define": ["error", { "functions": true, "classes": true, "variables": true, "enums": true }]
+    "@typescript-eslint/no-use-before-define": [
+      "error",
+      { "functions": true, "classes": true, "variables": true, "enums": true }
+    ]
   }
 }
 ```
@@ -176,15 +182,15 @@ return withMinWords(segments, minWords);
 
 The ugly-to-clear table of `../shape.md`, with each row as TypeScript writes it:
 
-| Ugly | Clear |
-| --- | --- |
-| `a ? b : c ? d : e` | an `if`/`else if` chain, or early returns |
-| `[...base, ...(flag ? extra : [])]` | `const items = [...base];` then `if (flag) items.push(...extra);` |
-| `rows.find((r) => r.id === key)!` | a `Map` keyed by `id`, or a named `findRow` that handles the miss |
-| `if ((n = rows.length) > 3)` | `const count = rows.length;` on its own line |
-| `ok && doThing()` | `if (ok) doThing();` |
-| a guard's body wrapped in `else` | return early, the body follows unwrapped (`noUselessElse`) |
-| `f(0.0, 12.5, 0.2)` | `f({ start: 0.0, end: 12.5, pad: 0.2 })`, an options object once three values share a type |
+| Ugly                                | Clear                                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| `a ? b : c ? d : e`                 | an `if`/`else if` chain, or early returns                                                  |
+| `[...base, ...(flag ? extra : [])]` | `const items = [...base];` then `if (flag) items.push(...extra);`                          |
+| `rows.find((r) => r.id === key)!`   | a `Map` keyed by `id`, or a named `findRow` that handles the miss                          |
+| `if ((n = rows.length) > 3)`        | `const count = rows.length;` on its own line                                               |
+| `ok && doThing()`                   | `if (ok) doThing();`                                                                       |
+| a guard's body wrapped in `else`    | return early, the body follows unwrapped (`noUselessElse`)                                 |
+| `f(0.0, 12.5, 0.2)`                 | `f({ start: 0.0, end: 12.5, pad: 0.2 })`, an options object once three values share a type |
 
 `Array.prototype.find` on a small array is idiomatic, not ugly; the finding is a `find` used as a lookup table, or a `find` whose miss is silenced with `!`.
 

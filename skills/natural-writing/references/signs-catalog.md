@@ -15,7 +15,7 @@ Quoted phrases and characters inside this catalog are examples of the tells, not
 
 ### 1.1 Inflated significance, legacy, and broader trends
 
-Watch for: *stands/serves as*, *is a testament/reminder*, *a vital/ significant/crucial/pivotal/key role/moment*, *underscores/highlights its importance/significance*, *reflects broader*, *symbolizing its ongoing/ enduring/lasting*, *contributing to the*, *setting the stage for*, *marking/shaping the*, *represents/marks a shift*, *key turning point*, *evolving landscape*, *focal point*, *indelible mark*, *deeply rooted*.
+Watch for: _stands/serves as_, _is a testament/reminder_, _a vital/ significant/crucial/pivotal/key role/moment_, _underscores/highlights its importance/significance_, _reflects broader_, _symbolizing its ongoing/ enduring/lasting_, _contributing to the_, _setting the stage for_, _marking/shaping the_, _represents/marks a shift_, _key turning point_, _evolving landscape_, _focal point_, _indelible mark_, _deeply rooted_.
 
 LLMs puff up arbitrary aspects of a subject as representing or contributing to some broader topic ("marking a pivotal moment in the evolution of regional statistics"). They situate subjects amid vague "debates" the subject has "prompted" or "shaped", or note that a subject "participated in public discussions".
 
@@ -25,7 +25,7 @@ Instead: State what happened. If something matters, show the specific, checkable
 
 ### 1.2 Canned emphasis on notability, attribution, and coverage
 
-Watch for: *independent coverage*, *local/regional/national media outlets*, *trade publications*, *cited/featured/profiled in*, *was identified by*, *written by a leading expert*, *maintains an active social media presence*, *featured in X, Y, and other prominent outlets*.
+Watch for: _independent coverage_, _local/regional/national media outlets_, _trade publications_, _cited/featured/profiled in_, _was identified by_, _written by a leading expert_, _maintains an active social media presence_, _featured in X, Y, and other prominent outlets_.
 
 LLMs prove importance by cataloging where a subject was covered and what kind of sources those are. They often echo notability-guideline language verbatim, as if the justification for the edit leaked into the text, and often misattribute their own superficial analysis to the named source.
 
@@ -35,7 +35,7 @@ Instead: Report the substance a source contains, not the fact of coverage. Never
 
 ### 1.3 Superficial trailing analysis
 
-Watch for sentence-final present-participle clauses: *…, highlighting/ underscoring/emphasizing X*, *…, ensuring Y*, *…, reflecting/symbolizing Z*, *…, contributing to*, *…, cultivating/fostering*, *…, enhancing*, *…, offering valuable insights*, *…, aligning/resonating with*.
+Watch for sentence-final present-participle clauses: _…, highlighting/ underscoring/emphasizing X_, _…, ensuring Y_, _…, reflecting/symbolizing Z_, _…, contributing to_, _…, cultivating/fostering_, _…, enhancing_, _…, offering valuable insights_, _…, aligning/resonating with_.
 
 The clause bolts an unearned significance-claim onto a factual sentence ("The station has 8 tracks and 6 platforms, reflecting its continued relevance in the regional transportation landscape"). It is unattributed opinion, and retrieval-equipped models will pin it on named sources that never said it.
 
@@ -43,7 +43,7 @@ Instead: End the sentence at the fact. If analysis is warranted, make it a separ
 
 ### 1.4 Promotional and advertisement-like language
 
-Watch for: *boasts a*, *vibrant*, *rich*, *profound*, *enhancing*, *showcasing*, *exemplifies*, *commitment to*, *natural beauty*, *nestled*, *in the heart of*, *groundbreaking*, *renowned*, *featuring*, *diverse array*, *seamlessly*, *rich cultural heritage*, *stunning*, and press-release cadence generally.
+Watch for: _boasts a_, _vibrant_, _rich_, _profound_, _enhancing_, _showcasing_, _exemplifies_, _commitment to_, _natural beauty_, _nestled_, _in the heart of_, _groundbreaking_, _renowned_, _featuring_, _diverse array_, _seamlessly_, _rich cultural heritage_, _stunning_, and press-release cadence generally.
 
 LLM output drifts toward travel-guide or press-release tone even when asked for neutral style, sometimes while claiming to have removed promotional tone. Newer models are subtler (they avoid "the best") but still skew positive.
 
@@ -51,7 +51,7 @@ Instead: Neutral register. Describe, don't sell. If a rewrite claims to remove p
 
 ### 1.5 Vague attributions and overgeneralized opinions (weasel wording)
 
-Watch for: *industry reports*, *observers have cited*, *experts argue*, *some critics argue*, *several sources/publications* (when few are cited), *such as* before supposedly non-exhaustive lists, *described in scholarship as*, *researchers and conservationists*.
+Watch for: _industry reports_, _observers have cited_, _experts argue_, _some critics argue_, _several sources/publications_ (when few are cited), _such as_ before supposedly non-exhaustive lists, _described in scholarship as_, _researchers and conservationists_.
 
 LLMs attribute opinions to vague authorities. They present one or two sources as a crowd ("reviewers" and "scholars" backed by a single citation), and imply lists are samples when the source gives everything it has.
 
@@ -59,7 +59,7 @@ Instead: Name who said it, or cut it. Match the stated quantity of support to th
 
 ### 1.6 Formulaic "challenges" and "future prospects" conclusions
 
-Watch for: *Despite its … faces several challenges…*, *Despite these challenges…*, sections titled *Challenges*, *Challenges and Legacy*, *Future Outlook*, *Future Prospects*, and endings that pivot to vague optimism ("continues to thrive", "positions them as critical components", "could enhance…").
+Watch for: _Despite its … faces several challenges…_, _Despite these challenges…_, sections titled _Challenges_, _Challenges and Legacy_, _Future Outlook_, _Future Prospects_, and endings that pivot to vague optimism ("continues to thrive", "positions them as critical components", "could enhance…").
 
 The tell is the rigid formula bolted onto the end of an outline-shaped piece: a challenges paragraph, then a hopeful kicker.
 
@@ -67,13 +67,13 @@ Instead: If challenges are real and sourced, cover them where they belong. End w
 
 ### 1.7 Term-definition openings
 
-Watch for first sentences that treat a descriptive title as a proper noun or a term to define: "*Catchment area (health)* refers to…", "*The 'List of songs about Mexico'* is a curated compilation of…".
+Watch for first sentences that treat a descriptive title as a proper noun or a term to define: "_Catchment area (health)_ refers to…", "_The 'List of songs about Mexico'_ is a curated compilation of…".
 
 Instead: Open about the subject itself, in a natural sentence. "Refers to" almost never belongs in an opening. The piece is about the thing, not the phrase.
 
 ### 1.8 "Awards and recognition" sections
 
-Watch for section headings shaped "X and Y", and especially *Awards and recognition* or plain *Recognition* sections.
+Watch for section headings shaped "X and Y", and especially _Awards and recognition_ or plain _Recognition_ sections.
 
 The wording "Awards and recognition" is nearly ubiquitous in AI-generated articles, and far more common than in human writing even against articles tagged as promotional. It is the heading-level form of inflated legacy (1.1) and canned coverage-claims (1.2).
 
@@ -89,9 +89,9 @@ Instead: On politically sensitive or censorship-adjacent topics, verify claims a
 
 ### 2.1 "AI vocabulary" clusters
 
-Empirically overused words (each backed by published studies): *additionally* (especially sentence-initial), *align with*, *boasts* (= has), *bolstered*, *crucial*, *deep dive*, *delve*, *emphasizing*, *enduring*, *enhance*, *fostering*, *garner*, *highlight* (verb), *interplay*, *intricate/intricacies*, *key* (adjective), *landscape* (abstract), *meticulous(ly)*, *pivotal*, *robust*, *showcase*, *tapestry* (abstract), *testament*, *underscore* (verb), *valuable*, *vibrant*.
+Empirically overused words (each backed by published studies): _additionally_ (especially sentence-initial), _align with_, _boasts_ (= has), _bolstered_, _crucial_, _deep dive_, _delve_, _emphasizing_, _enduring_, _enhance_, _fostering_, _garner_, _highlight_ (verb), _interplay_, _intricate/intricacies_, _key_ (adjective), _landscape_ (abstract), _meticulous(ly)_, _pivotal_, _robust_, _showcase_, _tapestry_ (abstract), _testament_, _underscore_ (verb), _valuable_, _vibrant_.
 
-The overused set shifts by model era. *Delve* peaked in 2023 and 2024, then fell off, while *emphasizing*, *enhance*, *highlighting*, and *showcasing* persist in newer output. Grok overuses pseudo-scientific *causal*, *empirical*, and *correlate*.
+The overused set shifts by model era. _Delve_ peaked in 2023 and 2024, then fell off, while _emphasizing_, _enhance_, _highlighting_, and _showcasing_ persist in newer output. Grok overuses pseudo-scientific _causal_, _empirical_, and _correlate_.
 
 One occurrence is coincidence, but a cluster is one of the strongest tells. The flag is literal: these specific words, not their synonyms. Thesaurus-swapping keeps the pattern and adds stiffness.
 
@@ -99,19 +99,19 @@ Instead: Plain verbs and nouns. "Delve into" becomes "examine", and "Crucial" be
 
 ### 2.2 Avoidance of "is"/"are"/"has"
 
-Watch for: *serves as/stands as/marks/functions as/operates as/represents [a]*, *boasts/features/ maintains/offers [a]*, *refers to*, *holds the distinction of being*, *ventured into politics as a candidate* (= was a candidate), *began his career as* (= was).
+Watch for: _serves as/stands as/marks/functions as/operates as/represents [a]_, _boasts/features/ maintains/offers [a]_, _refers to_, _holds the distinction of being_, _ventured into politics as a candidate_ (= was a candidate), _began his career as_ (= was).
 
-Measured effect: usage of *is/are* dropped over 10% in post-2023 academic text, and AI "copyedits" often replace copulas with these constructions.
+Measured effect: usage of _is/are_ dropped over 10% in post-2023 academic text, and AI "copyedits" often replace copulas with these constructions.
 
-Instead: *Is, are, was, has.* The plainest linking verb is usually right, and using it is itself a sign of human writing.
+Instead: _Is, are, was, has._ The plainest linking verb is usually right, and using it is itself a sign of human writing.
 
 ### 2.3 Vague expression of connection or association
 
-Watch for: *in connection with/to*, *connected with/to*, *in association with*, *associated with*, and intensified forms like *particularly/widely associated*.
+Watch for: _in connection with/to_, _connected with/to_, _in association with_, _associated with_, and intensified forms like _particularly/widely associated_.
 
-LLMs allude to two subjects being "connected to" or "associated with" each other instead of stating the relationship: "sources identified John Doe as being associated with leadership of ExampleCorp" for "John Doe was the CEO of ExampleCorp". It often rides with promotional buzz and AI vocabulary, sometimes stacked (*particularly/widely associated*).
+LLMs allude to two subjects being "connected to" or "associated with" each other instead of stating the relationship: "sources identified John Doe as being associated with leadership of ExampleCorp" for "John Doe was the CEO of ExampleCorp". It often rides with promotional buzz and AI vocabulary, sometimes stacked (_particularly/widely associated_).
 
-The fix words are plain: *of*, *for*, *by*, or a defined relationship (*working in/with*, *used in/for*, *caused by*). This indirection alone proves nothing, but its abundance alongside other signs does.
+The fix words are plain: _of_, _for_, _by_, or a defined relationship (_working in/with_, _used in/for_, _caused by_). This indirection alone proves nothing, but its abundance alongside other signs does.
 
 Instead: State the actual relationship. "Is associated with the orchestra" becomes "plays in the orchestra", "conducted the orchestra", or whatever is true.
 
@@ -119,9 +119,9 @@ Instead: State the actual relationship. "Is associated with the orchestra" becom
 
 Three templates:
 
-- *Not just X, but Y*: "not only dismissive but also unnecessarily harsh"; "doesn't just undermine the argument; it questions their very right to participate".
-- *Not X, but Y*: "It's not a mirror but a portal"; "Not a career, not a body of work, not sustained relevance — just an algorithmic moment".
-- *Y rather than X*: the reversed form, especially common in Grok output and present in ChatGPT and Claude output too ("Rather than simply retelling a classical legend, the film adapts…").
+- _Not just X, but Y_: "not only dismissive but also unnecessarily harsh"; "doesn't just undermine the argument; it questions their very right to participate".
+- _Not X, but Y_: "It's not a mirror but a portal"; "Not a career, not a body of work, not sustained relevance — just an algorithmic moment".
+- _Y rather than X_: the reversed form, especially common in Grok output and present in ChatGPT and Claude output too ("Rather than simply retelling a classical legend, the film adapts…").
 
 The construction preemptively corrects a misconception nobody had.
 
@@ -199,13 +199,13 @@ Sections set at h1 (`=` in wikitext, `#` in Markdown), often from mistranslated 
 
 ### 4.1 Collaborative chatter
 
-Watch for: *I hope this helps*, *Of course!*, *Certainly!*, *You're absolutely right*, *Would you like…*, *is there anything else*, *let me know*, *here is a…*, *more detailed breakdown*, meta-advice about the deliverable ("ensure the content is presented in a neutral tone"), leftover instructions ("Delete this section before submission"), and pasted prompt templates ("List the areas you want to contribute to. Example: …").
+Watch for: _I hope this helps_, _Of course!_, _Certainly!_, _You're absolutely right_, _Would you like…_, _is there anything else_, _let me know_, _here is a…_, _more detailed breakdown_, meta-advice about the deliverable ("ensure the content is presented in a neutral tone"), leftover instructions ("Delete this section before submission"), and pasted prompt templates ("List the areas you want to contribute to. Example: …").
 
 Instead: The deliverable contains only the deliverable. Conversation goes in the conversation.
 
 ### 4.2 Disclaimers: knowledge cutoffs, source availability, how to read a source
 
-Watch for: *as of my last knowledge update*, *up to my last training update*, *while specific details are limited/scarce…*, *not widely available/ documented/disclosed*, *…in the provided/available sources/search results…*, *based on available information*, *maintains a low profile*, *keeps personal details private*, *[claim] should be treated as … rather than …*, and "likely/probably" bridges into invented specifics ("the mountain likely supports…").
+Watch for: _as of my last knowledge update_, _up to my last training update_, _while specific details are limited/scarce…_, _not widely available/ documented/disclosed_, _…in the provided/available sources/search results…_, _based on available information_, _maintains a low profile_, _keeps personal details private_, _[claim] should be treated as … rather than …_, and "likely/probably" bridges into invented specifics ("the mountain likely supports…").
 
 The claim that information "is not documented" is itself speculation, and what follows it is usually fabrication.
 
@@ -267,8 +267,8 @@ From the page's "edit summaries", "comments", and "submission statements" sectio
 - First-person formal paragraphs itemizing virtues ("ensured neutral tone", "adheres to guidelines").
 - Exhaustive summaries of trivial changes.
 - Preemptive compliance claims ("This draft is neutral and well-sourced and meets all standards").
-- Canned assurance vocabulary: *ensured that ... adheres to*, *refined*, *enhanced*, *streamlined*, *in compliance with*, *neutrality*, *clarity*, *flow*. Verbose yet unspecific, unlike a human's brief "removed excessive links per MOS:OVERLINK".
-- Procedural statements about what was NOT changed: *preserved/retained X*, *avoided Y*, *while preserving the original meaning*. Humans rarely list what they didn't do, but a prompted model does.
+- Canned assurance vocabulary: _ensured that ... adheres to_, _refined_, _enhanced_, _streamlined_, _in compliance with_, _neutrality_, _clarity_, _flow_. Verbose yet unspecific, unlike a human's brief "removed excessive links per MOS:OVERLINK".
+- Procedural statements about what was NOT changed: _preserved/retained X_, _avoided Y_, _while preserving the original meaning_. Humans rarely list what they didn't do, but a prompted model does.
 - Overemphasis on citedness: "added sourced content", "with independent sources", instead of saying what the content is.
 - Itemized markup minutiae: naming infobox or reference parameters and templates, with brackets and equals signs, at a granularity new editors never volunteer.
 - Stating the obvious about review feedback: "addressed reviewer feedback", "per reviewer feedback".
@@ -283,10 +283,10 @@ Instead: Commit messages and summaries state what changed and why, in the projec
 
 Common in older models, rarer now, still instantly recognizable:
 
-- Didactic disclaimers: *it's important/crucial to note/remember/ consider*, *worth noting*, *may vary*, safety caveats for imagined readers.
+- Didactic disclaimers: _it's important/crucial to note/remember/ consider_, _worth noting_, _may vary_, safety caveats for imagined readers.
 - Forced synonym cycling (elegant variation): repetition penalties in older models rotated synonyms for the same referent ("the constraints of socialist realism", then "the challenging climate of Soviet artistic constraints", then "state-imposed artistic norms"), blurring it with each rotation. Call the same thing by the same name every time, because repetition of the right word is clarity, not a defect.
-- Section summaries: *In summary*, *In conclusion*, *Overall*, sections titled "Conclusion" that restate the piece, paragraph-final restatements.
-- Prompt-refusal residue: *as an AI language model*, *I cannot… but I can…*, *I'm sorry*.
+- Section summaries: _In summary_, _In conclusion_, _Overall_, sections titled "Conclusion" that restate the piece, paragraph-final restatements.
+- Prompt-refusal residue: _as an AI language model_, _I cannot… but I can…_, _I'm sorry_.
 - Abrupt cutoffs: text that stops mid-sentence from a token limit.
 
 Caveat on synonym cycling: some non-native English writers are taught to avoid repetition too, and the source page reclassified it as historical in 2026.
@@ -297,10 +297,10 @@ Deliver complete text that ends when the content ends: no recap, no disclaimer, 
 
 Patterns empirically more common in human writing. Use them:
 
-- Simple *is/has* phrases: "there is a", "it has a".
-- Plain words over stiff synonyms: *wrote* not *authored*, *used* not *utilized*, *moved* not *relocated*, *tried* not *attempted*, *died* not *passed away*.
+- Simple _is/has_ phrases: "there is a", "it has a".
+- Plain words over stiff synonyms: _wrote_ not _authored_, _used_ not _utilized_, _moved_ not _relocated_, _tried_ not _attempted_, _died_ not _passed away_.
 - Definite statements when true: "was the first", "is the only", "one of the best". Commit, and don't sand every claim down to hedged mush.
-- Natural hedges and intensifiers where uncertainty is real: *very*, *perhaps*, *tends to*.
+- Natural hedges and intensifiers where uncertainty is real: _very_, _perhaps_, _tends to_.
 - Ordinary wordy constructions in moderation: "as a result of", "in order to", "the fact that". Human prose has texture, and ruthlessly "optimized" prose reads generated.
 - Being able to explain any choice you made in the text. If asked why a sentence, source, or number is there, have a real answer.
 

@@ -13,13 +13,13 @@ That test decides, whatever form the information takes. The two kinds met most o
 
 The identity substitutes:
 
-| Kind | Substitute |
-| --- | --- |
-| a login or username | `octocat`, `work-bot`, or `example-user` |
-| an employer, a domain, or a hostname | `example.com` |
-| a whole email | `example-user@example.com`, never just its host |
-| a home path | `/home/user` or `~` |
-| the checkout path | `/repo/...` |
+| Kind                                 | Substitute                                      |
+| ------------------------------------ | ----------------------------------------------- |
+| a login or username                  | `octocat`, `work-bot`, or `example-user`        |
+| an employer, a domain, or a hostname | `example.com`                                   |
+| a whole email                        | `example-user@example.com`, never just its host |
+| a home path                          | `/home/user` or `~`                             |
+| the checkout path                    | `/repo/...`                                     |
 
 A captured row published with `/repo/...` in place of the machine's real checkout path is the worked example.
 
@@ -31,4 +31,3 @@ What follows for anything measured or copied:
 Specimens: a real account login copied from pasted terminal output into a test fixture and a PR body, shipped as `work-bot`; a statistical profile measured from the author's real sessions and committed as a test fixture, replaced by a hand-written one, every figure of the old file grepped out of the replacing PR, and the history rewritten to drop the original.
 
 A product file name that happens to contain a vendor's word (a PowerShell profile filename, a devcontainer base image), a repository's own `owner/repo` coordinate in its install command, a plugin marketplace manifest's owner contact (a publishing contact the marketplace requires), and the repository's own tooling and gates (the review tool a body's Gates line names, a check's run count) are facts about the repository, not the author, and stay.
-

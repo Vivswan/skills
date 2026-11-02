@@ -9,7 +9,7 @@ metadata:
 
 # Natural writing
 
-Produce prose that avoids the documented signs of AI writing, based on [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing). That page is a field guide for *detecting* AI text. This skill inverts it into rules for *not producing* those patterns.
+Produce prose that avoids the documented signs of AI writing, based on [Wikipedia:Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing). That page is a field guide for _detecting_ AI text. This skill inverts it into rules for _not producing_ those patterns.
 
 One pattern alone can be fine. The goal is prose where the patterns don't cluster and nothing reads generated.
 
@@ -54,7 +54,7 @@ Read `references/signs-catalog.md` in full. For audits or thorough requests, als
 
 Apply the full catalog. The highest-value rules:
 
-1. **State facts plainly**, with *is/are/has/was*. Not "serves as", "stands as", "boasts", "features", "marks", "represents", or "refers to" openings.
+1. **State facts plainly**, with _is/are/has/was_. Not "serves as", "stands as", "boasts", "features", "marks", "represents", or "refers to" openings.
 2. **Cut inflated significance**: "pivotal moment", "testament to", "underscores its importance", "reflects broader trends", "rich cultural heritage", "evolving landscape". Replace generic importance-claims with a specific, checkable fact. Specificity is the whole game.
 3. **Kill trailing participle analysis.** No sentence-final "-ing" clauses that editorialize: "…, highlighting the significance of X", "…, ensuring Y".
 4. **Avoid AI-vocabulary clusters**: delve, crucial, pivotal, tapestry, landscape (abstract), showcase, underscore, intricate, fostering, garner, meticulous, vibrant, robust, boasts, align with, testament. One may be fine, but clusters are the tell. See the word list.

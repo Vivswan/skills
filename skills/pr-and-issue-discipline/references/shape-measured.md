@@ -33,8 +33,8 @@ When the diff touches a library-shaped category, the last of them is **Library:*
 <!-- a measured before/after table; a cell not yet measured says "not yet" and why -->
 
 | Metric | Before | After |
-| --- | --- | --- |
-| ... | ... | ... |
+| ------ | ------ | ----- |
+| ...    | ...    | ...   |
 
 <!-- one footer line: the judge, the runs, the aggregation -->
 
@@ -80,11 +80,11 @@ after:  load policy.yaml -> render(policy)             -> router prompt    (exam
 
 ## Results
 
-| Metric | Before | After |
-| --- | --- | --- |
-| Policy recall | 0.71 | 0.84 |
-| Example leakage | 12 of 200 | 0 of 200 |
-| Latency p50 | not yet: the perf sweep runs nightly | not yet: same sweep |
+| Metric          | Before                               | After               |
+| --------------- | ------------------------------------ | ------------------- |
+| Policy recall   | 0.71                                 | 0.84                |
+| Example leakage | 12 of 200                            | 0 of 200            |
+| Latency p50     | not yet: the perf sweep runs nightly | not yet: same sweep |
 
 Judge: rubric v3, 200 prompts, 3 runs each, mean.
 
