@@ -15,9 +15,10 @@
  *   the stream goes silent       -> a stuck child held one run for hours: --stall kills the reviewer's process group
  *   criteria pasted by hand      -> thirty rounds passed what the house rules forbid: the launcher names this collection's pages
  *   the bundle runs from .build/ -> paths off import.meta would miss scripts/: the skill root is two levels up either way
+ *   codex-acp alone on PATH      -> no codex to probe read as a working sandbox: the codex the adapter bundles is probed instead
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { type SpawnSyncOptions, spawn, spawnSync } from "node:child_process";
 import type { Dirent } from "node:fs";
 import {
   closeSync,
@@ -613,21 +614,46 @@ type Launch =
 const SANDBOX_PROBE_TIMEOUT_MS = 15000;
 const BWRAP_REFUSAL = /^bwrap: .*$/m;
 
-/** codex runs every sandboxed command under bubblewrap, and a container whose
- * AppArmor profile denies mount propagation refuses it at start (`bwrap:
- * Failed to make / slave: Permission denied`). A no-op under the sandbox
- * shows that before the reviewer does. Only that refusal selects the copy:
- * a codex too old for the subcommand, or one not installed, keeps the
- * read-only launch and reports its own failure there. */
-function planLaunch(tool: Tool): Launch {
-  if (tool !== "codex") return { sandbox: "read-only" };
-  const probe = spawnSync("codex", ["sandbox", "--", "true"], {
+/** The codex the adapter bundles (codex-acp depends on @openai/codex): its launcher under a node_modules above the
+ * adapter's real path, or null where the adapter is not installed or carries none. The walk is the adapter's tree
+ * alone: bun's module resolver reaches past it, to a cached or freshly installed package, which is no sandbox here. */
+function adapterCodex(): string | null {
+  const adapter = Bun.which(ACP_REVIEWERS.codex.adapter);
+  if (adapter === null) return null;
+  let dir = dirname(realpathSync(adapter));
+  for (;;) {
+    const launcher = join(dir, "node_modules", "@openai", "codex", "bin", "codex.js");
+    if (existsSync(launcher)) return launcher;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** Why codex's sandbox cannot start here, or null where it can. On Linux codex runs every sandboxed command under
+ * bubblewrap, and a container whose AppArmor profile denies mount propagation refuses it at start (`bwrap: Failed to
+ * make / slave: Permission denied`); a no-op under the sandbox shows that before the reviewer does. codex's own probe
+ * is the measure, since it knows its bundled bubblewrap, its /proc fallback, and Seatbelt on macOS. */
+function sandboxRefusal(): string | null {
+  const options: SpawnSyncOptions = {
     stdio: ["ignore", "ignore", "pipe"],
     timeout: SANDBOX_PROBE_TIMEOUT_MS,
-  });
-  if (probe.status === 0 || probe.error !== undefined) return { sandbox: "read-only" };
-  const refusal = BWRAP_REFUSAL.exec(probe.stderr.toString())?.[0];
-  if (refusal === undefined) return { sandbox: "read-only" };
+  };
+  const read = (probe: ReturnType<typeof spawnSync>): string | null =>
+    probe.status === 0 ? null : (BWRAP_REFUSAL.exec(probe.stderr.toString())?.[0] ?? null);
+  const codex = spawnSync("codex", ["sandbox", "--", "true"], options);
+  if (codex.error === undefined) return read(codex);
+  if ((codex.error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+  const launcher = adapterCodex();
+  if (launcher === null) return null;
+  const bundled = spawnSync(process.execPath, [launcher, "sandbox", "--", "true"], options);
+  return bundled.error === undefined ? read(bundled) : null;
+}
+
+function planLaunch(tool: Tool): Launch {
+  if (tool !== "codex") return { sandbox: "read-only" };
+  const refusal = sandboxRefusal();
+  if (refusal === null) return { sandbox: "read-only" };
   const toplevel = spawnSync("git", ["rev-parse", "--show-toplevel"], {
     stdio: ["ignore", "pipe", "ignore"],
   });
