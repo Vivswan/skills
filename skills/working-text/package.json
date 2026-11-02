@@ -2,7 +2,7 @@
   "name": "working-text-skill-dependencies",
   "private": true,
   "dependencies": {
-    "@babel/parser": "8.0.7",
+    "@babel/parser": "8.0.8",
     "mdast-util-from-markdown": "2.1.0",
     "mdast-util-gfm": "3.1.0",
     "mdast-util-to-string": "4.0.0",
