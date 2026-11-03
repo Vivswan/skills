@@ -176,14 +176,14 @@ Ok(with_min_words(segments, min_words))
 
 The ugly-to-clear table of `../shape.md`, with each row as Rust writes it:
 
-| Ugly | Clear |
-| --- | --- |
-| `if let Some(x) = a { if let Some(y) = x.b { ... } }` | `let Some(x) = a else { return };` then a straight line, or `?` |
-| `.map(...).unwrap_or_else(\|\| ...)` three deep | named intermediates, one computation per line |
-| `.iter().find(\|r\| r.id == key).unwrap()` | a `HashMap` keyed by `id`, or a named `find_row` returning `Option` |
-| `cond.then(\|\| do_thing())` as control flow | `if cond { do_thing() }` |
-| a guard's body wrapped in `else` | `return` early, the body follows unwrapped |
-| `new(0.0, 12.5, 0.2)` | a struct argument or builder once three values share a type |
+| Ugly                                                  | Clear                                                               |
+| ----------------------------------------------------- | ------------------------------------------------------------------- |
+| `if let Some(x) = a { if let Some(y) = x.b { ... } }` | `let Some(x) = a else { return };` then a straight line, or `?`     |
+| `.map(...).unwrap_or_else(\|\| ...)` three deep       | named intermediates, one computation per line                       |
+| `.iter().find(\|r\| r.id == key).unwrap()`            | a `HashMap` keyed by `id`, or a named `find_row` returning `Option` |
+| `cond.then(\|\| do_thing())` as control flow          | `if cond { do_thing() }`                                            |
+| a guard's body wrapped in `else`                      | `return` early, the body follows unwrapped                          |
+| `new(0.0, 12.5, 0.2)`                                 | a struct argument or builder once three values share a type         |
 
 `match` over an `if`/`else if` chain on the same value; `continue` at the top of a loop body instead of nesting the rest.
 

@@ -2,14 +2,14 @@
 
 `/verify-with-controls` fires at the moments a measurement is about to become a claim: a zero or absent reading, an alarming finding, a success claim, or stillness read from a probe or status check. The reading must survive its controls first:
 
-| # | Rule | The failure it kills |
-| --- | --- | --- |
-| 1 | Evidence or error, never a bare zero | one 0 for both "absent" and "I failed to look" |
-| 2 | Positive control before trusting a zero | a blind instrument answering the wrong question truthfully |
-| 3 | Suspect the instrument first | a plausible number measuring the wrong thing |
-| 4 | The postcondition is the truth | success logs over a state that never changed |
-| 5 | Two observations to look, re-measure to send | a report racing the state it describes |
-| 6 | Negative control for checkers | a gate that cannot go red |
+| #   | Rule                                         | The failure it kills                                       |
+| --- | -------------------------------------------- | ---------------------------------------------------------- |
+| 1   | Evidence or error, never a bare zero         | one 0 for both "absent" and "I failed to look"             |
+| 2   | Positive control before trusting a zero      | a blind instrument answering the wrong question truthfully |
+| 3   | Suspect the instrument first                 | a plausible number measuring the wrong thing               |
+| 4   | The postcondition is the truth               | success logs over a state that never changed               |
+| 5   | Two observations to look, re-measure to send | a report racing the state it describes                     |
+| 6   | Negative control for checkers                | a gate that cannot go red                                  |
 
 Each rule is distilled from a false conclusion nearly shipped in production:
 

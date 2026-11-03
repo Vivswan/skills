@@ -77,12 +77,12 @@ usage: lint.mts [--config <architecture.yml>] [--root <dir>] [--mermaid]
 exits: 0 the tree matches the declaration; 1 forbidden or stale edges; 2 usage or an unreadable graph
 ```
 
-| Message | What to do |
-| --- | --- |
-| `forbidden import a -> b: src/a/x.ts -> src/b/y.ts; move it or declare the edge` | Move the import, or add `b` under `edges.a` when the dependency is right |
-| `stale allowance a -> b: no file draws it; remove it from architecture.yml` | Delete `b` from `edges.a`. The declaration lists only edges the code draws |
-| `src/z.ts belongs to no layer in architecture.yml` | Add the file to a layer or to `exclude`. Nothing is silently dropped |
-| `src/a/x.ts:12 loads a module through a computed specifier ...` (exit 2) | Rewrite `import(name)` with a string literal. The graph cannot follow a variable |
+| Message                                                                          | What to do                                                                       |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `forbidden import a -> b: src/a/x.ts -> src/b/y.ts; move it or declare the edge` | Move the import, or add `b` under `edges.a` when the dependency is right         |
+| `stale allowance a -> b: no file draws it; remove it from architecture.yml`      | Delete `b` from `edges.a`. The declaration lists only edges the code draws       |
+| `src/z.ts belongs to no layer in architecture.yml`                               | Add the file to a layer or to `exclude`. Nothing is silently dropped             |
+| `src/a/x.ts:12 loads a module through a computed specifier ...` (exit 2)         | Rewrite `import(name)` with a string literal. The graph cannot follow a variable |
 
 ### 2. Give the page a generated region and render the map
 
@@ -145,13 +145,13 @@ usage: check-page.mts --page <path> [--root <dir>] [--repo-url <prefix>] [--expe
 exits: 0 the page names real code; 1 problems, each printed; 2 usage or an unreadable page
 ```
 
-| Message | What to do |
-| --- | --- |
-| `"<label>": src/engine/nowhere.ts does not exist` | The file moved or the path is mistyped. Fix the box |
-| `"<label>": src/engine/layers.ts exports no foldAll` | The symbol was renamed or never exported. Fix the box, not the file |
-| `"<label>": "srcc/engine/x.ts" looks like code but reads as a caption` | The first path segment is not a top-level directory. Fix the typo |
-| `line 41: the diagram has no "Demonstrated by:" line before the next heading` | Add the line with a link to the covering test |
-| `expected <n> concept diagrams, found <n-1>` | A diagram vanished, or you added one: update `--expect-diagrams` in the same change |
+| Message                                                                       | What to do                                                                          |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `"<label>": src/engine/nowhere.ts does not exist`                             | The file moved or the path is mistyped. Fix the box                                 |
+| `"<label>": src/engine/layers.ts exports no foldAll`                          | The symbol was renamed or never exported. Fix the box, not the file                 |
+| `"<label>": "srcc/engine/x.ts" looks like code but reads as a caption`        | The first path segment is not a top-level directory. Fix the typo                   |
+| `line 41: the diagram has no "Demonstrated by:" line before the next heading` | Add the line with a link to the covering test                                       |
+| `expected <n> concept diagrams, found <n-1>`                                  | A diagram vanished, or you added one: update `--expect-diagrams` in the same change |
 
 ### 5. Wire the gates
 

@@ -25,7 +25,7 @@ Use this skill when someone asks for:
 
 - Prefer a dedicated review tool when one is available.
 - Use a reviewer that is different from the current model when possible.
-- If no dedicated tool exists, fall back to a read-only CLI invocation through this skill's `scripts/run-review.mts` (step 4). Pick the reviewer by which model *you* are:
+- If no dedicated tool exists, fall back to a read-only CLI invocation through this skill's `scripts/run-review.mts` (step 4). Pick the reviewer by which model _you_ are:
   - If you are currently using **Claude** -> `codex`, fallback `copilot`.
   - If you are currently using **Codex or GitHub Copilot** -> `claude`, fallback `copilot`.
 - **Never** let the reviewer write files, edit code, or run unrestricted shell commands.
@@ -181,26 +181,29 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - After a `--background` launch, the wait for the verdict has two shapes, one per actor. They differ for one reason: a subagent that goes idle after one long call is never woken, while the lead's session is re-invoked when a background command ends.
 
   **The lead** (a session the harness re-invokes) waits in one background shell, so the harness delivers the completion. Never poll `review.status` or the output path by hand:
+
   ```bash
   out=<the path from the output-file: line>
   bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" --timeout 3600 > "${out%/*}/verdict.out" 2>&1
   ```
 
   **A subagent** (a worktree builder, a spawned worker) launches with `--background` once, then repeats this call, each run its own foreground tool call with the Bash timeout parameter at 300000 ms, until a verdict, a failure line, or the stall line:
+
   ```bash
   out=<the path from the output-file: line>; record="${out%/*}/review.status"
   ! grep -q '"status"' "$record" && find "$record" -mmin +60 | grep -q . && { echo "review stalled: no verdict an hour after the launch; report it to the lead"; exit 3; }
   bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract --wait "$out" --timeout 240
   ```
+
   What the call printed decides the next step, never its exit code alone, since exit 1 covers both a wait that timed out and a review that failed:
 
-  | The call printed | It means | Next |
-  | --- | --- | --- |
-  | the JSON report on stdout, exit 0 | the verdict | act on it, below |
-  | `review FAILED - relaunch (--wait timed out: ...)` on stderr, exit 1 | no verdict yet | run the call again |
-  | `review FAILED - relaunch (stalled: no stream event for <n> s ...)` on stderr, exit 1 | the launcher killed a reviewer whose stream went silent | relaunch it once; a second stall is tooling trouble to report |
-  | `review FAILED - relaunch (<any other reason>)` on stderr, exit 1 | the review failed | relaunch it |
-  | `review stalled: ...`, exit 3 | the launch record is an hour old and still has no `status`: the block's own cap, not the launcher's | report the stall to the lead |
+  | The call printed                                                                      | It means                                                                                            | Next                                                          |
+  | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+  | the JSON report on stdout, exit 0                                                     | the verdict                                                                                         | act on it, below                                              |
+  | `review FAILED - relaunch (--wait timed out: ...)` on stderr, exit 1                  | no verdict yet                                                                                      | run the call again                                            |
+  | `review FAILED - relaunch (stalled: no stream event for <n> s ...)` on stderr, exit 1 | the launcher killed a reviewer whose stream went silent                                             | relaunch it once; a second stall is tooling trouble to report |
+  | `review FAILED - relaunch (<any other reason>)` on stderr, exit 1                     | the review failed                                                                                   | relaunch it                                                   |
+  | `review stalled: ...`, exit 3                                                         | the launch record is an hour old and still has no `status`: the block's own cap, not the launcher's | report the stall to the lead                                  |
 
   Every wait is a short foreground call repeated, never one long call: each wait is its own foreground tool call, never a shell loop, which is one long call again. The `/orchestrator-mode` skill's `references/spawn-briefs.md`, The Stop-and-Wait Ban, carries the brief's side and points here for the block.
 

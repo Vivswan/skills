@@ -88,12 +88,12 @@ Then for real:
 bun "<skill-dir>/scripts/retire-branch.mts" --branch feature/thing --execute
 ```
 
-| Exit | Meaning | What to do |
-| --- | --- | --- |
-| 0 | every gate passed (and every step ran, under `--execute`) | done |
-| 1 | a gate REFUSED on the evidence: not landed, worktree holds work, the ref moved | read the refusal; it names what blocked |
-| 2 | usage error | fix the invocation |
-| 3 | BROKEN measurement: a ref that does not resolve, a git failure, a probe that could not run, a shallow clone | the question was never answered; never retry with the gate removed |
+| Exit | Meaning                                                                                                     | What to do                                                         |
+| ---- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| 0    | every gate passed (and every step ran, under `--execute`)                                                   | done                                                               |
+| 1    | a gate REFUSED on the evidence: not landed, worktree holds work, the ref moved                              | read the refusal; it names what blocked                            |
+| 2    | usage error                                                                                                 | fix the invocation                                                 |
+| 3    | BROKEN measurement: a ref that does not resolve, a git failure, a probe that could not run, a shallow clone | the question was never answered; never retry with the gate removed |
 
 `bun "<skill-dir>/scripts/retire-branch.mts" --help`:
 

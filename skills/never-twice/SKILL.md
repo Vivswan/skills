@@ -12,12 +12,12 @@ metadata:
 
 Every failure that passes the floor below, most corrections of an agent among them, gets the most durable response reachable:
 
-| Rung | Response | What the class can still do | Preference |
-| --- | --- | --- | --- |
-| 1 | better architecture or data structures | cannot recur | the goal |
-| 2 | a lint rule or test in CI | recurs, but cannot land | acceptable |
-| 3 | a skill or written rule | recurs, but the next agent knows | fallback |
-| 4 | human vigilance | anything | avoid |
+| Rung | Response                               | What the class can still do      | Preference |
+| ---- | -------------------------------------- | -------------------------------- | ---------- |
+| 1    | better architecture or data structures | cannot recur                     | the goal   |
+| 2    | a lint rule or test in CI              | recurs, but cannot land          | acceptable |
+| 3    | a skill or written rule                | recurs, but the next agent knows | fallback   |
+| 4    | human vigilance                        | anything                         | avoid      |
 
 The ladder is not a menu, and preference decays exponentially down it. Rung 1 is the goal, and rung 2 a clearly weaker but acceptable gate. Rungs 3 and 4 are each another large step down, taken only when every higher rung is genuinely unreachable.
 

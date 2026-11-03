@@ -19,11 +19,11 @@ A skill folder is unpublished until `plugin.json` lists it. Installers and disco
 
 ## Inputs
 
-| Input | Meaning | Default |
-|---|---|---|
-| `skills-dir` | Directory holding the skills, relative to the repo root | `skills` |
+| Input             | Meaning                                                  | Default                      |
+| ----------------- | -------------------------------------------------------- | ---------------------------- |
+| `skills-dir`      | Directory holding the skills, relative to the repo root  | `skills`                     |
 | `plugin-manifest` | Path of the plugin manifest listing the published skills | `.claude-plugin/plugin.json` |
-| `mode` | `structure` or `discovery` | `structure` |
+| `mode`            | `structure` or `discovery`                               | `structure`                  |
 
 Both paths must be plain relative paths inside the checkout: no absolute paths, no `.` or `..` segments.
 
@@ -31,9 +31,9 @@ Both paths must be plain relative paths inside the checkout: no absolute paths, 
 
 An empty catalog (`"skills": []`) passes both modes: a freshly adopted repository publishes nothing yet.
 
-| Mode | Network | What a red means |
-|---|---|---|
-| `structure` | offline | the catalog structure is broken; cheap, so it belongs in the merge gate |
+| Mode        | Network   | What a red means                                                                          |
+| ----------- | --------- | ----------------------------------------------------------------------------------------- |
+| `structure` | offline   | the catalog structure is broken; cheap, so it belongs in the merge gate                   |
 | `discovery` | needs npm | the real `npx -y skills@<pinned> add . --list` does not list every skill in `plugin.json` |
 
 Structure mode, in the order it reports:
@@ -58,11 +58,11 @@ Discovery mode downloads the CLI from the npm registry at the exact version `val
 
 Exit codes:
 
-| Exit | Meaning |
-|---|---|
-| `0` | clean |
-| `1` | one `error:` line per finding, then a count |
-| `2` | unknown mode |
+| Exit | Meaning                                     |
+| ---- | ------------------------------------------- |
+| `0`  | clean                                       |
+| `1`  | one `error:` line per finding, then a count |
+| `2`  | unknown mode                                |
 
 The full rule set is the source, [validate-skills.ts](../.github/actions/validate-skills/validate-skills.ts). Its tests are [tests/repo/validate-skills.test.ts](../tests/repo/validate-skills.test.ts).
 

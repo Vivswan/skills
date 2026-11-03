@@ -6,10 +6,10 @@ Specimen, 2026-09-07, desktop app bundle `26.901.51231`: discovery found the Bra
 
 The same `getAuthStatus` request with `includeToken: false` returned:
 
-| Helper launch | Auth method |
-| --- | --- |
-| Inherits the custom `model_provider` from `config.toml` | `null` |
-| Process-only `-c 'model_provider="openai"'` | `chatgpt` |
+| Helper launch                                           | Auth method |
+| ------------------------------------------------------- | ----------- |
+| Inherits the custom `model_provider` from `config.toml` | `null`      |
+| Process-only `-c 'model_provider="openai"'`             | `chatgpt`   |
 
 So the sign-in was fine. The helper just asked the wrong provider for it.
 
@@ -43,10 +43,10 @@ A missing bundle, `config.toml`, or executable is an error. The preflight never 
 
 Distinguish a missing connection from a missing tab first:
 
-| Signal | Meaning | Action |
-| --- | --- | --- |
-| Tab reported missing, stale, or closed | Tab binding is dead, browser binding is fine | Get a fresh tab from the existing browser binding |
-| `list()` shows no `extension` entry for the family | Extension not connected | Read `bootstrap-troubleshooting`, then `chrome-troubleshooting`, from the plugin's documentation |
-| Explicit browser-disconnected error | Browser binding is dead | Re-select the browser; only this or a user-requested switch justifies re-selection |
+| Signal                                             | Meaning                                      | Action                                                                                           |
+| -------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Tab reported missing, stale, or closed             | Tab binding is dead, browser binding is fine | Get a fresh tab from the existing browser binding                                                |
+| `list()` shows no `extension` entry for the family | Extension not connected                      | Read `bootstrap-troubleshooting`, then `chrome-troubleshooting`, from the plugin's documentation |
+| Explicit browser-disconnected error                | Browser binding is dead                      | Re-select the browser; only this or a user-requested switch justifies re-selection               |
 
 Never switch browser families, launch a standalone browser, or use another control mechanism to route around a failure. If recovery needs the user (installing the extension, signing in), report that exact action and preserve live work. Do not promise a connection will stay active indefinitely.

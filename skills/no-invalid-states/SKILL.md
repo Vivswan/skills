@@ -99,14 +99,14 @@ Two rules make the owner-side fix sound:
 
 Pick by situation, not by favorite mechanism:
 
-| Situation | Representation |
-| --- | --- |
-| State changes at runtime and code inspects which state it is in | Sum type: enum with data, discriminated union, sealed class |
-| Available operations depend on state; wrong ordering should fail to compile | Typestate: state-parameterized types, consuming transitions |
-| A primitive has special meaning or is validated once then trusted | Newtype or branded type behind a smart constructor |
-| Two states carry meaningfully different data; optionals encode which one | Separate types per state |
-| An invariant spans construction (fields must agree) | Private fields, factory or constructor that validates, immutability |
-| The invariant is really about the data store | Schema constraints: NOT NULL, CHECK, foreign keys, unique |
+| Situation                                                                   | Representation                                                      |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| State changes at runtime and code inspects which state it is in             | Sum type: enum with data, discriminated union, sealed class         |
+| Available operations depend on state; wrong ordering should fail to compile | Typestate: state-parameterized types, consuming transitions         |
+| A primitive has special meaning or is validated once then trusted           | Newtype or branded type behind a smart constructor                  |
+| Two states carry meaningfully different data; optionals encode which one    | Separate types per state                                            |
+| An invariant spans construction (fields must agree)                         | Private fields, factory or constructor that validates, immutability |
+| The invariant is really about the data store                                | Schema constraints: NOT NULL, CHECK, foreign keys, unique           |
 
 Detailed, idiomatic guidance with code examples lives in the per-language references:
 

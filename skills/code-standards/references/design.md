@@ -96,11 +96,11 @@ Malformed input or state with one unambiguous repair is repaired at the boundary
 
 Ownership follows the direction of data:
 
-| The data | Ownership | At the boundary |
-| --- | --- | --- |
-| what the tool only reads: a user's settings file, CLI arguments, a caller's payload | never the tool's own | refused, naming the key and the fix |
+| The data                                                                                                                | Ownership             | At the boundary                      |
+| ----------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------------ |
+| what the tool only reads: a user's settings file, CLI arguments, a caller's payload                                     | never the tool's own  | refused, naming the key and the fix  |
 | what the tool outputs, directly or through something it drives: applied state, rendered config, caches, generated files | may be the tool's own | healed toward what the user declared |
-| direction unclear | | ask the repository owner |
+| direction unclear                                                                                                       |                       | ask the repository owner             |
 
 A tool's own section inside a user-authored file splits the same way. A malformation the user typed there is reported, never healed, and the bad slot reads as absent where that is safe. A schema migration may rewrite that section once, since the tool moves its own data between its own shapes. Nothing outside the section is touched.
 

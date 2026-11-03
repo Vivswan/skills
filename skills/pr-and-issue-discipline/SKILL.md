@@ -42,15 +42,15 @@ Show the change rather than describe it. A PR body is text, so its picture is a 
 
 **Size budget.** Part one has a hard cap, counted before publishing. The bullet counts are defaults: a change whose mechanism needs eight bullets gets eight. Part two has no length cap, only the format rules below. An agent that believes this change cannot fit the cap asks the user before publishing over it, with the count and the lines it would keep. The user decides, never the agent alone.
 
-| Region | Budget |
-| --- | --- |
-| Part one prose (words outside fenced blocks) | 150 words, hard cap; about 200 for the measured shape |
-| Flow blocks, where the flow moved | One ASCII text block per state inside `## Before` and `## After`, or one block with both lines under a single opening section, ahead of the output. Fenced, so outside the prose count |
-| `## How` | 3 to 6 bullets by default, one sentence each, about 15 words. Or one small table |
-| `## Proof` | 2 to 4 bullets by default, latest totals only |
-| `## Reasoning` (measured shape) | 3 to 4 bullets, one sentence each, bold lead-in |
-| `## Results` (measured shape) | One before/after table of metrics and a one-line footer: judge, runs, aggregation |
-| `Technical details` | No length cap. One fact per line, one sentence each |
+| Region                                       | Budget                                                                                                                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Part one prose (words outside fenced blocks) | 150 words, hard cap; about 200 for the measured shape                                                                                                                                  |
+| Flow blocks, where the flow moved            | One ASCII text block per state inside `## Before` and `## After`, or one block with both lines under a single opening section, ahead of the output. Fenced, so outside the prose count |
+| `## How`                                     | 3 to 6 bullets by default, one sentence each, about 15 words. Or one small table                                                                                                       |
+| `## Proof`                                   | 2 to 4 bullets by default, latest totals only                                                                                                                                          |
+| `## Reasoning` (measured shape)              | 3 to 4 bullets, one sentence each, bold lead-in                                                                                                                                        |
+| `## Results` (measured shape)                | One before/after table of metrics and a one-line footer: judge, runs, aggregation                                                                                                      |
+| `Technical details`                          | No length cap. One fact per line, one sentence each                                                                                                                                    |
 
 When the diff adds, moves, touches, reuses, or depends on a library-shaped category (parsers, fetchers, retry loops, and the rest of the list the `/code-standards` skill's `references/design.md` owns), `## How` carries one more bullet (in the measured shape, the last of `## Reasoning`'s 3 to 4): `**Library:** <package>, covers <what>` or `**Library:** searched <where>; none fits because <reason>`. The landing gate refuses the PR without it (the `/pr-landing-discipline` skill).
 
@@ -79,13 +79,13 @@ Whichever is chosen, the repository's `CONTRIBUTING` guidance still applies: hon
 
 Each shape is a file under `references/`, and each file is a PR template above a horizontal rule: the headings, the shape's rules as HTML comments that vanish when the body renders, placeholders. Under the rule, the filled specimen. Pick by what the change is:
 
-| The change is | Shape |
-| --- | --- |
-| something that runs, and what it prints or the path it takes moved | [`references/shape-before-after.md`](references/shape-before-after.md) |
-| something that runs, and neither moved (a pure refactor) | the same file, opening with one `## What this changes` section |
-| something new, added beside what exists | [`references/shape-additive.md`](references/shape-additive.md) |
-| something read rather than run, whose effect is measured by an evaluation | [`references/shape-measured.md`](references/shape-measured.md) |
-| a contract or a document: nothing runs, nothing is measured | [`references/shape-contract.md`](references/shape-contract.md) |
+| The change is                                                             | Shape                                                                  |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| something that runs, and what it prints or the path it takes moved        | [`references/shape-before-after.md`](references/shape-before-after.md) |
+| something that runs, and neither moved (a pure refactor)                  | the same file, opening with one `## What this changes` section         |
+| something new, added beside what exists                                   | [`references/shape-additive.md`](references/shape-additive.md)         |
+| something read rather than run, whose effect is measured by an evaluation | [`references/shape-measured.md`](references/shape-measured.md)         |
+| a contract or a document: nothing runs, nothing is measured               | [`references/shape-contract.md`](references/shape-contract.md)         |
 
 When a change both runs and is measured, the measured shape wins: a run shows a string, the evaluation shows the behavior. Something new that also extends an existing flow is additive; before-after is for a change to what already existed.
 
@@ -159,7 +159,7 @@ The body is written when the PR opens and read when the PR is offered; the diff 
 
 **Before the offer** (the flip to ready, the "ready to merge" report), re-read the body against the final diff as a reader who did not watch the session. How hard to look depends on how far the PR moved: a one-commit PR gets a glance at the Proof numbers, a PR that went through eight review rounds gets every claim re-checked. Run the size check first, then the drift list:
 
-```bash
+````bash
 # Part-one prose: words outside fenced blocks and HTML comments, above the <details> tag. Cap: 150, or 200 for the measured shape (set cap= below).
 # Pipe the CANDIDATE body in through a quoted heredoc: the text about to be published, every round and before the first publish.
 # `gh pr view "$n" --json body -q .body |` replaces the heredoc only for the final pre-offer read of what is already published.
@@ -176,7 +176,7 @@ awk '
   !f' <<'EOF' | awk -v cap=150 '{ for (i = 1; i <= NF; i++) if ($i ~ /[[:alnum:]]/) n++ } END { print n + 0; exit (n > cap) }'   # counts tokens with a letter or digit, so `##`, `-`, and `|` are not words; exits 1 over the cap
 <the candidate body>
 EOF
-```
+````
 
 Over the cap means cut, not justify. Move detail down into part two, which has room for it, or drop what the diff already says. If the cut would lose something the reader must know, stop and ask the user with the count and the candidate lines. Publishing over the cap is the user's call. What usually drifts:
 

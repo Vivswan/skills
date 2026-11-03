@@ -6,7 +6,7 @@ The rules are in `SKILL.md` (Replies to Issue Reporters); this page carries the 
 
 A diagnostics-only bug report whose log already showed the cause three times over: a stray backtick at the end of the server address, a refused connection on the port, and no API key. The first reply still opened with a `## Questions` list of three; none of the answers would have changed the diagnosis. The rewrite:
 
-`````markdown
+````markdown
 ## What the report shows
 
 **The server address ends in a stray backtick**, so every request goes to an address that does not exist:
@@ -28,13 +28,13 @@ server.apiKey = (unset)                    <- no key configured
 3. **Set `server.apiKey`** in the same file if the server requires one.
 
 If it still fails after these steps, run the tool with `--verbose` and paste the log lines after `GET`.
-`````
+````
 
 ## Cause not in the report: questions first
 
 A diagnostics-only bug report whose log ended mid-request, so nothing in it said what failed. The first reply opened with three paragraphs on hidden server entries, tombstones, and silent refreshes. The rewrite:
 
-`````markdown
+````markdown
 ## Questions
 
 1. **What went wrong?** One or two sentences, or a screenshot.
@@ -63,7 +63,7 @@ GET https://<host>/@<user>/v1/models    <- last line, still waiting
 - **Where the log stops:** `GET .../v1/models` is the first discovery request. The log buffer holds 50 lines and no error was recorded, so the report was built inside this request's 30 second timeout.
 
 </details>
-`````
+````
 
 The details block exists because the buffer size and the timeout explain why the log stops where it does; nothing in part one depends on it.
 
@@ -71,10 +71,12 @@ The details block exists because the buffer size and the timeout explain why the
 
 Both halves are complete replies under the rules above, each with its own details block when the reply has one, a rule between them:
 
-`````markdown
+```markdown
 ## Ce que le rapport montre
+
 ...
 ## Que faire
+
 1. ...
 
 <details>
@@ -85,12 +87,14 @@ Both halves are complete replies under the rules above, each with its own detail
 ---
 
 ## What the report shows
+
 ...
 ## What to do
+
 1. ...
 
 <details>
 <summary>Technical details</summary>
 ...
 </details>
-`````
+```

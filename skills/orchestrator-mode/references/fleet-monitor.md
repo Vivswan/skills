@@ -24,12 +24,12 @@ automated notice from fleet-events; no reply needed
 
 Under the daemon no turn is spent on "nothing changed yet", and no subagent sweeps. A message carries only what needs the lead's judgment; a start, a head move, a retraction is a note in the events log, read with `wait`, and `status` lists the alerts standing under each target. The daemon is per session: a new wave needs no new monitor, and it exits with the session.
 
-| Argument | Means |
-| --- | --- |
-| `session` | this session's transcript and subagents directory, found by `CLAUDE_CODE_SESSION_ID` under `~/.claude/projects` (the cwd's project tried first) |
-| `/abs/<sessionId>` | an absolute session directory, for another session's fleet |
-| `--repo <root>` | adds the worktree reading of that repository for every worktree no agent claims, by sidecar or by its own commands: what `sweep.mts` prints, every poll |
-| `--quiet-after <minutes>` | how long an open turn with nothing pending stands before it is stuck (default 10) |
+| Argument                  | Means                                                                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session`                 | this session's transcript and subagents directory, found by `CLAUDE_CODE_SESSION_ID` under `~/.claude/projects` (the cwd's project tried first)         |
+| `/abs/<sessionId>`        | an absolute session directory, for another session's fleet                                                                                              |
+| `--repo <root>`           | adds the worktree reading of that repository for every worktree no agent claims, by sidecar or by its own commands: what `sweep.mts` prints, every poll |
+| `--quiet-after <minutes>` | how long an open turn with nothing pending stands before it is stuck (default 10)                                                                       |
 
 The transcript reading is incremental: each poll reads what an `agent-*.jsonl` gained since the last. The interval is 60 s while something moves, backing off to 300 s. The command contract (`--help`) is quoted under The Daemon at the end of this page.
 
@@ -37,10 +37,10 @@ The transcript reading is incremental: each poll reads what an `agent-*.jsonl` g
 
 The fleet monitor is a role: watch the fleet, and report each transition with how long the state behind it has held. It judges nothing, so every call and every action stays the lead's.
 
-| Instrument | Reads | Harness | The pick |
-| --- | --- | --- | --- |
-| the `fleet-events` daemon | a session's agent transcripts, plus the worktrees with `--repo` | a Claude Code lead. File-sink mode (`--id <name>`, The Daemon below) changes only the delivery: every poll still reads a session transcript | the default wherever there is a session to read |
-| the monitor subagent | the sweep's worktree rows, plus the ledger | any harness, any worker: Codex, Copilot, a human | the fallback wherever there is no session to read. For workers without a Claude transcript its rows are the whole reading |
+| Instrument                | Reads                                                           | Harness                                                                                                                                     | The pick                                                                                                                  |
+| ------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| the `fleet-events` daemon | a session's agent transcripts, plus the worktrees with `--repo` | a Claude Code lead. File-sink mode (`--id <name>`, The Daemon below) changes only the delivery: every poll still reads a session transcript | the default wherever there is a session to read                                                                           |
+| the monitor subagent      | the sweep's worktree rows, plus the ledger                      | any harness, any worker: Codex, Copilot, a human                                                                                            | the fallback wherever there is no session to read. For workers without a Claude transcript its rows are the whole reading |
 
 Both say what moved and for how long, and the rest of this page reads the same rows either way. The daemon's events are What Arrives, and the subagent's brief is The Monitor Subagent.
 
@@ -52,26 +52,26 @@ Every text is names, tool names, counts, durations, shas, and paths, and nothing
 
 A state is said once on entering and once on leaving. A stuck or idle alert is repeated as its duration doubles (10, 20, 40, 80 minutes; 2, 4, 8, 16 polls), three times at most, then held in silence until it clears; `fine again` and `active again` are the retractions, and they are notes.
 
-| Level | Kind | The line says | What the lead judges |
-| --- | --- | --- | --- |
-| alert | `agent` | `agent <name>: stuck 32 min on Bash` | a pending call older than its own `timeout` plus ten minutes, or than thirty with no timeout of its own: a long command, or a permission prompt; the transcript shows the two the same |
-| alert | `agent` | `agent <name>: stuck on agent <child>, <child> last moved 31 min ago` | a child, foreground or background, whose own transcript has been still for thirty minutes; a moving child is never stuck, however long the parent waits |
-| alert | `agent` | `agent <name>: stranded, job <id> ended with no notice` | the job's output file under the harness's tasks directory ends with its exit line while the transcript carries no notice for it; said at once. A job whose own last line spells that footer reads as ended too: open the file |
-| alert | `agent` | `agent <name>: stuck 12 min mid-turn, nothing pending` | past `--quiet-after`: a stall, or a worker composing a large edit; Priors at the Quiet Seams carries the base rates |
-| alert | `agent` | `agent <name>: ended 7 min ago, no signal reached the lead` | past a five-minute grace, the agent is still running in the child map of whoever spawned it (the lead's for the lead's own children), or nobody the fleet read spawned it: a report never sent, or a wait on a message the lead owes |
-| note | `agent` | `agent <name>: ended 7 min ago, report received` | the idle notification or the task notice arrived; nothing to do. The same note when the transcript left the turn open: the harness omits the final stop reason when a hook closes the turn, and a fork whose notice the lead holds is finished, never stuck |
-| note | `agent` | `agent <name>: started` | nothing yet |
-| note | `agent` | `agent <name>: stopped by the lead` | the stop landed |
-| note | `agent` | `agent <name>: fine again` | the alert on it is void |
-| note | `agent` | `agent <name>: ended 5760 min ago, long before this watch` | a turn that had ended more than a day before the daemon first judged it (the first poll of a watch over an old session, a transcript first seen): history, said once, never an alert; nothing to do |
-| note | `agent` | `agent <name>: still 5760 min, long before this watch` | a stuck call, a still child, or a stall already a day old when first judged: the same history. One that crosses the day under the watch was judged fresh and stays an alert; a history agent that moves again is judged fresh from then on |
-| alert | `idle` | `worktree <branch>: idle 2 polls after work` | a worktree no agent claims by sidecar or by its own commands, with no worker process lsof could read and no dirty-tree change, after a worker or a change was seen there earlier in this watch; one where nothing ever worked never says it. The liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
-| alert | `wipe` | `worktree <branch>: 130 files at HEAD -> 3` | a commit on top of deleting the repo reads normal on every other reading; the tree is read before the track lands |
-| note | `head` | `worktree <branch>: head moved to <sha12>` | the `sha` field is the new head; content claims about the track are re-verified on it at its report |
-| note | `active` | `worktree <branch>: active again` | the idle ended: a worker is in the tree or the dirty tree changed |
-| note | `gone` | `worktree <branch>: gone` | discovery no longer lists it: a landed track swept, or a removed worktree; the `sha` field is its last head |
-| alert | `trouble` | `fleet: <reason>` | the daemon could not take a reading: tooling trouble, never a quiet fleet; the `/session-events` skill's line after three failed polls is the same kind |
-| note | `restored` | `fleet: reading restored` | the reading that failed is back, and it covers the processes lsof could read: a sandboxed worker it cannot read is invisible, so its worktree can idle beside it |
+| Level | Kind       | The line says                                                         | What the lead judges                                                                                                                                                                                                                                                                                                                      |
+| ----- | ---------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| alert | `agent`    | `agent <name>: stuck 32 min on Bash`                                  | a pending call older than its own `timeout` plus ten minutes, or than thirty with no timeout of its own: a long command, or a permission prompt; the transcript shows the two the same                                                                                                                                                    |
+| alert | `agent`    | `agent <name>: stuck on agent <child>, <child> last moved 31 min ago` | a child, foreground or background, whose own transcript has been still for thirty minutes; a moving child is never stuck, however long the parent waits                                                                                                                                                                                   |
+| alert | `agent`    | `agent <name>: stranded, job <id> ended with no notice`               | the job's output file under the harness's tasks directory ends with its exit line while the transcript carries no notice for it; said at once. A job whose own last line spells that footer reads as ended too: open the file                                                                                                             |
+| alert | `agent`    | `agent <name>: stuck 12 min mid-turn, nothing pending`                | past `--quiet-after`: a stall, or a worker composing a large edit; Priors at the Quiet Seams carries the base rates                                                                                                                                                                                                                       |
+| alert | `agent`    | `agent <name>: ended 7 min ago, no signal reached the lead`           | past a five-minute grace, the agent is still running in the child map of whoever spawned it (the lead's for the lead's own children), or nobody the fleet read spawned it: a report never sent, or a wait on a message the lead owes                                                                                                      |
+| note  | `agent`    | `agent <name>: ended 7 min ago, report received`                      | the idle notification or the task notice arrived; nothing to do. The same note when the transcript left the turn open: the harness omits the final stop reason when a hook closes the turn, and a fork whose notice the lead holds is finished, never stuck                                                                               |
+| note  | `agent`    | `agent <name>: started`                                               | nothing yet                                                                                                                                                                                                                                                                                                                               |
+| note  | `agent`    | `agent <name>: stopped by the lead`                                   | the stop landed                                                                                                                                                                                                                                                                                                                           |
+| note  | `agent`    | `agent <name>: fine again`                                            | the alert on it is void                                                                                                                                                                                                                                                                                                                   |
+| note  | `agent`    | `agent <name>: ended 5760 min ago, long before this watch`            | a turn that had ended more than a day before the daemon first judged it (the first poll of a watch over an old session, a transcript first seen): history, said once, never an alert; nothing to do                                                                                                                                       |
+| note  | `agent`    | `agent <name>: still 5760 min, long before this watch`                | a stuck call, a still child, or a stall already a day old when first judged: the same history. One that crosses the day under the watch was judged fresh and stays an alert; a history agent that moves again is judged fresh from then on                                                                                                |
+| alert | `idle`     | `worktree <branch>: idle 2 polls after work`                          | a worktree no agent claims by sidecar or by its own commands, with no worker process lsof could read and no dirty-tree change, after a worker or a change was seen there earlier in this watch; one where nothing ever worked never says it. The liveness line for a Codex or Copilot worker; expected on a parked worker, per the ledger |
+| alert | `wipe`     | `worktree <branch>: 130 files at HEAD -> 3`                           | a commit on top of deleting the repo reads normal on every other reading; the tree is read before the track lands                                                                                                                                                                                                                         |
+| note  | `head`     | `worktree <branch>: head moved to <sha12>`                            | the `sha` field is the new head; content claims about the track are re-verified on it at its report                                                                                                                                                                                                                                       |
+| note  | `active`   | `worktree <branch>: active again`                                     | the idle ended: a worker is in the tree or the dirty tree changed                                                                                                                                                                                                                                                                         |
+| note  | `gone`     | `worktree <branch>: gone`                                             | discovery no longer lists it: a landed track swept, or a removed worktree; the `sha` field is its last head                                                                                                                                                                                                                               |
+| alert | `trouble`  | `fleet: <reason>`                                                     | the daemon could not take a reading: tooling trouble, never a quiet fleet; the `/session-events` skill's line after three failed polls is the same kind                                                                                                                                                                                   |
+| note  | `restored` | `fleet: reading restored`                                             | the reading that failed is back, and it covers the processes lsof could read: a sandboxed worker it cannot read is invisible, so its worktree can idle beside it                                                                                                                                                                          |
 
 A worktree an agent claims is not read at all: the transcript says everything the tree could, so its commits, idleness, and removal produce no line. A claim is a sidecar naming the worktree, or a tool call of the agent's naming its path in the input (never a result), or the lead's, for 30 minutes after its last command there; the main checkout is never claimed by command.
 
@@ -149,13 +149,22 @@ prints: one JSON line each, in this order, each only when its condition holds
 exits: 0 the sweep ran (ok:false rows included); 1 control failure; 2 usage error
 ```
 
-It prints one JSON line per worktree of `<repo-root>` (one row, example values, wrapped here for width):
+It prints one JSON line per worktree of `<repo-root>` (one row, example values, spread over lines here for width):
 
 ```json
-{"worktree":"/repo/.claude/worktrees/agent-a1b2c3d4e5f60718","branch":"worktree-agent-a1b2c3d4e5f60718",
- "ok":true,"headSha":"0123abcd0123abcd0123abcd0123abcd0123abcd","aheadBehind":{"ahead":0,"behind":0},
- "treeFileCount":130,"dirtyCount":1,"untrackedCount":0,"newestDirtyMtime":"2026-01-01T00:00:00.000Z",
- "statusHash":"0123456789abcdef","processes":[{"pid":4242,"command":"bun","state":"S+"}]}
+{
+  "worktree": "/repo/.claude/worktrees/agent-a1b2c3d4e5f60718",
+  "branch": "worktree-agent-a1b2c3d4e5f60718",
+  "ok": true,
+  "headSha": "0123abcd0123abcd0123abcd0123abcd0123abcd",
+  "aheadBehind": { "ahead": 0, "behind": 0 },
+  "treeFileCount": 130,
+  "dirtyCount": 1,
+  "untrackedCount": 0,
+  "newestDirtyMtime": "2026-01-01T00:00:00.000Z",
+  "statusHash": "0123456789abcdef",
+  "processes": [{ "pid": 4242, "command": "bun", "state": "S+" }]
+}
 ```
 
 How to read the row:
@@ -239,8 +248,12 @@ Every result is evidence-bearing or a loud error, never a bare number:
 A `tokens` table is a JSON object mapping tree-relative files to token lists, each token a `text` plus an `expect` of a non-negative integer or `">=1"`:
 
 ```json
-{"docs/guide.md": [{"text": "the exact sentence that must appear twice", "expect": 2},
-                   {"text": "the removed line that must stay gone", "expect": 0}]}
+{
+  "docs/guide.md": [
+    { "text": "the exact sentence that must appear twice", "expect": 2 },
+    { "text": "the removed line that must stay gone", "expect": 0 }
+  ]
+}
 ```
 
 Per-locale content needs per-locale tokens: two locales can share a script and still differ in WORDS, so a claim verified against zh-cn wording says nothing about zh-tw. Each locale's file gets its own entry in the table.
@@ -380,11 +393,11 @@ The daemon says each state once on entering and once on leaving, and repeats a s
 
 **Standing state lives in the ledger, not in messages.** A message is a one-shot exchange, never a standing order, and the lead's own context compacts. Anything that must hold across polls goes into the ledger in the shape it represents, and every daemon event is read against it:
 
-| The decision | Its ledger shape |
-| --- | --- |
-| "parked on purpose" | a `state` transition |
-| a scope adjudication | a `grant` with its exact wording |
-| a closed finding | a `retract` |
+| The decision                                                | Its ledger shape                                                                            |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| "parked on purpose"                                         | a `state` transition                                                                        |
+| a scope adjudication                                        | a `grant` with its exact wording                                                            |
+| a closed finding                                            | a `retract`                                                                                 |
 | an order with no dedicated shape (a hold-silent order, say) | a standing `flag` on the target worker (`flag` takes arbitrary text), retracted when lifted |
 
 Production, from a monitor subagent whose standing state lived in messages: ten directives sent over six hours drained from its inbox in one batch, hours later, and meanwhile it re-raised closed items, quoted a superseded base rate, and sent a mistaken stand-down. So no standing state ever lives only in message history.

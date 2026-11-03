@@ -42,11 +42,11 @@ sequenceDiagram
 
 ## What every session owns on its own machine
 
-| Path | Content |
-|------|---------|
-| `/tmp/cc-socks-<uid>/<pid>.sock` | inbox: a Unix socket the session listens on |
-| `~/.claude/sessions/<pid>.json` | registry record: `pid`, `name`, `messagingSocketPath`, `status`, ... `ListAgents` reads these |
-| `~/.claude/sessions/<pid>.<sha256(socketPath)>.key` | `{"peerToken": <32 hex>, ...}`, presented by senders when present |
+| Path                                                | Content                                                                                       |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `/tmp/cc-socks-<uid>/<pid>.sock`                    | inbox: a Unix socket the session listens on                                                   |
+| `~/.claude/sessions/<pid>.json`                     | registry record: `pid`, `name`, `messagingSocketPath`, `status`, ... `ListAgents` reads these |
+| `~/.claude/sessions/<pid>.<sha256(socketPath)>.key` | `{"peerToken": <32 hex>, ...}`, presented by senders when present                             |
 
 Wire format, one connection per message:
 
