@@ -183,7 +183,7 @@ describe("sweep.mts worktree rows", () => {
         // "unknown" and a broken lsof field parse as command "".
         expect(mine).toEqual({
           pid: parked.pid,
-          command: "sleep",
+          command: "cat",
           state: expect.stringMatching(/^S/),
         });
       } finally {

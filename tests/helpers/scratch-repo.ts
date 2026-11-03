@@ -76,9 +76,14 @@ export function scratchRepo<Name extends string>(
   return { base, repo, worktrees: made };
 }
 
-/** A process parked in `cwd` for lsof to attribute to that directory; the caller kills it. */
+/**
+ * A process parked in `cwd` for lsof to attribute to that directory, held until the caller kills
+ * it: `cat` on a pipe this process holds open. No clock, since a park ending mid-test would turn
+ * its directory idle; and the pipe closes with this process, so a failed test or a killed runner
+ * leaves nothing behind.
+ */
 export function park(cwd: string): ReturnType<typeof Bun.spawn> {
-  return Bun.spawn(["sleep", "60"], { cwd, stdout: "ignore" });
+  return Bun.spawn(["cat"], { cwd, stdin: "pipe", stdout: "ignore" });
 }
 
 /**
