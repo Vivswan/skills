@@ -24,10 +24,10 @@ metadata:
 
 Every worktree lives INSIDE the main checkout, under one ignored dot folder. Never outside it: not the OS tmp dir, not a sibling directory, not the home directory.
 
-- **The harness's own folder when it has one**, so hand-made and harness-made trees share it: `.claude/worktrees/` under Claude Code. Elsewhere, `.worktrees/`. `<folder>` below is that folder's absolute path.
-- **One tree per branch, named by it**: `git worktree add -b <branch> <folder>/<slug> <base>`. The folder sits under the main checkout's toplevel: `git rev-parse --show-toplevel` run there, never in a linked tree, which prints its own root.
-- **The folder is ignored**, or the main checkout's `git status` shows it as untracked content. A repository whose `.gitignore` lacks the line adds it before the first tree.
-- **A tree already outside moves in**: `mkdir -p <folder> && git worktree move <old> <folder>/<slug>`. The move keeps the branch and the tree's private git dir. It does not create the folder, and it refuses a locked tree until it is unlocked.
+- **`.worktrees/` first, whatever the harness.** It is agent-agnostic, so every actor on the repository looks in one place. `<main>` below is the main checkout's toplevel: `git rev-parse --show-toplevel` run there, never in a linked tree, which prints its own root.
+- **`.claude/worktrees/` only when `.worktrees/` is not ignored.** The test is `git -C <main> check-ignore -q .worktrees/`, trailing slash included, which works before the folder exists. Claude Code's own worktree tool uses that fallback folder. Keep it out of `git status` with a `.claude/worktrees/` line in `.git/info/exclude`, which is local to the clone and needs no `.gitignore` edit.
+- **One tree per branch, named by it**: `git worktree add -b <branch> <main>/<folder>/<slug> <base>`.
+- **A tree already outside moves in**: `mkdir -p <main>/<folder> && git worktree move <old> <main>/<folder>/<slug>`. The move keeps the branch and the tree's private git dir. It does not create the folder, and it refuses a locked tree until it is unlocked.
 
 Why the placement is a rule and not a taste:
 

@@ -422,11 +422,11 @@ describe("sweep.mts worktree rows", () => {
   // The row's git calls are pinned with --git-dir/--work-tree, but git still
   // reads a cwd INSIDE that work tree as a pathspec prefix, so a sweep
   // launched from a nested worktree (this repo keeps them under
-  // .claude/worktrees/) once listed the main checkout's tree relative to the
+  // .worktrees/) once listed the main checkout's tree relative to the
   // nested dir: treeFileCount 0 and a control:FAILED verdict on a healthy
   // repo. The axis: where the sweep is launched from.
   const cwdRepo = join(fixtureRoot, "cwd-repo");
-  const nestedWorktree = join(cwdRepo, ".claude", "worktrees", "nested");
+  const nestedWorktree = join(cwdRepo, ".worktrees", "nested");
   mkdirSync(cwdRepo);
   git(cwdRepo, "init", "-b", "main");
   writeFileSync(join(cwdRepo, "tracked.txt"), "x\n");

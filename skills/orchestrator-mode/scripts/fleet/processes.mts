@@ -47,7 +47,7 @@ export function parseLsofFields(output: string): CwdEntry[] {
 
 /**
  * Attribute each cwd to the LONGEST matching worktree path: this repo nests
- * worktrees inside the main checkout (.claude/worktrees/), so a plain prefix
+ * worktrees inside the main checkout (.worktrees/), so a plain prefix
  * match would credit every nested worker to the main checkout as well.
  */
 export function attributeByCwd(
