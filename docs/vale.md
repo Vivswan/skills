@@ -2,11 +2,11 @@
 
 Two skills ship their rules as [Vale](https://vale.sh) styles, each inside its own folder under `vale/`. A consumer pins this repository by sha and points Vale at the checkout root, so a skill and its lint move together.
 
-| Rule | Skill | What it reports |
-|---|---|---|
-| `skills.working-text.vale.UnitLength` | `/working-text` | a paragraph or list item over 70 words |
-| `skills.natural-writing.vale.AIVocabulary`, `skills.natural-writing.vale.PlainWords` | `/natural-writing`, derived from the upstream `/unslop` skill's text | unslop rules 7 and 8 (AI vocabulary, fancy ways to say "is"); rules 23 and 31 (filler phrases, plain words) |
-| `skills.natural-writing.vale.Vocabulary`, `Significance`, `Formula`, `TrailingParticiple` | `/natural-writing` | the lists of `references/words-to-avoid.md`: vocabulary and copula avoidance, inflated significance, formula endings with weasel attributions and promotional words, sentence-final participles |
+| Rule                                                                                      | Skill                                                                | What it reports                                                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `skills.working-text.vale.UnitLength`                                                     | `/working-text`                                                      | a paragraph or list item over 70 words                                                                                                                                                          |
+| `skills.natural-writing.vale.AIVocabulary`, `skills.natural-writing.vale.PlainWords`      | `/natural-writing`, derived from the upstream `/unslop` skill's text | unslop rules 7 and 8 (AI vocabulary, fancy ways to say "is"); rules 23 and 31 (filler phrases, plain words)                                                                                     |
+| `skills.natural-writing.vale.Vocabulary`, `Significance`, `Formula`, `TrailingParticiple` | `/natural-writing`                                                   | the lists of `references/words-to-avoid.md`: vocabulary and copula avoidance, inflated significance, formula endings with weasel attributions and promotional words, sentence-final participles |
 
 One owner per token: no word or phrase is listed by two rules, so a word-level hit is reported once. A phrase rule can still overlap a word rule (`pivotal role` in `Significance`, `pivotal` in `Unslop`), and then both report, which is right: two different tells.
 

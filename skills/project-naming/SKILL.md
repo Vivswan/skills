@@ -67,14 +67,14 @@ linear:  6 letters, 3 syllables, stress on the first, open vowels, Latinate, no 
 
 One lane per style, run in parallel (the `/orchestrator-mode` skill, where installed, owns the fan-out). Each lane brainstorms 50 to 100 names, drops what fails the gate by eye, and checks its best 20 with the script in step 4.
 
-| Lane | Generates |
-| --- | --- |
-| real word | one existing word, common or rare |
-| invented | a coined word with the exemplars' sound |
+| Lane             | Generates                                            |
+| ---------------- | ---------------------------------------------------- |
+| real word        | one existing word, common or rare                    |
+| invented         | a coined word with the exemplars' sound              |
 | Latin or Romance | forms from Latin, Italian, Spanish, Portuguese roots |
-| metaphor | an object or place that evokes the work |
-| two short words | a compound of two real words |
-| borrowed | a word from a named language, with its plain meaning |
+| metaphor         | an object or place that evokes the work              |
+| two short words  | a compound of two real words                         |
+| borrowed         | a word from a named language, with its plain meaning |
 
 Drop a lane the brief rules out. Add a lane when the owner's exemplars share a style the table lacks.
 
@@ -150,10 +150,9 @@ Native speakers do this step at naming agencies. The report says it was done by 
 
 All lanes merge into one ranked table. A name never reaches the owner without its row.
 
-| name | say it | exemplar 1-5 | elegance 1-5 | grow 1-5 | registries | meaning | verdict |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `<name>` | `<stress and vowels>` | `<score>` | `<score>` | `<score>` | `<free, or the taken cells named>` | `<NONE, MILD: word, SERIOUS: word>` | CLEAR / MINOR: `<the one collision>` / TAKEN |
-
+| name     | say it                | exemplar 1-5 | elegance 1-5 | grow 1-5  | registries                         | meaning                             | verdict                                      |
+| -------- | --------------------- | ------------ | ------------ | --------- | ---------------------------------- | ----------------------------------- | -------------------------------------------- |
+| `<name>` | `<stress and vowels>` | `<score>`    | `<score>`    | `<score>` | `<free, or the taken cells named>` | `<NONE, MILD: word, SERIOUS: word>` | CLEAR / MINOR: `<the one collision>` / TAKEN |
 - CLEAR: free on every claimed registry, meaning NONE.
 - MINOR: one collision the owner can accept knowingly, named in the cell.
 - TAKEN: fails the hard gate; shown only when the owner asked to see what was ruled out.
@@ -183,15 +182,15 @@ not checked:  trademark offices, app stores, social handles, native-speaker revi
 
 A name fails the hard gate on any one row:
 
-| Gate | Fails when |
-| --- | --- |
+| Gate            | Fails when                                                                                                                                                                                                                                          |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | said as spelled | the `say` column flags it: `hard x,q,z,k`; `doubled ll`; `cluster str` (three consonants together); `two readings` for ch, gh, ough, ea, a trailing e, or c and g before e, i, y; `spoken digits 1,2,3` (a digit is said, and counted one syllable) |
-| short | more than 3 syllables, more than about 8 letters, or more than one token |
-| free | taken on any registry the brief claims, or an exact-name repository with 20 or more stars |
-| no neighbour | an AI company, product, or ML method already uses it (web search) |
-| no bad meaning | a SERIOUS meaning finding in any language |
-| no wrong signal | the name means something, and that something is not what the project is |
-| not a typosquat | the `typosquat` column names a package on a registry the brief claims; a hit on an unclaimed registry is a MINOR note |
+| short           | more than 3 syllables, more than about 8 letters, or more than one token                                                                                                                                                                            |
+| free            | taken on any registry the brief claims, or an exact-name repository with 20 or more stars                                                                                                                                                           |
+| no neighbour    | an AI company, product, or ML method already uses it (web search)                                                                                                                                                                                   |
+| no bad meaning  | a SERIOUS meaning finding in any language                                                                                                                                                                                                           |
+| no wrong signal | the name means something, and that something is not what the project is                                                                                                                                                                             |
+| not a typosquat | the `typosquat` column names a package on a registry the brief claims; a hit on an unclaimed registry is a MINOR note                                                                                                                               |
 
 Meaning is either plain at a glance or absent. A name that means nothing passes; a name that means the wrong thing fails; a name whose meaning the reader must decode (a pun, a reference, a chain of hops) is rejected by default.
 

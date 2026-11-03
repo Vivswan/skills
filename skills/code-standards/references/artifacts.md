@@ -38,13 +38,13 @@ How to apply: write subject and body with content only and unwrapped paragraphs.
 
 A pre-commit hook checks what the developer staged and reports. It never changes what the commit contains.
 
-| The hook | Verdict |
-| --- | --- |
-| check, fail | allowed |
-| check, fail, write the fix into the working tree, still fail | allowed |
-| stage, commit, format-and-restage (lint-staged and its kind) | forbidden: it changes what the commit contains |
-| fix-then-pass, a git command that writes (`stash push`, `checkout`, `reset`, `push`, a `config` set), network, an install or tool fetch | forbidden |
-| a read-only query (`git diff --cached --name-only`, `git config --get`) | stays |
+| The hook                                                                                                                                | Verdict                                        |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| check, fail                                                                                                                             | allowed                                        |
+| check, fail, write the fix into the working tree, still fail                                                                            | allowed                                        |
+| stage, commit, format-and-restage (lint-staged and its kind)                                                                            | forbidden: it changes what the commit contains |
+| fix-then-pass, a git command that writes (`stash push`, `checkout`, `reset`, `push`, a `config` set), network, an install or tool fetch | forbidden                                      |
+| a read-only query (`git diff --cached --name-only`, `git config --get`)                                                                 | stays                                          |
 
 A hook itself installs nothing and goes no further than the tooling already offers. A toolchain that fetches what it needs on its own (bun does) is the toolchain's feature, not the hook installing. A pre-check in front of a failure the tooling shows on its own is the check that never earns its place (`tests.md`, A check earns its place).
 

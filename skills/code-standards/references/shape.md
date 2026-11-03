@@ -124,16 +124,16 @@ Readability and beauty come first: this rule yields where following it would rea
 
 Each ugly one-liner has a clear form that reads once, and the clear form is the clever one. The table is in Python; each language page repeats it in its own syntax.
 
-| Ugly | Clear |
-| --- | --- |
-| `a if x else (b if y else c)` | an `if`/`elif`/`else` block, or early returns |
-| `[*base, *(extra if flag else [])]` | `items = list(base)` then `if flag: items.extend(extra)` |
-| `next(s for s in rows if s.id == key)` | a dict keyed by `id`, or a named `find_row` function |
-| `if (n := len(rows)) > 3:` | `count = len(rows)` on its own line |
-| `ok and do_thing()` | `if ok:` then the call |
-| nested `if` inside `if` | early returns, the happy path at the left margin |
-| `try: ... finally: shutil.rmtree(tmp)` | `with tempfile.TemporaryDirectory() as tmp:` |
-| `try: ... except KeyError: pass` | `with contextlib.suppress(KeyError):` |
+| Ugly                                   | Clear                                                    |
+| -------------------------------------- | -------------------------------------------------------- |
+| `a if x else (b if y else c)`          | an `if`/`elif`/`else` block, or early returns            |
+| `[*base, *(extra if flag else [])]`    | `items = list(base)` then `if flag: items.extend(extra)` |
+| `next(s for s in rows if s.id == key)` | a dict keyed by `id`, or a named `find_row` function     |
+| `if (n := len(rows)) > 3:`             | `count = len(rows)` on its own line                      |
+| `ok and do_thing()`                    | `if ok:` then the call                                   |
+| nested `if` inside `if`                | early returns, the happy path at the left margin         |
+| `try: ... finally: shutil.rmtree(tmp)` | `with tempfile.TemporaryDirectory() as tmp:`             |
+| `try: ... except KeyError: pass`       | `with contextlib.suppress(KeyError):`                    |
 
 The last two rows are one rule: cleanup is bound to its acquisition by the language's construct (`with`, `defer`, `Drop`, `using`), never by a hand-written cleanup block that sits apart from what it cleans.
 

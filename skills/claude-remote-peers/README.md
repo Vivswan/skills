@@ -36,12 +36,12 @@ npx skills add https://github.com/Vivswan/skills/tree/main/skills/claude-remote-
 
 ## Requirements
 
-| Need | Why |
-| --- | --- |
-| non-interactive `ssh <destination>` | keys or an agent; the script runs with `BatchMode=yes` |
-| OpenSSH 6.7+ on both ends | Unix socket forwarding with `-L` and `-R` |
-| Linux or macOS receiver | Windows inboxes require an auth token the bridge does not carry ([why](./references/protocol.md#the-five-facts-the-bridge-rests-on)) |
-| a live Claude Code session on each side | each needs its own inbox socket |
+| Need                                    | Why                                                                                                                                  |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| non-interactive `ssh <destination>`     | keys or an agent; the script runs with `BatchMode=yes`                                                                               |
+| OpenSSH 6.7+ on both ends               | Unix socket forwarding with `-L` and `-R`                                                                                            |
+| Linux or macOS receiver                 | Windows inboxes require an auth token the bridge does not carry ([why](./references/protocol.md#the-five-facts-the-bridge-rests-on)) |
+| a live Claude Code session on each side | each needs its own inbox socket                                                                                                      |
 
 ## Plugin-Ready Layout
 

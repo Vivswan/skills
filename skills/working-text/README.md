@@ -4,13 +4,13 @@
 
 Every fact is shown by the device that shows it fastest, and every path, symbol, and check the text names is real:
 
-| The reader must see | A device that showed it well |
-| --- | --- |
-| which value wins | an ASCII tree with the winner on each leaf |
-| what a command does | its real captured output |
-| what to do about a symptom | what you see, what it means, what to do |
-| a break between versions | old form, new form, and what the old form does now |
-| plain facts | bullets with bold lead-ins, paragraphs under 70 words |
+| The reader must see        | A device that showed it well                          |
+| -------------------------- | ----------------------------------------------------- |
+| which value wins           | an ASCII tree with the winner on each leaf            |
+| what a command does        | its real captured output                              |
+| what to do about a symptom | what you see, what it means, what to do               |
+| a break between versions   | old form, new form, and what the old form does now    |
+| plain facts                | bullets with bold lead-ins, paragraphs under 70 words |
 
 `scripts/docs-probe.mts` measures the cap and checks that named paths exist. `references/architecture-page.md` and the `scripts/architecture/` set keep an architecture page's diagrams naming real code.
 
@@ -50,11 +50,11 @@ The scripts bundle their dependencies (the mdast readers, `@babel/parser`) into 
 
 ## Exit Codes
 
-| Exit | Meaning |
-| --- | --- |
-| 0 | the page, the tree, or the region is clean |
-| 1 | a finding: a unit over the cap, a missing path, a forbidden or stale edge, a box naming missing code, drift in the generated region |
-| 2 | usage, a page or declaration that cannot be read, a missing region, or a computed import the graph cannot follow |
+| Exit | Meaning                                                                                                                             |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | the page, the tree, or the region is clean                                                                                          |
+| 1    | a finding: a unit over the cap, a missing path, a forbidden or stale edge, a box naming missing code, drift in the generated region |
+| 2    | usage, a page or declaration that cannot be read, a missing region, or a computed import the graph cannot follow                    |
 
 ## Plugin-Ready Layout
 

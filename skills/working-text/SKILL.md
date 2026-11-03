@@ -29,12 +29,11 @@ The same facts, shown:
 ```markdown
 The judgment, whole:
 
-| Needed result | Gate |
-| --- | --- |
-| `success` | passes |
-| `skipped`, for a job named in `allowed-skips` | passes |
+| Needed result                                                        | Gate                                                    |
+| -------------------------------------------------------------------- | ------------------------------------------------------- |
+| `success`                                                            | passes                                                  |
+| `skipped`, for a job named in `allowed-skips`                        | passes                                                  |
 | anything else: `failure`, `cancelled`, a skip the list does not name | fails; the step summary lists every job with its result |
-
 - **Default workflow:** `allowed-skips` names `checks` alone, so a scheduled run passes on `ci` and an all-skipped run cannot pass.
 - **Release workflow:** names nothing, since none of its gating jobs may skip.
 ```
@@ -55,17 +54,17 @@ There is no mandated carrier. Ask what the reader must see, then use the device 
 
 These are devices that carried real pages well, with the content each fits. A page that needs a different one uses it.
 
-| The reader must see | A device that showed it | Why it won |
-| --- | --- | --- |
-| which value wins, and where inheritance stops | an ASCII tree with the winner on each leaf | a table cannot show the branch |
-| what a command does | its real captured output, then the fewest words | the output is the fact; prose about it is a copy |
-| what to do about a symptom | three lines: what you see, what it means, what to do | a symptom needs the quoted error and a causal chain, which a table cell truncates |
-| a break between versions | a table with an old form, a new form, and a column for what the old form does now | the fourth column is the observable symptom, not the rule |
-| two states side by side | a status matrix, resolved by one prose line saying what left means and what right means | the matrix holds the states, the sentence holds the reading |
-| how code is arranged | a mermaid diagram whose boxes name real files and exports, closed by a link to the test that demonstrates it | a box a checker can verify does not rot |
-| a sequence | an arrow flow, or numbered steps with one fenced block per step that runs something | the order is the content |
-| how a change reads | a before block and an after block | the comparison is the visualization |
-| plain facts | bullets, each opened by a bold lead-in that names the fact | the reader scans the lead-ins and stops where it matters |
+| The reader must see                           | A device that showed it                                                                                      | Why it won                                                                        |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| which value wins, and where inheritance stops | an ASCII tree with the winner on each leaf                                                                   | a table cannot show the branch                                                    |
+| what a command does                           | its real captured output, then the fewest words                                                              | the output is the fact; prose about it is a copy                                  |
+| what to do about a symptom                    | three lines: what you see, what it means, what to do                                                         | a symptom needs the quoted error and a causal chain, which a table cell truncates |
+| a break between versions                      | a table with an old form, a new form, and a column for what the old form does now                            | the fourth column is the observable symptom, not the rule                         |
+| two states side by side                       | a status matrix, resolved by one prose line saying what left means and what right means                      | the matrix holds the states, the sentence holds the reading                       |
+| how code is arranged                          | a mermaid diagram whose boxes name real files and exports, closed by a link to the test that demonstrates it | a box a checker can verify does not rot                                           |
+| a sequence                                    | an arrow flow, or numbered steps with one fenced block per step that runs something                          | the order is the content                                                          |
+| how a change reads                            | a before block and an after block                                                                            | the comparison is the visualization                                               |
+| plain facts                                   | bullets, each opened by a bold lead-in that names the fact                                                   | the reader scans the lead-ins and stops where it matters                          |
 
 A change of device must show the content faster than the device it replaces, or the device stays. A table earns its place only when the items share two or more fields a reader compares down a column. A one-line-per-item list turned into a name-and-description table gained nothing and goes back.
 
@@ -192,4 +191,3 @@ The page kind with the most to rot has its own recipe in `references/architectur
 - A box naming a symbol its file does not export, or a concept diagram with no `Demonstrated by:` line.
 - Prose inside a code artifact, per this skill's "Prose inside artifacts" subsection, that breaks the page rules. An action description that is not a literal block, or that gives an input or output more than one sentence. `${{` inside an action or workflow description.
 - Wall-of-text prose anywhere a human skims: docs, reports, PR text (the `/pr-and-issue-discipline` skill owns the PR body's content).
-

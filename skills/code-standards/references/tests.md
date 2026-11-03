@@ -8,24 +8,24 @@ This is a floor, not a ceiling. It says nothing about which kinds of tests to wr
 
 Agents write many small tests because each one is easy to justify in isolation. The result is a suite that is long, slow to read, and weaker than its size suggests. Fifteen tests that each assert one key of a returned dict all pass while a sixteenth field silently regresses.
 
-The reviewer's phrasing that set this rule: *"Please make sure to write few but strong tests. Claude/GPT tend to write a lot of small weak tests."*
+The reviewer's phrasing that set this rule: _"Please make sure to write few but strong tests. Claude/GPT tend to write a lot of small weak tests."_
 
 ## What counts as weak
 
 Delete or fold these:
 
-| Pattern | Why it is weak |
-|---|---|
-| `assert result.shape == (3, 4)` and nothing else | passes for any wrong values of the right shape |
-| `assert isinstance(x, Foo)` and nothing else | the constructor already guaranteed that |
-| `assert grad is not None` | existence is not correctness; if there is no custom gradient, delete the test |
-| `assert output.dtype == dtype` as its own test | assert it inside the test that checks the values |
-| five tests differing only in an input value | one parametrized case list |
-| `expect(job.needs).toEqual(["lint", "test"])` after reading the workflow that says so | restates the source; it changes in the same commit, so nothing drifts under it |
-| `expect(DEFAULT_HOME).toBe("~/.local/share/app")` | the constant is the source of the value; the test restates it and grows with every new constant |
-| `expect(parseToml(shippedCargoToml).lints.clippy).toEqual({ ... })` | the shipped file is the source; a data file is not external because it is not code |
+| Pattern                                                                               | Why it is weak                                                                                  |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `assert result.shape == (3, 4)` and nothing else                                      | passes for any wrong values of the right shape                                                  |
+| `assert isinstance(x, Foo)` and nothing else                                          | the constructor already guaranteed that                                                         |
+| `assert grad is not None`                                                             | existence is not correctness; if there is no custom gradient, delete the test                   |
+| `assert output.dtype == dtype` as its own test                                        | assert it inside the test that checks the values                                                |
+| five tests differing only in an input value                                           | one parametrized case list                                                                      |
+| `expect(job.needs).toEqual(["lint", "test"])` after reading the workflow that says so | restates the source; it changes in the same commit, so nothing drifts under it                  |
+| `expect(DEFAULT_HOME).toBe("~/.local/share/app")`                                     | the constant is the source of the value; the test restates it and grows with every new constant |
+| `expect(parseToml(shippedCargoToml).lints.clippy).toEqual({ ... })`                   | the shipped file is the source; a data file is not external because it is not code              |
 
-A shape or dtype claim is not forbidden. It is forbidden *as the whole test*. Move it into the correctness test that also compares values.
+A shape or dtype claim is not forbidden. It is forbidden _as the whole test_. Move it into the correctness test that also compares values.
 
 ## What strong looks like
 
@@ -41,11 +41,11 @@ Observed: every one of 16 files got the same partial-assertion finding at one la
 
 Every test answers "what would drift silently without this?" in its name or first line. Three answers count:
 
-| Answer | Example |
-|---|---|
+| Answer                                                             | Example                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | An external fact that nothing in the repository or its CI enforces | every PAT-reading job declares its `environment`; `secrets: inherit` sits on exactly the callers whose call reaches an environment job; an absent step output expands to the empty string, which a numeric comparison reads as `0` |
-| A cross-file consistency the source cannot express | the codex manifest's `shortDescription` equals the `interface.short_description` in `agents/openai.yaml` |
-| A regression with a named incident | the empty manifest that passed validation vacuously |
+| A cross-file consistency the source cannot express                 | the codex manifest's `shortDescription` equals the `interface.short_description` in `agents/openai.yaml`                                                                                                                           |
+| A regression with a named incident                                 | the empty manifest that passed validation vacuously                                                                                                                                                                                |
 
 "The source says so" is not an answer. A test that restates what it read is edited in the same commit as the source, so nothing can drift under it. It is deleted in the PR that notices it, and a reviewer asking for one is declined with this rule.
 
@@ -69,7 +69,9 @@ expect(DEFAULT_HOME).toBe("~/.local/share/app");
 
 // KEEP: the installer wrote there, and the user's shell reads it from there
 await runInstaller({ env: { HOME: home } });
-await expect(readFile(join(home, ".local/share/app/env.sh"), "utf8")).resolves.toBe(expectedEnvFile);
+await expect(readFile(join(home, ".local/share/app/env.sh"), "utf8")).resolves.toBe(
+  expectedEnvFile,
+);
 ```
 
 The KEEP test fails when the default changes, when the installer stops writing the file, or when the content drifts. The assertion owns each failure (a bare `await readFile` would reject upstream of it, which Prove the test below rules out). The DELETE test fails only when someone edits the constant, and they edit the test in the same keystroke.
@@ -148,7 +150,7 @@ Specimen: a statistical profile measured from the author's real sessions was com
 
 This proves a test that exists for a behavior. It does not ask for a test on every change (Deletions, above).
 
-A guard test that has never failed is not yet evidence. This is the `/verify-with-controls` rule (*a checker that has never been seen failing proves nothing when it passes*) applied to a test suite.
+A guard test that has never failed is not yet evidence. This is the `/verify-with-controls` rule (_a checker that has never been seen failing proves nothing when it passes_) applied to a test suite.
 
 Before claiming a test covers a bug, show it failing on that bug through the same assertion path its green run takes. Reintroducing the bug is the standard form, in the steps below.
 
@@ -156,7 +158,7 @@ The fixture is the reproduction of the observed failure: the same input shape an
 
 1. Reintroduce the bug in the source (or make the equivalent one-line change).
 2. Run that test file alone, not the suite, and confirm it fails.
-3. Confirm it fails *for that reason*, not on an unrelated error.
+3. Confirm it fails _for that reason_, not on an unrelated error.
 4. Confirm the mutation reached the assertion you added or changed. A mutation that throws upstream of every `expect` fails the old test just as well and proves nothing about the new one (observed: breaking a default path threw before the new assertion ran, and the red run looked right and was not).
 5. Restore the source and confirm green again.
 
@@ -171,7 +173,7 @@ Specimens, both caught this way:
 
 ## Boundaries
 
-- **Distinct scenarios are not duplicates.** Five tests that look alike but cover five different short-circuit paths stay five tests, because folding them behind a setup callable hides what each one covers. Fold on *shared shape with a varying value*, not on superficial resemblance.
+- **Distinct scenarios are not duplicates.** Five tests that look alike but cover five different short-circuit paths stay five tests, because folding them behind a setup callable hides what each one covers. Fold on _shared shape with a varying value_, not on superficial resemblance.
 - **Parametrized case count is not test count.** The rule targets weak assertions and duplicated functions, not the number of cases a table drives.
 - **Whole outcome means the outcome under test.** Pin the full result the test exists to check, not every incidental detail around it. A snapshot of unrelated fields is brittle, not strong.
 - **Dropped coverage needs a successor or a recorded reason.** If consolidation drops a path, either a remaining test still covers that failure class, or the change says which path was cut and why (the `/never-twice` rule on deleting a guard). Never let the count improve quietly.

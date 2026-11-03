@@ -4,13 +4,13 @@ One-line rule memories consumable by agent memory tooling. Each memory file carr
 
 ## File contract
 
-| Field | Convention |
-| --- | --- |
-| `name` | Matches the filename stem, kebab-case |
-| `description` | Single line, trigger-shaped ("Use when/before ..."), never a content summary |
-| `metadata.type` | `feedback` |
-| Body | The rule first, then a `**Why:**` line (the failure mode it prevents) and a `**How to apply:**` line |
-| `[[wikilinks]]` | Only to other memories in this directory; a dangling link is an error |
+| Field           | Convention                                                                                           |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| `name`          | Matches the filename stem, kebab-case                                                                |
+| `description`   | Single line, trigger-shaped ("Use when/before ..."), never a content summary                         |
+| `metadata.type` | `feedback`                                                                                           |
+| Body            | The rule first, then a `**Why:**` line (the failure mode it prevents) and a `**How to apply:**` line |
+| `[[wikilinks]]` | Only to other memories in this directory; a dangling link is an error                                |
 
 ## Memories are not skills
 

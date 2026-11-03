@@ -10,11 +10,11 @@ metadata:
 
 Codex only. The desktop app bundles a Chrome plugin that drives any Chromium browser through the ChatGPT extension. Two things break it, and the vendor skill covers neither:
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `Codex auth token is unavailable` after the extension was discovered | `config.toml` sets a custom `model_provider`; the browser helper launches `codex app-server` and inherits it, so the ChatGPT sign-in is invisible | Preflight installs a launcher that overrides the provider for that one subprocess |
-| Extension found yesterday, missing or erroring today | The desktop app updated; `~/.codex/plugins/cache/openai-bundled/chrome` still points at the old bundle | Preflight re-syncs the cache and the trust hashes to the installed app |
-| User asked for a Chromium browser other than Chrome or Edge (Brave, Vivaldi, Opera) and the agent picked Chrome | The vendor skill only names `chrome` and `edge`; other families need a `list()` match | Select by `family` (below) |
+| Symptom                                                                                                         | Cause                                                                                                                                             | Fix                                                                               |
+| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `Codex auth token is unavailable` after the extension was discovered                                            | `config.toml` sets a custom `model_provider`; the browser helper launches `codex app-server` and inherits it, so the ChatGPT sign-in is invisible | Preflight installs a launcher that overrides the provider for that one subprocess |
+| Extension found yesterday, missing or erroring today                                                            | The desktop app updated; `~/.codex/plugins/cache/openai-bundled/chrome` still points at the old bundle                                            | Preflight re-syncs the cache and the trust hashes to the installed app            |
+| User asked for a Chromium browser other than Chrome or Edge (Brave, Vivaldi, Opera) and the agent picked Chrome | The vendor skill only names `chrome` and `edge`; other families need a `list()` match                                                             | Select by `family` (below)                                                        |
 
 The installed Chrome plugin's own skill (`skills/control-chrome/SKILL.md` inside the app bundle) stays the authority for browser APIs. This skill owns local setup, recovery, and browser-family selection.
 

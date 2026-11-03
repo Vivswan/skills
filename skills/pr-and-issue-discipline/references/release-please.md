@@ -19,4 +19,3 @@ BEGIN_COMMIT_OVERRIDE
 <footer>: <value, one line per break>
 END_COMMIT_OVERRIDE
 ```
-

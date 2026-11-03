@@ -2,12 +2,12 @@
 
 `/never-twice` fires when you just corrected an agent or fixed the same failure class twice, or when a change removes a rule, guard, or check. Instead of the next instance fix, it climbs to the most durable response reachable:
 
-| Rung | Response | What the class can still do | Preference |
-| --- | --- | --- | --- |
-| 1 | better architecture or data structures | cannot recur | the goal |
-| 2 | a lint rule or test in CI | recurs, but cannot land | acceptable |
-| 3 | a skill or written rule | recurs, but the next agent knows | fallback |
-| 4 | human vigilance | anything | avoid |
+| Rung | Response                               | What the class can still do      | Preference |
+| ---- | -------------------------------------- | -------------------------------- | ---------- |
+| 1    | better architecture or data structures | cannot recur                     | the goal   |
+| 2    | a lint rule or test in CI              | recurs, but cannot land          | acceptable |
+| 3    | a skill or written rule                | recurs, but the next agent knows | fallback   |
+| 4    | human vigilance                        | anything                         | avoid      |
 
 Preference decays exponentially down the ladder: rungs 1 and 2 are the acceptable tiers. Rungs 3 and 4 are debts taken only when every higher rung is genuinely unreachable, converted up the ladder as soon as one becomes reachable.
 

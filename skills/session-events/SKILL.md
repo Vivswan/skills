@@ -79,15 +79,15 @@ runEvents<File>({
 
 A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and three optional:
 
-| Field | The file source says | The daemon uses it for |
-| --- | --- | --- |
-| `name` | `"log-events"` (`[a-z0-9-]{1,40}`) | the file stems, the envelope's `from-name`, the `msg_id` prefix, the closing line |
-| `interval` | `5` | seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400 |
-| `idleInterval` (optional) | not set, so `5` | the longest wait between polls; a quiet poll doubles the wait from `interval` up to it |
-| `usage` (optional) | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags |
-| `parseTarget(args)` | the path, refused unless absolute | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2 |
-| `poll(targets, io)` | stat each file, compare with its saved size | every poll: the events, and whether anything is still moving |
-| `summary(target)` (optional) | not set, so the target line stands alone | `status`: the lines printed under each target, what stands right now (a standing alert each) |
+| Field                        | The file source says                          | The daemon uses it for                                                                                       |
+| ---------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `name`                       | `"log-events"` (`[a-z0-9-]{1,40}`)            | the file stems, the envelope's `from-name`, the `msg_id` prefix, the closing line                            |
+| `interval`                   | `5`                                           | seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400                        |
+| `idleInterval` (optional)    | not set, so `5`                               | the longest wait between polls; a quiet poll doubles the wait from `interval` up to it                       |
+| `usage` (optional)           | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags                                  |
+| `parseTarget(args)`          | the path, refused unless absolute             | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2 |
+| `poll(targets, io)`          | stat each file, compare with its saved size   | every poll: the events, and whether anything is still moving                                                 |
+| `summary(target)` (optional) | not set, so the target line stands alone      | `status`: the lines printed under each target, what stands right now (a standing alert each)                 |
 
 The daemon keeps `targets`, a map from the text the user typed to the object `parseTarget` returned, and saves it after every poll. A source writes its cursor onto each target object: the file source keeps the last size there. The daemon adds nothing else to the state but the event counter.
 
@@ -126,12 +126,12 @@ exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too)
        3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line
 ```
 
-| Exit | Meaning |
-| --- | --- |
-| 0 | ok; `stop` with no daemon running is ok too, and so is a second `daemon` start, which says the first is up |
-| 2 | usage (`CLAUDE_CODE_MESSAGING_SOCKET` unset and no `--id`, a bad `--id`, `--pid` without `--id`, `--interval` off the scale, a target the source refuses), a state file that is not JSON, or no runtime directory |
-| 3 | no daemon answers for this session: stderr names the socket and the exact background command that starts one |
-| 4 | `wait` only: the timeout passed with no newer line |
+| Exit | Meaning                                                                                                                                                                                                           |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | ok; `stop` with no daemon running is ok too, and so is a second `daemon` start, which says the first is up                                                                                                        |
+| 2    | usage (`CLAUDE_CODE_MESSAGING_SOCKET` unset and no `--id`, a bad `--id`, `--pid` without `--id`, `--interval` off the scale, a target the source refuses), a state file that is not JSON, or no runtime directory |
+| 3    | no daemon answers for this session: stderr names the socket and the exact background command that starts one                                                                                                      |
+| 4    | `wait` only: the timeout passed with no newer line                                                                                                                                                                |
 
 `watch` saves the target and polls at once, so it returns after that poll. A second `watch` of the same text replaces the target, cursor included. `poll` runs one poll now, for tests and debugging. `--interval` moves the busy interval; the idle one never drops below it. `--mode` is the session's permission mode (below), `bypass` by default.
 
@@ -173,20 +173,20 @@ stop      the owner's pid gone (checked every second and before each poll): fini
 
 The runtime directory, tried in this order. Each must be creatable as a private directory (mode 0700, owned by the user) or the next is tried; none at all exits 2 asking for `SESSION_EVENTS_DIR`.
 
-| Tried | When |
-| --- | --- |
-| `$SESSION_EVENTS_DIR` | set, as an absolute path |
-| `$XDG_RUNTIME_DIR/session-events` | `XDG_RUNTIME_DIR` set |
-| `$CLAUDE_CODE_TMPDIR/session-events-<uid>` | `CLAUDE_CODE_TMPDIR` set |
-| `<os tmpdir>/session-events-<uid>` | the OS temp dir, honouring `TMPDIR` |
-| `/tmp/session-events-<uid>` | the last resort |
+| Tried                                      | When                                |
+| ------------------------------------------ | ----------------------------------- |
+| `$SESSION_EVENTS_DIR`                      | set, as an absolute path            |
+| `$XDG_RUNTIME_DIR/session-events`          | `XDG_RUNTIME_DIR` set               |
+| `$CLAUDE_CODE_TMPDIR/session-events-<uid>` | `CLAUDE_CODE_TMPDIR` set            |
+| `<os tmpdir>/session-events-<uid>`         | the OS temp dir, honouring `TMPDIR` |
+| `/tmp/session-events-<uid>`                | the last resort                     |
 
-| File | Holds |
-| --- | --- |
-| `<pid>.<source>.sock` | the control socket, also the daemon's `from` address |
-| `<pid>-<start>.<source>.events.jsonl` | the events log, one line per event, appended before the state is saved |
-| `<pid>-<start>.<source>.state.json` | the targets with their cursors and the event counter, written tmp-then-rename |
-| `<pid>-<start>.<source>.log` | the daemon's log; the first place to read when something is off |
+| File                                  | Holds                                                                         |
+| ------------------------------------- | ----------------------------------------------------------------------------- |
+| `<pid>.<source>.sock`                 | the control socket, also the daemon's `from` address                          |
+| `<pid>-<start>.<source>.events.jsonl` | the events log, one line per event, appended before the state is saved        |
+| `<pid>-<start>.<source>.state.json`   | the targets with their cursors and the event counter, written tmp-then-rename |
+| `<pid>-<start>.<source>.log`          | the daemon's log; the first place to read when something is off               |
 
 `<start>` is the session's start token (its process start time from `/proc`, or its inbox socket's inode where there is no `/proc`). A later session that happens to get the same pid opens other files and starts from an empty state; nothing compares owners. A file-sink daemon (below) names its files `<id>.<source>.` instead.
 
@@ -208,13 +208,13 @@ In a fleet, the lead's session runs the daemon as its own background task, with 
 
 ## Gotchas
 
-| What you see | What it means | What to do |
-| --- | --- | --- |
-| held delivery notices in the session instead of the event text | the daemon runs detached (`nohup`, `setsid`, a shell that exited), so it is a cross-session sender | `stop`, then start it again as a background task of this session |
-| `watch` exits 3 naming a socket and a command | no daemon for this session and source | run the printed command as a background task, then `watch` again |
-| exit 2: `CLAUDE_CODE_MESSAGING_SOCKET` is unset | not a Claude Code session, or one without an inbox | a file-sink daemon with `--id`, and `wait` (above) |
-| a `trouble` event naming the daemon log | three polls in a row failed; the daemon keeps polling | read the log; fix what it names (the polled system, credentials, the network) |
-| the log ends `daemon <pid> stopped: SIGTERM` about two hours after the start, with the session still running | the harness's two-hour cap on a background task | start the daemon again with the same command; the saved targets carry on |
-| a message arrives twice | the daemon was killed between appending the log and saving the state, and the restart read that poll again | nothing; at most one poll repeats |
+| What you see                                                                                                 | What it means                                                                                              | What to do                                                                    |
+| ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| held delivery notices in the session instead of the event text                                               | the daemon runs detached (`nohup`, `setsid`, a shell that exited), so it is a cross-session sender         | `stop`, then start it again as a background task of this session              |
+| `watch` exits 3 naming a socket and a command                                                                | no daemon for this session and source                                                                      | run the printed command as a background task, then `watch` again              |
+| exit 2: `CLAUDE_CODE_MESSAGING_SOCKET` is unset                                                              | not a Claude Code session, or one without an inbox                                                         | a file-sink daemon with `--id`, and `wait` (above)                            |
+| a `trouble` event naming the daemon log                                                                      | three polls in a row failed; the daemon keeps polling                                                      | read the log; fix what it names (the polled system, credentials, the network) |
+| the log ends `daemon <pid> stopped: SIGTERM` about two hours after the start, with the session still running | the harness's two-hour cap on a background task                                                            | start the daemon again with the same command; the saved targets carry on      |
+| a message arrives twice                                                                                      | the daemon was killed between appending the log and saving the state, and the restart read that poll again | nothing; at most one poll repeats                                             |
 
 A local subagent spawned with the Agent tool shares its session's inbox socket and pid (`CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_PID` are the session's, with `CLAUDE_CODE_CHILD_SESSION=1`), so a `watch` run inside it reaches the session's daemon, and the events land with the session. A teammate from agent teams is a separate process with its own socket and runs its own daemon.

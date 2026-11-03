@@ -191,14 +191,14 @@ return withMinWords(result, minWords), nil
 
 The ugly-to-clear table of `../shape.md`, with each row as Go writes it:
 
-| Ugly | Clear |
-| --- | --- |
+| Ugly                                             | Clear                                                                 |
+| ------------------------------------------------ | --------------------------------------------------------------------- |
 | `if err := f(); err != nil { ... } else { ... }` | `err := f()` then `if err != nil { return err }` then a straight line |
-| a `for` body nested under `if ok {` | `if !ok { continue }` at the top of the body |
-| a guard's body wrapped in `else` | return early, the body follows unwrapped |
-| naked `return` with named results | explicit values (`nakedret`) |
-| `New(0.0, 12.5, 0.2)` | an options struct once three values share a type |
-| `func() T { ... }()` inline to compute a value | a named function |
+| a `for` body nested under `if ok {`              | `if !ok { continue }` at the top of the body                          |
+| a guard's body wrapped in `else`                 | return early, the body follows unwrapped                              |
+| naked `return` with named results                | explicit values (`nakedret`)                                          |
+| `New(0.0, 12.5, 0.2)`                            | an options struct once three values share a type                      |
+| `func() T { ... }()` inline to compute a value   | a named function                                                      |
 
 `switch` over an `if`/`else if` chain on the same value.
 
