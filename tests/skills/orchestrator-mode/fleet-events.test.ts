@@ -1208,6 +1208,7 @@ describe("fleet-events.mts", () => {
         worktrees: { "wt-a": wtA, "wt-b": wtB },
       } = scratchRepo(s.fixtureDir, TRACKS);
       const parked = park(repo);
+      let worker: ReturnType<typeof park> | null = null;
       const cwd = process.cwd();
       try {
         // The daemon inherits the test process's cwd at spawn: park it in wt-b for the start only.
@@ -1222,10 +1223,11 @@ describe("fleet-events.mts", () => {
         expect(polled(s, box.path)).toBe(0);
         expect(polled(s, box.path)).toBe(0);
 
-        const worker = park(wtA);
+        worker = park(wtA);
         expect(polled(s, box.path)).toBe(0);
         worker.kill();
         await worker.exited;
+        worker = null;
         expect(polled(s, box.path)).toBe(0);
         expect(polled(s, box.path)).toBe(1);
         expect(polled(s, box.path)).toBe(0);
@@ -1243,6 +1245,7 @@ describe("fleet-events.mts", () => {
           },
         });
       } finally {
+        worker?.kill();
         parked.kill();
       }
       s.stop({ inbox: box.path });
@@ -2582,13 +2585,15 @@ describe("fleet-events.mts", () => {
         exchange(ago(0), "toolu_01"),
       );
       const parked = park(repo);
+      let worker: ReturnType<typeof park> | null = null;
       try {
         await s.start({ inbox: box.path });
         watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
-        const worker = park(wtB);
+        worker = park(wtB);
         expect(polled(s, box.path)).toBe(0);
         worker.kill();
         await worker.exited;
+        worker = null;
         expect(polled(s, box.path)).toBe(0);
 
         const pathB = writeAgent(
@@ -2617,6 +2622,7 @@ describe("fleet-events.mts", () => {
         const target = s.state().targets[session.dir] as { worktrees: Record<string, unknown> };
         expect(Object.keys(target.worktrees).sort()).toEqual([repo, wtB].sort());
       } finally {
+        worker?.kill();
         parked.kill();
       }
       s.stop({ inbox: box.path });
