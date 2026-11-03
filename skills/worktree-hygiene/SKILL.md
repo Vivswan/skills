@@ -14,10 +14,26 @@ metadata:
 
 ## When to Apply
 
+- Creating a git worktree, or choosing where one goes
 - Removing a git worktree, or retiring a branch after it landed (its worktree, its local ref, optionally its remote ref)
 - Handing a worktree or branch from one actor to another, or resuming an actor that owns one
 - Several actors (agents, sessions, scripts) share one repository or one worktree
 - Checking out branches or writing `git config` while other worktrees exist
+
+## Creating a Worktree
+
+Every worktree lives INSIDE the main checkout, under one ignored dot folder. Never outside it: not the OS tmp dir, not a sibling directory, not the home directory.
+
+- **`.worktrees/` first, whatever the harness.** It is agent-agnostic, so every actor on the repository looks in one place. `<main>` below is the main checkout's toplevel: `git rev-parse --show-toplevel` run there, never in a linked tree, which prints its own root.
+- **`.claude/worktrees/` only when `.worktrees/` is not ignored.** The test is `git -C <main> check-ignore -q .worktrees/`, trailing slash included, which works before the folder exists. Claude Code's own worktree tool uses that fallback folder. Keep it out of `git status` with a `.claude/worktrees/` line in `.git/info/exclude`, which is local to the clone and needs no `.gitignore` edit.
+- **One tree per branch, named by it**: `git worktree add -b <branch> <main>/<folder>/<slug> <base>`.
+- **A tree already outside moves in**: `mkdir -p <main>/<folder> && git worktree move <old> <main>/<folder>/<slug>`. The move keeps the branch and the tree's private git dir. It does not create the folder, and it refuses a locked tree until it is unlocked.
+
+Why the placement is a rule and not a taste:
+
+- **The OS tmp dir may be swept.** A cleaner or a reboot can take a tree there, uncommitted work included, and leave a stale entry in the shared git dir.
+- **A sibling directory is outside the checkout.** The repository's ignore rules do not reach it, and a harness that confines writes to the checkout refuses it.
+- **Scattered trees are hard to find.** `git worktree list` names them, but nothing else does without a search of the whole disk. One folder in the checkout is where anyone looks.
 
 ## Removing a Worktree
 

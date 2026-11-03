@@ -17,7 +17,7 @@ agent builder-a: stuck 32 min on Bash
 file:///home/user/.claude/projects/-repo/0f3c7e2a-5b1d-4c8e-9a2f-6d7e8f9a0b1c/subagents/agent-0a1b2c3d4e5f6a7b8.jsonl
 
 worktree feat/parser: idle 4 polls after work
-file:///repo/.claude/worktrees/feat-parser
+file:///repo/.worktrees/feat-parser
 automated notice from fleet-events; no reply needed
 </cross-session-message>
 ```
@@ -153,7 +153,7 @@ It prints one JSON line per worktree of `<repo-root>` (one row, example values, 
 
 ```json
 {
-  "worktree": "/repo/.claude/worktrees/agent-a1b2c3d4e5f60718",
+  "worktree": "/repo/.worktrees/agent-a1b2c3d4e5f60718",
   "branch": "worktree-agent-a1b2c3d4e5f60718",
   "ok": true,
   "headSha": "0123abcd0123abcd0123abcd0123abcd0123abcd",
