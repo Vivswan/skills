@@ -489,8 +489,9 @@ function checkCodexAuthors(codexManifests: readonly CodexManifest[], author: Aut
   }
 }
 
-// Every place that repeats the author's name or email must agree with the
+// Every manifest and frontmatter that repeats the author's name or email must agree with the
 // canonical copy in .claude-plugin/plugin.json author.
+// LICENSE.md is not checked here: the platform writes it, and its managed-files check owns the text.
 function checkAuthorIdentity(
   marketplace: Marketplace,
   manifest: RootManifest,
@@ -519,14 +520,6 @@ function checkAuthorIdentity(
           " (first name of the .claude-plugin/plugin.json author)",
       );
     }
-  }
-
-  const licenseText = readTextFile(join(ROOT, "LICENSE.md"));
-  const copyright = licenseText
-    .split("\n")
-    .find((line) => line.includes("Copyright") && line.includes(author.name));
-  if (copyright === undefined) {
-    fail(`LICENSE.md: copyright line must name '${author.name}'`);
   }
 }
 
