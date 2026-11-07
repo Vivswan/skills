@@ -8,7 +8,6 @@ project:
   name: Skills
   slug: skills
   description: Installable, plugin-ready skills that give coding agents disciplined workflows, from code standards and review gates to multi-agent orchestration
-  copyright_holder: Vivswan Shah (https://github.com/Vivswan)
 mirrors:
   - source: LICENSE.md
     targets:
