@@ -19,6 +19,7 @@ Never a comment: what the code does, its types, its control flow, its history, t
 ## Tell first, then show
 
 - **The tell.** One or two sentences say what the code cannot show. That is the whole comment when nothing more is needed.
+- **One fact per sentence, one sentence per line** (a long sentence wraps). A reason rides with its fact once (`X, so Y`, `Y because X`). A second link, another `so`, a `because` after it, or a semicolon, is a chain: split it into lines, or cut it. Unsure whether to split or cut: cut.
 - **The show.** A block follows only when it shows the fact faster: an arrow flow for a sequence (`re-derive -> read credentials -> re-derive again -> must match`), aligned rows for facts that share a shape (`input  -> outcome`). Nothing else is mandated.
 - **Combine as the spot needs.** A blank comment line separates groups when there are more than a tell and its block. One carrier per point: rows followed by prose re-explaining them mean the rows failed.
 - **Uniform shape is the wall.** A paragraph fails, and so does every fact as its own line with nothing shown, however true each line is. The tell is one or two sentences, and past that a fact is shown or cut.
@@ -61,13 +62,13 @@ interface Network {
   /** The links, one segment each, with their own alpha in the fourth colour component. */
   readonly lines: THREE.LineSegments;
 
-  /** Each point's home on the plane as (u, v) in system units; the links are knitted by the homes, so they stretch with their points. */
+  /** Each point's home on the plane as (u, v) in system units. */
   readonly homes: Float32Array;
 
   /** Each point's small lift off the plane. */
   readonly lift: Float32Array;
 
-  /** Each point's place this frame, its home carried off by the pointer's motion; the points draw at their places. */
+  /** Each point's place this frame: its home, carried off by the pointer's motion. */
   readonly places: Float32Array;
 
   /** The plane's right axis, from the closing camera's stance. */
@@ -80,7 +81,9 @@ interface Network {
   readonly center: THREE.Vector3;
 ```
 
-The three-line comment was three fields' comments; each went to its field. The same file's constants block had a five-line comment over three constants, a group's tell merged into its first constant's comment, and bare constants among commented ones: the tell went on its own line above the group, and every constant got one line.
+The three-line comment was three fields' comments. Each went to its field, and the two facts the code shows (the links are built from the homes and stretch with them, the points draw at their places) went.
+
+The same file's constants block had a five-line comment over three constants, a group's tell merged into its first constant's comment, and bare constants among commented ones: the tell went on its own line above the group, and every constant got one line.
 
 ## Combinations
 
@@ -92,12 +95,14 @@ The carrier follows the fact at that spot. Real-shaped examples, tell first in e
 ```
 
 ```ts
-// Servers send the model list in three spellings; callers only ever compare the normalized form.
+// Servers send the model list in three spellings.
+// Callers only ever compare the normalized form.
 //   "GPT-4o", "gpt_4o", "gpt-4o " -> "gpt-4o"
 ```
 
 ```ts
-// `--help` prints this block, and tests/repo/usage-blocks.test.ts holds the fence on SKILL.md equal to it.
+// `--help` prints this block.
+// tests/repo/usage-blocks.test.ts holds the fence on SKILL.md equal to it.
 ```
 
 ```ts
@@ -139,7 +144,9 @@ Before writing or keeping a comment, ask two questions:
 1. What does this say that the code does not?
 2. Could a tired human read it in one pass?
 
-Fail either: rewrite or delete. A wholly redundant comment is deleted, not compressed. A comment that buries one real constraint in narration keeps only the constraint.
+Fail either: rewrite or delete. Unsure which: delete.
+
+A wholly redundant comment is deleted, not compressed. A comment that buries one real constraint in narration keeps only the constraint.
 
 After compressing, check each remaining fact against the code. Shorter is never allowed to be less true (one rewrite turned "can overstate" into "overstates").
 
@@ -164,16 +171,29 @@ Real blocks, before and after.
 
 ```ts
 /**
- * The ONE "entry uses this credential field" judgment; it judges the ENTRY alone, so it errs toward "uses it".
+ * The ONE "entry uses this credential field" judgment, read from the ENTRY alone.
  * Wire narrowing still drops what cannot ride, so consumers gate refusals, never the send.
  *
+ * only a value's existence known       -> errs toward "uses it"
  * Authorization-named header resolved  -> skips the OAuth exchange
  * X-API-Key-named header resolved      -> owns that carrier
  * declared header, value unknown       -> lowers no other field's judgment
  */
 ```
 
-Two lines described what other functions do. Their own comments carry that. Three facts shared a shape (a resolved header, its effect) and became rows.
+Two lines described what other functions do. Their own comments carry that. Four facts shared a shape (what is known of the entry, the judgment) and became rows.
+
+**Three facts chained in one sentence, deleted.** One line in a network policy file. Its owner read it twice and rejected it as convoluted and not needed.
+
+```jsonc
+// Nothing else names tag:tv or tag:iot, so they get no other Service and no ssh; a TV carries both tags.
+```
+
+```jsonc
+// (nothing: the comment is removed)
+```
+
+A `so` and a semicolon chained three facts. The owner found none of the three worth keeping, so the line went whole rather than being split into three.
 
 **Narrated control flow, deleted.** Every sentence described a branch the function body shows. Nothing here was a reason, an invariant, or a quirk.
 
@@ -193,7 +213,7 @@ Two lines described what other functions do. Their own comments carry that. Thre
 ```
 
 ```ts
-// (nothing: the comment is removed; the function signature and body carry all of it)
+// (nothing: the comment is removed. The signature and body carry all of it)
 ```
 
 **A wrapped paragraph, to tell then rows.** From one repository's test launcher.
@@ -243,7 +263,7 @@ Comments describe purpose and constraints, not where the code came from. Commit 
 ## How to apply
 
 - **Run the two-question test** before writing a comment and before keeping one you meet.
-- **Shape every comment you keep:** tell, then show only when a block is faster.
+- **Shape every comment you keep:** tell, one fact per sentence, then show only when a block is faster.
 - **On a variable, field, or constant:** one line above it, and the record or block commented throughout or not at all.
 - **Redesign around a defended hack.** Treat any multi-line comment defending a hack, special case, or fragile assumption as a signal to redesign that code until the comment becomes unnecessary.
 - **Run these checks explicitly** in every pre-commit review pass (see the `/rubber-duck-review` skill).
