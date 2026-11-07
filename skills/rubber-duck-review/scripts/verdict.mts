@@ -16,6 +16,7 @@ import {
   statSync,
 } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
+import type { $ZodIssueUnrecognizedKeys } from "zod/v4/core";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -204,6 +205,7 @@ const VERDICT = z.strictObject({
   recorded_not_built: z.array(z.string()),
   summary: z.string().check(z.refine((text) => text.trim() !== "")),
 });
+const VERDICT_KEYS = Object.keys(VERDICT.shape);
 
 /** Why a value is not the verdict object, in the report format's words: the issue's first path step names the field. */
 function verdictIssue(issue: { code: string; path: PropertyKey[]; keys?: string[] }): string {
@@ -224,6 +226,24 @@ function verdictIssue(issue: { code: string; path: PropertyKey[]; keys?: string[
 function parseVerdict(value: unknown): Verdict | string {
   const read = VERDICT.safeParse(value);
   if (read.success) return read.data;
+
+  // A reviewer once wrapped its verdict in an outer object, {"verdict": {...}}.
+  // zod's first issue for that is a missing `blocking`, which read as a malformed array.
+  if (isRecord(value)) {
+    const missing = VERDICT_KEYS.filter((key) => !(key in value));
+    if (missing.length > 0) {
+      const extra = read.error.issues.find(
+        (issue): issue is $ZodIssueUnrecognizedKeys =>
+          issue.code === "unrecognized_keys" && issue.path.length === 0,
+      );
+      const instead =
+        extra === undefined
+          ? ""
+          : `; ${verdictIssue({ code: extra.code, path: [], keys: extra.keys })}`;
+      return `missing key(s): ${missing.join(", ")}${instead}`;
+    }
+  }
+
   const [issue] = read.error.issues;
   return verdictIssue({
     code: issue?.code ?? "invalid_type",
