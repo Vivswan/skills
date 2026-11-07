@@ -201,6 +201,13 @@ const CODEX_SCENARIOS: Record<string, unknown> = {
     { type: "message", text: JSON.stringify({ blocking: [], summary: "no non_blocking key" }) },
     END,
   ]),
+  // A reviewer wrapped a well-formed verdict in an outer object.
+  // The old message blamed the empty blocking array, and the builder read three captures by hand.
+  wrapped: acpScenario([
+    READ_STEP,
+    { type: "message", text: JSON.stringify({ verdict: CODEX_VERDICT }) },
+    END,
+  ]),
   blank: acpScenario([READ_STEP, { type: "message", text: "" }, END]),
   big: acpScenario([
     READ_STEP,
@@ -647,7 +654,14 @@ describe("run-review.mts", () => {
         id: "codex missing key",
         tool: "codex",
         mode: "badshape",
-        reason: "non_blocking is not an array",
+        reason: "missing key(s): non_blocking, recorded_not_built",
+      },
+      {
+        id: "codex wrapped verdict",
+        tool: "codex",
+        mode: "wrapped",
+        reason:
+          "missing key(s): blocking, non_blocking, recorded_not_built, summary; unexpected key(s): verdict",
       },
       { id: "copilot prose", tool: "copilot", mode: "prose", reason: "final message is not JSON" },
       // The validator refuses an extra key; the script's reading of a plain-text
