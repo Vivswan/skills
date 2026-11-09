@@ -64,6 +64,24 @@ Readability and beauty come first: this rule yields where following it would rea
 
 The specimens pre-date modern typing. The layout is what to copy; the syntax is modernised.
 
+## A folder may exist to tell the reader a fact
+
+The tree is documentation. A path is read before any file is opened and costs nothing to read, so a folder may encode a property that no program branches on.
+
+Specimen: one homelab's apps tree, which an architecture audit flagged as "enforced only by folder names and read by nothing". The owner kept it.
+
+```text
+src/apps/
+  code/  <app>/   fully declared: rebuilds whole from git, nothing to preserve
+  ui/    <app>/   keeps state through its own UI: back it up before touching it
+```
+
+An agent asked to rotate Home Assistant's settings learns the stakes from the path `src/apps/ui/homeassistant` before it opens a file.
+
+The test for such a folder is the reader, not the code: does a reader learn something here they could not learn as fast another way? A reviewer who finds a folder "read by nothing" runs that test before calling it a finding.
+
+It is no licence for a folder that encodes nothing. A folder whose fact the file names already show fails the test: a `scripts/` folder holding every `.ts` file, when the extension says it. One axis per level, the one a reader most needs.
+
 ## The same rule in other languages
 
 The test is identical in every language: does this file or function only forward names? How each language spells the barrel (`__init__.py`, `mod.rs`, `index.ts`, a wrapping package) is on its page under `languages/`.
@@ -74,3 +92,4 @@ The test is identical in every language: does this file or function only forward
 - Transient re-exports are acceptable only as staging INSIDE a multi-step migration, and the migration is not done until a sweep removes them.
 - The test for a barrel is "does this file only re-export names", not "does it import a lot": generated aggregators that carry real derived values (registries, merged tables, generated indexes with data) are not barrels.
 - The test for an escort is "does this function add any behavior, contract, or type information". If not, inline it away and repoint callers.
+- The test for a folder no code reads is the reader: what does a reader learn from the path that they could not learn as fast another way? Nothing, and the level goes; something, and it stays.

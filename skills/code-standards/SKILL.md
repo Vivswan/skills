@@ -105,6 +105,10 @@ Delete an import-only index, a "keep old importers compiling" re-export, and a f
 
 A confusing layout is the same defect one level up. A predictable one names each file after its main public thing and keeps its helpers beside it, gives every sibling in a folder the same internal template, and repeats file names across sibling stages, so a reader knows where a thing sits before opening it. Not sure where a thing goes: ask the user, with options.
 
+A folder may exist to tell the reader a fact no code reads: the tree is documentation, read before any file is opened. The test is the reader, not the code, and a level whose fact the file names already show fails it.
+
+Specimen: one homelab splits `apps/code` from `apps/ui` by whether an app keeps state, so an agent learns from the path alone what to back up.
+
 A stage's records, constants, and small functions gather in its `records`, `constants`, and `util` modules, and a package that fits one module is one module. A module named after its main thing may hold that thing alone; the defect is a helper of one caller, or a constant, given its own module outside those three.
 
 Specimen: one sweep split a tree into 269 modules, among them a file holding a single format-conversion helper and another holding a default layer list.
@@ -168,6 +172,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - Barrel files, re-export shims, or pass-through functions that only forward to another function or module.
 - A file holding two main things, a concept scattered over several files, or a file named unlike the one it holds, a helper of one caller or a constant given its own module outside the `records`, `constants`, and `util` modules, a sibling whose internal template differs from the folder's, or a concept spelled differently across sibling stages.
 - A move that leaves a path it changed unrepaired (an importer, a workflow or manifest path, a comment, a relative path inside the moved file), that edits the moved code beyond its paths in the same PR, or that lacks the export census and test count; a confusing layout kept because moving files is "churn".
+- A folder called a defect for being "read by nothing" without the reader test (what does a reader learn from the path that they could not learn as fast another way), or a folder level kept whose fact the file names already show.
 - Planning artifacts (work packages, phases, codenames, finding numbers) referenced in code or comments.
 - AGENTS.md or CLAUDE.md carrying anything deducible from the code or another doc (layout trees, enforced checklists, module behavior), a long paragraph, or a test that pins its text.
 - Attribution lines or hard-wrapped bodies in commit messages and PR descriptions.
@@ -183,7 +188,7 @@ Cross-language standards, one page each:
 - `references/tests.md`: the minimum standard for tests, the drift question, proving a guard test, the census rule for deletions, hand-authored fixtures
 - `references/comments.md`: what a good comment carries, tell then show, the one-line rule for variables, fields, and constants, the two-question test, the specimens, the TODO ban, planning references
 - `references/shape.md`: module layout, define before use, one concept per function, guards and early exits, the ugly-to-clear table, the paragraph specimen, members standing alone, types and docs
-- `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging, the predictable layout and its specimen tree, the pure-move PR and the target layout for a reorganisation
+- `references/structure.md`: barrels, compatibility re-exports, escort functions, migration staging, the predictable layout and its specimen tree, a folder that tells the reader a fact, the pure-move PR and the target layout for a reorganisation
 - `references/artifacts.md`: lean AGENTS.md, content-only commit messages and their two exceptions, hooks that check and never commit
 
 How the shape and barrel rules land in each language, with its lint floor and idioms:
