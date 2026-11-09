@@ -52,7 +52,9 @@ Specimen: fifteen tests each asserting one key of a dict became one parametrized
 
 The reason a choice was made, an invariant another file relies on, an external system's quirk, a consequence invisible here, the input that motivated a guard. Never what the code does, its types, its control flow, its history, the alternatives.
 
-Tell first, in one or two sentences, then show (aligned rows, an arrow flow) only when a block is faster. Never pack prose to fit a cap: cut honestly. Before writing or keeping one: what does this say that the code does not, and could a tired human read it in one pass?
+Tell first, in one or two sentences, one fact each, then show (aligned rows, an arrow flow) only when a block is faster. A reason rides with its fact once. A second link (another `so`, a `because` after it, a semicolon) is a chain to split or cut.
+
+Never pack prose to fit a cap: cut honestly. Before writing or keeping one: what does this say that the code does not, and could a tired human read it in one pass? Unsure: delete it.
 
 Where a variable, a field, or a constant needs a comment at all, it is one line above the item, never more; what needs more goes into the name or a short tell above the group. Once one field of a record or one constant of a block carries a comment, every field or constant does, so it reads uniform. Specimens, the TODO ban: `references/comments.md`.
 
@@ -162,7 +164,7 @@ Anything a human skims uses scannable structure: paragraphs of 1 to 3 sentences,
 - Hand-rolled code, added, moved, touched, reused, or depended on, whose whole job a good library or a tool already in the repository does; the finding names the library and what it covers. A change in a library-shaped category whose record (the brief, then the PR body or the landing report) names no library and no search.
 - A skill's script copied into a repository, or a library finding that counts a transitive dependency or a library's private module as already in the repository.
 - Comments that say what the code shows: what it does, its types, its control flow, its history, the alternatives.
-- Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), several ideas in one sentence, prose packed to fit a cap.
+- Comments a reader cannot take in one pass: uniform shape (a paragraph, or every fact as its own line with nothing shown past a two-sentence tell), a sentence chaining facts past one link (another `so`, a `because` after it, a semicolon), prose packed to fit a cap.
 - A comment on a variable, field, or constant over one line, a record or constants block where some items carry a comment and others none, members of a commented record running together, or a commented constant or variable not spaced out from its neighbours.
 - Paragraph-long comments justifying workarounds (flag the underlying code, not the comment alone).
 - A boundary that refuses state the tool outputs and could repair unambiguously, repairs input the tool only reads, or lets malformed input through to fail later; a healing step whose comment argues instead of stating the rule.
