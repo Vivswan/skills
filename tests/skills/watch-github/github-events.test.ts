@@ -723,7 +723,7 @@ describe("github-events.mts", () => {
     paged.stop({ inbox: pagedBox.path });
   }, 30000);
 
-  test("a gate neither the target's head nor a recent head of its form ran is refused at the watch, naming the workflows that ran there; a gate that ran is watched, and so is any gate where nothing ran", async () => {
+  test("a gate neither the target's head nor a recent head of its form ran is refused at the watch, naming the workflows that ran there; a gate that ran is watched, and so is any gate where nothing ran or a head's suites pass one page", async () => {
     // The incident: a PR gated on `Checks`, the name of a workflow that only another one calls,
     // was accepted, and the mistake surfaced as a trouble event once CI had settled.
     const s = new Scenario("unrun-gate");
@@ -741,6 +741,7 @@ describe("github-events.mts", () => {
         ],
       ),
       "recent-prs-5": recentPrHeads([], []),
+      "recent-prs-6": recentPrHeads([["CI", "COMPLETED", "SUCCESS"]], [], "page-2"),
       "recent-branch-1": recentBranchHeads([[["CI", "COMPLETED", "SUCCESS"]]]),
       "rows-1": rows({
         p7: prNode({ rollup: "PENDING", suites: [["CI", "IN_PROGRESS", null]] }),
@@ -778,13 +779,14 @@ describe("github-events.mts", () => {
     rmSync(join(s.fixtureDir, "fail-recent-prs"));
     expect(s.run(["status"], { inbox: box.path }).stdout).toContain("targets: 0");
 
-    // The same reads pass the names that ran, and the fifth PR read finds nothing ran anywhere.
+    // The same reads pass the names that ran. The fifth PR read finds nothing ran anywhere, and the
+    // sixth is cut at one page of suites: neither can say `Checks` never ran.
     const gated = ["--expect-workflow", "Backend CI", "--expect-workflow", "PR Title"];
     expect(s.run(["watch", PR7, ...gated], { inbox: box.path }).code).toBe(0);
     expect(s.run(["watch", MAIN, "--expect-workflow", "CI"], { inbox: box.path }).code).toBe(0);
-    expect(
-      s.run(["watch", `${REPO}#8`, "--expect-workflow", "Checks"], { inbox: box.path }).code,
-    ).toBe(0);
+    const watchEight = () =>
+      s.run(["watch", `${REPO}#8`, "--expect-workflow", "Checks"], { inbox: box.path }).code;
+    expect([watchEight(), watchEight()]).toEqual([0, 0]);
     expect(Object.keys(s.state().targets).sort()).toEqual([PR7, `${REPO}#8`, MAIN].sort());
     expect(s.violations()).toBe("");
     s.stop({ inbox: box.path });

@@ -37,9 +37,13 @@ function nodesOf(connection: unknown): unknown[] {
 }
 
 // Every run parseSuites returns counts, under the name the CI judgment matches a gate by.
-function workflowNames(heads: unknown[]): string[] {
-  const runs = heads.flatMap((head) => parseSuites(get(head, "checkSuites")).runs);
-  const names = new Set(runs.map((run) => run.name));
+function workflowNames(heads: unknown[]): string[] | null {
+  const pages = heads.map((head) => parseSuites(get(head, "checkSuites")));
+
+  // A head with more suites than one page gives a cut list, which cannot say a workflow never ran.
+  if (pages.some((page) => !page.complete)) return null;
+
+  const names = new Set(pages.flatMap((page) => page.runs.map((run) => run.name)));
 
   return [...names].sort();
 }
@@ -52,10 +56,10 @@ function headCommit(pr: unknown): unknown {
  * The workflows that ran on a pull request's own head or on the heads of the repository's most
  * recently updated pull requests. Its own head counts, since an older pull request is not among those.
  *
- * @returns the names, sorted; empty when none ran
+ * @returns the names, sorted; empty when none ran; null when a head's suites pass one page
  * @throws {GhError} the request failed, or GitHub knows no such pull request
  */
-export function readPrHeadWorkflows(repo: string, number: number): string[] {
+export function readPrHeadWorkflows(repo: string, number: number): string[] | null {
   const [owner, name] = repo.split("/") as [string, string];
   const body = graphql(PR_HEADS_QUERY, { owner, name, number });
   const repository = get(get(body, "data"), "repository");
@@ -67,10 +71,10 @@ export function readPrHeadWorkflows(repo: string, number: number): string[] {
 /**
  * The workflows that ran on the branch's newest commits.
  *
- * @returns the names, sorted; empty when none ran, or GitHub answers null for the branch
+ * @returns the names, sorted; empty when none ran, or GitHub answers null for the branch; null when a head's suites pass one page
  * @throws {GhError} the request failed
  */
-export function readBranchWorkflows(repo: string, branch: string): string[] {
+export function readBranchWorkflows(repo: string, branch: string): string[] | null {
   const [owner, name] = repo.split("/") as [string, string];
   const body = graphql(BRANCH_HEADS_QUERY, { owner, name, ref: `refs/heads/${branch}` });
   const tip = get(get(get(get(body, "data"), "repository"), "ref"), "target");

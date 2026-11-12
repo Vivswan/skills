@@ -66,7 +66,7 @@ Spell a gate as the refusal lists it, case included. A workflow file's `name:` i
 
 - **A pull request's gates** are held against its own head and the heads of the repository's 10 most recently updated pull requests.
 - **A branch's gates** are held against the branch's last 10 commits.
-- **Nothing ran on any of those heads:** the gate is taken as given, and the CI rules below judge it.
+- **Nothing ran on any of those heads, or one carries more than 100 check suites:** the gate is taken as given, and the CI rules below judge it.
 - **A workflow new to the repository** is refused until its first run registers on one of those heads: `watch` again a few seconds after the push.
 - **A listed name can still miss this head:** a path or branch filter skips it there, and the CI rules below report the gate with no run.
 - **The read fails,** or GitHub knows no such pull request: `watch` exits 1 with gh's own message, and nothing is subscribed.

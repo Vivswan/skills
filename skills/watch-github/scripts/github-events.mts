@@ -41,7 +41,7 @@ try {
 }
 const { runEvents, UsageError } = base;
 
-function recentWorkflows(target: Target): { ran: string[]; where: string } {
+function recentWorkflows(target: Target): { ran: string[] | null; where: string } {
   if (target.form === "pr") {
     return {
       ran: readPrHeadWorkflows(target.repo, target.number),
@@ -61,10 +61,12 @@ function recentWorkflows(target: Target): { ran: string[]; where: string } {
  */
 function refuseUnrunGates(target: Target): void {
   const { ran, where } = recentWorkflows(target);
-  const unrun = target.gates.filter((gate) => !ran.includes(gate));
 
-  // Nothing ran on any recent head: there is no list to hold a gate against.
-  if (ran.length === 0 || unrun.length === 0) return;
+  // Nothing ran on any of those heads, or the list was cut: there is no list to hold a gate against.
+  if (ran === null || ran.length === 0) return;
+
+  const unrun = target.gates.filter((gate) => !ran.includes(gate));
+  if (unrun.length === 0) return;
 
   throw new UsageError(
     `--expect-workflow ${unrun.join(", ")}: no run on ${where}; workflows that ran there: ${ran.join(", ")}`,

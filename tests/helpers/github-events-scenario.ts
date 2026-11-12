@@ -193,12 +193,22 @@ export function rows(
   });
 }
 
-/** The recent-heads reply for a PR target: the runs on the watched PR's own head, then on the head of each recently updated one. */
-export function recentPrHeads(own: RunSpec[], recent: RunSpec[][]): string {
-  const head = (runs: RunSpec[]) => ({
-    commits: { nodes: [{ commit: { checkSuites: suitesConnection(runs) } }] },
+/**
+ * The recent-heads reply for a PR target: the runs on the watched PR's own head, then on the head
+ * of each recently updated one. `ownNext` is the cursor of an own head whose suites pass one page.
+ */
+export function recentPrHeads(
+  own: RunSpec[],
+  recent: RunSpec[][],
+  ownNext: string | null = null,
+): string {
+  const head = (runs: RunSpec[], next: string | null = null) => ({
+    commits: { nodes: [{ commit: { checkSuites: suitesConnection(runs, next) } }] },
   });
-  const repository = { pullRequest: head(own), pullRequests: { nodes: recent.map(head) } };
+  const repository = {
+    pullRequest: head(own, ownNext),
+    pullRequests: { nodes: recent.map((runs) => head(runs)) },
+  };
 
   return JSON.stringify({ data: { repository } });
 }
