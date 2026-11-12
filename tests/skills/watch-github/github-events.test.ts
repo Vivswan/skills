@@ -23,6 +23,8 @@ import {
   prNode,
   REPO,
   type RowSpec,
+  recentBranchHeads,
+  recentPrHeads,
   refNode,
   rows,
   SCRIPT,
@@ -719,6 +721,75 @@ describe("github-events.mts", () => {
     expect(s.violations()).toBe("");
     s.stop({ inbox: box.path });
     paged.stop({ inbox: pagedBox.path });
+  }, 30000);
+
+  test("a gate neither the target's head nor a recent head of its form ran is refused at the watch, naming the workflows that ran there; a gate that ran is watched, and so is any gate where nothing ran or a head's suites pass one page", async () => {
+    // The incident: a PR gated on `Checks`, the name of a workflow that only another one calls,
+    // was accepted, and the mistake surfaced as a trouble event once CI had settled.
+    const s = new Scenario("unrun-gate");
+    const box = await s.inbox("a");
+    s.fixtures({
+      // PR 7 is older than the ten recent ones: only its own head ran the path-filtered Backend CI.
+      "recent-prs-1": recentPrHeads(
+        [["Backend CI", "IN_PROGRESS", null]],
+        [
+          [
+            ["CI", "COMPLETED", "SUCCESS"],
+            ["PR Title", "COMPLETED", "SUCCESS"],
+          ],
+          [["CI", "COMPLETED", "FAILURE"]],
+        ],
+      ),
+      "recent-prs-5": recentPrHeads([], []),
+      "recent-prs-6": recentPrHeads([["CI", "COMPLETED", "SUCCESS"]], [], "page-2"),
+      "recent-branch-1": recentBranchHeads([[["CI", "COMPLETED", "SUCCESS"]]]),
+      "rows-1": rows({
+        p7: prNode({ rollup: "PENDING", suites: [["CI", "IN_PROGRESS", null]] }),
+        p8: prNode({ number: 8, rollup: "PENDING", suites: [] }),
+      }),
+    });
+    await s.start({ inbox: box.path });
+    const prHeads = `the head of ${PR7}, nor on the heads of the repository's 10 most recently updated pull requests`;
+    const prRan = "Backend CI, CI, PR Title";
+    for (const [args, refusal] of [
+      [
+        ["watch", PR7, "--expect-workflow", "CI", "--expect-workflow", "Checks"],
+        `--expect-workflow Checks: no run on ${prHeads}; workflows that ran there: ${prRan}`,
+      ],
+      [
+        ["watch", PR7, "--expect-workflow", "ci", "--expect-workflow", "pr title"],
+        `--expect-workflow ci, pr title: no run on ${prHeads}; workflows that ran there: ${prRan}`,
+      ],
+      [
+        ["watch", MAIN, "--expect-workflow", "PR Title"],
+        `--expect-workflow PR Title: no run on the last 10 commits of ${MAIN}; workflows that ran there: CI`,
+      ],
+    ] as Array<[string[], string]>) {
+      const r = s.run(args, { inbox: box.path });
+      expect({ code: r.code, refusal: r.stderr.split("\n")[0] }).toEqual({ code: 2, refusal });
+    }
+
+    // A read that fails says nothing about the gate: the watch fails with gh's own words.
+    writeFileSync(join(s.fixtureDir, "fail-recent-prs"), "HTTP 502");
+    const unread = s.run(["watch", PR7, "--expect-workflow", "CI"], { inbox: box.path });
+    expect({ code: unread.code, why: unread.stderr.trim() }).toEqual({
+      code: 1,
+      why: "gh api graphql exited 1: gh: HTTP 502",
+    });
+    rmSync(join(s.fixtureDir, "fail-recent-prs"));
+    expect(s.run(["status"], { inbox: box.path }).stdout).toContain("targets: 0");
+
+    // The same reads pass the names that ran. The fifth PR read finds nothing ran anywhere, and the
+    // sixth is cut at one page of suites: neither can say `Checks` never ran.
+    const gated = ["--expect-workflow", "Backend CI", "--expect-workflow", "PR Title"];
+    expect(s.run(["watch", PR7, ...gated], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["watch", MAIN, "--expect-workflow", "CI"], { inbox: box.path }).code).toBe(0);
+    const watchEight = () =>
+      s.run(["watch", `${REPO}#8`, "--expect-workflow", "Checks"], { inbox: box.path }).code;
+    expect([watchEight(), watchEight()]).toEqual([0, 0]);
+    expect(Object.keys(s.state().targets).sort()).toEqual([PR7, `${REPO}#8`, MAIN].sort());
+    expect(s.violations()).toBe("");
+    s.stop({ inbox: box.path });
   }, 30000);
 });
 

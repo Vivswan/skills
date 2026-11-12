@@ -10,6 +10,11 @@
 
 import type { EventInput, Io } from "../../session-events/scripts/session-events.mts";
 import { GhError } from "./github/gh.mts";
+import {
+  RECENT_HEADS,
+  readBranchWorkflows,
+  readPrHeadWorkflows,
+} from "./github/recent-workflows.mts";
 import { type RepoRead, type RepoReply, readRepository } from "./github/repository.mts";
 import {
   type BranchTarget,
@@ -36,6 +41,38 @@ try {
 }
 const { runEvents, UsageError } = base;
 
+function recentWorkflows(target: Target): { ran: string[] | null; where: string } {
+  if (target.form === "pr") {
+    return {
+      ran: readPrHeadWorkflows(target.repo, target.number),
+      where: `the head of ${target.repo}#${target.number}, nor on the heads of the repository's ${RECENT_HEADS} most recently updated pull requests`,
+    };
+  }
+
+  return {
+    ran: readBranchWorkflows(target.repo, target.branch),
+    where: `the last ${RECENT_HEADS} commits of ${target.repo}:${target.branch}`,
+  };
+}
+
+/**
+ * Refuses a gate no recent head ran. Another spelling, or a workflow that runs only when another
+ * calls it, never registers a run, and the watch would wait on it until CI settled.
+ */
+function refuseUnrunGates(target: Target): void {
+  const { ran, where } = recentWorkflows(target);
+
+  // Nothing ran on any of those heads, or the list was cut: there is no list to hold a gate against.
+  if (ran === null || ran.length === 0) return;
+
+  const unrun = target.gates.filter((gate) => !ran.includes(gate));
+  if (unrun.length === 0) return;
+
+  throw new UsageError(
+    `--expect-workflow ${unrun.join(", ")}: no run on ${where}; workflows that ran there: ${ran.join(", ")}`,
+  );
+}
+
 function parseTarget(args: string[]): Target {
   const [text, ...flags] = args;
   const gates = new Set<string>();
@@ -53,6 +90,8 @@ function parseTarget(args: string[]): Target {
   if (target === null) {
     throw new UsageError(`target must be <owner/repo>#<n> or <owner/repo>:<branch>, got: ${text}`);
   }
+  if (target.gates.length > 0) refuseUnrunGates(target);
+
   return target;
 }
 
@@ -144,7 +183,8 @@ runEvents<Target>({
   idleInterval: 300,
   usage: [
     "targets: <owner/repo>#<n> for a pull request, <owner/repo>:<branch> for a branch tip",
-    "--expect-workflow <name> names a workflow whose run must appear on the head before CI reads green; repeatable",
+    "--expect-workflow <name> names a workflow whose run must appear on the head before CI reads green; repeatable;",
+    "  watch refuses a name no recent head of the target ran, and lists the workflows that ran there",
     `the session-events skill must be installed beside this one; without it every command exits 2 naming the install: ${INSTALL}`,
   ],
   parseTarget,

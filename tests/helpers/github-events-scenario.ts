@@ -7,8 +7,9 @@
 // entry, and a `fail-<kind>` file fails every call of the class outright while it exists. Anything
 // but `gh api graphql` is a violation. A PR's
 // first sighting reads its detail as the baseline, so every scenario starts with an empty
-// `detail-1` and a scenario's own detail fixtures begin at 2. Call githubEventsHarness() at the
-// file's top level.
+// `detail-1` and a scenario's own detail fixtures begin at 2. A gated `watch` reads the recent
+// heads of its target's form, so every scenario also starts with a `recent-prs-1` and a
+// `recent-branch-1` on which nothing ran. Call githubEventsHarness() at the file's top level.
 
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -59,6 +60,8 @@ case "$1 $2" in
       *"query OlderThreadComments("*) serve older-thread "$(next older-thread)" || exit 1;;
       *"nodes(ids:"*) serve jobs "$(next jobs)" || { echo "stub gh: no jobs fixture" >&2; exit 1; };;
       *"checkSuites(first: 100, after:"*) serve suites "$(next suites)" || { echo "stub gh: no suites fixture" >&2; exit 1; };;
+      *"query RecentPrHeads("*) serve recent-prs "$(next recent-prs)" || { echo "stub gh: no recent-prs fixture" >&2; exit 1; };;
+      *"query RecentBranchHeads("*) serve recent-branch "$(next recent-branch)" || { echo "stub gh: no recent-branch fixture" >&2; exit 1; };;
       *) echo "unexpected graphql: $*" >> "\${STUB_VIOLATIONS}"; exit 64;;
     esac;;
   *) echo "rest or unknown: $*" >> "\${STUB_VIOLATIONS}"; exit 64;;
@@ -191,6 +194,33 @@ export function rows(
 }
 
 /**
+ * The recent-heads reply for a PR target: the runs on the watched PR's own head, then on the head
+ * of each recently updated one. `ownNext` is the cursor of an own head whose suites pass one page.
+ */
+export function recentPrHeads(
+  own: RunSpec[],
+  recent: RunSpec[][],
+  ownNext: string | null = null,
+): string {
+  const head = (runs: RunSpec[], next: string | null = null) => ({
+    commits: { nodes: [{ commit: { checkSuites: suitesConnection(runs, next) } }] },
+  });
+  const repository = {
+    pullRequest: head(own, ownNext),
+    pullRequests: { nodes: recent.map((runs) => head(runs)) },
+  };
+
+  return JSON.stringify({ data: { repository } });
+}
+
+/** The recent-heads reply for a branch target: one entry per commit of the branch, newest first. */
+export function recentBranchHeads(heads: RunSpec[][]): string {
+  const nodes = heads.map((runs) => ({ checkSuites: suitesConnection(runs) }));
+
+  return JSON.stringify({ data: { repository: { ref: { target: { history: { nodes } } } } } });
+}
+
+/**
  * `id` defaults to the comment's position in its fixture, from 901; the source's cursor is by id.
  * `review` is the fullDatabaseId of the review that published an inline comment.
  */
@@ -318,7 +348,11 @@ function program(): Program {
 export class Scenario extends SessionScenario {
   constructor(name: string) {
     super(program(), name);
-    this.fixtures({ "detail-1": detail({}) });
+    this.fixtures({
+      "detail-1": detail({}),
+      "recent-prs-1": recentPrHeads([], []),
+      "recent-branch-1": recentBranchHeads([]),
+    });
   }
 
   ghCalls(): string[] {
