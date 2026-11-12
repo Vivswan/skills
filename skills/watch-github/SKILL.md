@@ -20,7 +20,7 @@ A push went up and its PR is open. Once per session the daemon is started as a b
 
 ```bash
 bun "<skill-dir>/scripts/github-events.mts" daemon     # once per session, as a BACKGROUND task
-bun "<skill-dir>/scripts/github-events.mts" watch owner/repo#12 --expect-workflow checks   # the gate's name: read it from the runs, see Targets
+bun "<skill-dir>/scripts/github-events.mts" watch owner/repo#12 --expect-workflow checks
 ```
 
 The session goes back to work. Minutes later the gate finishes, and this arrives in the conversation unasked:
@@ -55,23 +55,25 @@ bun "<skill-dir>/scripts/github-events.mts" watch owner/repo:main --expect-workf
 
 Issues and security alerts are future target forms of this source, never new commands or skills.
 
-`--expect-workflow <name>`, repeatable, names a gate: a workflow that registers a run of its own on the target's head. The repository's recent runs list the candidates:
-
-```bash
-gh run list -R owner/repo --limit 40 --json workflowName,event --jq '[.[] | "\(.workflowName)  (\(.event))"] | unique | .[]'
-```
+`--expect-workflow <name>`, repeatable, names a gate: a workflow that registers a run of its own on the target's head. `watch` refuses a gate no recent head ran, and the refusal lists the names to pick from:
 
 ```text
-CI  (pull_request)
-CI  (push)
-PR Title  (pull_request)
+$ bun "<skill-dir>/scripts/github-events.mts" watch owner/repo#12 --expect-workflow Checks
+--expect-workflow Checks: no run on the head of owner/repo#12, nor on the heads of the repository's 10 most recently updated pull requests; workflows that ran there: CI, PR Title
 ```
 
-Spell a gate as its run lists it, case included. The second column is what triggered each run, so pick the names whose trigger fires on the target's head. A workflow file's `name:` is not enough: a workflow that runs only when another calls it (`on: workflow_call`) has a name and never a run of its own.
+Spell a gate as the refusal lists it, case included. A workflow file's `name:` is not enough: a workflow that runs only when another calls it (`on: workflow_call`) has a name and never a run of its own.
+
+- **A pull request's gates** are held against its own head and the heads of the repository's 10 most recently updated pull requests.
+- **A branch's gates** are held against the branch's last 10 commits.
+- **Nothing ran on any of those heads:** the gate is taken as given, and the CI rules below judge it.
+- **A workflow new to the repository** is refused until its first run registers on one of those heads: `watch` again a few seconds after the push.
+- **A listed name can still miss this head:** a path or branch filter skips it there, and the CI rules below report the gate with no run.
+- **The read fails,** or GitHub knows no such pull request: `watch` exits 1 with gh's own message, and nothing is subscribed.
 
 The flags of one call are the complete gate set. A repeated `watch` of the same target replaces it, gates and cursor: its CI is judged again, and its activity baseline is taken afresh.
 
-Without a daemon, `watch` exits 3 and prints the exact start command. A PR's first sighting reports none of the comments, reviews, or labels already on it; only what lands afterwards is an event. Its CI verdict, its merged or closed state, and a conflict it already carries are judged at once.
+Without a daemon, a `watch` whose target and gates are accepted exits 3 and prints the exact start command. A PR's first sighting reports none of the comments, reviews, or labels already on it; only what lands afterwards is an event. Its CI verdict, its merged or closed state, and a conflict it already carries are judged at once.
 
 ## Events
 
@@ -100,7 +102,7 @@ After a push on either side GitHub recomputes the merge test and answers UNKNOWN
 
 - **Green** is every named gate's latest run passed (skipped counts), or, with no gate named, the PR's aggregate rollup `SUCCESS`. With gates named, a failed run outside them is listed after `; other checks red:`, and a bystander turning red later is a new `ci` event, since the `/pr-landing-discipline` skill's green counts every check.
 - **Red** is any named gate's latest run failed or cancelled with no newer run, or, with no gate, the rollup `FAILURE` or `ERROR`. The red line names up to 50 failed jobs per suite, each as workflow, job, and first failed step, and any gate with no run after `; no run of`.
-- **A gate with no run** is pending while the rollup is pending, and one `trouble` event once the rollup settled without it, or after two polls on a head with no checks at all: a typo in the name, or a workflow that registers no run of its own on this ref (Targets).
+- **A gate with no run** is pending while the rollup is pending, and one `trouble` event once the rollup settled without it, or after two polls on a head with no checks at all: a workflow that runs on other heads and not on this one, or a gate taken as given (Targets).
 - **No checks and no gate** is no CI, not pending: nothing is said, and the head idles until a rollup appears. Name the gate with `--expect-workflow` when a run must register.
 - **The unit is the workflow.** Re-triggers stack runs on one SHA; the newest run of each workflow is judged, and an older cancelled one is superseded.
 - **After a verdict**, the head is judged again when something moves: a gated head on every poll (a gate's re-run need not move the rollup), a gateless one when the rollup changes. The same verdict stays silent; a different one is a new `ci` event. A new head is judged from nothing.
@@ -133,7 +135,8 @@ the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET 
 --mode is the session's permission mode, carried in the envelope: bypass (the default) or prompting;
 --interval is 60 s by default, 1 to 86400
 targets: <owner/repo>#<n> for a pull request, <owner/repo>:<branch> for a branch tip
---expect-workflow <name> names a workflow whose run must appear on the head before CI reads green; repeatable
+--expect-workflow <name> names a workflow whose run must appear on the head before CI reads green; repeatable;
+  watch refuses a name no recent head of the target ran, and lists the workflows that ran there
 the session-events skill must be installed beside this one; without it every command exits 2 naming the install: npx skills add Vivswan/skills -g --skill session-events
 files: <dir>/<pid>-<start>.github-events.{state.json,events.jsonl,log} and <dir>/<pid>.github-events.sock for a session; <id>.github-events.* for a file sink;
   <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
@@ -143,12 +146,12 @@ exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too)
        3 no daemon answers for this session: stderr names the socket and the background command that starts one; 4 wait only: the timeout passed with no newer line
 ```
 
-| Exit | Meaning                                                                                                                                                                                                                                                                              |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0    | ok; `stop` with no daemon running is ok too, and so is a second `daemon` start                                                                                                                                                                                                       |
-| 2    | usage (`CLAUDE_CODE_MESSAGING_SOCKET` unset and no `--id`, a target in neither form, a blank gate name), no runtime directory, or the `/session-events` skill not installed beside this one: `install it beside this skill: npx skills add Vivswan/skills -g --skill session-events` |
-| 3    | no daemon answers for this session: stderr names the socket and the exact background command that starts one                                                                                                                                                                         |
-| 4    | `wait` only: the timeout passed with no newer line                                                                                                                                                                                                                                   |
+| Exit | Meaning                                                                                                                                                                                                                                                                                                         |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | ok; `stop` with no daemon running is ok too, and so is a second `daemon` start                                                                                                                                                                                                                                  |
+| 2    | usage (`CLAUDE_CODE_MESSAGING_SOCKET` unset and no `--id`, a target in neither form, a blank gate name, a gate no recent head ran), no runtime directory, or the `/session-events` skill not installed beside this one: `install it beside this skill: npx skills add Vivswan/skills -g --skill session-events` |
+| 3    | no daemon answers for this session: stderr names the socket and the exact background command that starts one                                                                                                                                                                                                    |
+| 4    | `wait` only: the timeout passed with no newer line                                                                                                                                                                                                                                                              |
 
 `--interval` is 60 s by default. The file sink (`--id`), `wait` and its cursor, and the runtime files are the `/session-events` skill's; the log line of this source is `{"id":17,"at":"2026-10-12T14:03:20Z","repo":"owner/repo","pr":12,"sha":"1a2b...","kind":"ci","text":"...","url":"..."}`, with `branch` in place of `pr` on a branch target's line.
 
@@ -161,7 +164,7 @@ In a fleet, the lead's session runs the daemon as its own background task, `--mo
 | `watch` exits 3 naming a socket and a command                             | no daemon for this session                                                                                         | run the printed command as a background task, then `watch` again                                                       |
 | the daemon stops on its own about two hours in, the session still running | the harness's cap on a background task; the `/session-events` skill's page owns the row                            | start it again with the same command; the saved targets carry on                                                       |
 | a `trouble` event after three failed polls                                | gh, the network, or GitHub refused three polls in a row; `gh auth status` is the first check                       | fix what the daemon log names; a stale token needs `stop` and a fresh start, since the daemon inherited the session's  |
-| a `trouble` event: CI settled with no run of a gate                       | the named workflow never registered a run on the head                                                              | read the names from `gh run list` (Targets), then `watch` again with the right set; never read the rollup as green     |
+| a `trouble` event: CI settled with no run of a gate                       | the gate ran on other heads and not on this one, or was taken as given                                             | `watch` again with the gates that run on this head; never read the rollup as green                                     |
 | a `trouble` event: not readable                                           | the PR or branch answers null: deleted, renamed, or no access                                                      | `unwatch` it, or fix the access                                                                                        |
 | a `trouble` event: 3 reads failed                                         | this one target's detail or paged suites read failed three polls in a row while the repository read kept answering | read the daemon log; the target is retried every poll and the counter resets on a success                              |
 | a red line with workflow names only                                       | the failed-jobs read failed; the verdict stands                                                                    | `gh run view <id> --log-failed` on the run URL's id                                                                    |
