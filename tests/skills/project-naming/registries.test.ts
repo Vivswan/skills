@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { checkName } from "../../../skills/project-naming/scripts/check-name.mts";
-import {
-  GITHUB_STARS_TAKEN,
-  WIKTIONARY_FLAG,
-} from "../../../skills/project-naming/scripts/columns/registries/readers.mts";
+import { WIKTIONARY_FLAG } from "../../../skills/project-naming/scripts/columns/registries/readers.mts";
 import type { Cell, Io } from "../../../skills/project-naming/scripts/core/cells.mts";
 import {
   BLUESKY_FREE,
@@ -294,7 +291,7 @@ describe("registries.mts readers", () => {
       // A full page above the threshold, so a second page is asked for; then a short one.
       const full = Array.from({ length: 100 }, (_, i) => ({
         name: `other-${i}`,
-        stargazers_count: 500,
+        stargazers_count: 5000,
       }));
       return { status: 200, body: { items: url.searchParams.get("page") === "1" ? full : [] } };
     });
@@ -346,22 +343,38 @@ describe("registries.mts readers", () => {
       });
     const near = await checkName(pages([repo("lumera-ui", 5000)]), OPTIONS, "lumera");
     expect(cell(near.cells, "github-repo")).toEqual({ status: "free" });
-    const small = await checkName(
-      pages([repo("Lumera", GITHUB_STARS_TAKEN - 1)]),
+    // Under the threshold the cell stays free but names the repository, so the table can show it as MINOR;
+    // a lower --github-stars makes the same repository taken.
+    const small = await checkName(pages([repo("Lumera", 999)]), OPTIONS, "lumera");
+    expect(cell(small.cells, "github-repo")).toEqual({
+      status: "free",
+      detail: "repo with 999 stars",
+    });
+    const lowBar = await checkName(
+      { ...pages([repo("Lumera", 999)]), githubStarsTaken: 20 },
       OPTIONS,
       "lumera",
     );
-    expect(cell(small.cells, "github-repo")).toEqual({ status: "free" });
+    expect(cell(lowBar.cells, "github-repo")).toEqual({
+      status: "taken",
+      detail: "repo with 999 stars",
+    });
+    // Under the noted floor it is not even a note.
+    const tiny = await checkName(pages([repo("lumera", 5)]), OPTIONS, "lumera");
+    expect(cell(tiny.cells, "github-repo")).toEqual({ status: "free" });
+    // A page ending under the bar but above the floor is read on: the sub-bar repository on page two is still noted.
+    const sliding = Array.from({ length: 100 }, (_, i) => repo(`lumera-${i}`, 1098 - i));
+    const noted = await checkName(pages(sliding, [repo("lumera", 240)]), OPTIONS, "lumera");
+    expect(cell(noted.cells, "github-repo")).toEqual({
+      status: "free",
+      detail: "repo with 240 stars",
+    });
     // The exact-name repository sits on page two, behind a full page of better-starred substring hits.
     const pageOne = Array.from({ length: 100 }, (_, i) => repo(`lumera-${i}`, 10000 - i));
-    const deep = await checkName(
-      pages(pageOne, [repo("lumera", GITHUB_STARS_TAKEN)]),
-      OPTIONS,
-      "lumera",
-    );
+    const deep = await checkName(pages(pageOne, [repo("lumera", 1000)]), OPTIONS, "lumera");
     expect(cell(deep.cells, "github-repo")).toEqual({
       status: "taken",
-      detail: `repo with ${GITHUB_STARS_TAKEN} stars`,
+      detail: "repo with 1000 stars",
     });
     // A page ending under the threshold is the last one read: one request for a short result.
     requests = 0;
@@ -373,7 +386,7 @@ describe("registries.mts readers", () => {
     expect(cell(short.cells, "github-repo")).toEqual({ status: "free" });
     expect(requests).toBe(1);
     // Ten full pages still above the threshold with no exact hit: unknown, never free.
-    const full = Array.from({ length: 100 }, (_, i) => repo(`lumera-${i}`, 500));
+    const full = Array.from({ length: 100 }, (_, i) => repo(`lumera-${i}`, 5000));
     const capped = await checkName(pages(...Array(12).fill(full)), OPTIONS, "lumera");
     expect(cell(capped.cells, "github-repo")).toEqual({
       status: "unknown",

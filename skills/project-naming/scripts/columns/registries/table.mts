@@ -11,7 +11,7 @@ import {
   DNS_TAKEN_CONTROL,
   dockerHub,
   domain,
-  GITHUB_STARS_TAKEN,
+  GITHUB_STARS_TAKEN_DEFAULT,
   githubRepo,
   githubUser,
   homebrew,
@@ -164,9 +164,13 @@ export const REGISTRIES: readonly RegistryEntry[] = [
   {
     kind: "registry",
     id: "github-repo",
-    label: `GitHub repository with ${GITHUB_STARS_TAKEN}+ stars`,
+    label: `GitHub repository with --github-stars or more (default ${GITHUB_STARS_TAKEN_DEFAULT})`,
     takenControl: "linux",
     lookup: githubRepo,
+    // A bar set above the control's own stars must not fail the instrument: a free cell naming
+    // the repository proves the column saw it.
+    controlHolds: (cell) =>
+      cell.status === "taken" || (cell.status === "free" && cell.detail !== undefined),
   },
   {
     kind: "registry",

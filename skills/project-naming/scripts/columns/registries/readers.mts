@@ -5,6 +5,7 @@ import { cached, stringList, stringMap } from "../../core/cache.mts";
 import {
   type Cell,
   free,
+  freeNoting,
   get,
   type Io,
   renderCell,
@@ -71,8 +72,12 @@ export async function githubUser(io: Io, name: string): Promise<Cell> {
   }
 }
 
-/** Stars at or above which an exact-name GitHub repository counts as taken. */
-export const GITHUB_STARS_TAKEN = 20;
+/** The default for `--github-stars`: only a famous repository counts. */
+export const GITHUB_STARS_TAKEN_DEFAULT = 1000;
+
+/** An exact-name repository under this is not even a note. The search reads pages down to it,
+ * so a repository between it and the bar still shows as `free(repo with N stars)`. */
+export const GITHUB_STARS_NOTED = 20;
 
 /** GitHub search serves at most 1000 results; past that an exact-name hit cannot be ruled out. */
 const GITHUB_SEARCH_PAGES = 10;
@@ -116,9 +121,11 @@ async function githubSearchPage(io: Io, url: string): Promise<GithubSearch | Cel
 
 /** The search matches the name as a substring, sorted by stars, so the first exact-name hit is the
  * best-starred one and decides the cell. Pages are read until that hit, or until the stars fall
- * under the threshold, past which no exact-name repository can count. Forks are excluded by
- * default and a starred fork holds the name as firmly, so they are asked for. */
+ * under the noted floor, past which no exact-name repository is taken or noted. Forks are
+ * excluded by default and a starred fork holds the name as firmly, so they are asked for. */
 export async function githubRepo(io: Io, name: string): Promise<Cell> {
+  const threshold = io.githubStarsTaken;
+  const floor = Math.min(threshold, GITHUB_STARS_NOTED);
   const query = encodeURIComponent(`${name} in:name fork:true`);
   for (let page = 1; page <= GITHUB_SEARCH_PAGES; page++) {
     const url = `https://api.github.com/search/repositories?q=${query}&sort=stars&order=desc&per_page=100&page=${page}`;
@@ -127,18 +134,21 @@ export async function githubRepo(io: Io, name: string): Promise<Cell> {
     const { items } = search;
     const exact = items.find((item) => item.name.toLowerCase() === name.toLowerCase());
     if (exact) {
-      if (exact.stargazers_count >= GITHUB_STARS_TAKEN) {
+      if (exact.stargazers_count >= threshold) {
         return taken(`repo with ${exact.stargazers_count} stars`);
+      }
+      if (exact.stargazers_count >= floor) {
+        return freeNoting(`repo with ${exact.stargazers_count} stars`);
       }
       return free;
     }
-    // A short page is the last one; a full page ending under the threshold has shown every
-    // repository that could count.
+    // A short page is the last one; a full page ending under the floor has shown every
+    // repository that could count or be noted.
     const last = items[items.length - 1];
-    if (!last || items.length < 100 || last.stargazers_count < GITHUB_STARS_TAKEN) return free;
+    if (!last || items.length < 100 || last.stargazers_count < floor) return free;
   }
   return unknown(
-    `github search: over ${GITHUB_SEARCH_PAGES * 100} repos named like it above ${GITHUB_STARS_TAKEN} stars`,
+    `github search: over ${GITHUB_SEARCH_PAGES * 100} repos named like it above ${floor} stars`,
   );
 }
 

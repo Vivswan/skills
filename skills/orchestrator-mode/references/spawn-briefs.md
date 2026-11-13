@@ -126,6 +126,7 @@ Every brief includes:
     A builder that cannot wait on a reply still cannot decide for the owner: the dependent part goes into the signal as an escalation (item 4), never as a guess built in. The lead answers from the brief or puts the question to the user.
 
     Production: two builders in one wave decided a folder name and a library swap (flagged `Ask the owner:` by their reviewer) themselves, because their briefs said where to send a report and nothing about where to send a question.
+21. **The naming rule: a brief that asks a builder or a lane for a name points at the `/project-naming` skill.** A name reaches the owner only through its interview, brief, and table, even one name; a lane brief carries the brief that skill's step 2 produced, never the lead's own taste.
 
 ## The Stop-and-Wait Ban
 

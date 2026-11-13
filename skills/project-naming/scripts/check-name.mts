@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { domainToASCII } from "node:url";
 import { parseArgs } from "node:util";
+import { GITHUB_STARS_TAKEN_DEFAULT } from "./columns/registries/readers.mts";
 import {
   ARXIV_GAP_MS,
   type Column,
@@ -25,10 +26,11 @@ import {
 import { type Cell, type Claimed, type Io, renderCell, unknown } from "./core/cells.mts";
 
 const USAGE = [
-  "usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--no-arxiv] [--json] <name>...",
+  "usage: check-name.mts [--domain <tld>]... [--registries <id,id,...>] [--github-stars <n>] [--no-arxiv] [--json] <name>...",
   "       check-name.mts --list-registries",
   "  --domain <tld>          a DNS column per zone (default: com, ai, dev; the list replaces the default)",
   "  --registries <id,...>   the availability columns to run; the gate columns run on every name regardless",
+  "  --github-stars <n>      stars from which an exact-name GitHub repository is taken (default 1000); one with 20 or more stars under it reads free(repo with <n> stars)",
   "  --no-arxiv              skip the arXiv column (one request every three seconds)",
   "  --json                  one JSON object, rows and failures, instead of the table",
   "  --list-registries       the live column table: id, label, taken control, gate",
@@ -194,9 +196,10 @@ function githubTokenFromEnvironment(): string | null {
   return null;
 }
 
-function liveIo(): Io {
+function liveIo(githubStarsTaken: number): Io {
   const githubToken = githubTokenFromEnvironment();
   return {
+    githubStarsTaken,
     fetch: (url, init) => fetch(url, init),
     resolve: (host) => dns.lookup(host),
     resolveNs: (zone) => dns.resolveNs(zone),
@@ -213,7 +216,15 @@ type Flags = ReturnType<typeof parseArgs>["values"];
 
 /** The Options the flags name, or the usage error that stops the run: a `--domain` spelling that
  * names no zone, a `--registries` id no column has, or a selection `--no-arxiv` leaves empty. */
-function optionsFrom(flags: Flags): { options: Options } | { error: string } {
+export function optionsFrom(
+  flags: Flags,
+): { options: Options; githubStars: number } | { error: string } {
+  const starsFlag = flags["github-stars"] as string | undefined;
+  if (starsFlag !== undefined && !/^[1-9]\d*$/.test(starsFlag)) {
+    return { error: `--github-stars: a positive whole number, not ${JSON.stringify(starsFlag)}` };
+  }
+  const githubStars = starsFlag === undefined ? GITHUB_STARS_TAKEN_DEFAULT : Number(starsFlag);
+
   const spellings = (flags.domain as string[] | undefined) ?? ["com", "ai", "dev"];
   const { zones: domains, rejected } = tlds(spellings);
   if (rejected.length > 0) {
@@ -242,7 +253,7 @@ function optionsFrom(flags: Flags): { options: Options } | { error: string } {
     return { error: "--registries and --no-arxiv together leave no column of the selection" };
   }
 
-  return { options };
+  return { options, githubStars };
 }
 
 async function main(): Promise<number> {
@@ -261,6 +272,7 @@ async function main(): Promise<number> {
         domain: { type: "string", multiple: true },
         registries: { type: "string" },
         "list-registries": { type: "boolean" },
+        "github-stars": { type: "string" },
         "no-arxiv": { type: "boolean" },
         json: { type: "boolean" },
       },
@@ -297,7 +309,7 @@ async function main(): Promise<number> {
     return 2;
   }
 
-  const result = await run(liveIo(), read.options, names);
+  const result = await run(liveIo(read.githubStars), read.options, names);
   if (parsed.values.json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {

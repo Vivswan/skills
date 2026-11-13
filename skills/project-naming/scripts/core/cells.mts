@@ -1,8 +1,8 @@
 // The vocabulary every column speaks: a lookup that failed never reads as free, and a note is a
-// reading with no free or taken in it.
+// reading with no free or taken in it. A free cell may carry a detail the table shows as MINOR.
 
 export type Cell =
-  | { status: "free" }
+  | { status: "free"; detail?: string }
   | { status: "taken"; detail: string }
   | { status: "unknown"; detail: string }
   | { status: "note"; detail: string };
@@ -28,6 +28,9 @@ export type Io = {
 
   /** GitHub allows 30 searches a minute per token, 10 with none, and every lane on the machine shares the token; the searches are serialised this far apart. */
   githubSearchGapMs: number;
+
+  /** Stars from which an exact-name GitHub repository counts as taken (`--github-stars`); a less-starred one is a free cell naming its stars. */
+  githubStarsTaken: number;
 
   /** crates.io asks for one request a second from anything automated; its lookups and the pages of its ranking are serialised this far apart. */
   cratesGapMs: number;
@@ -57,11 +60,12 @@ export async function get(
 export type Claimed = (registryId: string) => boolean;
 
 export const free: Cell = { status: "free" };
+export const freeNoting = (detail: string): Cell => ({ status: "free", detail });
 export const taken = (detail: string): Cell => ({ status: "taken", detail });
 export const unknown = (detail: string): Cell => ({ status: "unknown", detail });
 
 export function renderCell(cell: Cell): string {
-  if (cell.status === "free") return "free";
+  if (cell.status === "free") return cell.detail === undefined ? "free" : `free(${cell.detail})`;
   return `${cell.status}(${cell.detail})`;
 }
 

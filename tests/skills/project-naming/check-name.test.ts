@@ -5,6 +5,7 @@ import {
   checkName,
   columns,
   type Options,
+  optionsFrom,
   renderRegistries,
   renderTsv,
   run,
@@ -84,6 +85,15 @@ describe("check-name.mts controls", () => {
     expect(failures).toEqual([
       { column: "dns-com", control: "@", expected: "taken", got: { status: "free" } },
     ]);
+  });
+
+  test("a star bar above the GitHub control's own stars still proves the column saw it: the free cell names the repository", async () => {
+    const failures = await runControls(
+      { ...allTakenIo([]), githubStarsTaken: 6000 },
+      WITH_ARXIV,
+      RANDOM,
+    );
+    expect(failures.map((f) => f.column)).toEqual(["dns-com"]);
   });
 
   test("the DNS taken control is the zone's delegation, so a zone whose registry serves no nic host (co.uk, uk, ca) passes it, and a zone nothing delegates fails it free", async () => {
@@ -303,6 +313,7 @@ describe("check-name.mts output", () => {
           pypi: { status: "free" },
           npm: { status: "taken", detail: "npm package" },
           crates: { status: "unknown", detail: "crate HTTP 500" },
+          "github-repo": { status: "free", detail: "repo with 240 stars" },
           say: { status: "note", detail: "ok(3s)" },
         },
       },
@@ -312,7 +323,7 @@ describe("check-name.mts output", () => {
       "name\tpypi\tnpm\tcrates\thomebrew\tdocker\tmaven\thf\tgithub-user\tgithub-repo\tbluesky\tdns-com\twiktionary\turban\ttyposquat\tsay",
     );
     expect(row).toBe(
-      `lumera\tfree\ttaken(npm package)\tunknown(crate HTTP 500)${"\tunknown(missing)".repeat(11)}\tnote(ok(3s))`,
+      `lumera\tfree\ttaken(npm package)\tunknown(crate HTTP 500)${"\tunknown(missing)".repeat(5)}\tfree(repo with 240 stars)${"\tunknown(missing)".repeat(5)}\tnote(ok(3s))`,
     );
   });
 
@@ -329,6 +340,18 @@ describe("check-name.mts output", () => {
       );
       expect(refused.exitCode, selection).toBe(2);
       expect(refused.stderr.toString(), selection).toContain("--registries");
+    }
+    // The star threshold reaches the run as a number: the default, or the flag's value.
+    expect(optionsFrom({})).toMatchObject({ githubStars: 1000 });
+    expect(optionsFrom({ "github-stars": "50" })).toMatchObject({ githubStars: 50 });
+    // The star threshold is a positive whole number; anything else is refused before any lookup.
+    for (const stars of ["abc", "0", "-5", "1.5"]) {
+      const refused = Bun.spawnSync([process.execPath, SCRIPT, "--github-stars", stars, "lumera"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(refused.exitCode, stars).toBe(2);
+      expect(refused.stderr.toString(), stars).toContain("--github-stars");
     }
     // A valid selection that --no-arxiv then empties would print a clean row with no cells.
     const emptied = Bun.spawnSync(
