@@ -35,6 +35,35 @@ describe("cells.mts", () => {
     expect(cell(taken.cells, "crates")).toEqual({ status: "taken", detail: "crate" });
   });
 
+  test("a 429 is asked again after a doubling wait, three times, and the last answer stands", async () => {
+    // One live lane put ten names a batch at Wiktionary in parallel and 140 of 191 readings came back 429 and blank.
+    let calls = 0;
+    const thenTaken = fakeIo((url) => {
+      if (url.hostname !== "pypi.org") return undefined;
+      calls++;
+      return calls < 3 ? { status: 429 } : { status: 200 };
+    });
+    const recovered = await checkName({ ...thenTaken, retryBaseMs: 10 }, OPTIONS, "lumera");
+    expect(cell(recovered.cells, "pypi")).toEqual({ status: "taken", detail: "pypi package" });
+    expect(calls).toBe(3);
+
+    calls = 0;
+    const always = fakeIo((url) => {
+      if (url.hostname !== "pypi.org") return undefined;
+      calls++;
+      return { status: 429 };
+    });
+    const started = Date.now();
+    const limited = await checkName({ ...always, retryBaseMs: 10 }, OPTIONS, "lumera");
+    expect(cell(limited.cells, "pypi")).toEqual({
+      status: "unknown",
+      detail: "pypi package HTTP 429",
+    });
+    expect(calls).toBe(4);
+    // 10 + 20 + 40 ms of waiting, a timer waking a millisecond or two early allowed.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(65);
+  });
+
   test("a fetch that throws is unknown with the error named, not free", async () => {
     const io = withReply(
       fakeIo(() => undefined),

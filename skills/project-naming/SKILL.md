@@ -53,7 +53,7 @@ The claims follow from how the project ships, so that question comes first. An o
 
 When npm or PyPI is a claim and the exemplars are familiar English, the trade-off is said before any lane runs: short common words are mostly gone there as bare names.
 
-The owner picks one of three: a scoped package on npm (`@handle/name`, always free), a dead placeholder accepted knowingly, or a hunt in the longest region the brief allows (7 to 8 letters; 7 letters and two syllables at `one glance: yes`), where free familiar words still exist.
+The owner picks one of three: a scoped package on npm (`@handle/name`, free under a handle you own; the script checks bare names only, so npm leaves the claims and the scope is recorded), a dead placeholder accepted knowingly, or a hunt in the longest region the brief allows (7 to 8 letters; 7 letters and two syllables at `one glance: yes`), where free familiar words still exist.
 
 ### 2. Brief
 
@@ -92,6 +92,8 @@ Vercel is coined yet reads natural and easy to say. The `register` line names th
 ### 3. Lanes
 
 One lane per style, run in parallel (the `/orchestrator-mode` skill, where installed, owns the fan-out). Each lane brainstorms 50 to 100 names, drops what fails the gate by eye, and checks its best 20 with the script in step 4.
+
+The batches of ten run one after another, never in parallel: the registries rate-limit per client. One lane of 191 words ran its batches at once and lost the Wiktionary reading for the first 140.
 
 | Lane                | Generates                                                                                   |
 | ------------------- | ------------------------------------------------------------------------------------------- |
@@ -163,6 +165,7 @@ numpi   free  free                free    free                            free  
 
 - `--registries` selects the availability columns; the gate columns `say`, `typosquat`, `wiktionary`, and `urban` run on every name whatever it names, so a selective run cannot skip them: the hard gate reads the first two, and step 5 reads the two meaning columns, on every name.
 - Two controls run with every batch: per registry column, a name known to be taken there (the zone's own delegation for DNS, spelled `@`; a word with a flagged sense for Wiktionary), and one random string that must be free everywhere. A column that answers either wrongly is reported on stderr as a failed instrument and the exit code is 1. Do not read that column.
+- A 429 is waited out and asked again three times, the wait doubling from two seconds and never under the registry's own gap. A column still rate-limited after that reads `unknown` with its own rate-limit message, and the row is rerun later.
 - `unknown` is not `free`. A rate-limited arXiv or a 5xx stays `unknown` in the table; rerun later or drop the column with `--no-arxiv`.
 - arXiv allows one request every three seconds, and the script spaces its own that far. Lanes run with `--no-arxiv`; the lead runs the arXiv column once, over the merged shortlist, in step 6.
 - Maven Central's search holds some requests for half a minute and more, so the script runs its lookups one at a time and asks again after a short wait; an `unknown(maven TimeoutError ...)` cell is three holds in a row, rerun later.

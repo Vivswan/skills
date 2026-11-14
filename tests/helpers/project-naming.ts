@@ -129,6 +129,7 @@ export function fakeIo(
     githubStarsTaken: 1000,
     cratesGapMs: 0,
     cacheDir: null,
+    retryBaseMs: 0,
   };
 }
 

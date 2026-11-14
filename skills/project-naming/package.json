@@ -1,0 +1,7 @@
+{
+  "name": "project-naming-skill-dependencies",
+  "private": true,
+  "dependencies": {
+    "p-retry": "9.0.0"
+  }
+}
