@@ -126,8 +126,10 @@ export function fakeIo(
     timeoutMs: 5_000,
     arxivGapMs: 0,
     githubSearchGapMs: 0,
+    githubStarsTaken: 1000,
     cratesGapMs: 0,
     cacheDir: null,
+    retryBaseMs: 0,
   };
 }
 
@@ -201,7 +203,7 @@ export function cell(row: Record<string, Cell>, column: string): Cell {
 }
 
 export function detail(c: Cell): string {
-  if (c.status === "free") throw new Error("free cell has no detail");
+  if (c.detail === undefined) throw new Error(`${c.status} cell has no detail`);
   return c.detail;
 }
 

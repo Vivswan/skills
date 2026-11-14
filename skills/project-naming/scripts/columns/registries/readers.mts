@@ -1,22 +1,126 @@
 // The per-registry readers: one lookup per registry, each reading a name into a Cell through the
 // injected Io. table.mts binds them to their columns; wiktionary.mts parses the page text.
 
-import { cached, stringList, stringMap } from "../../core/cache.mts";
+import { spawn, spawnSync } from "node:child_process";
 import {
-  type Cell,
-  free,
-  get,
-  type Io,
-  renderCell,
-  serialQueue,
-  taken,
-  unknown,
-} from "../../core/cells.mts";
-import { readWikitext, type WikiReading } from "./wiktionary.mts";
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
+import type { Cell, Io } from "../../core/cells.mts";
+import type { WikiReading } from "./wiktionary.mts";
 
-export async function lookup404(io: Io, url: string, label: string): Promise<Cell> {
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
+  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
+}
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
+}
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, scripts: string, skill: string, built: string): boolean {
+  // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
+  // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
+  mkdirSync(join(skill, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
   try {
-    const response = await get(io, url);
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function ensureBuilt(source: string): Promise<boolean> {
+  if (!source.endsWith(".mts")) return Promise.resolve(false);
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
+  // The bundle runs on this process's stdio, and a signal to this process goes on to it; this process then ends as
+  // the bundle did, by its status, or by the same signal once the forwarding is off and the signal's default is back.
+  const run = spawn("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  const forward = (signal: NodeJS.Signals) => {
+    run.kill(signal);
+  };
+  for (const signal of signals) process.on(signal, forward);
+  return new Promise((resolve) => {
+    const settle = (status: number | null, signal: NodeJS.Signals | null) => {
+      for (const name of signals) process.off(name, forward);
+      if (signal !== null) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exitCode = status ?? 1;
+      resolve(true);
+    };
+    run.on("exit", settle);
+    // A bundle that never started (no bun on PATH) emits error and no exit: that is the run's failure.
+    run.on("error", (error) => {
+      console.error(String(error));
+      settle(1, null);
+    });
+  });
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && (await ensureBuilt(import.meta.path))) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+
+const { cached, stringList, stringMap } = await import("../../core/cache.mts");
+const { free, freeNoting, get, renderCell, serialQueue, taken, unknown } = await import(
+  "../../core/cells.mts"
+);
+const { readWikitext } = await import("./wiktionary.mts");
+
+export async function lookup404(io: Io, url: string, label: string, gapMs = 0): Promise<Cell> {
+  try {
+    const response = await get(io, url, {}, io.timeoutMs, gapMs);
     // The status is the answer; the body is released so the request is over, not left open, and
     // a release that fails changes nothing.
     await response.body?.cancel().catch(() => undefined);
@@ -71,8 +175,12 @@ export async function githubUser(io: Io, name: string): Promise<Cell> {
   }
 }
 
-/** Stars at or above which an exact-name GitHub repository counts as taken. */
-export const GITHUB_STARS_TAKEN = 20;
+/** The default for `--github-stars`: only a famous repository counts. */
+export const GITHUB_STARS_TAKEN_DEFAULT = 1000;
+
+/** An exact-name repository under this is not even a note. The search reads pages down to it,
+ * so a repository between it and the bar still shows as `free(repo with N stars)`. */
+export const GITHUB_STARS_NOTED = 20;
 
 /** GitHub search serves at most 1000 results; past that an exact-name hit cannot be ruled out. */
 const GITHUB_SEARCH_PAGES = 10;
@@ -99,7 +207,7 @@ function githubSearch(body: unknown): GithubSearch | string {
 async function githubSearchPage(io: Io, url: string): Promise<GithubSearch | Cell> {
   let body: unknown;
   try {
-    const response = await get(io, url, githubHeaders(io));
+    const response = await get(io, url, githubHeaders(io), io.timeoutMs, io.githubSearchGapMs);
     if (response.status === 403 || response.status === 429) {
       return unknown("github search rate-limited; retry later");
     }
@@ -116,9 +224,11 @@ async function githubSearchPage(io: Io, url: string): Promise<GithubSearch | Cel
 
 /** The search matches the name as a substring, sorted by stars, so the first exact-name hit is the
  * best-starred one and decides the cell. Pages are read until that hit, or until the stars fall
- * under the threshold, past which no exact-name repository can count. Forks are excluded by
- * default and a starred fork holds the name as firmly, so they are asked for. */
+ * under the noted floor, past which no exact-name repository is taken or noted. Forks are
+ * excluded by default and a starred fork holds the name as firmly, so they are asked for. */
 export async function githubRepo(io: Io, name: string): Promise<Cell> {
+  const threshold = io.githubStarsTaken;
+  const floor = Math.min(threshold, GITHUB_STARS_NOTED);
   const query = encodeURIComponent(`${name} in:name fork:true`);
   for (let page = 1; page <= GITHUB_SEARCH_PAGES; page++) {
     const url = `https://api.github.com/search/repositories?q=${query}&sort=stars&order=desc&per_page=100&page=${page}`;
@@ -127,18 +237,21 @@ export async function githubRepo(io: Io, name: string): Promise<Cell> {
     const { items } = search;
     const exact = items.find((item) => item.name.toLowerCase() === name.toLowerCase());
     if (exact) {
-      if (exact.stargazers_count >= GITHUB_STARS_TAKEN) {
+      if (exact.stargazers_count >= threshold) {
         return taken(`repo with ${exact.stargazers_count} stars`);
+      }
+      if (exact.stargazers_count >= floor) {
+        return freeNoting(`repo with ${exact.stargazers_count} stars`);
       }
       return free;
     }
-    // A short page is the last one; a full page ending under the threshold has shown every
-    // repository that could count.
+    // A short page is the last one; a full page ending under the floor has shown every
+    // repository that could count or be noted.
     const last = items[items.length - 1];
-    if (!last || items.length < 100 || last.stargazers_count < GITHUB_STARS_TAKEN) return free;
+    if (!last || items.length < 100 || last.stargazers_count < floor) return free;
   }
   return unknown(
-    `github search: over ${GITHUB_SEARCH_PAGES * 100} repos named like it above ${GITHUB_STARS_TAKEN} stars`,
+    `github search: over ${GITHUB_SEARCH_PAGES * 100} repos named like it above ${floor} stars`,
   );
 }
 
@@ -314,7 +427,13 @@ async function arxivLookup(io: Io, name: string): Promise<Cell> {
   const query = encodeURIComponent(`ti:"${name}"`);
   const url = `https://export.arxiv.org/api/query?search_query=${query}&max_results=1`;
   try {
-    const response = await get(io, url, { accept: "application/atom+xml" });
+    const response = await get(
+      io,
+      url,
+      { accept: "application/atom+xml" },
+      io.timeoutMs,
+      io.arxivGapMs,
+    );
     if (response.status === 429) return unknown("arxiv rate-limited; retry later");
     if (response.status !== 200) return unknown(`arxiv HTTP ${response.status}`);
     const match = /<opensearch:totalResults[^>]*>(\d+)</.exec(await response.text());
