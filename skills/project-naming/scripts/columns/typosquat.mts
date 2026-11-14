@@ -255,6 +255,7 @@ async function cratesRanking(io: Io): Promise<Source> {
           CRATES_PAGE_SIZE,
         ),
       revive: wholeStringList(CRATES_PAGE_SIZE),
+      gapMs: io.cratesGapMs,
       through: (work) => cratesQueue(io.cratesGapMs, work),
     });
     if ("error" in loaded) {

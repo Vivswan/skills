@@ -230,7 +230,12 @@ export const REGISTRIES: readonly RegistryEntry[] = [
     // One request a second to crates.io, the typosquat ranking's pages in the same line.
     lookup: (io, name) =>
       cratesQueue(io.cratesGapMs, () =>
-        lookup404(io, `https://crates.io/api/v1/crates/${name.toLowerCase()}`, "crate"),
+        lookup404(
+          io,
+          `https://crates.io/api/v1/crates/${name.toLowerCase()}`,
+          "crate",
+          io.cratesGapMs,
+        ),
       ),
   },
   {

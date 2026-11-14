@@ -118,9 +118,9 @@ const { free, freeNoting, get, renderCell, serialQueue, taken, unknown } = await
 );
 const { readWikitext } = await import("./wiktionary.mts");
 
-export async function lookup404(io: Io, url: string, label: string): Promise<Cell> {
+export async function lookup404(io: Io, url: string, label: string, gapMs = 0): Promise<Cell> {
   try {
-    const response = await get(io, url);
+    const response = await get(io, url, {}, io.timeoutMs, gapMs);
     // The status is the answer; the body is released so the request is over, not left open, and
     // a release that fails changes nothing.
     await response.body?.cancel().catch(() => undefined);
@@ -207,7 +207,7 @@ function githubSearch(body: unknown): GithubSearch | string {
 async function githubSearchPage(io: Io, url: string): Promise<GithubSearch | Cell> {
   let body: unknown;
   try {
-    const response = await get(io, url, githubHeaders(io));
+    const response = await get(io, url, githubHeaders(io), io.timeoutMs, io.githubSearchGapMs);
     if (response.status === 403 || response.status === 429) {
       return unknown("github search rate-limited; retry later");
     }
@@ -427,7 +427,13 @@ async function arxivLookup(io: Io, name: string): Promise<Cell> {
   const query = encodeURIComponent(`ti:"${name}"`);
   const url = `https://export.arxiv.org/api/query?search_query=${query}&max_results=1`;
   try {
-    const response = await get(io, url, { accept: "application/atom+xml" });
+    const response = await get(
+      io,
+      url,
+      { accept: "application/atom+xml" },
+      io.timeoutMs,
+      io.arxivGapMs,
+    );
     if (response.status === 429) return unknown("arxiv rate-limited; retry later");
     if (response.status !== 200) return unknown(`arxiv HTTP ${response.status}`);
     const match = /<opensearch:totalResults[^>]*>(\d+)</.exec(await response.text());

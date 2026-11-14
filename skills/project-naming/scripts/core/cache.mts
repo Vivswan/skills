@@ -135,6 +135,9 @@ export type CacheSource<T> = {
   /** The request's bound, where the body is too large for the Io's one-name bound. */
   timeoutMs?: number;
 
+  /** The registry's gap between requests, kept between a 429 and its retry; 0 for a host with no queue. */
+  gapMs?: number;
+
   /** The queue the request goes through, body included, for a host that wants its requests one at a time; a value read from disk goes through nothing. */
   through?: <T>(work: () => Promise<T>) => Promise<T>;
 };
@@ -164,7 +167,7 @@ async function load<T>(io: Io, source: CacheSource<T>): Promise<Loaded<T>> {
   const fetchAndKeep = async (): Promise<Loaded<T>> => {
     let text: string;
     try {
-      const response = await get(io, source.url, {}, timeoutMs);
+      const response = await get(io, source.url, {}, timeoutMs, source.gapMs ?? 0);
       if (response.status !== 200) {
         // Released, not left open: the queue behind this request waits for the body too. The
         // status is the error whether or not the release succeeds.
@@ -189,7 +192,8 @@ async function load<T>(io: Io, source: CacheSource<T>): Promise<Loaded<T>> {
   // still held past twice that is a holder stalled outside one (suspended, or a pid another
   // process wears since).
   const work = dir
-    ? () => underLock(dir, source, 2 * requestBudgetMs(io, timeoutMs), fetchAndKeep)
+    ? () =>
+        underLock(dir, source, 2 * requestBudgetMs(io, timeoutMs, source.gapMs ?? 0), fetchAndKeep)
     : fetchAndKeep;
   return source.through ? source.through(work) : work();
 }

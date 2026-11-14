@@ -160,15 +160,15 @@ export const RATE_LIMIT_RETRIES = 3;
 /** The first wait after a 429 in a live run: 2 s, then 4 s, then 8 s, never under a registry's own gap. */
 export const RATE_LIMIT_BASE_MS = 2_000;
 
-/** The first retry wait: the base, or the widest registry gap, so a retry never repeats the violation a queue spaces for. */
-function firstRetryWaitMs(io: Io): number {
-  return Math.max(io.retryBaseMs, io.arxivGapMs, io.githubSearchGapMs, io.cratesGapMs);
+/** The first retry wait: the base, or the registry's own gap, so a retry never repeats the violation its queue spaces for. */
+function firstRetryWaitMs(io: Io, gapMs: number): number {
+  return Math.max(io.retryBaseMs, gapMs);
 }
 
 /** The longest one request can take: every attempt's timeout plus every wait between them. */
-export function requestBudgetMs(io: Io, timeoutMs = io.timeoutMs): number {
+export function requestBudgetMs(io: Io, timeoutMs = io.timeoutMs, gapMs = 0): number {
   let waits = 0;
-  for (let k = 0, wait = firstRetryWaitMs(io); k < RATE_LIMIT_RETRIES; k++, wait *= 2)
+  for (let k = 0, wait = firstRetryWaitMs(io, gapMs); k < RATE_LIMIT_RETRIES; k++, wait *= 2)
     waits += wait;
   return (RATE_LIMIT_RETRIES + 1) * timeoutMs + waits;
 }
@@ -191,6 +191,7 @@ export async function get(
   url: string,
   headers: Record<string, string> = {},
   timeoutMs = io.timeoutMs,
+  gapMs = 0,
 ): Promise<Response> {
   const once = async () => {
     const response = await io.fetch(url, {
@@ -205,7 +206,7 @@ export async function get(
     return await pRetry(once, {
       retries: RATE_LIMIT_RETRIES,
       factor: 2,
-      minTimeout: firstRetryWaitMs(io),
+      minTimeout: firstRetryWaitMs(io, gapMs),
       maxTimeout: Number.POSITIVE_INFINITY,
       randomize: false,
       shouldRetry: ({ error }) => error instanceof RateLimited,

@@ -53,15 +53,22 @@ describe("cells.mts", () => {
       calls++;
       return { status: 429 };
     });
+    // Another registry's gap (GitHub's six seconds without a token) is not this registry's wait.
     const started = Date.now();
-    const limited = await checkName({ ...always, retryBaseMs: 10 }, OPTIONS, "lumera");
+    const limited = await checkName(
+      { ...always, retryBaseMs: 10, githubSearchGapMs: 6_000 },
+      { ...OPTIONS, registries: ["pypi"] },
+      "lumera",
+    );
     expect(cell(limited.cells, "pypi")).toEqual({
       status: "unknown",
       detail: "pypi package HTTP 429",
     });
     expect(calls).toBe(4);
     // 10 + 20 + 40 ms of waiting, a timer waking a millisecond or two early allowed.
-    expect(Date.now() - started).toBeGreaterThanOrEqual(65);
+    const waited = Date.now() - started;
+    expect(waited).toBeGreaterThanOrEqual(65);
+    expect(waited).toBeLessThan(1_000);
   });
 
   test("a fetch that throws is unknown with the error named, not free", async () => {
