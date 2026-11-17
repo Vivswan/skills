@@ -1,0 +1,36 @@
+{
+  "name": "think-in-trees",
+  "description": "Anything with parts is a tree, and the tree is the analysis. Before placing, naming, or judging a file, a command, a flag, a page, a menu item, a setting, an alert, or a task, know its parent and siblings in the whole tree; clashes, duplicates, and wrong parents then show by themselves, to the agent and to the reader.",
+  "author": {
+    "name": "Vivswan Shah",
+    "email": "58091053+Vivswan@users.noreply.github.com",
+    "url": "https://vivswan.github.io/"
+  },
+  "homepage": "https://github.com/Vivswan/skills/tree/main/skills/think-in-trees",
+  "repository": "https://github.com/Vivswan/skills",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "agent-skills",
+    "architecture",
+    "folder-structure",
+    "cli-design",
+    "information-architecture",
+    "plugin-ready"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Think in Trees",
+    "shortDescription": "The tree is the analysis; the faults show themselves.",
+    "longDescription": "Fires whenever an agent works out where something belongs or how a set of things relates: a folder, a command or flag, a page, a menu item, a setting, an alert, a task. The whole tree is held first and drawn for the owner, the first level is the dimension the reader arrives with, seven checks run on the picture, and the agreed tree becomes a guard.",
+    "developerName": "Vivswan",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Edit", "Refactor"],
+    "websiteURL": "https://github.com/Vivswan/skills/tree/main/skills/think-in-trees",
+    "defaultPrompt": [
+      "Show me the whole tree structure, and do not make it flat.",
+      "Draw the CLI as a tree: commands as branches, flags as leaves.",
+      "Where does this page belong in the docs tree?"
+    ],
+    "brandColor": "#15803D"
+  }
+}

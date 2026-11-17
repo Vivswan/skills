@@ -53,10 +53,7 @@ analogvnn/
 - **A stage's siblings of one kind share one module:** `records` holds its records, `constants` its constants, `util` its small functions, each in the language's file form (`records.py`, `constants.py`, `util.py` in the specimen's Python), and a package that fits one module is one module.
 - **A module named after its main thing may hold that thing alone.** The defect is a helper of one caller, or a constant, given its own module outside those three. Specimen: one sweep split a tree into 269 modules, among them a file holding a single format-conversion helper and another holding a default layer list.
 - **A file per function is the same defect from the other side.** A file holds one concept with its helpers, as a function holds one concept with its steps (`shape.md`, One concept per function).
-- **A folder is a concept,** and inside it the base sits beside one file per variant (`Noise.py` beside the four noises). Adding a variant adds one file; nothing else moves.
 - **Every sibling has the same internal template,** and every module follows the one module template (`shape.md`, Module layout), so the reader knows where the constants, the class, and the entry point sit before opening the file. The specimen's reading: "it is easy to even just predict where the thing will be".
-- **Sibling stages mirror their names.** In a pipeline the stage is the folder and the concept is the file name, repeated across stages: `equations/dpuc_input.py` and `simulation/results_parser/dpuc_input.py` are one concept at two stages.
-- **Entry points sit at the root,** one runnable script per run (`finetune.py`, `run_pca.py`). A `utils/` folder holds the small functions several stages share, grouped by what they serve, as a stage's `util.py` holds its own.
 - **Package metadata and constants have one home each:** the root `__init__.py` carries only the package's name, author, and version; a package-wide constant (one that two or more modules read) lives in one constants module, never beside its first use. A module's own constants sit in its constants block (`shape.md`, Module layout).
 - **Not sure where a thing goes: ask the user, with options.** Two or three candidate placements, each with the import line it would give and what sits beside it. A guessed placement is the one the reader cannot predict.
 
@@ -64,23 +61,9 @@ Readability and beauty come first: this rule yields where following it would rea
 
 The specimens pre-date modern typing. The layout is what to copy; the syntax is modernised.
 
-## A folder may exist to tell the reader a fact
+## The folders themselves
 
-The tree is documentation. A path is read before any file is opened and costs nothing to read, so a folder may encode a property that no program branches on.
-
-Specimen: one homelab's apps tree, which an architecture audit flagged as "enforced only by folder names and read by nothing". The owner kept it.
-
-```text
-src/apps/
-  code/  <app>/   fully declared: rebuilds whole from git, nothing to preserve
-  ui/    <app>/   keeps state through its own UI: back it up before touching it
-```
-
-An agent asked to rotate Home Assistant's settings learns the stakes from the path `src/apps/ui/homeassistant` before it opens a file.
-
-The test for such a folder is the reader, not the code: does a reader learn something here they could not learn as fast another way? A reviewer who finds a folder "read by nothing" runs that test before calling it a finding.
-
-It is no licence for a folder that encodes nothing. A folder whose fact the file names already show fails the test: a `scripts/` folder holding every `.ts` file, when the extension says it. One axis per level, the one a reader most needs.
+How deep the tree goes, what its first level is, which folder a thing belongs in, and when a folder exists only to tell the reader a fact are the `/think-in-trees` skill's. This page keeps the file inside the folder: its name, its template, its helpers, and the pure move.
 
 ## The same rule in other languages
 
@@ -92,4 +75,3 @@ The test is identical in every language: does this file or function only forward
 - Transient re-exports are acceptable only as staging INSIDE a multi-step migration, and the migration is not done until a sweep removes them.
 - The test for a barrel is "does this file only re-export names", not "does it import a lot": generated aggregators that carry real derived values (registries, merged tables, generated indexes with data) are not barrels.
 - The test for an escort is "does this function add any behavior, contract, or type information". If not, inline it away and repoint callers.
-- The test for a folder no code reads is the reader: what does a reader learn from the path that they could not learn as fast another way? Nothing, and the level goes; something, and it stays.

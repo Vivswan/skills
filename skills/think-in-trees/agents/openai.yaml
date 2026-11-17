@@ -1,0 +1,7 @@
+# Codex sidecar for this skill. The interface block mirrors
+# .codex-plugin/plugin.json (displayName, shortDescription, brandColor) and
+# the SKILL.md H1; the smoke test keeps them identical.
+interface:
+  display_name: "Think in Trees"
+  short_description: "The tree is the analysis; the faults show themselves."
+  brand_color: "#15803D"
