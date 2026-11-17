@@ -19,12 +19,13 @@ Before: top tabs with sub-tabs, sign-out hidden in a menu, a "Computers" page no
 |-- Access
 |   `-- Users  Tokens       "sign everyone out" lives here, not under Settings
 |-- Domain
-`-- Settings
+|-- Settings
+`-- Sign out               a leaf in view, not an item in a hidden menu
 ```
 
 What it showed: sub-tabs were siblings pretending to be children; one thing was reachable two ways; "sign everyone out" lived under Settings and belonged under Access > Users.
 
-What changed: a side menu in two groups, and the rule the owner gave: one place per thing.
+What changed: a side menu in two groups with sign-out as its last leaf, and the rule the owner gave: one place per thing.
 
 ## A home page of a lab
 
