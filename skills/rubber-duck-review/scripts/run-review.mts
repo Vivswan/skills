@@ -8,7 +8,7 @@
  *   a reviewer narrates first    -> an empty verdict reads as clean: a tool call must precede it
  *   a reviewer asks to write     -> the review refuses, the adapter ends the turn: the refusal is the failure's reason
  *   predictable prompt path      -> one agent overwrites another's: prepare mints a private dir
- *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged
+ *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged, and past 100 the oldest go too
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
  *   cp -a of the checkout        -> venvs and nested worktrees weigh gigabytes: snapshot HEAD, the refs, the index
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
@@ -59,7 +59,7 @@ const USAGE = [
   "  records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',",
   "  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;",
   "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
-  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones",
+  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, the newest 100 at most; prepare and a launch purge the rest, never a review still running",
   "codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are",
   "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
   "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
@@ -206,7 +206,11 @@ const TOOL_ARGS: Record<CliTool, (prompt: string) => string[]> = {
 
 const SCRATCH_PREFIX = "rubber-duck-";
 const PROMPT_DIR_PREFIX = "rubber-duck-prompt-";
+/** The exit record a finished review leaves beside its capture; a dir without it is still running. */
+const STATUS_FILE = "review.status";
 const SCRATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
+/** Past this many scratch dirs the oldest finished ones go, age aside: a machine running hundreds of reviews a day fills tmp within the retention. */
+const SCRATCH_KEEP = 100;
 const WAIT_POLL_MS = 2000;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
 const DEFAULT_STALL_SECONDS = 900;
@@ -239,10 +243,14 @@ function usageError(message: string): never {
   throw new SilentExit();
 }
 
-/** The tmp dir is shared with other sessions' live reviews, so age alone decides and a
- * symlink is never followed. A purge that fails is reported and must never fail the review. */
+/** The tmp dir is shared with other sessions' live reviews, so age decides first and a symlink
+ * is never followed: everything past the retention goes. Then the count: past SCRATCH_KEEP the
+ * oldest finished reviews go too. A dir whose record carries no exit status yet is a review
+ * still running, and a dir with no record is a prompt dir a lead may still relaunch from; the
+ * count never touches either.
+ * A purge that fails is reported and must never fail the review. */
 function purgeStaleScratch(): void {
-  const cutoff = Date.now() - SCRATCH_RETENTION_MS;
+  const now = Date.now();
   let entries: Dirent[];
   try {
     entries = readdirSync(tmpdir(), { withFileTypes: true });
@@ -250,17 +258,38 @@ function purgeStaleScratch(): void {
     process.stderr.write(`stale scratch purge skipped: ${String(error)}\n`);
     return;
   }
+  const purge = (dir: string) =>
+    removeTree(dir, (line) => process.stderr.write(`stale scratch purge skipped: ${line}\n`));
+  const kept: { dir: string; mtimeMs: number }[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith(SCRATCH_PREFIX)) continue;
     const dir = join(tmpdir(), entry.name);
+    let mtimeMs: number;
     try {
-      if (lstatSync(dir).mtimeMs >= cutoff) continue;
+      mtimeMs = lstatSync(dir).mtimeMs;
     } catch (error) {
       process.stderr.write(`stale scratch purge skipped ${dir}: ${String(error)}\n`);
       continue;
     }
-    removeTree(dir, (line) => process.stderr.write(`stale scratch purge skipped: ${line}\n`));
+    if (now - mtimeMs > SCRATCH_RETENTION_MS) purge(dir);
+    else kept.push({ dir, mtimeMs });
   }
+  kept.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const { dir } of kept.slice(SCRATCH_KEEP)) {
+    if (isFinishedCapture(dir)) purge(dir);
+  }
+}
+
+/** A capture whose launch record carries an exit status: the review ended. A missing, unreadable,
+ * or still-pending record reads as not finished, so a doubt never removes a live review. */
+function isFinishedCapture(dir: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(dir, STATUS_FILE), "utf-8"));
+  } catch {
+    return false;
+  }
+  return isRecord(parsed) && "status" in parsed;
 }
 
 /** Mint a private directory for one review's prompt files and print the
@@ -505,7 +534,7 @@ function scratchPaths(dir: string, tool: Tool): Scratch {
     dir,
     outFile: join(dir, tool === "copilot" ? "review.out" : "review.jsonl"),
     errFile: join(dir, "review.err"),
-    statusFile: join(dir, "review.status"),
+    statusFile: join(dir, STATUS_FILE),
   };
 }
 
@@ -1052,7 +1081,7 @@ interface LaunchRecord {
 function readLaunchRecord(tool: Tool, outputFile: string): LaunchRecord | null {
   let recordText: string;
   try {
-    recordText = readFileSync(join(dirname(outputFile), "review.status"), "utf-8");
+    recordText = readFileSync(join(dirname(outputFile), STATUS_FILE), "utf-8");
   } catch {
     return null;
   }
