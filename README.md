@@ -51,6 +51,7 @@ The agent applies these on its own when the task matches:
 - [/pr-landing-discipline](./skills/pr-landing-discipline/SKILL.md) - Draft flips, review rounds to convergence, line accounting, and a human-gated merge
 - [/reply-and-review-discipline](./skills/reply-and-review-discipline/SKILL.md) - Plain-first replies to issue reporters and one pending review on someone else's PR
 - [/rubber-duck-review](./skills/rubber-duck-review/SKILL.md) - Cross-model, read-only second-opinion code review
+- [/think-in-trees](./skills/think-in-trees/SKILL.md) - The tree is the analysis: where a thing belongs and what it sits next to, for folders, CLIs, docs, menus, settings, alerts, queues, and failure paths
 - [/session-events](./skills/session-events/SKILL.md) - One daemon per session delivers events from any polled source as messages in the peer envelope, quoting nothing from the polled system; the daemon behind /watch-github
 - [/verify-with-controls](./skills/verify-with-controls/SKILL.md) - Controls and evidence before a zero, alarm, success claim, or stillness becomes a conclusion
 - [/watch-github](./skills/watch-github/SKILL.md) - One daemon per session, a background task of that session, delivers PR comments, reviews, CI verdicts, head moves, and merges, and branch tips' CI, as messages instead of polls
@@ -106,6 +107,7 @@ graph LR
   pnm["/project-naming"]
   nis["/no-invalid-states"]
   nt["/never-twice"]
+  tit["/think-in-trees"]
   vwc["/verify-with-controls"]
   csm["/craft-skills-and-memories"]
   wgh["/watch-github"]
@@ -120,6 +122,7 @@ graph LR
 
   cs <--> wt
   cs <--> rdr
+  cs <--> tit
   csm <--> nt
   nis <--> rdr
   nt <--> rdr
@@ -144,6 +147,9 @@ graph LR
   pld --> rdr
   cs --> nt
   cs --> nis
+  tit --> nis
+  tit --> wt
+  om --> tit
   nt --> nis
   om --> vwc
   pnm --> vwc
@@ -166,6 +172,7 @@ graph LR
   click pnm "./skills/project-naming/SKILL.md"
   click nis "./skills/no-invalid-states/SKILL.md"
   click nt "./skills/never-twice/SKILL.md"
+  click tit "./skills/think-in-trees/SKILL.md"
   click vwc "./skills/verify-with-controls/SKILL.md"
   click csm "./skills/craft-skills-and-memories/SKILL.md"
   click wgh "./skills/watch-github/SKILL.md"

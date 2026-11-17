@@ -127,6 +127,7 @@ Every brief includes:
 
     Production: two builders in one wave decided a folder name and a library swap (flagged `Ask the owner:` by their reviewer) themselves, because their briefs said where to send a report and nothing about where to send a question.
 21. **The naming rule: a brief that asks a builder or a lane for a name points at the `/project-naming` skill.** A name reaches the owner only through its interview, brief, and table, even one name; a lane brief carries the brief that skill's step 2 produced, never the lead's own taste.
+22. **The tree rule: a brief that touches a folder layout, a CLI's commands or flags, a docs set, a menu, or a settings surface points at the `/think-in-trees` skill.** The builder holds the whole tree before placing or naming anything and shows it in the signal; a lead reviewing the result runs that skill's checks on the picture.
 
 ## The Stop-and-Wait Ban
 

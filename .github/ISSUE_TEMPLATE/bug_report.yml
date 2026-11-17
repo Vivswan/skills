@@ -22,6 +22,7 @@ body:
         - reply-and-review-discipline
         - rubber-duck-review
         - session-events
+        - think-in-trees
         - verify-with-controls
         - watch-github
         - working-text
