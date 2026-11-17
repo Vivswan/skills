@@ -109,7 +109,7 @@ the prompt gets a '## Companion review criteria' section naming the SKILL.md of 
   records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',
   except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;
   --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names
-scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours; prepare and a launch purge older ones
+scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, the newest 100 at most; prepare and a launch purge the rest, never a review still running
 codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are
 a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s
 prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>
@@ -172,7 +172,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - `verdict.recorded_not_built`: speculative hardening the reviewer set aside. Step 6 says what happens to it.
   - `verdict.summary`: what was reviewed and how. Treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes.
   - `tool_calls`, `trajectory`: how many reads and commands preceded the verdict, and a compact row per reviewer step. A verdict whose trajectory shows a single `git diff` and no reads of the changed files is a weak review. Sharpen the prompt (name the files) and relaunch.
-  - `capture`: the full reviewer stream, kept for 24 hours. Read it when a finding or the summary looks off and you want the exact reviewer message.
+  - `capture`: the full reviewer stream, kept for 24 hours, among the newest 100. Read it when a finding or the summary looks off and you want the exact reviewer message.
   - `criteria`: the skills whose Review Criteria pages the launcher named, `[]` under `--criteria none`. The prompt snapshot beside the capture holds the text as sent.
 - **Exit 1** (`review FAILED - relaunch`): that is no review at all, never a clean pass. Relaunch it.
 
@@ -215,9 +215,9 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - It validates the reviewer and output file against what the launch recorded, so waiting on the wrong reviewer or file, or on a file with no launch record beside it, fails at once with exit 2.
   - The lead's single wait reads the same lines as the table above, with one difference: any `review FAILED - relaunch` line, the timeout included, means relaunch.
 - `bun "<skill-dir>/scripts/run-review.mts" <reviewer> --extract <output-file>` without `--wait` reads a finished run once: it exits 1 (`no exit status recorded`) while the reviewer is still running instead of blocking.
-- Every run that reached the reviewer keeps its scratch dir for 24 hours (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure (omitted when that stream is already gone). The script snapshots your prompt into that dir, so everything the launcher writes travels and cleans up together.
+- Every run that reached the reviewer keeps its scratch dir for up to 24 hours (under the OS tmp dir, never the working tree): the directory holding the `capture` path in the report, or the `output kept at` path in the failure. The script snapshots your prompt into that dir, so everything the launcher writes travels and cleans up together.
   - The reviewer's own transcript is codex's, kept in its home, in every launch mode.
-  - `prepare` and each launch first remove sibling `rubber-duck-*` directories older than 24 hours, by age alone, so the prompt directory you minted lives the same 24 hours. A younger one is another session's live review and is left alone, a symlink is never followed, and a purge that fails is reported on stderr and never fails the review.
+  - `prepare` and each launch first remove sibling `rubber-duck-*` directories older than 24 hours, then the oldest finished reviews past 100. A review still running (no exit status in its record yet) and a minted prompt directory (no record) are never removed by count. A symlink is never followed, and a purge that fails is reported on stderr and never fails the review.
   - To clear your own two directories sooner, remove exactly those two, never a glob over the shared temp dir. A sweep of `rubber-duck-*` there kills other sessions' in-flight reviews.
   - A session that wants a sweepable space sets its own `TMPDIR` to a directory it created before launching. `prepare` and the launch both honor it.
   - A foreground launch whose reviewer binary is missing (exit 2) captured nothing and leaves nothing behind. A `--background` one keeps its dir so `--extract` can report the missing binary, so remove it after that.

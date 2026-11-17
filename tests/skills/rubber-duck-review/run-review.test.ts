@@ -1491,6 +1491,49 @@ describe("run-review.mts", () => {
     }
   });
 
+  test("past 100 scratch dirs the oldest finished reviews go, age aside; a review still running never does", () => {
+    // One machine held 776 rubber-duck-* dirs under 24 h old; age alone never bounds a busy day.
+    const privateTmp = temp.dir("run-review-cap-");
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000);
+    // recordStatus writes the exit status as a string; the extractor rejects a number.
+    const record = (status?: string) =>
+      JSON.stringify({
+        tool: "codex",
+        output: "review.jsonl",
+        ...(status === undefined ? {} : { status }),
+      });
+    const makeDir = (name: string, ageHours: number, recordText: string | null): string => {
+      const dir = join(privateTmp, name);
+      mkdirSync(dir);
+      writeFileSync(join(dir, "review.jsonl"), "");
+      if (recordText !== null) writeFileSync(join(dir, "review.status"), recordText);
+      utimesSync(dir, hoursAgo(ageHours), hoursAgo(ageHours));
+      return dir;
+    };
+    // 105 finished reviews, oldest first: dir 000 is 23 h old, dir 104 about 3 h.
+    const finished = Array.from({ length: 105 }, (_, i) =>
+      makeDir(`rubber-duck-cap-${String(i).padStart(3, "0")}`, 23 - (i * 20) / 105, record("0")),
+    );
+    // Older than every finished one: a review still running (its record has no exit status yet)
+    // and a minted prompt dir (no record at all). Neither is ever removed by count.
+    const running = makeDir("rubber-duck-cap-running", 23.6, record());
+    const minted = makeDir("rubber-duck-prompt-cap-minted", 23.5, null);
+    const young = makeDir("rubber-duck-cap-young", 0.5, record("0"));
+
+    const prepared = run(["prepare", "cap-probe"], { TMPDIR: privateTmp });
+    expect(prepared.code).toBe(0);
+    expect(prepared.stderr).toBe("");
+    // 108 before: the 8 past the newest 100 are the running dir, the minted dir, and finished 000
+    // to 005; the six finished go, the other two stay, and prepare mints one more prompt dir.
+    const left = readdirSync(privateTmp).filter((name) => name.startsWith("rubber-duck-"));
+    expect(left.length).toBe(103);
+    expect(existsSync(running)).toBe(true);
+    expect(existsSync(minted)).toBe(true);
+    expect(existsSync(young)).toBe(true);
+    for (const dir of finished.slice(0, 6)) expect(existsSync(dir), dir).toBe(false);
+    for (const dir of finished.slice(6)) expect(existsSync(dir), dir).toBe(true);
+  });
+
   test("a prompt file that prepare did not mint is refused: exit 2", () => {
     // Negative controls for the collision guard. Each row is a way a shared
     // or predictable prompt could reach a launch without going through prepare.
