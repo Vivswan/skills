@@ -179,6 +179,7 @@ const { extractVerdict, isEnoent, isRecord, isTool } = await import("./verdict.m
 type CliTool = Extract<Tool, "copilot">;
 type AcpTool = Exclude<Tool, "copilot">;
 
+/** The ACP adapter on PATH for each reviewer and the session mode a read-only review needs. */
 const ACP_REVIEWERS: Record<AcpTool, { adapter: string; mode: string }> = {
   // read-only: commands ask before they run, a file edit asks, and a refusal ends the turn.
   codex: { adapter: "codex-acp", mode: "read-only" },
@@ -186,6 +187,7 @@ const ACP_REVIEWERS: Record<AcpTool, { adapter: string; mode: string }> = {
   claude: { adapter: "claude-agent-acp", mode: "plan" },
 };
 
+/** The argv a CLI reviewer gets: the prompt, plain stdout, and a read-only tool allow-list. */
 const TOOL_ARGS: Record<CliTool, (prompt: string) => string[]> = {
   // -p consumes the next argument, so the prompt must immediately follow it.
   // -s strips the model/stats decoration so stdout is only the response.
@@ -204,12 +206,19 @@ const TOOL_ARGS: Record<CliTool, (prompt: string) => string[]> = {
   ],
 };
 
+/** Every scratch dir under the OS tmp dir, a capture's or a prompt's, starts with this. */
 const SCRATCH_PREFIX = "rubber-duck-";
+
+/** A prompt dir minted by `prepare`; the prefix is what a launch checks first. */
 const PROMPT_DIR_PREFIX = "rubber-duck-prompt-";
-/** The exit record a finished review leaves beside its capture; a dir without it is still running. */
+
+/** The launch record beside a capture; an exit status in it means the review ended. */
 const STATUS_FILE = "review.status";
+
+/** A scratch dir older than this goes at the next prepare or launch. */
 const SCRATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
-/** Past this many scratch dirs the oldest finished ones go, age aside: a machine running hundreds of reviews a day fills tmp within the retention. */
+
+/** Past this many scratch dirs the oldest finished reviews go too: a busy day outruns the retention. */
 const SCRATCH_KEEP = 100;
 const WAIT_POLL_MS = 2000;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;

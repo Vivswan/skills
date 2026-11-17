@@ -1495,7 +1495,8 @@ describe("run-review.mts", () => {
     // One machine held 776 rubber-duck-* dirs under 24 h old; age alone never bounds a busy day.
     const privateTmp = temp.dir("run-review-cap-");
     const hoursAgo = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000);
-    const record = (status?: number) =>
+    // recordStatus writes the exit status as a string; the extractor rejects a number.
+    const record = (status?: string) =>
       JSON.stringify({
         tool: "codex",
         output: "review.jsonl",
@@ -1511,13 +1512,13 @@ describe("run-review.mts", () => {
     };
     // 105 finished reviews, oldest first: dir 000 is 23 h old, dir 104 about 3 h.
     const finished = Array.from({ length: 105 }, (_, i) =>
-      makeDir(`rubber-duck-cap-${String(i).padStart(3, "0")}`, 23 - (i * 20) / 105, record(0)),
+      makeDir(`rubber-duck-cap-${String(i).padStart(3, "0")}`, 23 - (i * 20) / 105, record("0")),
     );
     // Older than every finished one: a review still running (its record has no exit status yet)
     // and a minted prompt dir (no record at all). Neither is ever removed by count.
     const running = makeDir("rubber-duck-cap-running", 23.6, record());
     const minted = makeDir("rubber-duck-prompt-cap-minted", 23.5, null);
-    const young = makeDir("rubber-duck-cap-young", 0.5, record(0));
+    const young = makeDir("rubber-duck-cap-young", 0.5, record("0"));
 
     const prepared = run(["prepare", "cap-probe"], { TMPDIR: privateTmp });
     expect(prepared.code).toBe(0);
