@@ -75,6 +75,7 @@ Both halves are complete replies under the rules above, each with its own detail
 ## Ce que le rapport montre
 
 ...
+
 ## Que faire
 
 1. ...
@@ -89,6 +90,7 @@ Both halves are complete replies under the rules above, each with its own detail
 ## What the report shows
 
 ...
+
 ## What to do
 
 1. ...

@@ -89,7 +89,6 @@ How to apply:
 - The one exception: a library that needs a runtime or API the repository has dropped is not a fit, however good. Specimen: a dependency graph tool that requires the TypeScript compiler API is not a fit for a repository pinned to a TypeScript that no longer ships one. The hand-rolled parser walk stays, and the reason is recorded where the walk lives.
 - At review, a reviewer treats hand-rolled code whose whole job a good library does as a finding that names the library. A finding that names no library is a style opinion.
 
-
 ## Heal at the Boundary, or Refuse There
 
 Malformed input or state with one unambiguous repair is repaired at the boundary, reported where a user would want to know, and the program continues. Input with no repair, or with several candidate repairs, is refused at that same boundary. Nothing malformed passes through to fail later.

@@ -11,7 +11,6 @@ consumers install from `main` with `npx skills add Vivswan/skills`.
 
 - rewrite the repo checks in TypeScript on bun ([ed852bc](https://github.com/Vivswan/skills/commit/ed852bc5be6dfa08d936c23e0341a1861d8234e1))
 
-
 ### Bug Fixes
 
 - keep rubber-duck reviewer alive until it exits ([546dcf7](https://github.com/Vivswan/skills/commit/546dcf79722b6b7829579bf2d1ae13860ae73f4d))
