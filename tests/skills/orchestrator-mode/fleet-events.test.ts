@@ -41,7 +41,6 @@ const F = "f60718293041526a";
 const MARKER = "MARKER-sunflower-9c1d";
 const GIT_TIMEOUT = 60_000;
 const TRACKS = { "wt-a": "track-a", "wt-b": "track-b" };
-// The harness's per-user directory under its temp root.
 const USER_TMP = `claude-${process.getuid?.() ?? 0}`;
 const TWO_MINUTES_MS = 120_000;
 const HOUR_MS = 3_600_000;
@@ -481,6 +480,18 @@ describe("fleet-events.mts", () => {
       [unreadable],
       ["agent builder-a: stranded, job b1a2b3c4d ended with no notice"],
       [unreadable],
+    ]);
+
+    // A stopped agent waits on nothing: the job its transcript left open is no trouble once the directory is swept.
+    appendLines(pathB, launched(B, "b5t4s3r2q"));
+    appendLines(session.sessionFile, [
+      toolUse(ago(0), "toolu_stop", "TaskStop", { task_id: B }, null),
+      toolResult(ago(0), "toolu_stop", { agentId: null }),
+    ]);
+    renameSync(tasks, `${tasks}.away`);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(6)).toEqual([
+      ["note", "agent builder-b: stopped by the lead", fileUrl(pathB)],
     ]);
     s.stop({ inbox: box.path });
   }, 30000);

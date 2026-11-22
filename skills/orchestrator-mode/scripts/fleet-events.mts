@@ -528,8 +528,13 @@ function childrenSituation(
   return running.length > 0 ? { kind: "fine" } : null;
 }
 
+/** Whether `path` is a directory this process can reach: one under a parent it cannot search is not. */
 function isDirectory(path: string): boolean {
-  return statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** What the background jobs say, oldest first: stranded once one's output ended with no notice; fine while every one runs; unread while the tasks directory is not there, since no job can be read; null with none. */
@@ -545,12 +550,15 @@ function jobsSituation(target: Target, state: Activity, io: Io): Situation | nul
 /**
  * The trouble of a tasks directory that is not there while a listed agent waits on a job: every
  * such job would read as running for good, and an ended one would never be stranded. The harness
- * makes the directory with the session's first job, so its absence before any job is no trouble.
+ * makes the directory with the session's first job, so its absence before any job is no trouble,
+ * and a stopped agent waits on nothing, whatever jobs its transcript left open.
  */
 function jobsOutputTrouble(target: Target, listed: string[]): Trouble | null {
-  const waiting = listed.some(
-    (agentId) => Object.keys(target.agents[agentId]?.state.jobs ?? {}).length > 0,
-  );
+  const waiting = listed.some((agentId) => {
+    const entry = target.agents[agentId];
+    if (entry === undefined || Object.keys(entry.state.jobs).length === 0) return false;
+    return !stoppedByLead(target, agentId, entry);
+  });
   if (!waiting || isDirectory(target.tasksDir)) return null;
   return {
     text: `fleet: cannot read job output: ${target.tasksDir} is no directory`,
@@ -578,6 +586,12 @@ function stillnessSituation(
   return { kind: "ended", since: movedAt, signalled };
 }
 
+/** Whether the lead stopped the agent: by its id, or, for the lead's own child, by the name its sidecar gives it. */
+function stoppedByLead(target: Target, agentId: string, entry: AgentEntry): boolean {
+  const ownChild = parentState(target, entry) === target.lead.state;
+  return isStopped(target.lead.state, agentId, ownChild ? (entry.sidecar?.name ?? null) : null);
+}
+
 /**
  * What stands for one agent now, read off its transcript against the bounds: a stop, a stuck call
  * (past its own timeout plus the grace, or the plain bound), a child still past the bound, a job
@@ -598,10 +612,7 @@ function situationOf(
   const parent = entry.sidecar?.parentAgentId ?? null;
   if (parent !== null && failed.has(parent)) return { kind: "unread" };
 
-  const ownChild = parentState(target, entry) === target.lead.state;
-  if (isStopped(target.lead.state, agentId, ownChild ? (entry.sidecar?.name ?? null) : null)) {
-    return { kind: "stopped" };
-  }
+  if (stoppedByLead(target, agentId, entry)) return { kind: "stopped" };
 
   const pending = pendingSituation(target, entry.state, nowMs, failed);
   if (pending !== null) return pending;
