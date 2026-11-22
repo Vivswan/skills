@@ -278,13 +278,7 @@ function filesOf(ctx: Context<object>, owner: Owner): Files {
   return files;
 }
 
-/**
- * What a session whose inbox socket file is gone is told: the harness listens on a path nothing
- * can connect to, so no message reaches the session again, and a file sink read by `wait` is what
- * still does. The sink is another owner with a state of its own, so the targets are watched again
- * under it, and each `wait` starts at the cursor the one before printed, or an event that lands
- * between two waits is never read.
- */
+/** What a session whose inbox socket file is gone is told: the harness listens on a path nothing can connect to, and a file sink, an owner with a state of its own, still reaches it. */
 function inboxGoneText(ctx: Context<object>, owner: Owner, watched: string[]): string {
   // The files carry the source name already, and a socket path has a length to keep.
   const sink = `sink-${owner.pid}`;
@@ -624,8 +618,6 @@ interface DaemonSetup<Target extends object> {
   idleInterval: number;
   mode: Mode;
   log: (line: string) => void;
-
-  /** The daemon's last words when the owner's inbox is gone, given the targets it watched. */
   inboxGone: (watched: string[]) => string;
 }
 
@@ -670,6 +662,8 @@ class Daemon<Target extends object> {
 
   private stopping = false;
 
+  private inboxLost = false;
+
   private lastDeliveryAt = Date.now();
 
   private shuttingDown: Promise<void> | null = null;
@@ -701,9 +695,7 @@ class Daemon<Target extends object> {
   private servingOver(): string | null {
     if (this.ownerGone()) return `${describeOwner(this.owner)} exited`;
     if (this.owner.inbox === null || existsSync(this.owner.inbox)) return null;
-    console.error(
-      `${this.inboxGoneText(Object.keys(this.state.targets))}\nevents through #${this.state.lastEventId} are in ${this.files.events}`,
-    );
+    this.inboxLost = true;
     return `the inbox ${this.owner.inbox} is gone`;
   }
 
@@ -845,6 +837,12 @@ class Daemon<Target extends object> {
     if (this.polling) await this.polling.catch(() => {});
 
     saveState(this.files, this.state);
+    // After the drain: the words name the targets and the last event as the final poll left them.
+    if (this.inboxLost) {
+      console.error(
+        `${this.inboxGoneText(Object.keys(this.state.targets))}\nevents through #${this.state.lastEventId} are in ${this.files.events}`,
+      );
+    }
     this.closeServer();
     this.removeSocket();
     this.log(`daemon ${process.pid} stopped: ${reason}`);
