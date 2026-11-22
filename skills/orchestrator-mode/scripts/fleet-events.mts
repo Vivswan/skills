@@ -10,7 +10,7 @@
 //   bun "<skill-dir>/scripts/fleet-events.mts" watch /abs/session-dir --quiet-after 5
 
 import { closeSync, constants, fstatSync, openSync, readdirSync, statSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
@@ -73,6 +73,9 @@ const LEAD_CLAIM_MINUTES = 30;
 
 // A stuck or idle alert is repeated as its duration doubles, this many times, then held in silence.
 const MAX_REPEATS = 3;
+
+// Where the harness keeps its per-user temp root when CLAUDE_CODE_TMPDIR names none: never the OS temp dir, which macOS puts elsewhere.
+const HARNESS_TMP = "/tmp";
 
 // The harness closes a background job's output file with this line.
 const EXIT_LINE = /^\[exited with code \d+\]$/;
@@ -299,9 +302,9 @@ function parseFlags(flags: string[]): { repo: string | null; quietAfterMinutes: 
   return { repo, quietAfterMinutes };
 }
 
-/** The harness's tasks directory for a session: its own temp root (or `<os tmpdir>/claude-<uid>`), the project slug, the session id, `tasks`. */
+/** The harness's tasks directory for a session: its temp root (`CLAUDE_CODE_TMPDIR`, else `/tmp` whatever the OS temp dir is), `claude-<uid>`, the project slug, the session id, `tasks`. */
 function tasksDirOf(sessionDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  const root = env.CLAUDE_CODE_TMPDIR || join(tmpdir(), `claude-${process.getuid?.() ?? 0}`);
+  const root = join(env.CLAUDE_CODE_TMPDIR || HARNESS_TMP, `claude-${process.getuid?.() ?? 0}`);
   return join(root, basename(dirname(sessionDir)), basename(sessionDir), "tasks");
 }
 
@@ -525,13 +528,34 @@ function childrenSituation(
   return running.length > 0 ? { kind: "fine" } : null;
 }
 
-/** What the background jobs say, oldest first: stranded once one's output ended with no notice; fine while every one runs; null with none. */
+function isDirectory(path: string): boolean {
+  return statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
+}
+
+/** What the background jobs say, oldest first: stranded once one's output ended with no notice; fine while every one runs; unread while the tasks directory is not there, since no job can be read; null with none. */
 function jobsSituation(target: Target, state: Activity, io: Io): Situation | null {
   const jobs = Object.entries(state.jobs).sort(byTime(([, job]) => job.at));
+  if (jobs.length > 0 && !isDirectory(target.tasksDir)) return { kind: "unread" };
   for (const [job] of jobs) {
     if (jobEnded(join(target.tasksDir, `${job}.output`), io)) return { kind: "stranded", job };
   }
   return jobs.length > 0 ? { kind: "fine" } : null;
+}
+
+/**
+ * The trouble of a tasks directory that is not there while a listed agent waits on a job: every
+ * such job would read as running for good, and an ended one would never be stranded. The harness
+ * makes the directory with the session's first job, so its absence before any job is no trouble.
+ */
+function jobsOutputTrouble(target: Target, listed: string[]): Trouble | null {
+  const waiting = listed.some(
+    (agentId) => Object.keys(target.agents[agentId]?.state.jobs ?? {}).length > 0,
+  );
+  if (!waiting || isDirectory(target.tasksDir)) return null;
+  return {
+    text: `fleet: cannot read job output: ${target.tasksDir} is no directory`,
+    url: fileUrl(target.tasksDir),
+  };
 }
 
 /** What a transcript with nothing pending says by its stillness: a stall past `--quiet-after` while the turn is open and no signal reached the one waiting, an ended turn past the grace, else fine. */
@@ -615,7 +639,7 @@ function situationText(name: string, situation: Situation, nowMs: number): strin
     case "fine":
       return `agent ${name}: fine again`;
     case "unread":
-      return `agent ${name}: a child's read failed`;
+      return `agent ${name}: a read its judgment rests on failed`;
     case "stopped":
       return `agent ${name}: stopped by the lead`;
     case "tool":
@@ -690,7 +714,7 @@ function restate(
  * notes, said once while they hold; a return to fine retracts a standing alert with a note; an
  * alert is said on entering and repeated as its duration doubles. A stillness already past the
  * horizon when first judged is history: a note, said once, with nothing to retract. A judgment
- * that rests on a parent or a child whose read failed this poll is held: nothing said, nothing
+ * that rests on a read that failed this poll (a parent, a child, a job's output) is held: nothing said, nothing
  * changed.
  */
 function agentTransition(
@@ -1175,6 +1199,10 @@ async function readFleet(
       : await readWorktrees(draft, draft.repo, trouble, nowMs);
   busy ||= worktrees.busy;
 
+  // An agent whose read failed this poll still waits on the jobs its last reading held.
+  const jobsOutput = jobsOutputTrouble(draft, [...agents.refreshed, ...agents.failed.keys()]);
+  if (jobsOutput !== null) trouble.set("tasks", jobsOutput);
+
   const transitions: EventInput[] = [];
   for (const agentId of agents.refreshed) {
     const entry = draft.agents[agentId] as AgentEntry;
@@ -1365,7 +1393,18 @@ async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult
   return { events, busy };
 }
 
-/** The alerts in force for a target, oldest first: who needs the lead now. */
+/** The agent transcripts the subagents directory holds now, what every poll reads: a count, none before the first spawn makes the directory, or the code of a listing that failed. */
+function listedAgents(target: Target): string {
+  try {
+    const names = readdirSync(target.subagentsDir);
+    return String(names.filter((name) => TRANSCRIPT_NAME.test(name)).length);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "error";
+    return code === "ENOENT" ? "0" : `not listed (${code})`;
+  }
+}
+
+/** What the target reads now, then the alerts in force, oldest first: a quiet target is told from an empty one. */
 function summary(target: Target): string[] {
   // The saved shape may predate this daemon while a restart's first read keeps failing: read it as a poll would.
   const maps = normalizeMaps(target as unknown as Record<string, unknown>);
@@ -1380,7 +1419,15 @@ function summary(target: Target): string[] {
   standing.push(...Object.values(maps.trouble));
   const at = (since: string | null) =>
     since === null ? Number.NEGATIVE_INFINITY : Date.parse(since);
-  return standing.sort((a, b) => at(a.since) - at(b.since)).map((entry) => entry.text);
+  const agents = listedAgents(target);
+  const reading =
+    target.repo === null
+      ? `reading: agents ${agents}`
+      : `reading: agents ${agents}, unclaimed worktrees ${Object.keys(maps.worktrees).length}`;
+  return [
+    reading,
+    ...standing.sort((a, b) => at(a.since) - at(b.since)).map((entry) => entry.text),
+  ];
 }
 
 runEvents<Target>({
