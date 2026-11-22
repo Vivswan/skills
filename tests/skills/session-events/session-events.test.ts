@@ -412,6 +412,37 @@ describe("session-events.mts", () => {
     s.stop({ id: "probe" });
   }, 30000);
 
+  test("the daemon stops with its last words once the session's inbox socket file is gone, the session still running, " +
+    "and a start for an inbox that is not there exits 2 naming the file sink", async () => {
+    // The harness keeps listening on a path nothing can connect to: every alert would fail in the
+    // log alone, so the stop, which the harness reports, is the one signal left.
+    const s = new Fake("inbox-gone");
+    const box = await s.inbox("a");
+    const daemon = await s.start({ inbox: box.path });
+    expect(s.run(["watch", "a"], { inbox: box.path }).code).toBe(0);
+    const { socket, log, events } = s.files();
+    rmSync(box.path);
+    const exit = await Promise.race([
+      daemon.exited,
+      Bun.sleep(5000).then(() => "timeout" as const),
+    ]);
+    expect(exit).toBe(0);
+    const lastWords = await new Response(daemon.stderr as ReadableStream).text();
+    const sink = `daemon --id sink-${process.pid} --pid ${process.pid}`;
+    expect(lastWords).toContain(`${box.path}, is gone: no message can reach this session`);
+    expect(lastWords).toContain(sink);
+    // The sink starts with no targets and no cursor: the words name what was watched and where to read from.
+    expect(lastWords).toContain("with the flags it was given: a,");
+    expect(lastWords).toContain(`wait --id sink-${process.pid} --since 0`);
+    expect(lastWords).toContain(`events through #0 are in ${events}`);
+    expect(existsSync(socket)).toBe(false);
+    expect(readFileSync(log, "utf-8")).toContain(`stopped: the inbox ${box.path} is gone`);
+
+    const again = s.run(["daemon"], { inbox: box.path });
+    expect(again.code).toBe(2);
+    expect(again.stderr).toContain(sink);
+  }, 30000);
+
   test("the daemon exits on its own, socket removed, once the session whose inbox named it is gone", async () => {
     // Started as a background task, nothing else ends it when the session exits; left running it
     // would poll for a session that can no longer read the events.
@@ -419,10 +450,12 @@ describe("session-events.mts", () => {
     const session = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]);
     const inboxPath = join(s.dir, `${session.pid}.inbox`, `${session.pid}.sock`);
     mkdirSync(join(s.dir, `${session.pid}.inbox`));
+    // A file stands where the session's socket would: the daemon starts only for an inbox that is there.
+    writeFileSync(inboxPath, "");
     const owner = { pid: session.pid, inbox: inboxPath };
     const daemon = await s.start({ inbox: inboxPath });
-    // The stem's start token is read while the session lives: from /proc where it exists, else the inbox
-    // socket's inode, else 0 (this case makes no socket).
+    // The stem's start token is read while the session lives: from /proc where it exists, else the
+    // inode of the inbox.
     const { socket, log } = s.files(owner);
     expect(existsSync(socket)).toBe(true);
     expect(s.run(["status"], { inbox: inboxPath }).stdout).toContain(`for session ${session.pid}`);

@@ -278,6 +278,29 @@ function filesOf(ctx: Context<object>, owner: Owner): Files {
   return files;
 }
 
+/**
+ * What a session whose inbox socket file is gone is told: the harness listens on a path nothing
+ * can connect to, so no message reaches the session again, and a file sink read by `wait` is what
+ * still does. The sink is another owner with a state of its own, so the targets are watched again
+ * under it, and each `wait` starts at the cursor the one before printed, or an event that lands
+ * between two waits is never read.
+ */
+function inboxGoneText(ctx: Context<object>, owner: Owner, watched: string[]): string {
+  // The files carry the source name already, and a socket path has a length to keep.
+  const sink = `sink-${owner.pid}`;
+  const again =
+    watched.length === 0
+      ? "watch each target again under it"
+      : `watch each target again under it, with the flags it was given: ${watched.join(", ")}`;
+  return [
+    `the inbox of ${describeOwner(owner)}, ${owner.inbox}, is gone: no message can reach this session until it is restarted`,
+    `until then run a file sink as a background task, ${again}, and read it with wait as a background task, each from the cursor the one before printed:`,
+    `  bun "${ctx.entry}" daemon --id ${sink} --pid ${owner.pid}`,
+    `  bun "${ctx.entry}" watch <target> --id ${sink}`,
+    `  bun "${ctx.entry}" wait --id ${sink} --since 0`,
+  ].join("\n");
+}
+
 function startCommand(ctx: Context<object>, owner: Owner): string {
   return `bun "${ctx.entry}" daemon${owner.id === null ? "" : ` --id ${owner.id}`}`;
 }
@@ -526,6 +549,9 @@ async function daemon<Target extends object>(
       `--interval must be ${MIN_INTERVAL_SECONDS} to ${MAX_INTERVAL_SECONDS} seconds, got: ${interval}`,
     );
   }
+  if (owner.inbox !== null && !existsSync(owner.inbox)) {
+    throw new ToolingError(inboxGoneText(ctx, owner, []));
+  }
   const busy = interval ?? ctx.source.interval;
   const idle = Math.max(busy, ctx.source.idleInterval ?? busy);
   return runDaemon(ctx, owner, filesOf(ctx, owner), busy, idle, mode);
@@ -598,6 +624,9 @@ interface DaemonSetup<Target extends object> {
   idleInterval: number;
   mode: Mode;
   log: (line: string) => void;
+
+  /** The daemon's last words when the owner's inbox is gone, given the targets it watched. */
+  inboxGone: (watched: string[]) => string;
 }
 
 /**
@@ -622,6 +651,8 @@ class Daemon<Target extends object> {
   private readonly mode: Mode;
 
   private readonly log: (line: string) => void;
+
+  private readonly inboxGoneText: (watched: string[]) => string;
 
   private readonly silent = new Set<Socket>();
 
@@ -653,11 +684,27 @@ class Daemon<Target extends object> {
     this.idleInterval = setup.idleInterval;
     this.mode = setup.mode;
     this.log = setup.log;
+    this.inboxGoneText = setup.inboxGone;
     this.nextInterval = setup.busyInterval;
   }
 
   private ownerGone(): boolean {
     return this.owner.pid !== null && !isProcessAlive(this.owner.pid);
+  }
+
+  /**
+   * Why serving is over, or null: the owner's process ended, or its inbox socket file is gone. A
+   * daemon left polling for an inbox nothing can connect to would log every alert as undelivered
+   * and reach nobody; stopping is the one signal left, since the harness reports a background
+   * task that ended, with these last words.
+   */
+  private servingOver(): string | null {
+    if (this.ownerGone()) return `${describeOwner(this.owner)} exited`;
+    if (this.owner.inbox === null || existsSync(this.owner.inbox)) return null;
+    console.error(
+      `${this.inboxGoneText(Object.keys(this.state.targets))}\nevents through #${this.state.lastEventId} are in ${this.files.events}`,
+    );
+    return `the inbox ${this.owner.inbox} is gone`;
   }
 
   /** The daemon's two fields win: a source field named id or at would renumber the log. */
@@ -825,8 +872,9 @@ class Daemon<Target extends object> {
   private runPoll(): Promise<number | null> {
     if (this.stopping) return Promise.resolve(null);
     if (this.polling) return this.polling.then(() => this.runPoll());
-    if (this.ownerGone()) {
-      void this.shutdown(`${describeOwner(this.owner)} exited`);
+    const over = this.servingOver();
+    if (over !== null) {
+      void this.shutdown(over);
       return Promise.resolve(null);
     }
     if (this.pollTimer) {
@@ -941,7 +989,9 @@ class Daemon<Target extends object> {
   run(): Promise<number> {
     this.server.on("connection", (socket) => this.accept(socket));
     this.ownerTimer = setInterval(() => {
-      if (this.ownerGone()) void this.shutdown(`${describeOwner(this.owner)} exited`);
+      if (this.stopping) return;
+      const over = this.servingOver();
+      if (over !== null) void this.shutdown(over);
     }, OWNER_CHECK_MS);
     process.on("SIGTERM", () => void this.shutdown("SIGTERM"));
     process.on("SIGINT", () => void this.shutdown("SIGINT"));
@@ -991,6 +1041,7 @@ async function runDaemon<Target extends object>(
     idleInterval,
     mode,
     log,
+    inboxGone: (watched) => inboxGoneText(ctx, owner, watched),
   }).run();
 }
 
