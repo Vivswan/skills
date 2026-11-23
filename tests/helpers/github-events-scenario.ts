@@ -111,7 +111,7 @@ export function suitesConnection(runs: RunSpec[], nextCursor: string | null = nu
 
 /**
  * `labels` are the names as GitHub lists them, in any order. `mergeable` is a settled MERGEABLE
- * unless a spec says, so a first sighting is silent. `suites` are present only when the read asked
+ * unless a spec says, so a first sighting is silent. `autoMerge` is off unless a spec says. `suites` are present only when the read asked
  * for them, which a fixture cannot know, so a spec says. `stack` is the stack's base branch for a
  * PR in a stack.
  */
@@ -129,6 +129,8 @@ export interface RowSpec {
   rollup?: string | null;
   labels?: string[];
   mergeable?: string;
+  draft?: boolean;
+  autoMerge?: { method: string; by: string | null };
   suites?: RunSpec[];
   suitesNext?: string;
 }
@@ -148,13 +150,23 @@ function commitNode(
   };
 }
 
+/** GitHub's `autoMergeRequest`: null while auto-merge is off, and a null `enabledBy` for a deleted account. */
+export function autoMergeNode(spec: RowSpec["autoMerge"]): unknown {
+  if (spec === undefined) return null;
+  return {
+    mergeMethod: spec.method,
+    enabledBy: spec.by === null ? null : { login: spec.by },
+  };
+}
+
 export function prNode(spec: RowSpec = {}): unknown {
   const number = spec.number ?? 7;
   const head = spec.head ?? HEAD_A;
   return {
     number,
     url: `https://github.com/${REPO}/pull/${number}`,
-    isDraft: false,
+    isDraft: spec.draft ?? false,
+    autoMergeRequest: autoMergeNode(spec.autoMerge),
     state: spec.state ?? "OPEN",
     mergedAt: spec.mergedAt ?? null,
     baseRefName: spec.base ?? "main",

@@ -27,7 +27,11 @@ export type Row = {
   rollupState: string | null;
   labels: string[];
   mergeable: Mergeable;
+  autoMerge: AutoMerge | null;
 };
+
+/** Auto-merge as enabled on a PR: GitHub merges it by this method once its requirements pass. */
+export type AutoMerge = { method: string; by: string };
 
 /** GitHub's merge test against the base: UNKNOWN while it recomputes after either side moves. */
 export type Mergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
@@ -57,6 +61,7 @@ const COMMIT_FIELDS = "oid author { user { login } } statusCheckRollup { state }
 
 function rowFields(withSuites: boolean): string {
   return `number url isDraft state mergedAt baseRefName headRefOid updatedAt mergeable stack { baseRefName }
+      autoMergeRequest { mergeMethod enabledBy { login } }
       comments { totalCount } reviewThreads { totalCount } labels(first: 100) { nodes { name } }
       reviews(last: 1) { nodes { fullDatabaseId submittedAt state author { login } } }
       commits(last: 1) { nodes { commit { ${COMMIT_FIELDS}${withSuites ? ` ${SUITES_CONNECTION}` : ""} } } }`;
@@ -107,6 +112,7 @@ function parseRow(pr: unknown): { row: Row; suites: Suites | null } {
   if (!Array.isArray(labelNodes)) {
     throw new GhError("GraphQL response: labels.nodes is not an array");
   }
+  const autoMerge = get(pr, "autoMergeRequest");
   const commitNodes = get(get(pr, "commits"), "nodes");
   const commit = get(Array.isArray(commitNodes) ? commitNodes[0] : undefined, "commit");
   const suites = get(commit, "checkSuites");
@@ -143,6 +149,14 @@ function parseRow(pr: unknown): { row: Row; suites: Suites | null } {
         .map((node, i) => requireString(get(node, "name"), `labels.nodes[${i}].name`))
         .sort(),
       mergeable,
+      // Null while auto-merge is off; a deleted account nulls who enabled it.
+      autoMerge:
+        autoMerge === null || autoMerge === undefined
+          ? null
+          : {
+              method: requireString(get(autoMerge, "mergeMethod"), "autoMergeRequest.mergeMethod"),
+              by: stringOrNull(get(get(autoMerge, "enabledBy"), "login")) ?? "ghost",
+            },
     },
     suites: suites === undefined ? null : parseSuites(suites),
   };

@@ -261,6 +261,83 @@ describe("github-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("a draft marked ready, auto-merge enabled, and a label moved in one poll are three lines of one message; " +
+    "auto-merge a PR already carries is said at the first sighting, its draft state is the baseline; disabling and a return to draft are said too", async () => {
+    const s = new Scenario("automerge");
+    const box = await s.inbox("a");
+    const at = (minute: number, spec: RowSpec): RowSpec => ({
+      rollup: "SUCCESS",
+      updatedAt: `2026-01-01T00:${minute}:00Z`,
+      ...spec,
+    });
+    const squash = { method: "SQUASH", by: "octocat" };
+    s.fixtures({
+      "rows-1": rows({
+        p7: prNode({ ...at(10, { draft: true, labels: ["public"] }), suites: [] }),
+      }),
+      "rows-2": rows({ p7: prNode(at(11, { autoMerge: squash, labels: ["all"] })) }),
+      // The method changed while it stayed on: said again, with the new method.
+      "rows-3": rows({
+        p7: prNode(at(12, { autoMerge: { method: "REBASE", by: "octocat" }, labels: ["all"] })),
+      }),
+      "rows-4": rows({ p7: prNode(at(13, { draft: true, labels: ["all"] })) }),
+      "rows-5": rows({ p8: prNode({ ...at(14, { number: 8, autoMerge: squash }), suites: [] }) }),
+    });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", PR7], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("3 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("1 event(s)");
+    expect(s.run(["poll"], { inbox: box.path }).stdout).toContain("2 event(s)");
+    expect(s.run(["unwatch", PR7], { inbox: box.path }).code).toBe(0);
+    expect(s.run(["watch", `${REPO}#8`], { inbox: box.path }).code).toBe(0);
+    const PR8 = `${REPO}#8`;
+    const PR8_URL = `https://github.com/${REPO}/pull/8`;
+    expect((await box.frames(5)).map(text)).toEqual([
+      [`PR ${PR7}: CI green on ${SHORT_A}: 0 workflows`, `${PR7_URL}/checks`, CLOSING].join("\n"),
+      [
+        `PR ${PR7}: label added: all; label removed: public`,
+        PR7_URL,
+        "",
+        `PR ${PR7}: ready for review`,
+        PR7_URL,
+        "",
+        `PR ${PR7}: auto-merge enabled (squash) by octocat`,
+        PR7_URL,
+        CLOSING,
+      ].join("\n"),
+      [`PR ${PR7}: auto-merge enabled (rebase) by octocat`, PR7_URL, CLOSING].join("\n"),
+      [
+        `PR ${PR7}: back to draft`,
+        PR7_URL,
+        "",
+        `PR ${PR7}: auto-merge disabled`,
+        PR7_URL,
+        CLOSING,
+      ].join("\n"),
+      [
+        `PR ${PR8}: auto-merge enabled (squash) by octocat`,
+        PR8_URL,
+        "",
+        `PR ${PR8}: CI green on ${SHORT_A}: 0 workflows`,
+        `${PR8_URL}/checks`,
+        CLOSING,
+      ].join("\n"),
+    ]);
+    expect(s.events().map((e) => e.kind)).toEqual([
+      "ci",
+      "label",
+      "draft",
+      "automerge",
+      "automerge",
+      "draft",
+      "automerge",
+      "automerge",
+      "ci",
+    ]);
+    expect(s.violations()).toBe("");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a label added or removed after the first sighting is one line per poll naming the labels, sorted, and nothing else; the labels a PR already carries are its baseline", async () => {
     const s = new Scenario("labels");
     const box = await s.inbox("a");
