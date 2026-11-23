@@ -41,6 +41,7 @@ const F = "f60718293041526a";
 const MARKER = "MARKER-sunflower-9c1d";
 const GIT_TIMEOUT = 60_000;
 const TRACKS = { "wt-a": "track-a", "wt-b": "track-b" };
+const USER_TMP = `claude-${process.getuid?.() ?? 0}`;
 const TWO_MINUTES_MS = 120_000;
 const HOUR_MS = 3_600_000;
 const FOUR_DAYS_MINUTES = 4 * 24 * 60;
@@ -205,7 +206,7 @@ function spawnLines(id: string, name: string, agentId: string, timestamp = ago(3
 /** The harness's temp root the watch is told about, and the tasks directory it lays out under it for this session. */
 function claudeTmp(s: Scenario): { root: string; tasks: string } {
   const root = join(s.fixtureDir, "claude-tmp");
-  return { root, tasks: join(root, basename(s.fixtureDir), SESSION, "tasks") };
+  return { root, tasks: join(root, USER_TMP, basename(s.fixtureDir), SESSION, "tasks") };
 }
 
 /** `watch` of the session directory with the harness temp root set, so a job's output file is found under the fixture. */
@@ -266,10 +267,17 @@ async function delivered(box: { frames: (n: number) => Promise<string[]> }, n: n
   );
 }
 
-/** The `summary` lines `status` prints under the one target. */
-function standing(s: Scenario, inbox: string): string[] {
+/** The `summary` lines `status` prints under the one target: what it reads, then the alerts in force. */
+function statusLines(s: Scenario, inbox: string): string[] {
   const out = s.run(["status"], { inbox }).stdout.split("\n");
   return out.filter((line) => line.startsWith("    ")).map((line) => line.slice(4));
+}
+
+/** The alerts `status` lists as in force under the one target. */
+function standing(s: Scenario, inbox: string): string[] {
+  const [reading, ...alerts] = statusLines(s, inbox);
+  expect(reading).toMatch(/^reading: agents \d+/);
+  return alerts;
 }
 
 describe("fleet-events.mts", () => {
@@ -401,7 +409,6 @@ describe("fleet-events.mts", () => {
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
     const { tasks } = claudeTmp(s);
-    mkdirSync(tasks, { recursive: true });
     const launched = (agentId: string, taskId: string): Line[] => [
       toolUse(
         ago(6),
@@ -422,9 +429,14 @@ describe("fleet-events.mts", () => {
       ...launched(B, "b9z8y7x6w"),
     ]);
     await s.start({ inbox: box.path });
+    // Jobs wait and the tasks directory is not there: no job can be read, which is trouble, never a running job.
     watch(s, box.path, session, "--quiet-after", "1");
-    expect(polled(s, box.path)).toBe(0);
+    const unreadable = `fleet: cannot read job output: ${tasks} is no directory`;
+    expect(rows(s)).toEqual([["alert", unreadable, fileUrl(tasks)]]);
     expect(persistedTarget(s).tasksDir).toBe(tasks);
+    mkdirSync(tasks, { recursive: true });
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(1)).toEqual([["note", "fleet: reading restored", fileUrl(tasks)]]);
 
     // A's output ended; B's is still being written (no exit line yet).
     writeFileSync(
@@ -434,9 +446,20 @@ describe("fleet-events.mts", () => {
     writeFileSync(join(tasks, "b9z8y7x6w.output"), "checking...\n");
     expect(polled(s, box.path)).toBe(1);
     expect(polled(s, box.path)).toBe(0);
-    expect(rows(s)).toEqual([
+    expect(rows(s).slice(2)).toEqual([
       ["alert", "agent builder-a: stranded, job b1a2b3c4d ended with no notice", fileUrl(pathA)],
     ]);
+
+    // The directory gone again: the stranded alert holds, never fine again off a job nobody can read.
+    renameSync(tasks, `${tasks}.away`);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(3)).toEqual([["alert", unreadable, fileUrl(tasks)]]);
+    expect(standing(s, box.path)).toEqual([
+      "agent builder-a: stranded, job b1a2b3c4d ended with no notice",
+      unreadable,
+    ]);
+    renameSync(`${tasks}.away`, tasks);
+    expect(polled(s, box.path)).toBe(1);
 
     appendLines(pathA, [userText(ago(0), notice("b1a2b3c4d"))]);
     writeFileSync(join(tasks, "b9z8y7x6w.output"), "checking...\n[exited with code 1]\n");
@@ -452,11 +475,67 @@ describe("fleet-events.mts", () => {
       ),
     ]);
     expect(polled(s, box.path)).toBe(1);
-    expect(rows(s).slice(1)).toEqual([["note", "agent builder-a: fine again", fileUrl(pathA)]]);
-    expect(await delivered(box, 1)).toEqual([
+    expect(rows(s).slice(5)).toEqual([["note", "agent builder-a: fine again", fileUrl(pathA)]]);
+    expect(await delivered(box, 3)).toEqual([
+      [unreadable],
       ["agent builder-a: stranded, job b1a2b3c4d ended with no notice"],
+      [unreadable],
+    ]);
+
+    // A stopped agent waits on nothing: the job its transcript left open is no trouble once the directory is swept.
+    appendLines(pathB, launched(B, "b5t4s3r2q"));
+    appendLines(session.sessionFile, [
+      toolUse(ago(0), "toolu_stop", "TaskStop", { task_id: B }, null),
+      toolResult(ago(0), "toolu_stop", { agentId: null }),
+    ]);
+    renameSync(tasks, `${tasks}.away`);
+    expect(polled(s, box.path)).toBe(1);
+    expect(rows(s).slice(6)).toEqual([
+      ["note", "agent builder-b: stopped by the lead", fileUrl(pathB)],
     ]);
     s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("with no CLAUDE_CODE_TMPDIR a job's output is read under /tmp/claude-<uid>, wherever the OS temp dir points: " +
+    "an agent whose turn ended beside an ended job is stranded", async () => {
+    const s = new Scenario(PROGRAM, "tmp-root");
+    const box = await s.inbox("a");
+    // The project directory's name is the slug under the harness root: a fresh one, so the tasks directory is this test's alone.
+    const project = temp.dir("fleet-events-project-");
+    const session = sessionDir(project);
+    const slugDir = join("/tmp", USER_TMP, basename(project));
+    const tasks = join(slugDir, SESSION, "tasks");
+    const made = mkdirSync(tasks, { recursive: true }) ?? slugDir;
+    try {
+      writeFileSync(join(tasks, "b1a2b3c4d.output"), "all green\n[exited with code 0]\n");
+      const path = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+        ...exchange(ago(9), "toolu_a0", A),
+        toolUse(
+          ago(6),
+          "toolu_bg",
+          "Bash",
+          { command: "bun run check", run_in_background: true },
+          A,
+        ),
+        toolResult(ago(6), "toolu_bg", {
+          toolUseResult: { backgroundTaskId: "b1a2b3c4d" },
+          agentId: A,
+        }),
+        said(ago(6), "end_turn", A),
+      ]);
+      await s.start({ inbox: box.path });
+      const watched = s.run(["watch", session.dir], {
+        inbox: box.path,
+        env: { CLAUDE_CODE_TMPDIR: "", TMPDIR: join(s.fixtureDir, "os-tmp") },
+      });
+      expect(watched.code).toBe(0);
+      expect(rows(s)).toEqual([
+        ["alert", "agent builder-a: stranded, job b1a2b3c4d ended with no notice", fileUrl(path)],
+      ]);
+      s.stop({ inbox: box.path });
+    } finally {
+      rmSync(made, { recursive: true, force: true });
+    }
   }, 30000);
 
   test("a child still for thirty minutes is stuck on agent, a foreground one joined through its sidecar toolUseId and a background one through its agentId, " +
@@ -2695,7 +2774,7 @@ describe("fleet-events.mts", () => {
       form: "session",
       sessionFile: session.sessionFile,
       subagentsDir: session.subagents,
-      tasksDir: join(claudeTmp(s).root, "-home-user-repo", SESSION, "tasks"),
+      tasksDir: join(claudeTmp(s).root, USER_TMP, "-home-user-repo", SESSION, "tasks"),
     });
     const path = writeAgent(
       session,
@@ -2705,6 +2784,10 @@ describe("fleet-events.mts", () => {
     );
     expect(polled(s, box.path)).toBe(1);
     expect(rows(s)).toEqual([["note", "agent builder-a: started", fileUrl(path)]]);
+    expect(statusLines(s, box.path)).toEqual(["reading: agents 1"]);
+    // An agent whose transcript is gone is no longer read, and the count says so.
+    rmSync(path);
+    expect(statusLines(s, box.path)).toEqual(["reading: agents 0"]);
     // A note alone: the log has it, wait prints it with its level, and no message went out.
     const all = s.run(["wait", "--since", "0", "--timeout", "1"], { inbox: box.path });
     expect(all.code).toBe(0);
