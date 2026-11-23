@@ -208,14 +208,39 @@ In a fleet, the lead's session runs the daemon as its own background task, with 
 
 ## Gotchas
 
-| What you see                                                                                                 | What it means                                                                                                | What to do                                                                                                                                                                                               |
-| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| held delivery notices in the session instead of the event text                                               | the daemon runs detached (`nohup`, `setsid`, a shell that exited), so it is a cross-session sender           | `stop`, then start it again as a background task of this session                                                                                                                                         |
-| `watch` exits 3 naming a socket and a command                                                                | no daemon for this session and source                                                                        | run the printed command as a background task, then `watch` again                                                                                                                                         |
-| exit 2: `CLAUDE_CODE_MESSAGING_SOCKET` is unset                                                              | not a Claude Code session, or one without an inbox                                                           | a file-sink daemon with `--id`, and `wait` (above)                                                                                                                                                       |
-| a `trouble` event naming the daemon log                                                                      | three polls in a row failed; the daemon keeps polling                                                        | read the log; fix what it names (the polled system, credentials, the network)                                                                                                                            |
-| the log ends `daemon <pid> stopped: SIGTERM` about two hours after the start, with the session still running | the harness's two-hour cap on a background task                                                              | start the daemon again with the same command; the saved targets carry on                                                                                                                                 |
-| the daemon stops on its own and its output says the inbox `is gone`, or `daemon` exits 2 saying so           | the session's inbox socket file was removed while the session ran (a temp sweep), so no message can reach it | run the commands it prints: a file sink that ends with the session, `watch` of each target again under it, and `wait` as a background task from the last cursor; a restarted session gets messages again |
-| a message arrives twice                                                                                      | the daemon was killed between appending the log and saving the state, and the restart read that poll again   | nothing; at most one poll repeats                                                                                                                                                                        |
+**Held delivery notices in the session instead of the event text**
+
+- **Means:** the daemon runs detached (`nohup`, `setsid`, a shell that exited), so it is a cross-session sender.
+- **Do:** `stop`, then start it again as a background task of this session.
+
+**`watch` exits 3 naming a socket and a command**
+
+- **Means:** no daemon for this session and source.
+- **Do:** run the printed command as a background task, then `watch` again.
+
+**Exit 2: `CLAUDE_CODE_MESSAGING_SOCKET` is unset**
+
+- **Means:** not a Claude Code session, or one without an inbox.
+- **Do:** start a file-sink daemon with `--id`, and read it with `wait` (above).
+
+**A `trouble` event naming the daemon log**
+
+- **Means:** three polls in a row failed; the daemon keeps polling.
+- **Do:** read the log; fix what it names (the polled system, credentials, the network).
+
+**The log ends `daemon <pid> stopped: SIGTERM` about two hours after the start, with the session still running**
+
+- **Means:** the harness's two-hour cap on a background task.
+- **Do:** start the daemon again with the same command; the saved targets carry on.
+
+**The daemon stops on its own and its output says the inbox `is gone`, or `daemon` exits 2 saying so**
+
+- **Means:** the session's inbox socket file was removed while the session ran (a temp sweep), so no message can reach it.
+- **Do:** run the commands it prints: a file sink that ends with the session, `watch` of each target again under it, and `wait` as a background task from the last cursor. A restarted session gets messages again.
+
+**A message arrives twice**
+
+- **Means:** the daemon was killed between appending the log and saving the state, and the restart read that poll again.
+- **Do:** nothing; at most one poll repeats.
 
 A local subagent spawned with the Agent tool shares its session's inbox socket and pid (`CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_PID` are the session's, with `CLAUDE_CODE_CHILD_SESSION=1`), so a `watch` run inside it reaches the session's daemon, and the events land with the session. A teammate from agent teams is a separate process with its own socket and runs its own daemon.

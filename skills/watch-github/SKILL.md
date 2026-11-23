@@ -159,15 +159,44 @@ In a fleet, the lead's session runs the daemon as its own background task, `--mo
 
 ## Gotchas
 
-| What you see                                                              | What it means                                                                                                      | What to do                                                                                                             |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `watch` exits 3 naming a socket and a command                             | no daemon for this session                                                                                         | run the printed command as a background task, then `watch` again                                                       |
-| the daemon stops on its own about two hours in, the session still running | the harness's cap on a background task; the `/session-events` skill's page owns the row                            | start it again with the same command; the saved targets carry on                                                       |
-| a `trouble` event after three failed polls                                | gh, the network, or GitHub refused three polls in a row; `gh auth status` is the first check                       | fix what the daemon log names; a stale token needs `stop` and a fresh start, since the daemon inherited the session's  |
-| a `trouble` event: CI settled with no run of a gate                       | the gate ran on other heads and not on this one, or was taken as given                                             | `watch` again with the gates that run on this head; never read the rollup as green                                     |
-| a `trouble` event: not readable                                           | the PR or branch answers null: deleted, renamed, or no access                                                      | `unwatch` it, or fix the access                                                                                        |
-| a `trouble` event: 3 reads failed                                         | this one target's detail or paged suites read failed three polls in a row while the repository read kept answering | read the daemon log; the target is retried every poll and the counter resets on a success                              |
-| a red line with workflow names only                                       | the failed-jobs read failed; the verdict stands                                                                    | `gh run view <id> --log-failed` on the run URL's id                                                                    |
-| `gh` missing                                                              | `daemon` polls fail from the first                                                                                 | install and authenticate the GitHub CLI; until then, report the push with the PR URL and never silently skip the watch |
+**`watch` exits 3 naming a socket and a command**
+
+- **Means:** no daemon for this session.
+- **Do:** run the printed command as a background task, then `watch` again.
+
+**The daemon stops on its own about two hours in, the session still running**
+
+- **Means:** the harness's cap on a background task; the `/session-events` skill's page owns the entry.
+- **Do:** start it again with the same command; the saved targets carry on.
+
+**A `trouble` event after three failed polls**
+
+- **Means:** gh, the network, or GitHub refused three polls in a row; `gh auth status` is the first check.
+- **Do:** fix what the daemon log names; a stale token needs `stop` and a fresh start, since the daemon inherited the session's.
+
+**A `trouble` event: CI settled with no run of a gate**
+
+- **Means:** the gate ran on other heads and not on this one, or was taken as given.
+- **Do:** `watch` again with the gates that run on this head; never read the rollup as green.
+
+**A `trouble` event: not readable**
+
+- **Means:** the PR or branch answers null: deleted, renamed, or no access.
+- **Do:** `unwatch` it, or fix the access.
+
+**A `trouble` event: 3 reads failed**
+
+- **Means:** this one target's detail or paged suites read failed three polls in a row while the repository read kept answering.
+- **Do:** read the daemon log; the target is retried every poll and the counter resets on a success.
+
+**A red line with workflow names only**
+
+- **Means:** the failed-jobs read failed; the verdict stands.
+- **Do:** `gh run view <id> --log-failed` on the run URL's id.
+
+**`gh` missing**
+
+- **Means:** `daemon` polls fail from the first.
+- **Do:** install and authenticate the GitHub CLI; until then, report the push with the PR URL and never silently skip the watch.
 
 A local subagent spawned with the Agent tool shares its session's inbox socket and pid, so a `watch` run inside it subscribes the session's daemon, and the events land with the session. A teammate from agent teams is a separate process with its own socket and runs its own daemon.
