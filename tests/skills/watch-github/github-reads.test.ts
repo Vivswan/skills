@@ -23,6 +23,7 @@ import {
   verdictKey,
 } from "../../../skills/watch-github/scripts/targets/ci.mts";
 import { type PrTarget, processPr } from "../../../skills/watch-github/scripts/targets/pr.mts";
+import { autoMergeNode } from "../../helpers/github-events-scenario";
 import { tempDirs } from "../../helpers/temp-dirs";
 
 // Contract tests for the GitHub read modules: a fake `gh` on PATH validates the exact invocation
@@ -238,6 +239,7 @@ type PrNodeSpec = Partial<{
   rollup: string | null;
   labels: string[];
   mergeable: string;
+  autoMerge: { method: string; by: string | null };
   suites: SuiteSpec[];
   suitesNext: string;
 }>;
@@ -281,6 +283,7 @@ function prNode(spec: PrNodeSpec = {}): unknown {
     headRefOid: spec.headRefOid ?? "head0001",
     updatedAt: spec.updatedAt ?? "2026-03-01T10:00:00Z",
     mergeable: spec.mergeable ?? "MERGEABLE",
+    autoMergeRequest: autoMergeNode(spec.autoMerge),
     comments: { totalCount: spec.comments ?? 0 },
     reviewThreads: { totalCount: spec.threads ?? 0 },
     labels: { nodes: (spec.labels ?? []).map((name) => ({ name })) },
@@ -307,6 +310,7 @@ function row(spec: Partial<Row> = {}): Row {
     rollupState: null,
     labels: [],
     mergeable: "MERGEABLE",
+    autoMerge: null,
     ...spec,
   };
 }
@@ -922,7 +926,12 @@ describe("readRepository", () => {
         n === 17 ? null : prNode({ number: n, suites: n === 1 ? [{ id: 1 }] : undefined });
     }
     // Labels arrive in GitHub's order and are kept sorted, so two rows compare as sets.
-    r.p2 = prNode({ number: 2, labels: ["needs-rebase", "bug"], mergeable: "CONFLICTING" });
+    r.p2 = prNode({
+      number: 2,
+      labels: ["needs-rebase", "bug"],
+      mergeable: "CONFLICTING",
+      autoMerge: { method: "SQUASH", by: "octocat" },
+    });
     // PR 3 sits on PR 2's branch in a stack: its base is that branch, its merge lands on the stack's.
     r.p3 = prNode({ number: 3, baseRefName: "topic/below", stack: "main" });
     r.b0 = {
@@ -974,6 +983,7 @@ describe("readRepository", () => {
         url: "https://example.com/octocat/repo/pull/2",
         labels: ["bug", "needs-rebase"],
         mergeable: "CONFLICTING",
+        autoMerge: { method: "SQUASH", by: "octocat" },
       }),
       suites: null,
     });
@@ -995,6 +1005,7 @@ describe("readRepository", () => {
     expect(calls).toHaveLength(2);
     const first = calls[0] as string;
     expect(first).toContain("labels(first: 100) { nodes { name } }");
+    expect(first).toContain("autoMergeRequest { mergeMethod enabledBy { login } }");
     expect(first).toContain('r: repository(owner: "octocat", name: "repo")');
     expect(first).toContain("p17: pullRequest(number: 17)");
     expect(first).toContain('b0: ref(qualifiedName: "refs/heads/main")');

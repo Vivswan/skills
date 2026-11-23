@@ -1,11 +1,11 @@
 // A pull request as a target, `owner/repo#n`: new comments and reviews (who, where, how many,
-// never the words), head moves, label moves, conflicts with the base, CI verdicts judged with the
-// gates named on it, and the merge or close that ends the watch.
+// never the words), head moves, label moves, the draft state, auto-merge, conflicts with the base,
+// CI verdicts judged with the gates named on it, and the merge or close that ends the watch.
 
 import type { EventInput, Io } from "../../../session-events/scripts/session-events.mts";
 import type { Suites } from "../github/check-suites.mts";
 import { type Activity, newActivity, readPrDetail } from "../github/pr-activity.mts";
-import { type Row, rowChanged } from "../github/repository.mts";
+import { type AutoMerge, type Row, rowChanged } from "../github/repository.mts";
 import { type Outcome, unreadableOutcome } from "./branch.mts";
 import { type CiHead, type CiState, carriedCi, judgeCi, plural, rollupPending } from "./ci.mts";
 
@@ -123,6 +123,26 @@ export function describeLabels(previous: string[], current: string[]): string | 
   return parts.length === 0 ? null : parts.join("; ");
 }
 
+/** The draft state's move since the last poll; null when it stands. */
+export function describeDraft(previous: boolean, current: boolean): string | null {
+  if (previous === current) return null;
+  return current ? "back to draft" : "ready for review";
+}
+
+/**
+ * Auto-merge as it moved since the last poll: enabled (a method change says it again), disabled,
+ * or null when it stands. With no previous row it is enabled when the PR carries it: a green gate
+ * then merges the PR with no further step, which the watcher must know from the first sighting.
+ */
+export function describeAutoMerge(
+  previous: AutoMerge | null,
+  current: AutoMerge | null,
+): string | null {
+  if (current === null) return previous === null ? null : "auto-merge disabled";
+  if (previous?.method === current.method && previous.by === current.by) return null;
+  return `auto-merge enabled (${current.method.toLowerCase()}) by ${current.by}`;
+}
+
 // A merged or closed row ends the watch before any other read: a detail read that keeps failing
 // (a PR past the paging cap) must not keep a finished PR watched for good.
 function watchEnd(
@@ -236,6 +256,15 @@ export function processPr(
     const labelMoves = describeLabels(previous.row.labels, row.labels);
     if (labelMoves !== null)
       events.push({ ...fields, kind: "label", text: `${label}: ${labelMoves}`, url: row.url });
+    const draft = describeDraft(previous.row.isDraft, row.isDraft);
+    if (draft !== null)
+      events.push({ ...fields, kind: "draft", text: `${label}: ${draft}`, url: row.url });
+  }
+
+  // A row an older daemon saved carries no auto-merge field: read as off, so one enabled now is said.
+  const autoMerge = describeAutoMerge(previous?.row.autoMerge ?? null, row.autoMerge);
+  if (autoMerge !== null) {
+    events.push({ ...fields, kind: "automerge", text: `${label}: ${autoMerge}`, url: row.url });
   }
 
   const conflict = judgeConflict(previous, row, changes.head);
