@@ -131,8 +131,8 @@ export function describeDraft(previous: boolean, current: boolean): string | nul
 
 /**
  * Auto-merge as it moved since the last poll: enabled (a method change says it again), disabled,
- * or null when it stands. With no previous row it is enabled when the PR carries it: a green gate
- * then merges the PR with no further step, which the watcher must know from the first sighting.
+ * or null when it stands. With no previous row it is enabled when the PR carries it: GitHub then
+ * merges the PR once its requirements pass, which the watcher must know from the first sighting.
  */
 export function describeAutoMerge(
   previous: AutoMerge | null,
