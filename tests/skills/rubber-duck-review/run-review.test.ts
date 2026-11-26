@@ -1491,7 +1491,7 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("past 100 finished reviews the oldest go, age aside; a review still running never does, and neither it nor a prompt dir takes a place in the count: counted, a hundred prompt dirs minted after a review finished had the next launch purge it, its verdict with it", () => {
+  test("past 100 finished reviews the oldest go, age aside; a running review and a prompt dir never do, nor count toward the 100, so a hundred newer ones leave every finished review: counted, they had the next prepare purge each, verdict too", () => {
     // One machine held 776 rubber-duck-* dirs under 24 h old; age alone never bounds a busy day.
     const privateTmp = temp.dir("run-review-cap-");
     const hoursAgo = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000);
