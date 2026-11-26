@@ -204,6 +204,9 @@ const TRANSCRIPT_NAME = /^agent-([^/]+)\.jsonl$/;
 // Sha characters an event text shows for a head; git resolves the prefix.
 const SHORT_SHA = 12;
 
+// What `unwatch` takes for one agent of a watched fleet: its name as the event texts spell it, or its agentId.
+const AGENT_PART = /^agent:(.+)$/;
+
 // The bounds above are in minutes, and the transcripts' ISO timestamps compare in milliseconds.
 const MINUTE_MS = 60_000;
 
@@ -221,6 +224,9 @@ type Standing = Infer<typeof STANDING>;
 
 /** A note said about a state that holds (a stop, a shutdown, an ended turn whose signal arrived), so it is said once. */
 const NOTED = z.strictObject({ level: z.literal("note"), key: z.string() });
+
+/** The lead took the agent off the watch when its transcript was `size` bytes: nothing is said of it while the transcript stays that size. */
+const REMOVED = z.strictObject({ level: z.literal("removed"), size: z.number() });
 
 /** The reducer's `PendingCall`: a tool call with no result yet. */
 const PENDING_CALL = z.strictObject({
@@ -279,7 +285,7 @@ const AGENT = z.strictObject({
   ...TRANSCRIPT.shape,
   path: z.string(),
   sidecar: z.nullable(SIDECAR),
-  said: z.nullable(z.discriminatedUnion("level", [STANDING, NOTED])),
+  said: z.nullable(z.discriminatedUnion("level", [STANDING, NOTED, REMOVED])),
 });
 
 type AgentEntry = Infer<typeof AGENT>;
@@ -1444,6 +1450,12 @@ async function readFleet(
   const transitions: EventInput[] = [];
   for (const agentId of agents.refreshed) {
     const entry = draft.agents[agentId] as AgentEntry;
+    // An agent the lead took off the watch comes back once its transcript has moved since then, judged afresh.
+    if (entry.said?.level === "removed") {
+      if (entry.cursor.size === entry.said.size) continue;
+      entry.said = null;
+    }
+
     const event = agentTransition(draft, agentId, entry, nowMs, io, agents.failed);
     if (event !== null) transitions.push(event);
   }
@@ -1561,7 +1573,45 @@ function summary(target: Target): string[] {
     saved.repo === null
       ? `reading: agents ${agents}`
       : `reading: agents ${agents}, unclaimed worktrees ${Object.keys(saved.worktrees).length}`;
-  return [reading, ...standing.sort(byTime((entry) => entry.since)).map((entry) => entry.text)];
+
+  const removed = Object.entries(saved.agents)
+    .filter(([, entry]) => entry.said?.level === "removed")
+    .map(([agentId, entry]) => agentName(agentId, entry));
+  const off = removed.length > 0 ? [`removed: ${removed.sort().join(", ")}`] : [];
+
+  return [
+    reading,
+    ...off,
+    ...standing.sort(byTime((entry) => entry.since)).map((entry) => entry.text),
+  ];
+}
+
+/**
+ * `unwatch agent:<name>`: takes the agent with that agentId, else every agent of that name, off the
+ * watch, in every fleet that has read one. The removal holds the transcript's size as it is now,
+ * so a line written before the command does not bring the agent back. False when the text is no
+ * agent's, so the daemon says it is not watched.
+ */
+function unwatchAgent(targets: Record<string, Target>, text: string): boolean {
+  const name = AGENT_PART.exec(text)?.[1];
+  if (name === undefined) return false;
+
+  let found = false;
+  for (const target of Object.values(targets)) {
+    // A state in another shape has no agent read yet: the next poll starts that target over.
+    if (!TARGET.safeParse(target).success) continue;
+
+    const named = Object.keys(target.agents).filter(
+      (agentId) => agentName(agentId, target.agents[agentId]) === name,
+    );
+    for (const agentId of Object.hasOwn(target.agents, name) ? [name] : named) {
+      const entry = target.agents[agentId] as AgentEntry;
+      const size = statSync(entry.path, { throwIfNoEntry: false })?.size ?? entry.cursor.size;
+      entry.said = { level: "removed", size };
+      found = true;
+    }
+  }
+  return found;
 }
 
 runEvents<Target>({
@@ -1574,9 +1624,11 @@ runEvents<Target>({
     "targets: session (this session's transcript and subagents dir, found by CLAUDE_CODE_SESSION_ID under ~/.claude/projects), or an absolute path to a session directory",
     "--repo <root>            add the worktree reading for every worktree of this repository that no agent claims (absolute path)",
     `--quiet-after <minutes>  an open turn with nothing pending is stuck after this long (default ${DEFAULT_QUIET_AFTER_MINUTES})`,
+    "unwatch agent:<name>     takes off the watch the agent with that agentId, else every agent of that name in the event texts, until its transcript moves again; status lists it under removed:",
     `the session-events skill must be installed beside this one; without it every command exits 2 naming the install: ${INSTALL}`,
   ],
   parseTarget,
   poll,
   summary,
+  unwatchPart: unwatchAgent,
 });

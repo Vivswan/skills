@@ -461,6 +461,59 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("unwatch agent:<name> takes one agent off the watch: its alert leaves status, which lists it under removed, and polls say nothing of it while its transcript is still, " +
+    "a line it wrote before the command included; once the transcript moves it is watched again and judged afresh; " +
+    "an agentId names an agent as its name does, a name no fleet read is not watched, and a restart keeps the removal", async () => {
+    const s = new Scenario(PROGRAM, "unwatch-agent");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      pendingBash(ago(35), "toolu_a1", A),
+    ]);
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      pendingBash(ago(40), "toolu_b1", B),
+    ]);
+    const stuckA = "agent builder-a: stuck 35 min on Bash";
+    const stuckB = "agent builder-b: stuck 40 min on Bash";
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session);
+    expect(rows(s)).toEqual([
+      ["alert", stuckA, fileUrl(pathA)],
+      ["alert", stuckB, fileUrl(pathB)],
+    ]);
+
+    // A line the agent wrote after the last poll and before the command is no movement since the command.
+    appendLines(pathA, [toolResult(ago(34), "toolu_a1"), pendingBash(ago(33), "toolu_a2", A)]);
+    const removed = s.run(["unwatch", "agent:builder-a"], { inbox: box.path });
+    expect(removed.code).toBe(0);
+    expect(removed.stdout).toBe(`unwatched agent:builder-a for session ${process.pid}\n`);
+    expect(statusLines(s, box.path)).toEqual(["reading: agents 2", "removed: builder-a", stuckB]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(polled(s, box.path)).toBe(0);
+
+    // That call returns and the next one is already past the bound: the agent is watched again, and that call is its alert.
+    appendLines(pathA, [toolResult(ago(32), "toolu_a2"), pendingBash(ago(31), "toolu_a3", A)]);
+    expect(polled(s, box.path)).toBe(1);
+    const stuckAgain = "agent builder-a: stuck 31 min on Bash";
+    expect(rows(s).slice(2)).toEqual([["alert", stuckAgain, fileUrl(pathA)]]);
+    expect(statusLines(s, box.path)).toEqual(["reading: agents 2", stuckB, stuckAgain]);
+    expect(await delivered(box, 2)).toEqual([[stuckA, stuckB], [stuckAgain]]);
+
+    const unknown = s.run(["unwatch", "agent:builder-z"], { inbox: box.path });
+    expect(unknown.code).toBe(2);
+    expect(unknown.stderr).toContain("daemon: agent:builder-z is not watched");
+    expect(s.run(["unwatch", `agent:${B}`], { inbox: box.path }).code).toBe(0);
+    const off = ["reading: agents 2", "removed: builder-b", stuckAgain];
+    expect(statusLines(s, box.path)).toEqual(off);
+
+    s.stop({ inbox: box.path });
+    await s.start({ inbox: box.path });
+    expect(polled(s, box.path)).toBe(0);
+    expect(statusLines(s, box.path)).toEqual(off);
+    expect(s.log()).not.toContain("the target starts over");
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a background job is a wait while it runs; one whose output file ends with the harness's exit line and has no notice in the transcript is stranded, at once; " +
     "the notice is fine again, as a user string in one agent and as a queued_command attachment in another", async () => {
     const s = new Scenario(PROGRAM, "jobs");

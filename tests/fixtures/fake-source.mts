@@ -7,21 +7,24 @@
 //   { "events": [{ "target": "t1", "kind": "changed", "text": "hello", "url": "https://example.com/t1" }],
 //     "busy": true,
 //     "sleepMs": 2000,
+//     "holdFor": "release",
 //     "fail": "boom" }
 //
-// `fail` makes the poll throw after the sleep; `polls.log` in the same directory gets one line per
+// `holdFor` keeps the poll in flight until a file of that name is in the directory. `fail` makes the poll throw after the sleep; `polls.log` in the same directory gets one line per
 // poll, `<n> <when> <the watched keys>`, so a test can ask when polls ran. `summary.json` maps a
 // target's name to the lines `status` shows under it.
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import pRetry from "p-retry";
 import { runEvents, UsageError } from "../../skills/session-events/scripts/session-events.mts";
 
-type Target = { name: string; polls: number };
+type Target = { name: string; polls: number; muted?: string[] };
 type Fixture = {
   events?: Array<{ target: string; kind: string; text: string; url: string }>;
   busy?: boolean;
   sleepMs?: number;
+  holdFor?: string;
   fail?: string;
 };
 
@@ -37,6 +40,16 @@ function readFixture(poll: number): Fixture {
     if (existsSync(path)) return JSON.parse(readFileSync(path, "utf-8")) as Fixture;
   }
   return {};
+}
+
+/** Returns once `release` exists, asked every 20 ms: what keeps a poll in flight for a test. */
+async function held(release: string): Promise<void> {
+  await pRetry(
+    () => {
+      if (!existsSync(release)) throw new Error(`${release} is not there yet`);
+    },
+    { retries: Number.POSITIVE_INFINITY, factor: 1, minTimeout: 20, maxTimeout: 20 },
+  );
 }
 
 function pollsSoFar(): number {
@@ -64,11 +77,20 @@ runEvents<Target>({
     );
     const fixture = readFixture(n);
     if (fixture.sleepMs !== undefined) await Bun.sleep(fixture.sleepMs);
+    if (fixture.holdFor !== undefined) await held(join(fixtureDir(), fixture.holdFor));
     // The cursor a real source keeps: how many polls have seen each target. Moved before a
     // failure throws, the way a careless source would: the daemon must not save it.
     for (const target of Object.values(targets)) target.polls += 1;
     if (fixture.fail !== undefined) throw new Error(fixture.fail);
     return { events: fixture.events ?? [], busy: fixture.busy ?? false };
+  },
+  // `unwatch <target>/<part>` mutes one part of a watched target, the way a source whose target is a set drops one member.
+  unwatchPart(targets, text) {
+    const [name, part] = text.split("/");
+    const target = name === undefined ? undefined : targets[name];
+    if (target === undefined || part === undefined || part === "") return false;
+    target.muted = [...(target.muted ?? []), part];
+    return true;
   },
   summary(target) {
     const path = join(fixtureDir(), "summary.json");

@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
+import pRetry from "p-retry";
 import { ROOT } from "../../../scripts/lib.mts";
 import type { Level } from "../../../skills/session-events/scripts/session-events.mts";
 import {
@@ -37,7 +38,13 @@ const CLOSING = closingLine(NAME);
 const START = `bun "${FAKE_SOURCE}" daemon`;
 
 type FixtureEvent = { target: string; kind: string; text: string; url: string; level?: Level };
-type Fixture = { events?: FixtureEvent[]; busy?: boolean; sleepMs?: number; fail?: string };
+type Fixture = {
+  events?: FixtureEvent[];
+  busy?: boolean;
+  sleepMs?: number;
+  holdFor?: string;
+  fail?: string;
+};
 
 const changed = (target: string, text: string): FixtureEvent => ({
   target,
@@ -327,6 +334,43 @@ describe("session-events.mts", () => {
       t1: { name: "t1", polls: 2 },
       t2: { name: "t2", polls: 2 },
     });
+  }, 30000);
+
+  test("unwatch of a text that is no target's key goes to the source's unwatchPart, which drops one part of a target: the state is saved with the part gone, " +
+    "a text the source does not take is not watched, and a part cut while a poll runs is held until that poll returns, so the cursors it lands do not put the part back", async () => {
+    const s = new Fake("part");
+    const box = await s.inbox("a");
+    // Poll 1 is the watch's own; poll 2, the `poll` command's, stays in flight until the test releases it.
+    s.polls({}, { holdFor: "release" });
+    await s.start({ inbox: box.path });
+    expect(s.run(["watch", "t1"], { inbox: box.path }).code).toBe(0);
+
+    const one = s.run(["unwatch", "t1/a"], { inbox: box.path });
+    expect(one.code).toBe(0);
+    expect(one.stdout).toBe(`unwatched t1/a for session ${process.pid}\n`);
+    expect(s.state().targets).toEqual({ t1: { name: "t1", polls: 1, muted: ["a"] } });
+    const unknown = s.run(["unwatch", "t9/a"], { inbox: box.path });
+    expect(unknown.code).toBe(2);
+    expect(unknown.stderr).toContain("daemon: t9/a is not watched");
+
+    const held = s.spawn(["poll"], { inbox: box.path });
+    // The source logs a poll as it starts: the cut is sent once the held one is in flight.
+    await pRetry(() => expect(s.pollLog()).toHaveLength(2), {
+      retries: 250,
+      factor: 1,
+      minTimeout: 20,
+      maxTimeout: 20,
+    });
+    const cut = s.spawn(["unwatch", "t1/b"], { inbox: box.path });
+    await Bun.sleep(500);
+    // The daemon has the cut and holds it: answered under the poll, the command would have returned by now.
+    expect(cut.exitCode).toBeNull();
+    writeFileSync(join(s.fixtureDir, "release"), "");
+    expect(await held.exited).toBe(0);
+    expect(await cut.exited).toBe(0);
+    // The held poll counted t1 on its own copy; the part was cut from the target that poll landed.
+    expect(s.state().targets).toEqual({ t1: { name: "t1", polls: 2, muted: ["a", "b"] } });
+    s.stop({ inbox: box.path });
   }, 30000);
 
   test("with no daemon answering, watch, unwatch, status, and wait exit 3 naming the exact background command; stop is a no-op", async () => {

@@ -101,6 +101,13 @@ export interface Source<Target extends object> {
 
   /** Lines `status` prints under a target, what stands right now (a standing alert each); without it the target line stands alone. */
   summary?(target: Target): string[];
+
+  /**
+   * `unwatch` of a text that is no target's key: the source's own narrower removal, for a source
+   * whose target is a set (one agent of a fleet). Applies it in place to whatever the text matches,
+   * in any target, and says whether it matched.
+   */
+  unwatchPart?(targets: Record<string, Target>, text: string): boolean;
 }
 
 /** Runs the CLI for `source` on this process's arguments; the source script's one call. */
@@ -905,14 +912,20 @@ class Daemon<Target extends object> {
     return { ok: true, watched: Object.keys(this.state.targets).length };
   }
 
-  /** A null key drops every target. */
-  private unwatchTarget(key: string | null): Reply {
+  /** A null key drops every target; a key that is no target's may name a part of one, which the source drops. */
+  private async unwatchTarget(key: string | null): Promise<Reply> {
     if (key === null) {
       this.state.targets = noTargets();
     } else if (Object.hasOwn(this.state.targets, key)) {
       delete this.state.targets[key];
-    } else {
+    } else if (this.source.unwatchPart === undefined) {
       throw new Error(`${key} is not watched`);
+    } else {
+      // A part is cut from a target a poll may be writing: once no poll is in flight, never under one.
+      while (this.polling !== null) await this.polling.catch(() => null);
+      if (!this.source.unwatchPart(this.state.targets, key)) {
+        throw new Error(`${key} is not watched`);
+      }
     }
 
     saveState(this.files, this.state);
