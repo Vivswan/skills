@@ -77,19 +77,20 @@ runEvents<File>({
 
 ## The Source Contract
 
-A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and five optional:
+A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and six optional:
 
-| Field                        | The file source says                          | The daemon uses it for                                                                                            |
-| ---------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `name`                       | `"log-events"` (`[a-z0-9-]{1,40}`)            | the file stems, the envelope's `from-name`, the `msg_id` prefix, the closing line                                 |
-| `interval`                   | `5`                                           | seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400                             |
-| `idleInterval` (optional)    | not set, so `5`                               | the longest wait between polls; a quiet poll doubles the wait from `interval` up to it                            |
-| `usage` (optional)           | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags                                       |
-| `entry` (optional)           | not set, so the running file                  | the script the usage line and the start command name; a source run as a bundle names the script it was built from |
-| `wrapperPid` (optional)      | not set: it runs as itself                    | the process that runs the source as a bundle and waits on it; a `--pid` naming it is refused as the daemon's own  |
-| `parseTarget(args)`          | the path, refused unless absolute             | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2      |
-| `poll(targets, io)`          | stat each file, compare with its saved size   | every poll: the events, and whether anything is still moving                                                      |
-| `summary(target)` (optional) | not set, so the target line stands alone      | `status`: the lines printed under each target, what stands right now (a standing alert each)                      |
+| Field                                   | The file source says                          | The daemon uses it for                                                                                                                                                                  |
+| --------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                  | `"log-events"` (`[a-z0-9-]{1,40}`)            | the file stems, the envelope's `from-name`, the `msg_id` prefix, the closing line                                                                                                       |
+| `interval`                              | `5`                                           | seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400                                                                                                   |
+| `idleInterval` (optional)               | not set, so `5`                               | the longest wait between polls; a quiet poll doubles the wait from `interval` up to it                                                                                                  |
+| `usage` (optional)                      | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags                                                                                                             |
+| `entry` (optional)                      | not set, so the running file                  | the script the usage line and the start command name; a source run as a bundle names the script it was built from                                                                       |
+| `wrapperPid` (optional)                 | not set: it runs as itself                    | the process that runs the source as a bundle and waits on it; a `--pid` naming it is refused as the daemon's own                                                                        |
+| `parseTarget(args)`                     | the path, refused unless absolute             | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2                                                                            |
+| `poll(targets, io)`                     | stat each file, compare with its saved size   | every poll: the events, and whether anything is still moving                                                                                                                            |
+| `summary(target)` (optional)            | not set, so the target line stands alone      | `status`: the lines printed under each target, what stands right now (a standing alert each)                                                                                            |
+| `unwatchPart(targets, text)` (optional) | not set: a file is one thing                  | `unwatch <text>` when the text is no target's key: the source's own narrower removal (one member of a watched set), applied in place to whatever the text matches; true when it matched |
 
 The daemon keeps `targets`, a map from the text the user typed to the object `parseTarget` returned, and saves it after every poll. A source writes its cursor onto each target object, or puts a new object under the same key: the file source keeps the last size there. The daemon adds nothing else to the state but the event counter.
 
@@ -136,6 +137,8 @@ exits: 0 ok (stop with no daemon running, and a second daemon start, are ok too)
 | 4    | `wait` only: the timeout passed with no newer line                                                                                                                                                                |
 
 `watch` saves the target and polls at once, so it returns after that poll. A second `watch` of the same text replaces the target, cursor included. `poll` runs one poll now, for tests and debugging. `--interval` moves the busy interval; the idle one never drops below it. `--mode` is the session's permission mode (below), `bypass` by default.
+
+`unwatch` of a text that is no target's key goes to the source's `unwatchPart`, after any poll in flight. A source without one answers `<text> is not watched`.
 
 ## The Envelope and the Text
 

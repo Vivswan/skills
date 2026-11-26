@@ -35,6 +35,25 @@ The transcript reading is incremental: each poll reads what an `agent-*.jsonl` g
 
 A restarted daemon carries on from the state it saved. A reading in any other shape, another version's included, starts the target over: every transcript is read again, and what stands is said once more. When what `watch` was told is unreadable too, the poll fails and the log says to `watch` the target again.
 
+An agent leaves the watch by its name, the way a target does:
+
+```bash
+bun "<skill-dir>/scripts/fleet-events.mts" unwatch agent:builder-a   # its name in the event texts, or its agentId
+```
+
+```text
+$ bun "<skill-dir>/scripts/fleet-events.mts" status
+    reading: agents 12, unclaimed worktrees 3
+    removed: builder-a
+    agent builder-b: stuck 40 min on Bash
+```
+
+Its alert leaves `status`, and nothing more is said of it while its transcript is still: a parked worker, or an alert already judged. Once the transcript moves, the agent is watched again and judged afresh.
+
+- **A name several agents carry** removes each of them; the agentId removes that one.
+- **Its files are still read:** it keeps its worktree claim, and a read of them that fails is `fleet:` trouble as for any agent.
+- **An alert on its parent stays:** `stuck on agent <child>` is the parent's alert, so `unwatch` the parent too.
+
 ## One Role, Two Instruments
 
 The fleet monitor is a role: watch the fleet, and report each transition with how long the state behind it has held. It judges nothing, so every call and every action stays the lead's.
@@ -50,7 +69,7 @@ Both say what moved and for how long, and the rest of this page reads the same r
 
 Each event is one line and its `file://` URL. An alert is a message, inside the `/session-events` skill's envelope; never reply to one. A note is a line in the events log alone, read with `wait`;
 
-`status` opens each target with what it reads (`reading: agents 12, unclaimed worktrees 3`), then lists the alerts in force. The count is the agent transcripts the session holds now, a named teammate's included, and every poll reads each. With no `fleet:` trouble below it, an agent with no alert is read, never unseen.
+`status` opens each target with what it reads (`reading: agents 12, unclaimed worktrees 3`), then the agents taken off the watch (`removed: builder-a`), then lists the alerts in force. The count is the agent transcripts the session holds now, a named teammate's included, and every poll reads each. With no `fleet:` trouble below it, an agent with no alert is read, never unseen.
 
 Every text is names, tool names, counts, durations, shas, and paths, and nothing an agent wrote or read is in a message: the URL is where to read it.
 
@@ -546,6 +565,7 @@ the daemon serves the Claude Code session named by CLAUDE_CODE_MESSAGING_SOCKET 
 targets: session (this session's transcript and subagents dir, found by CLAUDE_CODE_SESSION_ID under ~/.claude/projects), or an absolute path to a session directory
 --repo <root>            add the worktree reading for every worktree of this repository that no agent claims (absolute path)
 --quiet-after <minutes>  an open turn with nothing pending is stuck after this long (default 10)
+unwatch agent:<name>     takes off the watch the agent with that agentId, else every agent of that name in the event texts, until its transcript moves again; status lists it under removed:
 the session-events skill must be installed beside this one; without it every command exits 2 naming the install: npx skills add Vivswan/skills -g --skill session-events
 files: <dir>/<pid>-<start>.fleet-events.{state.json,events.jsonl,log} and <dir>/<pid>.fleet-events.sock for a session; <id>.fleet-events.* for a file sink;
   <dir> is $SESSION_EVENTS_DIR, else $XDG_RUNTIME_DIR/session-events, else $CLAUDE_CODE_TMPDIR/session-events-<uid>, else <os tmpdir>/session-events-<uid>, else /tmp/session-events-<uid>
