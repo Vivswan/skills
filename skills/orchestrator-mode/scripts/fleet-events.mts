@@ -815,10 +815,11 @@ function stopOf(target: Target, agentId: string, entry: AgentEntry): "stopped" |
 /**
  * What stands for one agent now, read off its transcript against the bounds: a stop, a shutdown
  * it approved, a stuck call (past its own timeout plus the grace, or the plain bound), a child
- * still past the bound, a job whose output ended with no notice, a stall past `--quiet-after`, an
- * ended turn past the grace; else fine, which is moving or waiting within bounds. A turn the
- * transcript leaves open is over once the one waiting on the agent holds its finish: the harness
- * omits the final stop reason when a hook closes the turn, and a completed fork is never a stall.
+ * still past the bound, an idle agent's job whose output ended with no notice, a stall past
+ * `--quiet-after`, an ended turn past the grace; else fine, which is moving or waiting within
+ * bounds. A turn the transcript leaves open is over once the one waiting on the agent holds its
+ * finish: the harness omits the final stop reason when a hook closes the turn, and a completed
+ * fork is never a stall.
  */
 function situationOf(
   target: Target,
