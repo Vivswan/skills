@@ -363,6 +363,17 @@ describe("fleet-events.mts", () => {
     s.stop({ inbox: box.path });
   }, 30000);
 
+  test("`--pid $$` from a shell that execs the script names the process that runs the bundle, and is refused as the daemon's own pid is: " +
+    "that wrapper lives exactly as long as the daemon, which would then never end", () => {
+    const s = new Scenario(PROGRAM, "self-owned");
+    const selfOwned = Bun.spawnSync(
+      ["sh", "-c", 'exec "$0" "$1" daemon --id sink --pid "$$"', process.execPath, SCRIPT],
+      { env: s.env(), stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+    );
+    expect(selfOwned.exitCode).toBe(2);
+    expect(selfOwned.stderr.toString()).toContain("--pid names this very process");
+  }, 30000);
+
   test("a pending call is stuck past its own timeout plus ten minutes, and past thirty with no timeout of its own; the result landing is fine again, a note that sends no message", async () => {
     const s = new Scenario(PROGRAM, "stuck");
     const box = await s.inbox("a");

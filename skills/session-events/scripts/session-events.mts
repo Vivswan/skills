@@ -86,6 +86,9 @@ export interface Source<Target extends object> {
   /** The script a user runs for this source, when the running file is another (a bundle built from it): the usage line and the start command name it. Defaults to the running file. */
   entry?: string;
 
+  /** The process that runs this source as a bundle and waits on it, when one does: a `--pid` naming it names the daemon itself. */
+  wrapperPid?: number;
+
   /** The arguments after `watch`, the target text first and the source's own flags after it; throws UsageError. */
   parseTarget(args: string[]): Target;
 
@@ -150,6 +153,9 @@ const SOCKET_PATH_MAX = 104;
 
 // The reply to a command a stopping daemon refuses, and the error of the watch its stop cut short.
 const STOPPING_ERROR = "daemon stopping; retry";
+
+// A daemon owned by its own process, or by the wrapper that lives as long as it does, would never end.
+const SELF_OWNED = "--pid names this very process; pass the agent's own pid";
 
 class ToolingError extends Error {}
 class NoDaemonError extends Error {}
@@ -240,11 +246,12 @@ function positionals(args: string[], allowed: number): string[] {
 function resolveOwner(
   id: string | undefined,
   pidValue: string | undefined,
+  wrapperPid: number | undefined = undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Owner {
   const pid = parsePositiveInt(pidValue, "--pid") ?? null;
-  // `--pid $$` from a shell that execs the daemon as its last command names the daemon itself.
-  if (pid === process.pid) usage("--pid names this very process; pass the agent's own pid");
+  // `--pid $$` from a shell that execs the daemon as its last command names the daemon itself, or the wrapper that runs it as a bundle.
+  if (pid !== null && (pid === process.pid || pid === wrapperPid)) usage(SELF_OWNED);
   if (id !== undefined) {
     if (!ID_PATTERN.test(id)) usage(`--id must be a name of letters, digits, . _ or -, not ${id}`);
     if (/^\d+$/.test(id))
@@ -531,7 +538,8 @@ async function daemon<Target extends object>(
   ctx: Context<Target>,
   args: string[],
 ): Promise<number> {
-  const owner = resolveOwner(takeValue(args, "id"), takeValue(args, "pid"));
+  const wrapperPid = ctx.source.wrapperPid;
+  const owner = resolveOwner(takeValue(args, "id"), takeValue(args, "pid"), wrapperPid);
   const interval = parsePositiveInt(takeValue(args, "interval"), "--interval");
   const mode = takeValue(args, "mode") ?? "bypass";
   positionals(args, 0);

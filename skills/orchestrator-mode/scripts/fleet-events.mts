@@ -1544,6 +1544,7 @@ function summary(target: Target): string[] {
 runEvents<Target>({
   name: "fleet-events",
   entry: ENTRY,
+  wrapperPid: WRAPPER_PID ?? undefined,
   interval: 60,
   idleInterval: 300,
   usage: [
