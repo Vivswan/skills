@@ -8,7 +8,7 @@
  *   a reviewer narrates first    -> an empty verdict reads as clean: a tool call must precede it
  *   a reviewer asks to write     -> the review refuses, the adapter ends the turn: the refusal is the failure's reason
  *   predictable prompt path      -> one agent overwrites another's: prepare mints a private dir
- *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged, and past 100 the oldest go too
+ *   shared tmp dir               -> captures pile up: rubber-duck-* dirs older than 24 h are purged, and past 100 finished reviews the oldest go too
  *   bwrap denied in a container  -> codex's sandbox cannot start: review an unsandboxed snapshot copy
  *   cp -a of the checkout        -> venvs and nested worktrees weigh gigabytes: snapshot HEAD, the refs, the index
  *   codex reconnects mid-stream  -> an error event precedes the verdict: only a verdict-less capture fails
@@ -59,7 +59,7 @@ const USAGE = [
   "  records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',",
   "  except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;",
   "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
-  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, the newest 100 at most; prepare and a launch purge the rest, never a review still running",
+  "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, finished reviews the newest 100 at most; prepare and a launch purge the rest, and the count never takes a review still running",
   "codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are",
   "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
   "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
@@ -218,7 +218,7 @@ const STATUS_FILE = "review.status";
 /** A scratch dir older than this goes at the next prepare or launch. */
 const SCRATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-/** Past this many scratch dirs the oldest finished reviews go too: a busy day outruns the retention. */
+/** Past this many finished reviews the oldest go too: a busy day outruns the retention. */
 const SCRATCH_KEEP = 100;
 const WAIT_POLL_MS = 2000;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
@@ -253,10 +253,10 @@ function usageError(message: string): never {
 }
 
 /** The tmp dir is shared with other sessions' live reviews, so age decides first and a symlink
- * is never followed: everything past the retention goes. Then the count: past SCRATCH_KEEP the
- * oldest finished reviews go too. A dir whose record carries no exit status yet is a review
+ * is never followed: everything past the retention goes. Then the count: past SCRATCH_KEEP
+ * finished reviews the oldest go too. A dir whose record carries no exit status yet is a review
  * still running, and a dir with no record is a prompt dir a lead may still relaunch from; the
- * count never touches either.
+ * count neither touches nor counts either.
  * A purge that fails is reported and must never fail the review. */
 function purgeStaleScratch(): void {
   const now = Date.now();
@@ -283,10 +283,12 @@ function purgeStaleScratch(): void {
     if (now - mtimeMs > SCRATCH_RETENTION_MS) purge(dir);
     else kept.push({ dir, mtimeMs });
   }
+  // No more scratch dirs than the cap means no more finished reviews than it: no record is read.
+  if (kept.length <= SCRATCH_KEEP) return;
+
   kept.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  for (const { dir } of kept.slice(SCRATCH_KEEP)) {
-    if (isFinishedCapture(dir)) purge(dir);
-  }
+  const finished = kept.filter(({ dir }) => isFinishedCapture(dir));
+  for (const { dir } of finished.slice(SCRATCH_KEEP)) purge(dir);
 }
 
 /** A capture whose launch record carries an exit status: the review ended. A missing, unreadable,

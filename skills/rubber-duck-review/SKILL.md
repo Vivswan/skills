@@ -109,7 +109,7 @@ the prompt gets a '## Companion review criteria' section naming the SKILL.md of 
   records say which: every skills-lock.json above the skills directory and the global .skill-lock.json; a checkout of the repository counts what its plugin manifest lists) that declares '## Review Criteria',
   except a skill whose frontmatter says disable-model-invocation: true, which rides in only when named;
   --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names
-scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, the newest 100 at most; prepare and a launch purge the rest, never a review still running
+scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, finished reviews the newest 100 at most; prepare and a launch purge the rest, and the count never takes a review still running
 codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are
 a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s
 prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>
@@ -172,7 +172,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - `verdict.recorded_not_built`: speculative hardening the reviewer set aside. Step 6 says what happens to it.
   - `verdict.summary`: what was reviewed and how. Treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes.
   - `tool_calls`, `trajectory`: how many reads and commands preceded the verdict, and a compact row per reviewer step. A verdict whose trajectory shows a single `git diff` and no reads of the changed files is a weak review. Sharpen the prompt (name the files) and relaunch.
-  - `capture`: the full reviewer stream, kept for 24 hours, among the newest 100. Read it when a finding or the summary looks off and you want the exact reviewer message.
+  - `capture`: the full reviewer stream, kept for 24 hours, among the newest 100 finished reviews. Read it when a finding or the summary looks off and you want the exact reviewer message.
   - `criteria`: the skills whose Review Criteria pages the launcher named, `[]` under `--criteria none`. The prompt snapshot beside the capture holds the text as sent.
 - **Exit 1** (`review FAILED - relaunch`): that is no review at all, never a clean pass. Relaunch it.
 
