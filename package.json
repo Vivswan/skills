@@ -23,10 +23,10 @@
     "check:staged": "bun scripts/check-staged.mts"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "2.6.0",
+    "@agentclientprotocol/sdk": "2.8.0",
     "@babel/parser": "8.1.2",
     "@babel/types": "8.1.2",
-    "@biomejs/biome": "2.6.7",
+    "@biomejs/biome": "2.6.8",
     "@types/bun": "^1.4.4",
     "@types/mdast": "4.0.4",
     "@types/unist": "3.0.3",
