@@ -207,11 +207,6 @@ const SHORT_SHA = 12;
 // The bounds above are in minutes, and the transcripts' ISO timestamps compare in milliseconds.
 const MINUTE_MS = 60_000;
 
-// --- the saved state ----------------------------------------------------------------
-// The daemon saves each target after a poll and hands it to the next. Each schema names every key
-// of the shape this daemon writes and no other, and is the one declaration of that shape: its
-// type is read off it, so a state in any other shape is told apart at the read.
-
 /** An alert in force: what was said, when it began, the duration said (null for one said once), and how many repeats went out. */
 const STANDING = z.strictObject({
   level: z.literal("alert"),
@@ -221,11 +216,13 @@ const STANDING = z.strictObject({
   duration: z.nullable(z.number()),
   repeats: z.number(),
 });
+
 type Standing = Infer<typeof STANDING>;
 
 /** A note said about a state that holds (a stop, a shutdown, an ended turn whose signal arrived), so it is said once. */
 const NOTED = z.strictObject({ level: z.literal("note"), key: z.string() });
 
+/** The reducer's `PendingCall`: a tool call with no result yet. */
 const PENDING_CALL = z.strictObject({
   tool: z.string(),
   at: z.string(),
@@ -234,6 +231,7 @@ const PENDING_CALL = z.strictObject({
   shutdown: z.boolean(),
 });
 
+/** The reducer's `Child`: an agent this one spawned. */
 const CHILD = z.strictObject({
   name: z.nullable(z.string()),
   at: z.string(),
@@ -242,9 +240,7 @@ const CHILD = z.strictObject({
   finishedAt: z.nullable(z.string()),
 });
 
-// The reducer declares `Transcript` and `Sidecar` and loads no package, so their schemas sit here,
-// each held to its type by `toZod`: a key that differs, in presence or in being optional, stops the compile.
-
+/** The reducer's `Transcript`. The reducer loads no package, so `toZod` holds the schema to its type: a key that differs, in presence or in being optional, fails the typecheck. */
 const TRANSCRIPT = z.toZod<Transcript>()(
   z.strictObject({
     cursor: z.strictObject({ offset: z.number(), ino: z.nullable(z.number()), size: z.number() }),
@@ -264,6 +260,7 @@ const TRANSCRIPT = z.toZod<Transcript>()(
   }),
 );
 
+/** The reducer's `Sidecar`: who an agent is and where it works, as `readSidecar` read it from the file beside the transcript. */
 const SIDECAR = z.toZod<Sidecar>()(
   z.strictObject({
     name: z.nullable(z.string()),
@@ -284,6 +281,7 @@ const AGENT = z.strictObject({
   sidecar: z.nullable(SIDECAR),
   said: z.nullable(z.discriminatedUnion("level", [STANDING, NOTED])),
 });
+
 type AgentEntry = Infer<typeof AGENT>;
 
 /** One worktree's last reading: the head, the tree size, the activity fingerprint, the dirty-tree reading, and the idle count. */
@@ -315,10 +313,12 @@ const WORKTREE = z.strictObject({
   /** The idle alert in force, null while none is. */
   said: z.nullable(STANDING),
 });
+
 type WorktreeEntry = Infer<typeof WORKTREE>;
 
 /** A trouble condition in force, with when it was first said. */
 const STANDING_TROUBLE = z.strictObject({ text: z.string(), url: z.string(), since: z.string() });
+
 type StandingTrouble = Infer<typeof STANDING_TROUBLE>;
 
 /** Whole minutes, one or more: what `--quiet-after` takes, and what a saved target holds. */
@@ -345,7 +345,7 @@ const CONFIG = z.object({
   quietAfterMinutes: QUIET_AFTER,
 });
 
-/** One watched fleet: what `watch` was told, and the reading the polls keep. */
+/** One watched fleet as carried from poll to poll: what `watch` was told, and the reading the polls keep. */
 const TARGET = z.strictObject({
   ...CONFIG.shape,
 
@@ -367,6 +367,7 @@ const TARGET = z.strictObject({
   /** Whether the subagents directory has ever been listed; before the first worker is spawned it does not exist, and that is an empty fleet. */
   subagentsListed: z.boolean(),
 });
+
 type Target = Infer<typeof TARGET>;
 
 interface Trouble {
