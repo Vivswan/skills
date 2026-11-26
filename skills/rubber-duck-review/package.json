@@ -2,7 +2,7 @@
   "name": "rubber-duck-review-skill-dependencies",
   "private": true,
   "dependencies": {
-    "@agentclientprotocol/sdk": "2.6.0",
+    "@agentclientprotocol/sdk": "2.8.0",
     "zod": "4.6.7"
   }
 }
