@@ -40,15 +40,15 @@ const PATH_FIELD = /path|dir|cwd/i;
 // Distinct paths an agent named, the least recently named dropped past this: bounded state for a long transcript, and a path in current use never lapses.
 const MAX_NAMED_PATHS = 1000;
 
-// The time a path saved before times were kept was named: long ago, so no lead claim rests on it.
-const LONG_AGO = new Date(0).toISOString();
-
 // Each teammate envelope with its body: the regex locates, the parsed body decides; a body with a tag inside is text, never a notice, so it is not captured.
 const TEAMMATE_ENVELOPE =
   /<\\?teammate-message\s[^>]*?teammate_id="([^"]+)"[^>]*>([^<]*)<\\?\/teammate-message>/g;
 
 // The `status` a toolUseResult carries for an agent spawned to run beside its parent: a background task, or a teammate.
 const SPAWN_STATUSES = new Set(["async_launched", "teammate_spawned"]);
+
+// The `type` of the SendMessage body a teammate approves a shutdown request with, beside `approve: true`.
+const SHUTDOWN_RESPONSE = "shutdown_response";
 
 // `\n` as a byte, for the search over the raw buffer before it is decoded.
 const NEWLINE = 0x0a;
@@ -57,12 +57,15 @@ const NEWLINE = 0x0a;
  * A tool call with no result yet: mid-call, or killed with the agent. `taskId` is the name an Agent
  * call gives its child (what a TaskStop later takes), a TaskStop's own task_id, or a SendMessage's
  * `to`; null for every other tool. `timeoutMs` is the call's own `timeout` input, when it carries one.
+ * `shutdown` marks a SendMessage that approves a shutdown request: Claude Code ends the agent's
+ * process inside that call, so no result follows it.
  */
 export interface PendingCall {
   tool: string;
   at: string;
   taskId: string | null;
   timeoutMs: number | null;
+  shutdown: boolean;
 }
 
 /** A background job this agent launched, keyed by its task id, until its notice arrives. */
@@ -76,7 +79,7 @@ export interface Child {
   name: string | null;
 
   /** The spawn; it never moves, since a name resolves to the latest spawn. */
-  readonly at: string;
+  at: string;
 
   /** When its current run began: the spawn, or the message that resumed it. */
   since: string;
@@ -84,7 +87,7 @@ export interface Child {
   /** Stopped is final (TaskStop); a finished child runs again when this agent messages it. */
   outcome: "running" | "finished" | "stopped";
 
-  /** When the finish reached this agent; null while the child runs, and for a finish saved before the time was kept. */
+  /** When the finish reached this agent; null while the child runs. */
   finishedAt: string | null;
 }
 
@@ -174,18 +177,18 @@ export interface SessionPaths {
 }
 
 /** A JSON object, or null for anything else. */
-export function record(value: unknown): Record<string, unknown> | null {
+function record(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
 }
 
 /** A string, or null for anything else. */
-export function str(value: unknown): string | null {
+function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
 /** A finite number, or null for anything else. */
-export function num(value: unknown): number | null {
+function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
@@ -383,6 +386,23 @@ function stopTask(state: Activity, taskId: string, at: string): void {
   else (state.children[id] as Child).outcome = "stopped";
 }
 
+/** The pending call a tool_use block opens, read off the tool's name and its input. */
+function pendingCallOf(
+  tool: string,
+  input: Record<string, unknown> | null,
+  at: string,
+): PendingCall {
+  let taskId: string | null = null;
+  if (tool === "Agent") taskId = str(input?.name);
+  if (tool === "TaskStop") taskId = str(input?.task_id);
+  if (tool === "SendMessage") taskId = str(input?.to);
+
+  const reply = tool === "SendMessage" ? record(input?.message) : null;
+  const shutdown = reply?.type === SHUTDOWN_RESPONSE && reply.approve === true;
+
+  return { tool, at, taskId, timeoutMs: num(input?.timeout), shutdown };
+}
+
 // One line per content block, and only the message's last block carries the real stop_reason:
 // the others say null, which keeps the turn open until the final block says end_turn.
 function reduceAssistant(state: Activity, line: Record<string, unknown>, at: string): void {
@@ -404,11 +424,7 @@ function reduceAssistant(state: Activity, line: Record<string, unknown>, at: str
     if (id === null || tool === null) continue;
     const input = record(block.input);
     namePaths(state, input, at);
-    let taskId: string | null = null;
-    if (tool === "Agent") taskId = str(input?.name);
-    if (tool === "TaskStop") taskId = str(input?.task_id);
-    if (tool === "SendMessage") taskId = str(input?.to);
-    state.pending[id] = { tool, at, taskId, timeoutMs: num(input?.timeout) };
+    state.pending[id] = pendingCallOf(tool, input, at);
   }
 }
 
@@ -629,120 +645,6 @@ export function initialTranscript(): Transcript {
   return { cursor: { offset: 0, ino: null, size: 0 }, state: initialActivity() };
 }
 
-// --- persisted state from any version --------------------------------------------------------
-// A daemon restarted on newer code reads the state the older code saved. A map or field added
-// since takes its default here, at the load; a shape no version wrote is null, and the caller
-// starts that target over.
-
-/** A saved map read entry by entry: absent is empty, a non-object or a bad entry is null. */
-export function normalizeMap<T>(
-  value: unknown,
-  entry: (item: unknown) => T | null,
-): Record<string, T> | null {
-  if (value === undefined) return {};
-  const map = record(value);
-  if (map === null) return null;
-  const made: Record<string, T> = {};
-  for (const [key, item] of Object.entries(map)) {
-    const read = entry(item);
-    if (read === null) return null;
-    made[key] = read;
-  }
-  return made;
-}
-
-function normalizePending(value: unknown): PendingCall | null {
-  const call = record(value);
-  const tool = str(call?.tool);
-  const at = str(call?.at);
-  if (call === null || tool === null || at === null) return null;
-  return { tool, at, taskId: str(call.taskId), timeoutMs: num(call.timeoutMs) };
-}
-
-function normalizeJob(value: unknown): Job | null {
-  const at = str(record(value)?.at);
-  return at === null ? null : { at };
-}
-
-function normalizeChild(value: unknown): Child | null {
-  const child = record(value);
-  const at = str(child?.at);
-  const outcome = child?.outcome;
-  if (child === null || at === null) return null;
-  if (outcome !== "running" && outcome !== "finished" && outcome !== "stopped") return null;
-  return {
-    name: str(child.name),
-    at,
-    since: str(child.since) ?? at,
-    outcome,
-    finishedAt: str(child.finishedAt),
-  };
-}
-
-/** The saved named paths: the version before kept the paths alone, so each is named long ago; a shape no version wrote is empty. */
-function normalizeNamed(value: unknown): Record<string, string> {
-  if (Array.isArray(value)) {
-    const paths = value.filter((path): path is string => typeof path === "string");
-    return Object.fromEntries(paths.map((path) => [path, LONG_AGO]));
-  }
-  const saved = record(value) ?? {};
-  return Object.fromEntries(
-    Object.entries(saved).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-}
-
-/** A saved activity: `stops`, a child's `since` and `finishedAt`, `runSince` and `runPending`, and `named` came later and take their defaults; a shape no version wrote is null. */
-export function normalizeActivity(value: unknown): Activity | null {
-  const saved = record(value);
-  if (saved === null) return null;
-  const pending = normalizeMap(saved.pending, normalizePending);
-  const jobs = normalizeMap(saved.jobs, normalizeJob);
-  const children = normalizeMap(saved.children, normalizeChild);
-  const stops = normalizeMap(saved.stops, str);
-  if (pending === null || jobs === null || children === null || stops === null) return null;
-  return {
-    lastMovedAt: str(saved.lastMovedAt),
-    runSince: str(saved.runSince),
-    runPending: saved.runPending === true,
-    turn: saved.turn === "ended" ? "ended" : "open",
-    pending,
-    jobs,
-    children,
-    stops,
-    named: normalizeNamed(saved.named),
-    lines: num(saved.lines) ?? 0,
-    skipped: num(saved.skipped) ?? 0,
-  };
-}
-
-/** A saved transcript: its cursor and activity, read from the start again when saved before `stops`; null for a shape no version wrote. */
-export function normalizeTranscript(value: unknown): Transcript | null {
-  const saved = record(value);
-  const cursor = record(saved?.cursor);
-  const offset = num(cursor?.offset);
-  const state = normalizeActivity(saved?.state);
-  if (cursor === null || offset === null || state === null) return null;
-  // The version that added `stops` also stopped moving a resumed child's `at` to the message, so
-  // an older activity's `at` values are not the spawn times the name lookup needs; the one that
-  // added a pending call's `timeoutMs` reads it off the call; the ones that added `runSince`, then
-  // `runPending`, and a child's `finishedAt` read them off lines already consumed. Each older shape
-  // replays the file.
-  const activity = record(saved?.state);
-  const calls = Object.values(record(activity?.pending) ?? {});
-  if (
-    activity?.stops === undefined ||
-    activity.runSince === undefined ||
-    activity.runPending === undefined ||
-    calls.some((call) => record(call)?.timeoutMs === undefined)
-  ) {
-    return initialTranscript();
-  }
-  // A cursor saved without `size` has read `offset` bytes: a file smaller than that restarts.
-  return { cursor: { offset, ino: num(cursor.ino), size: num(cursor.size) ?? offset }, state };
-}
-
 /**
  * Reads what `path` appended since the last call into `transcript`, in place. A file that shrank
  * or was replaced starts the state over, silently.
@@ -792,11 +694,6 @@ export function readSidecar(path: string): Sidecar | null {
   const meta = parseRecord(text);
   if (meta === null) throw new Error(`${path} is not a JSON object`);
 
-  return sidecarOf(meta, new Date(opened.stat.mtimeMs).toISOString());
-}
-
-/** The sidecar's fields read off its JSON object; every field but `spawnedAt` is a string or null. */
-export function sidecarOf(meta: Record<string, unknown>, spawnedAt: string): Sidecar {
   return {
     name: str(meta.name),
     description: str(meta.description),
@@ -805,7 +702,7 @@ export function sidecarOf(meta: Record<string, unknown>, spawnedAt: string): Sid
     worktreePath: str(meta.worktreePath),
     worktreeBranch: str(meta.worktreeBranch),
     toolUseId: str(meta.toolUseId),
-    spawnedAt,
+    spawnedAt: new Date(opened.stat.mtimeMs).toISOString(),
   };
 }
 

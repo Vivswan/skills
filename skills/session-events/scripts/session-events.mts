@@ -83,6 +83,9 @@ export interface Source<Target extends object> {
   /** Lines the usage text ends with: the target's forms and the source's own flags after `watch`. */
   usage?: string[];
 
+  /** The script a user runs for this source, when the running file is another (a bundle built from it): the usage line and the start command name it. Defaults to the running file. */
+  entry?: string;
+
   /** The arguments after `watch`, the target text first and the source's own flags after it; throws UsageError. */
   parseTarget(args: string[]): Target;
 
@@ -99,7 +102,7 @@ export interface Source<Target extends object> {
 
 /** Runs the CLI for `source` on this process's arguments; the source script's one call. */
 export function runEvents<Target extends object>(source: Source<Target>): void {
-  main(source, process.argv.slice(2), process.argv[1] ?? "source.mts").then(
+  main(source, process.argv.slice(2), source.entry ?? process.argv[1] ?? "source.mts").then(
     (code) => {
       process.exitCode = code;
     },

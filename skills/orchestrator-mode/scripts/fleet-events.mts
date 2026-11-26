@@ -9,10 +9,26 @@
 //   bun "<skill-dir>/scripts/fleet-events.mts" watch session --repo /abs/repo
 //   bun "<skill-dir>/scripts/fleet-events.mts" watch /abs/session-dir --quiet-after 5
 
-import { closeSync, constants, fstatSync, openSync, readdirSync, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  constants,
+  copyFileSync,
+  cpSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { infer as Infer } from "zod/mini";
 import type {
   EventInput,
   Io,
@@ -29,23 +45,119 @@ import {
   initialTranscript,
   isStopped,
   locateSession,
-  normalizeMap,
-  normalizeTranscript,
-  num,
   type PendingCall,
   projectsRoot,
   readSidecar,
   readTranscript,
   realPath,
-  record,
   type Sidecar,
-  sidecarOf,
-  str,
   type Transcript,
 } from "./fleet/transcripts.mts";
 
+// --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
+// docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
+
+function buildPaths(source: string) {
+  // An entry may sit below scripts/: the skill root is the parent of the scripts/ with the manifest beside it.
+  let scripts = dirname(source);
+  while (basename(scripts) !== "scripts" || !existsSync(join(dirname(scripts), "package.json"))) {
+    if (dirname(scripts) === scripts) {
+      console.error(
+        `${source}: no scripts/ directory with a package.json beside it above the script`,
+      );
+      process.exit(2);
+    }
+    scripts = dirname(scripts);
+  }
+  const skill = dirname(scripts);
+  const built = join(skill, ".build", relative(scripts, source).replace(/\.mts$/, ".js"));
+  return { scripts, skill, built };
+}
+
+function buildIsStale(scripts: string, skill: string, built: string): boolean {
+  if (!existsSync(built)) return true;
+  // An entry imports its siblings, and a pin bump changes the bundle, so every script and the manifest count.
+  const inputs = readdirSync(scripts, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".mts"))
+    .map((name) => join(scripts, name));
+  inputs.push(join(skill, "package.json"));
+  const newest = Math.max(...inputs.map((path) => statSync(path).mtimeMs));
+  return statSync(built).mtimeMs < newest;
+}
+
+function runBun(args: string[]): boolean {
+  const step = spawnSync("bun", args, { stdio: ["ignore", "ignore", "pipe"] });
+  if (step.status !== 0) process.stderr.write(step.stderr);
+  return step.status === 0;
+}
+
+function build(source: string, scripts: string, skill: string, built: string): boolean {
+  // bun build resolves installed packages only, from a node_modules beside the entry, and two first runs at
+  // once must never share one: each build gets its own scratch under .build/ and publishes by one rename.
+  mkdirSync(join(skill, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(skill, ".build", "scratch-"));
+  try {
+    cpSync(scripts, join(scratch, "scripts"), { recursive: true });
+    copyFileSync(join(skill, "package.json"), join(scratch, "package.json"));
+    const entry = join(scratch, "scripts", relative(scripts, source));
+    const bundle = join(scratch, "bundle.js");
+    const ok =
+      runBun(["install", "--production", "--no-save", "--cwd", scratch]) &&
+      runBun(["build", entry, "--target", "bun", "--outfile", bundle]);
+    if (!ok) return false;
+    mkdirSync(dirname(built), { recursive: true });
+    renameSync(bundle, built);
+    return true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function ensureBuilt(source: string): Promise<boolean> {
+  if (!source.endsWith(".mts")) return Promise.resolve(false);
+  const { scripts, skill, built } = buildPaths(source);
+  if (buildIsStale(scripts, skill, built) && !build(source, scripts, skill, built)) process.exit(2);
+  // The bundle runs on this process's stdio, and a signal to this process goes on to it; this process then ends as
+  // the bundle did, by its status, or by the same signal once the forwarding is off and the signal's default is back.
+  const run = spawn("bun", [built, ...process.argv.slice(2)], { stdio: "inherit" });
+  const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  const forward = (signal: NodeJS.Signals) => {
+    run.kill(signal);
+  };
+  for (const signal of signals) process.on(signal, forward);
+  return new Promise((resolve) => {
+    const settle = (status: number | null, signal: NodeJS.Signals | null) => {
+      for (const name of signals) process.off(name, forward);
+      if (signal !== null) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exitCode = status ?? 1;
+      resolve(true);
+    };
+    run.on("exit", settle);
+    // A bundle that never started (no bun on PATH) emits error and no exit: that is the run's failure.
+    run.on("error", (error) => {
+      console.error(String(error));
+      settle(1, null);
+    });
+  });
+}
+
+// Only the command builds; a test or a sibling importing this file must not.
+if (import.meta.main && (await ensureBuilt(import.meta.path))) process.exit();
+
+// Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
+const z = await import("zod/mini");
+
 // The command that puts the session-events skill beside this one, where the import below resolves it.
 const INSTALL = "npx skills add Vivswan/skills -g --skill session-events";
+
+// The script a user runs. The self-build runs this file as its bundle in `.build/`, beside `scripts/`.
+const ENTRY = join(dirname(import.meta.dir), "scripts", "fleet-events.mts");
+
+// The source process that spawned this bundle and waits on it; null when this file runs as source.
+const WRAPPER_PID = import.meta.path.endsWith(".mts") ? null : process.ppid;
 
 // The `--quiet-after` default; `--help` shows it, and tests/repo/usage-blocks.test.ts holds a page's fence equal to `--help`.
 const DEFAULT_QUIET_AFTER_MINUTES = 10;
@@ -95,111 +207,178 @@ const SHORT_SHA = 12;
 // The bounds above are in minutes, and the transcripts' ISO timestamps compare in milliseconds.
 const MINUTE_MS = 60_000;
 
-/** An alert in force: what was said, when it began, the duration said (null for one said once), and how many repeats went out. */
-interface Standing {
-  level: "alert";
-  key: string;
-  text: string;
-  since: string;
-  duration: number | null;
-  repeats: number;
-}
+// --- the saved state ----------------------------------------------------------------
+// The daemon saves each target after a poll and hands it to the next. Each schema names every key
+// of the shape this daemon writes and no other, and is the one declaration of that shape: its
+// type is read off it, so a state in any other shape is told apart at the read.
 
-/** A note said about a state that holds (a stop, an ended turn whose signal arrived), so it is said once. */
-interface Noted {
-  level: "note";
-  key: string;
-}
+/** An alert in force: what was said, when it began, the duration said (null for one said once), and how many repeats went out. */
+const STANDING = z.strictObject({
+  level: z.literal("alert"),
+  key: z.string(),
+  text: z.string(),
+  since: z.string(),
+  duration: z.nullable(z.number()),
+  repeats: z.number(),
+});
+type Standing = Infer<typeof STANDING>;
+
+/** A note said about a state that holds (a stop, a shutdown, an ended turn whose signal arrived), so it is said once. */
+const NOTED = z.strictObject({ level: z.literal("note"), key: z.string() });
+
+const PENDING_CALL = z.strictObject({
+  tool: z.string(),
+  at: z.string(),
+  taskId: z.nullable(z.string()),
+  timeoutMs: z.nullable(z.number()),
+  shutdown: z.boolean(),
+});
+
+const CHILD = z.strictObject({
+  name: z.nullable(z.string()),
+  at: z.string(),
+  since: z.string(),
+  outcome: z.enum(["running", "finished", "stopped"]),
+  finishedAt: z.nullable(z.string()),
+});
+
+// The reducer declares `Transcript` and `Sidecar` and loads no package, so their schemas sit here,
+// each held to its type by `toZod`: a key that differs, in presence or in being optional, stops the compile.
+
+const TRANSCRIPT = z.toZod<Transcript>()(
+  z.strictObject({
+    cursor: z.strictObject({ offset: z.number(), ino: z.nullable(z.number()), size: z.number() }),
+    state: z.strictObject({
+      lastMovedAt: z.nullable(z.string()),
+      runSince: z.nullable(z.string()),
+      runPending: z.boolean(),
+      turn: z.enum(["open", "ended"]),
+      pending: z.record(z.string(), PENDING_CALL),
+      jobs: z.record(z.string(), z.strictObject({ at: z.string() })),
+      children: z.record(z.string(), CHILD),
+      stops: z.record(z.string(), z.string()),
+      named: z.record(z.string(), z.string()),
+      lines: z.number(),
+      skipped: z.number(),
+    }),
+  }),
+);
+
+const SIDECAR = z.toZod<Sidecar>()(
+  z.strictObject({
+    name: z.nullable(z.string()),
+    description: z.nullable(z.string()),
+    agentType: z.nullable(z.string()),
+    parentAgentId: z.nullable(z.string()),
+    worktreePath: z.nullable(z.string()),
+    worktreeBranch: z.nullable(z.string()),
+    toolUseId: z.nullable(z.string()),
+    spawnedAt: z.string(),
+  }),
+);
 
 /** One agent as the daemon remembers it: the transcript cursor and state, the sidecar, and what stands said. */
-interface AgentEntry extends Transcript {
-  path: string;
-  sidecar: Sidecar | null;
-  said: Standing | Noted | null;
-}
+const AGENT = z.strictObject({
+  ...TRANSCRIPT.shape,
+  path: z.string(),
+  sidecar: z.nullable(SIDECAR),
+  said: z.nullable(z.discriminatedUnion("level", [STANDING, NOTED])),
+});
+type AgentEntry = Infer<typeof AGENT>;
 
 /** One worktree's last reading: the head, the tree size, the activity fingerprint, the dirty-tree reading, and the idle count. */
-interface WorktreeEntry {
+const WORKTREE = z.strictObject({
   /** The branch checked out, null on a detached head; it names the worktree in the event texts. */
-  branch: string | null;
+  branch: z.nullable(z.string()),
 
   /** The head at the last reading; a different one now is a `head` note. */
-  headSha: string | null;
+  headSha: z.nullable(z.string()),
 
   /** Files at HEAD at the last reading; fewer than half now is a `wipe` alert. */
-  treeFileCount: number | null;
+  treeFileCount: z.nullable(z.number()),
 
   /** The head and the dirty-tree reading together; a change in either is movement, the daemon's busy flag. */
-  fingerprint: string | null;
+  fingerprint: z.nullable(z.string()),
 
   /** The dirty-tree reading alone (newest dirty mtime and status hash): what the idle count watches. */
-  tree: string | null;
+  tree: z.nullable(z.string()),
 
   /** Workers and shells counted at the last reading, kept with the row; the idle judgment reads the fresh count, never this. */
-  processes: { workers: number; shells: number };
+  processes: z.strictObject({ workers: z.number(), shells: z.number() }),
 
   /** Polls in a row with no worker process and an unchanged dirty tree. */
-  idlePolls: number;
+  idlePolls: z.number(),
 
   /** Whether a worker process or a dirty-tree change was ever seen here in this watch; a worktree that never worked never goes idle. */
-  workSeen: boolean;
+  workSeen: z.boolean(),
 
   /** The idle alert in force, null while none is. */
-  said: Standing | null;
-}
+  said: z.nullable(STANDING),
+});
+type WorktreeEntry = Infer<typeof WORKTREE>;
+
+/** A trouble condition in force, with when it was first said. */
+const STANDING_TROUBLE = z.strictObject({ text: z.string(), url: z.string(), since: z.string() });
+type StandingTrouble = Infer<typeof STANDING_TROUBLE>;
+
+/** Whole minutes, one or more: what `--quiet-after` takes, and what a saved target holds. */
+const QUIET_AFTER = z.int().check(z.positive());
+
+/** What `watch` was told: kept when the reading beside it is in another shape, so the target starts over on the same fleet. */
+const CONFIG = z.object({
+  /** How the target was named: `session`, found by CLAUDE_CODE_SESSION_ID, or a directory path given whole. */
+  form: z.enum(["session", "dir"]),
+
+  /** The lead's own transcript, `<project dir>/<session id>.jsonl`. */
+  sessionFile: z.string(),
+
+  /** Where Claude Code writes each subagent's transcript and sidecar, `<project dir>/<session id>/subagents`. */
+  subagentsDir: z.string(),
+
+  /** Where the harness writes this session's background job output: `<tmp root>/<project slug>/<session id>/tasks`. */
+  tasksDir: z.string(),
+
+  /** The repository whose unclaimed worktrees are read, from `--repo`; null reads the agents alone. */
+  repo: z.nullable(z.string()),
+
+  /** From `--quiet-after`: an open turn with nothing pending is stuck after this long. */
+  quietAfterMinutes: QUIET_AFTER,
+});
+
+/** One watched fleet: what `watch` was told, and the reading the polls keep. */
+const TARGET = z.strictObject({
+  ...CONFIG.shape,
+
+  /** Polls done so far; an agent present at the first is not started. */
+  polls: z.number(),
+
+  /** Every fleet agent read so far, by agentId; one the listing dropped stays, its claims and its alert cleared. */
+  agents: z.record(z.string(), AGENT),
+
+  /** The lead's own transcript: its children and stops judge the agents, its named paths claim worktrees. */
+  lead: TRANSCRIPT,
+
+  /** The last reading of every unclaimed worktree, by path; one discovery no longer lists is dropped, with a `gone` note unless an agent claims it. */
+  worktrees: z.record(z.string(), WORKTREE),
+
+  /** The trouble conditions in force, by key. */
+  trouble: z.record(z.string(), STANDING_TROUBLE),
+
+  /** Whether the subagents directory has ever been listed; before the first worker is spawned it does not exist, and that is an empty fleet. */
+  subagentsListed: z.boolean(),
+});
+type Target = Infer<typeof TARGET>;
 
 interface Trouble {
   text: string;
   url: string;
 }
 
-/** A trouble condition in force, with when it was first said; null for one saved before the time was kept. */
-interface StandingTrouble extends Trouble {
-  since: string | null;
-}
-
-interface Target {
-  /** How the target was named: `session`, found by CLAUDE_CODE_SESSION_ID, or a directory path given whole. */
-  form: "session" | "dir";
-
-  /** The lead's own transcript, `<project dir>/<session id>.jsonl`. */
-  sessionFile: string;
-
-  /** Where Claude Code writes each subagent's transcript and sidecar, `<project dir>/<session id>/subagents`. */
-  subagentsDir: string;
-
-  /** Where the harness writes this session's background job output: `<tmp root>/<project slug>/<session id>/tasks`. */
-  tasksDir: string;
-
-  /** The repository whose unclaimed worktrees are read, from `--repo`; null reads the agents alone. */
-  repo: string | null;
-
-  /** From `--quiet-after`: an open turn with nothing pending is stuck after this long. */
-  quietAfterMinutes: number;
-
-  /** Polls done so far; an agent present at the first is not started. */
-  polls: number;
-
-  /** Every fleet agent read so far, by agentId; one the listing dropped stays, its claims and its alert cleared. */
-  agents: Record<string, AgentEntry>;
-
-  /** The lead's own transcript: its children and stops judge the agents, its named paths claim worktrees. */
-  lead: Transcript;
-
-  /** The last reading of every unclaimed worktree, by path; one discovery no longer lists is dropped, with a `gone` note unless an agent claims it. */
-  worktrees: Record<string, WorktreeEntry>;
-
-  /** The trouble conditions in force, by key. */
-  trouble: Record<string, StandingTrouble>;
-
-  /** Whether the subagents directory has ever been listed; before the first worker is spawned it does not exist, and that is an empty fleet. */
-  subagentsListed: boolean;
-}
-
 type Situation =
   | { kind: "fine" }
   | { kind: "unread" }
   | { kind: "stopped" }
+  | { kind: "shutdown" }
   | { kind: "tool"; id: string; tool: string; since: string }
   | { kind: "child"; id: string; name: string; moved: string; since: string }
   | { kind: "stranded"; job: string }
@@ -280,10 +459,11 @@ function repoOf(value: string): string {
 }
 
 function quietAfterOf(value: string): number {
-  if (!/^\d+$/.test(value) || Number(value) <= 0) {
+  const minutes = QUIET_AFTER.safeParse(/^\d+$/.test(value) ? Number(value) : null);
+  if (!minutes.success) {
     throw new UsageError(`--quiet-after must be a positive whole number of minutes, got: ${value}`);
   }
-  return Number(value);
+  return minutes.data;
 }
 
 function parseFlags(flags: string[]): { repo: string | null; quietAfterMinutes: number } {
@@ -306,6 +486,18 @@ function parseFlags(flags: string[]): { repo: string | null; quietAfterMinutes: 
 function tasksDirOf(sessionDir: string, env: NodeJS.ProcessEnv = process.env): string {
   const root = join(env.CLAUDE_CODE_TMPDIR || HARNESS_TMP, `claude-${process.getuid?.() ?? 0}`);
   return join(root, basename(dirname(sessionDir)), basename(sessionDir), "tasks");
+}
+
+/** A target's reading before its first poll: nothing read, nothing said. */
+function emptyReading(): Omit<Target, keyof typeof CONFIG.shape> {
+  return {
+    polls: 0,
+    agents: {},
+    lead: initialTranscript(),
+    worktrees: {},
+    trouble: {},
+    subagentsListed: false,
+  };
 }
 
 /** `session` resolves here, in the CLI process, by the session id under the user's home; a path must be an existing absolute directory. */
@@ -351,12 +543,7 @@ function parseTarget(args: string[]): Target {
     ...paths,
     tasksDir: tasksDirOf(dirname(paths.subagentsDir)),
     ...options,
-    polls: 0,
-    agents: {},
-    lead: initialTranscript(),
-    worktrees: {},
-    trouble: {},
-    subagentsListed: false,
+    ...emptyReading(),
   };
 }
 
@@ -551,13 +738,13 @@ function jobsSituation(target: Target, state: Activity, io: Io): Situation | nul
  * The trouble of a tasks directory that is not there while a listed agent waits on a job: every
  * such job would read as running for good, and an ended one would never be stranded. The harness
  * makes the directory with the session's first job, so its absence before any job is no trouble,
- * and a stopped agent waits on nothing, whatever jobs its transcript left open.
+ * and a stopped or shut-down agent waits on nothing, whatever jobs its transcript left open.
  */
 function jobsOutputTrouble(target: Target, listed: string[]): Trouble | null {
   const waiting = listed.some((agentId) => {
     const entry = target.agents[agentId];
     if (entry === undefined || Object.keys(entry.state.jobs).length === 0) return false;
-    return !stoppedByLead(target, agentId, entry);
+    return stopOf(target, agentId, entry) === null;
   });
   if (!waiting || isDirectory(target.tasksDir)) return null;
   return {
@@ -593,12 +780,22 @@ function stoppedByLead(target: Target, agentId: string, entry: AgentEntry): bool
 }
 
 /**
- * What stands for one agent now, read off its transcript against the bounds: a stop, a stuck call
- * (past its own timeout plus the grace, or the plain bound), a child still past the bound, a job
- * whose output ended with no notice, a stall past `--quiet-after`, an ended turn past the grace;
- * else fine, which is moving or waiting within bounds. A turn the transcript leaves open is over
- * once the one waiting on the agent holds its finish: the harness omits the final stop reason
- * when a hook closes the turn, and a completed fork is never a stall.
+ * What ended the agent, null while it runs: the lead's stop, or a shutdown request it approved,
+ * whose call stays pending for good since its process ended inside it.
+ */
+function stopOf(target: Target, agentId: string, entry: AgentEntry): "stopped" | "shutdown" | null {
+  if (stoppedByLead(target, agentId, entry)) return "stopped";
+  if (Object.values(entry.state.pending).some((call) => call.shutdown)) return "shutdown";
+  return null;
+}
+
+/**
+ * What stands for one agent now, read off its transcript against the bounds: a stop, a shutdown
+ * it approved, a stuck call (past its own timeout plus the grace, or the plain bound), a child
+ * still past the bound, a job whose output ended with no notice, a stall past `--quiet-after`, an
+ * ended turn past the grace; else fine, which is moving or waiting within bounds. A turn the
+ * transcript leaves open is over once the one waiting on the agent holds its finish: the harness
+ * omits the final stop reason when a hook closes the turn, and a completed fork is never a stall.
  */
 function situationOf(
   target: Target,
@@ -612,7 +809,8 @@ function situationOf(
   const parent = entry.sidecar?.parentAgentId ?? null;
   if (parent !== null && failed.has(parent)) return { kind: "unread" };
 
-  if (stoppedByLead(target, agentId, entry)) return { kind: "stopped" };
+  const stop = stopOf(target, agentId, entry);
+  if (stop !== null) return { kind: stop };
 
   const pending = pendingSituation(target, entry.state, nowMs, failed);
   if (pending !== null) return pending;
@@ -631,6 +829,7 @@ function situationKey(situation: Situation): string {
     case "fine":
     case "unread":
     case "stopped":
+    case "shutdown":
       return situation.kind;
     case "tool":
       return `tool:${situation.id}`;
@@ -653,6 +852,8 @@ function situationText(name: string, situation: Situation, nowMs: number): strin
       return `agent ${name}: a read its judgment rests on failed`;
     case "stopped":
       return `agent ${name}: stopped by the lead`;
+    case "shutdown":
+      return `agent ${name}: shut down on request`;
     case "tool":
       return `agent ${name}: stuck ${minutesBetween(nowMs, situation.since)} min on ${situation.tool}`;
     case "child":
@@ -721,12 +922,12 @@ function restate(
 }
 
 /**
- * The event for one agent this poll, or null. A stop and an ended turn whose signal arrived are
- * notes, said once while they hold; a return to fine retracts a standing alert with a note; an
- * alert is said on entering and repeated as its duration doubles. A stillness already past the
- * horizon when first judged is history: a note, said once, with nothing to retract. A judgment
- * that rests on a read that failed this poll (a parent, a child, a job's output) is held: nothing said, nothing
- * changed.
+ * The event for one agent this poll, or null. A stop, a shutdown, and an ended turn whose signal
+ * arrived are notes, said once while they hold; a return to fine retracts a standing alert with a
+ * note; an alert is said on entering and repeated as its duration doubles. A stillness already
+ * past the horizon when first judged is history: a note, said once, with nothing to retract. A
+ * judgment that rests on a read that failed this poll (a parent, a child, a job's output) is held:
+ * nothing said, nothing changed.
  */
 function agentTransition(
   target: Target,
@@ -753,9 +954,11 @@ function agentTransition(
     return event("note", text);
   };
 
-  if (situation.kind === "stopped" || (situation.kind === "ended" && situation.signalled)) {
-    return note(situationText(name, situation, nowMs));
-  }
+  const over =
+    situation.kind === "stopped" ||
+    situation.kind === "shutdown" ||
+    (situation.kind === "ended" && situation.signalled);
+  if (over) return note(situationText(name, situation, nowMs));
 
   if (situation.kind === "fine") {
     const retract = entry.said?.level === "alert";
@@ -912,12 +1115,12 @@ function fingerprintOf(row: WorktreeRow & { ok: true }): string {
   return `${row.headSha} ${treeOf(row)}`;
 }
 
-// The daemon's own row is never a worker, wherever it stands.
+// The daemon's own rows, itself and the process that wraps it, are never workers, wherever they stand.
 function countProcesses(processes: ProcessRow[]): { workers: number; shells: number } {
   let workers = 0;
   let shells = 0;
   for (const row of processes) {
-    if (row.pid === process.pid) continue;
+    if (row.pid === process.pid || row.pid === WRAPPER_PID) continue;
     if (SHELLS.has(basename(row.command))) shells += 1;
     else workers += 1;
   }
@@ -1240,166 +1443,64 @@ function troubleOnly(target: Target, failure: FleetReadError, nowMs: number): Po
 }
 
 /**
- * One poll of a target, read and judged on a draft copy. A fleet-wide read that fails (the session
- * transcript, the subagents listing, the worktree discovery, or any dependency read added later
- * that throws past the per-agent catches) discards the draft: no transition is said, no counter
- * moves, every continuity stays as it was, and the one trouble event is said. A poll that reads
- * commits the draft. An error that is not a read failure is the daemon's failed poll, which saves
- * nothing either.
+ * The target a poll starts from: the saved one when it is in the shape this daemon writes. Any
+ * other shape (another version's, a hand edit) starts the target over under its own
+ * configuration, and the log says so.
+ *
+ * @throws {Error} the configuration is unreadable too, so nothing says what to watch
  */
-async function pollTarget(target: Target, key: string, nowMs: number, io: Io): Promise<PollResult> {
-  // The saved shape is read here, on the draft: a poll that fails leaves the saved target as it was.
-  const draft = normalizeTarget(structuredClone(target), key, io);
+function readTarget(saved: unknown, key: string, io: Io): Target {
+  const read = TARGET.safeParse(saved);
+  if (read.success) return read.data;
+
+  const config = CONFIG.safeParse(saved);
+  if (!config.success) {
+    throw new Error(`${key}: the saved target names nothing this daemon can watch; watch it again`);
+  }
+
+  io.log(`${key}: the saved state is in no shape this daemon writes; the target starts over`);
+  return { ...config.data, ...emptyReading() };
+}
+
+/**
+ * One poll of a saved target, read and judged on a draft copy: the events, and the target to keep.
+ * A fleet-wide read that fails (the session transcript, the subagents listing, the worktree
+ * discovery, or any dependency read added later that throws past the per-agent catches) discards
+ * the draft: no transition is said, no counter moves, every continuity stays as it was read, and
+ * the one trouble event is said. A poll that reads keeps the draft. An error that is not a read
+ * failure is the daemon's failed poll, which saves nothing.
+ */
+async function pollTarget(
+  saved: unknown,
+  key: string,
+  nowMs: number,
+  io: Io,
+): Promise<{ result: PollResult; target: Target }> {
+  const target = readTarget(saved, key, io);
+  const draft = structuredClone(target);
   let outcome: Awaited<ReturnType<typeof readFleet>>;
   try {
     outcome = await readFleet(draft, nowMs, io);
   } catch (error) {
     if (!(error instanceof FleetReadError)) throw error;
     io.log(error.message);
-    return troubleOnly(target, error, nowMs);
+    return { result: troubleOnly(target, error, nowMs), target };
   }
 
-  // A field a former version saved and this one dropped goes with the assign.
-  for (const field of Object.keys(target)) {
-    if (!Object.hasOwn(draft, field)) delete (target as unknown as Record<string, unknown>)[field];
-  }
-  Object.assign(target, draft);
-  return {
-    events: [...troubleTransitions(target, outcome.trouble, nowMs), ...outcome.events],
-    busy: outcome.busy,
-  };
+  const events = [...troubleTransitions(draft, outcome.trouble, nowMs), ...outcome.events];
+  return { result: { events, busy: outcome.busy }, target: draft };
 }
 
-/** What a saved entry had said: an alert or a note by its level; a shape no version wrote (an older version's situation key, say) is nothing said. */
-function normalizeSaid(value: unknown): Standing | Noted | null {
-  const saved = record(value);
-  const key = str(saved?.key);
-  if (saved === null || key === null) return null;
-  if (saved.level === "note") return { level: "note", key };
-  const text = str(saved.text);
-  const since = str(saved.since);
-  if (saved.level !== "alert" || text === null || since === null) return null;
-  return {
-    level: "alert",
-    key,
-    text,
-    since,
-    duration: num(saved.duration),
-    repeats: num(saved.repeats) ?? 0,
-  };
-}
-
-/** A saved alert in force, for an entry that says alerts alone. */
-function normalizeStanding(value: unknown): Standing | null {
-  const said = normalizeSaid(value);
-  return said?.level === "alert" ? said : null;
-}
-
-/** A saved worktree row: `workSeen` and the standing idle came later and take their defaults; a shape no version wrote is null. */
-function normalizeWorktree(value: unknown): WorktreeEntry | null {
-  const saved = record(value);
-  if (saved === null) return null;
-  const fingerprint = str(saved.fingerprint);
-  const processes = record(saved.processes);
-  return {
-    branch: str(saved.branch),
-    headSha: str(saved.headSha),
-    treeFileCount: num(saved.treeFileCount),
-    fingerprint,
-    tree:
-      str(saved.tree) ??
-      (fingerprint === null ? null : fingerprint.slice(fingerprint.indexOf(" ") + 1)),
-    processes: { workers: num(processes?.workers) ?? 0, shells: num(processes?.shells) ?? 0 },
-    idlePolls: num(saved.idlePolls) ?? num(saved.quietPolls) ?? 0,
-    workSeen: saved.workSeen === true,
-    said: normalizeStanding(saved.said),
-  };
-}
-
-/** A saved agent entry: its transcript, path, sidecar, and what stands said; a shape no version wrote is null. */
-function normalizeAgent(value: unknown): AgentEntry | null {
-  const saved = record(value);
-  const transcript = normalizeTranscript(value);
-  const path = str(saved?.path);
-  if (saved === null || transcript === null || path === null) return null;
-  let sidecar: Sidecar | null = null;
-  if (saved.sidecar !== null && saved.sidecar !== undefined) {
-    const meta = record(saved.sidecar);
-    const spawnedAt = str(meta?.spawnedAt);
-    if (meta === null || spawnedAt === null) return null;
-    sidecar = sidecarOf(meta, spawnedAt);
-  }
-  return { ...transcript, path, sidecar, said: normalizeSaid(saved.said) };
-}
-
-/** A saved trouble condition: the text alone before the url and the time were kept. */
-function normalizeTrouble(value: unknown): StandingTrouble | null {
-  const text = str(value);
-  if (text !== null) return { text, url: "", since: null };
-  const saved = record(value);
-  const kept = str(saved?.text);
-  if (saved === null || kept === null) return null;
-  return { text: kept, url: str(saved.url) ?? "", since: str(saved.since) };
-}
-
-/** The four maps of a saved target, each read in the shape its version used; null when any is in no shape a version wrote. */
-function normalizeMaps(
-  raw: Record<string, unknown>,
-): Pick<Target, "lead" | "agents" | "worktrees" | "trouble"> | null {
-  const lead = normalizeTranscript(raw.lead);
-  const agents = normalizeMap(raw.agents, normalizeAgent);
-  const worktrees = normalizeMap(raw.worktrees, normalizeWorktree);
-  const trouble = normalizeMap(raw.trouble, normalizeTrouble);
-  if (lead === null || agents === null || worktrees === null || trouble === null) return null;
-  return { lead, agents, worktrees, trouble };
-}
-
-/**
- * The target as the last poll saved it, read back in the shape that version used: maps and fields
- * added since take their defaults. A shape no version wrote starts the target over, with its
- * configuration kept, and the log says so.
- */
-function normalizeTarget(saved: Target, key: string, io: Io): Target {
-  const raw = saved as unknown as Record<string, unknown>;
-  const config = {
-    form: saved.form,
-    sessionFile: saved.sessionFile,
-    subagentsDir: saved.subagentsDir,
-    tasksDir: str(raw.tasksDir) ?? tasksDirOf(dirname(saved.subagentsDir)),
-    repo: saved.repo,
-    quietAfterMinutes: saved.quietAfterMinutes,
-  };
-  const maps = normalizeMaps(raw);
-  if (maps === null) {
-    io.log(`${key}: the saved state is in no shape this daemon writes; the target starts over`);
-    return {
-      ...config,
-      polls: 0,
-      agents: {},
-      lead: initialTranscript(),
-      worktrees: {},
-      trouble: {},
-      subagentsListed: false,
-    };
-  }
-  const polls = num(raw.polls) ?? 0;
-  return {
-    ...config,
-    ...maps,
-    polls,
-    // Before the flag existed a poll advanced only past a listing, so a polled target had one.
-    subagentsListed: raw.subagentsListed === undefined ? polls > 0 : raw.subagentsListed === true,
-  };
-}
-
+// The daemon lands each entry of `targets` as it stands when the poll returns: the target a poll kept replaces the saved one.
 async function poll(targets: Record<string, Target>, io: Io): Promise<PollResult> {
   const nowMs = Date.now();
   const events: EventInput[] = [];
   let busy = false;
-  for (const [key, target] of Object.entries(targets)) {
-    const result = await pollTarget(target, key, nowMs, io);
-    events.push(...result.events);
-    busy ||= result.busy;
+  for (const [key, saved] of Object.entries(targets)) {
+    const polled = await pollTarget(saved, key, nowMs, io);
+    targets[key] = polled.target;
+    events.push(...polled.result.events);
+    busy ||= polled.result.busy;
   }
   return { events, busy };
 }
@@ -1417,32 +1518,31 @@ function listedAgents(target: Target): string {
 
 /** What the target reads now, then the alerts in force, oldest first: a quiet target is told from an empty one. */
 function summary(target: Target): string[] {
-  // The saved shape may predate this daemon while a restart's first read keeps failing: read it as a poll would.
-  const maps = normalizeMaps(target as unknown as Record<string, unknown>);
-  if (maps === null) return [];
-  const standing: Array<{ since: string | null; text: string }> = [];
-  for (const entry of Object.values(maps.agents)) {
+  // A state in another shape has no poll behind it yet: the next one starts the target over.
+  const read = TARGET.safeParse(target);
+  if (!read.success) return [];
+
+  const saved = read.data;
+  const standing: Array<{ since: string; text: string }> = [];
+  for (const entry of Object.values(saved.agents)) {
     if (entry.said?.level === "alert") standing.push(entry.said);
   }
-  for (const entry of Object.values(maps.worktrees)) {
+  for (const entry of Object.values(saved.worktrees)) {
     if (entry.said !== null) standing.push(entry.said);
   }
-  standing.push(...Object.values(maps.trouble));
-  const at = (since: string | null) =>
-    since === null ? Number.NEGATIVE_INFINITY : Date.parse(since);
-  const agents = listedAgents(target);
+  standing.push(...Object.values(saved.trouble));
+
+  const agents = listedAgents(saved);
   const reading =
-    target.repo === null
+    saved.repo === null
       ? `reading: agents ${agents}`
-      : `reading: agents ${agents}, unclaimed worktrees ${Object.keys(maps.worktrees).length}`;
-  return [
-    reading,
-    ...standing.sort((a, b) => at(a.since) - at(b.since)).map((entry) => entry.text),
-  ];
+      : `reading: agents ${agents}, unclaimed worktrees ${Object.keys(saved.worktrees).length}`;
+  return [reading, ...standing.sort(byTime((entry) => entry.since)).map((entry) => entry.text)];
 }
 
 runEvents<Target>({
   name: "fleet-events",
+  entry: ENTRY,
   interval: 60,
   idleInterval: 300,
   usage: [

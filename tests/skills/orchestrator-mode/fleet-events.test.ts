@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
   mkdirSync,
@@ -20,6 +20,7 @@ import {
   sessionEventsHarness,
 } from "../../helpers/session-events-scenario";
 import { sideBySide } from "../../helpers/skill-layout";
+import { shutdownRequest, shutdownResponse } from "../../helpers/teammate-shutdown";
 
 // Contract tests for the fleet source through the daemon: a session directory laid out the way
 // Claude Code writes one, hand-written transcript lines with timestamps in the past so a wait ages
@@ -49,6 +50,11 @@ const FOUR_DAYS_MINUTES = 4 * 24 * 60;
 type Line = Record<string, unknown>;
 
 let uuid = 0;
+
+// The first run of a cold checkout installs and bundles the script, which outlasts a scenario's wait for the daemon's banner.
+beforeAll(() => {
+  expect(Bun.spawnSync([process.execPath, SCRIPT, "--help"]).exitCode).toBe(0);
+}, 120_000);
 
 function ago(minutes: number): string {
   return new Date(Date.now() - minutes * 60_000).toISOString();
@@ -308,6 +314,10 @@ describe("fleet-events.mts", () => {
         ["watch", session.dir, "--quiet-after", "soon"],
         "--quiet-after must be a positive whole number",
       ],
+      [
+        ["watch", session.dir, "--quiet-after", "9".repeat(400)],
+        "--quiet-after must be a positive whole number",
+      ],
       [["watch", session.dir, "--repo", "repo"], "--repo must be an absolute path"],
       [["watch", session.dir, "--repo"], "--repo needs a value"],
     ] as Array<[string[], string]>) {
@@ -400,6 +410,43 @@ describe("fleet-events.mts", () => {
         [C]: { said: { level: "alert", key: "tool:toolu_c1", duration: 31, repeats: 0 } },
       },
     });
+    s.stop({ inbox: box.path });
+  }, 30000);
+
+  test("a teammate that approved a shutdown request is shut down on request, a note said once: Claude Code ends its process inside that call, " +
+    "and the approval read as a pending call was said stuck on SendMessage at 30 minutes, then again at 60, 120, and 240; " +
+    "it waits on nothing, so a job its transcript left open is no trouble; a plain SendMessage past the bound is stuck as before", async () => {
+    const s = new Scenario(PROGRAM, "shutdown");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const approval = shutdownResponse("builder-a", true);
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      toolUse(ago(45), "toolu_bg", "Bash", { command: "bun run check", run_in_background: true }),
+      toolResult(ago(45), "toolu_bg", { toolUseResult: { backgroundTaskId: "b1a2b3c4d" } }),
+      said(ago(40), "end_turn"),
+      userText(ago(35), shutdownRequest("builder-a")),
+      toolUse(ago(35), "toolu_a1", "SendMessage", { to: "team-lead", message: approval }),
+      attachment(ago(35), {
+        type: "hook_success",
+        hookEvent: "PreToolUse",
+        hookName: "PreToolUse:SendMessage",
+        toolUseID: "toolu_a1",
+      }),
+    ]);
+    const report = { to: "team-lead", message: "the report: three findings" };
+    const pathB = writeAgent(session, B, { name: "builder-b", description: "build" }, [
+      ...exchange(ago(40), "toolu_b0", B),
+      toolUse(ago(35), "toolu_b1", "SendMessage", report, B),
+    ]);
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([
+      ["note", "agent builder-a: shut down on request", fileUrl(pathA)],
+      ["alert", "agent builder-b: stuck 35 min on SendMessage", fileUrl(pathB)],
+    ]);
+    expect(await delivered(box, 1)).toEqual([["agent builder-b: stuck 35 min on SendMessage"]]);
+    expect(standing(s, box.path)).toEqual(["agent builder-b: stuck 35 min on SendMessage"]);
     s.stop({ inbox: box.path });
   }, 30000);
 
@@ -2018,161 +2065,82 @@ describe("fleet-events.mts", () => {
     GIT_TIMEOUT,
   );
 
-  test("a state file from before `stops`, `since`, and the standing alert loads: the poll takes the defaults, says the stop it then reads as a note, and saves the current shape", async () => {
-    const s = new Scenario(PROGRAM, "older");
-    const box = await s.inbox("a");
-    const session = sessionDir(s.fixtureDir);
-    appendLines(session.sessionFile, spawnLines("toolu_spawn_a", "builder-a", A));
-    const pathA = writeAgent(
-      session,
-      A,
-      { name: "builder-a", description: "build" },
-      exchange(ago(0), "toolu_a1"),
-    );
-    await s.start({ inbox: box.path });
-    watch(s, box.path, session, "--quiet-after", "1");
-    expect(polled(s, box.path)).toBe(0);
-    s.stop({ inbox: box.path });
-
-    // What the version before `stops` wrote: activities without it, children without `since`,
-    // agents with the three situation keys, a trouble ledger of texts, and no tasks directory.
-    rewriteState(s, (target) => {
-      const older = (activity: Record<string, unknown>) => {
-        delete activity.stops;
-        for (const child of Object.values(
-          activity.children as Record<string, Record<string, unknown>>,
-        ))
-          delete child.since;
-      };
-      older(target.lead.state);
-      for (const entry of Object.values(target.agents)) {
-        older(entry.state);
-        delete entry.said;
-        entry.observed = "moving";
-        entry.baseline = null;
-        entry.said = "moving";
-      }
-      target.trouble = { lsof: "fleet: process attribution is down: no lsof" };
-      delete target.tasksDir;
-    });
-    // The lead stopped A while the daemon was down; the restart polls at once and says it.
-    appendLines(session.sessionFile, [
-      toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
-      toolResult(ago(2), "toolu_stop", { agentId: null }),
-    ]);
-    await s.start({ inbox: box.path, env: { CLAUDE_CODE_TMPDIR: claudeTmp(s).root } });
-    expect(polled(s, box.path)).toBe(0);
-    expect(rows(s)).toEqual([
-      ["note", "fleet: reading restored", ""],
-      ["note", "agent builder-a: stopped by the lead", fileUrl(pathA)],
-    ]);
-    const saved = persistedTarget(s);
-    expect(saved.lead.state.stops).toEqual({});
-    const child = (saved.lead.state.children as Record<string, Record<string, unknown>>)[A];
-    expect(child?.since).toBe(child?.at);
-    expect(saved.agents[A]).toMatchObject({ said: { level: "note", key: "stopped" } });
-    expect(saved.agents[A]).not.toHaveProperty("observed");
-    expect(saved.tasksDir).toBe(claudeTmp(s).tasks);
-    expect(s.log()).not.toContain("poll failed");
-    s.stop({ inbox: box.path });
-  }, 30000);
-
-  test("worktree rows saved before `workSeen` and the standing alert load: the idle count carries over with no work seen and nothing standing, so a worker arriving is no retraction", async () => {
-    const s = new Scenario(PROGRAM, "olderwt");
-    const box = await s.inbox("a");
-    const session = sessionDir(s.fixtureDir);
-    const {
-      repo,
-      worktrees: { "wt-a": wtA },
-    } = scratchRepo(s.fixtureDir, TRACKS);
-    const parked = park(repo);
-    let worker: ReturnType<typeof park> | null = null;
-    try {
-      await s.start({ inbox: box.path });
-      watch(s, box.path, session, "--repo", repo, "--quiet-after", "1");
-      expect(polled(s, box.path)).toBe(0);
-      expect(polled(s, box.path)).toBe(0);
-      s.stop({ inbox: box.path });
-
-      // What the version before wrote: rows with a quiet count and a said quiet, no workSeen.
-      rewriteState(s, (target) => {
-        for (const row of Object.values(target.worktrees)) {
-          row.quietPolls = row.idlePolls;
-          delete row.idlePolls;
-          delete row.workSeen;
-          row.said = "quiet";
-        }
-      });
-      await s.start({ inbox: box.path });
-      expect(polled(s, box.path)).toBe(0);
-      expect(s.state().targets[session.dir]).toMatchObject({
-        worktrees: { [wtA]: { idlePolls: 4, workSeen: false, said: null } },
-      });
-      worker = park(wtA);
-      expect(polled(s, box.path)).toBe(0);
-      expect(s.events()).toEqual([]);
-      expect(s.log()).not.toContain("poll failed");
-      s.stop({ inbox: box.path });
-    } finally {
-      parked.kill();
-      worker?.kill();
-    }
-  }, 30000);
-
-  test("a saved map that is not an object starts the target over instead of failing every poll", async () => {
+  test("a saved state in any shape but the one this daemon writes starts the target over under its own configuration, and the log says so: " +
+    "a map of another type, a key this daemon does not write, and a pending call saved before `shutdown` beside the stuck alert said on it, " +
+    "the state the daemon reads on its first restart after it learned of shutdowns; the fleet is read afresh each time, so the teammate is shut down on request, " +
+    "and a restart over the state this daemon saved carries on in silence", async () => {
     const s = new Scenario(PROGRAM, "reshape");
     const box = await s.inbox("a");
     const session = sessionDir(s.fixtureDir);
-    appendLines(session.sessionFile, spawnLines("toolu_spawn_a", "builder-a", A));
-    const pathA = writeAgent(
-      session,
-      A,
-      { name: "builder-a", description: "build" },
-      exchange(ago(0), "toolu_a1"),
-    );
+    const pathA = writeAgent(session, A, { name: "builder-a", description: "build" }, [
+      userText(ago(35), shutdownRequest("builder-a")),
+      toolUse(ago(35), "toolu_a1", "SendMessage", {
+        to: "team-lead",
+        message: shutdownResponse("builder-a", true),
+      }),
+    ]);
+    const shutDown: [string, string, string] = [
+      "note",
+      "agent builder-a: shut down on request",
+      fileUrl(pathA),
+    ];
     await s.start({ inbox: box.path });
-    watch(s, box.path, session, "--quiet-after", "1");
-    expect(polled(s, box.path)).toBe(0);
-    expect(persistedTarget(s).polls).toBe(2);
+    watch(s, box.path, session);
+    expect(rows(s)).toEqual([shutDown]);
     s.stop({ inbox: box.path });
 
-    rewriteState(s, (target) => {
-      target.lead.state.children = 5;
-    });
-    // The restart's own poll is the first again; this one is the second.
-    await s.start({ inbox: box.path });
-    expect(polled(s, box.path)).toBe(0);
-    expect(persistedTarget(s).polls).toBe(2);
-    expect(s.log()).toContain("the target starts over");
+    const reshapes: Array<[string, (target: PersistedTarget) => void]> = [
+      [
+        "a map of another type",
+        (target) => {
+          target.lead.state.children = 5;
+        },
+      ],
+      [
+        "a key this daemon does not write",
+        (target) => {
+          (target.agents[A] as Record<string, unknown>).quietPolls = 0;
+        },
+      ],
+      [
+        "a pending call saved before `shutdown`",
+        (target) => {
+          const entry = target.agents[A] as PersistedTarget["agents"][string];
+          const pending = entry.state.pending as Record<string, Record<string, unknown>>;
+          delete pending.toolu_a1?.shutdown;
+          entry.said = {
+            level: "alert",
+            key: "tool:toolu_a1",
+            text: "agent builder-a: stuck 35 min on SendMessage",
+            since: ago(5),
+            duration: 35,
+            repeats: 0,
+          };
+        },
+      ],
+    ];
+    const startsOver = () => s.log().split("the target starts over").length - 1;
+    for (const [index, [reason, reshape]] of reshapes.entries()) {
+      rewriteState(s, reshape);
+      // The restart's own poll is the first again; this one is the second.
+      await s.start({ inbox: box.path });
+      expect(polled(s, box.path), reason).toBe(0);
+      expect(startsOver(), reason).toBe(index + 1);
+      expect(persistedTarget(s).polls, reason).toBe(2);
+      expect(standing(s, box.path), reason).toEqual([]);
+      s.stop({ inbox: box.path });
+    }
     expect(s.log()).not.toContain("poll failed");
-    appendLines(session.sessionFile, [
-      toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
-      toolResult(ago(2), "toolu_stop", { agentId: null }),
-    ]);
-    expect(polled(s, box.path)).toBe(1);
-    expect(rows(s)).toEqual([["note", "agent builder-a: stopped by the lead", fileUrl(pathA)]]);
-    s.stop({ inbox: box.path });
-  }, 30000);
+    expect(rows(s)).toEqual([shutDown, shutDown, shutDown, shutDown]);
 
-  test("a saved target from before `subagentsListed` that polled an empty subagents directory treats its disappearance as a failed listing, not an empty fleet", async () => {
-    const s = new Scenario(PROGRAM, "olderdir");
-    const box = await s.inbox("a");
-    const session = sessionDir(s.fixtureDir);
-    await s.start({ inbox: box.path });
-    watch(s, box.path, session, "--quiet-after", "1");
-    s.stop({ inbox: box.path });
-
-    rewriteState(s, (target) => {
-      delete target.subagentsListed;
-    });
-    rmSync(session.subagents, { recursive: true });
+    // The control: a restart over the state this daemon saved starts nothing over and says nothing.
     await s.start({ inbox: box.path });
     expect(polled(s, box.path)).toBe(0);
-    expect(rows(s)).toEqual([
-      ["alert", `fleet: cannot list ${session.subagents}: ENOENT`, fileUrl(session.subagents)],
-    ]);
+    expect(startsOver()).toBe(reshapes.length);
+    expect(persistedTarget(s).polls).toBe(4);
+    expect(rows(s)).toHaveLength(4);
     s.stop({ inbox: box.path });
-  }, 30000);
+  }, 60000);
 
   test("a child finished and resumed between two polls is a new wait: stuck on it is said anew, with the run in its key, and the child moving at last is fine again", async () => {
     const s = new Scenario(PROGRAM, "rerun");
@@ -2230,75 +2198,6 @@ describe("fleet-events.mts", () => {
       ],
       ["note", "agent builder-b: fine again", fileUrl(pathB)],
     ]);
-    s.stop({ inbox: box.path });
-  }, 30000);
-
-  test("a failed read after a restart leaves the saved state as it was: the older shape is normalized only by the poll that reads, so no history is lost to a trouble poll", async () => {
-    const s = new Scenario(PROGRAM, "unread");
-    const box = await s.inbox("a");
-    const session = sessionDir(s.fixtureDir);
-    appendLines(session.sessionFile, spawnLines("toolu_spawn_a", "builder-a", A));
-    const pathA = writeAgent(
-      session,
-      A,
-      { name: "builder-a", description: "build" },
-      exchange(ago(0), "toolu_a1"),
-    );
-    await s.start({ inbox: box.path });
-    watch(s, box.path, session, "--quiet-after", "1");
-    s.stop({ inbox: box.path });
-
-    rewriteState(s, (target) => {
-      const older = (activity: Record<string, unknown>) => {
-        delete activity.stops;
-        for (const child of Object.values(
-          activity.children as Record<string, Record<string, unknown>>,
-        ))
-          delete child.since;
-      };
-      older(target.lead.state);
-      for (const entry of Object.values(target.agents)) older(entry.state);
-      target.trouble = { lsof: "fleet: process attribution is down: no lsof" };
-    });
-    const before = persistedTarget(s);
-    const offset = (before.lead.cursor as { offset: number }).offset;
-    expect(offset).toBeGreaterThan(0);
-    // The session transcript cannot be read: a directory stands where the file was.
-    const parked = `${session.sessionFile}.parked`;
-    renameSync(session.sessionFile, parked);
-    mkdirSync(session.sessionFile);
-    await s.start({ inbox: box.path });
-    expect(polled(s, box.path)).toBe(0);
-    expect(rows(s).map((row) => row[0])).toEqual(["alert"]);
-    expect(rows(s)[0]?.[1]).toContain("cannot read the session transcript");
-    // The saved shape is older than this daemon and the read failed, so nothing normalized it yet;
-    // status still lists the legacy condition by its text.
-    expect(standing(s, box.path)).toEqual([
-      "fleet: process attribution is down: no lsof",
-      expect.stringContaining("cannot read the session transcript"),
-    ]);
-    const after = persistedTarget(s);
-    expect((after.lead.cursor as { offset: number }).offset).toBe(offset);
-    expect(after.lead.state.stops).toBeUndefined();
-    expect(Object.keys(after.lead.state.children as Record<string, unknown>)).toEqual([A]);
-
-    // Readable again, with a stop appended: this poll normalizes, replays, retracts the trouble,
-    // and says the stop.
-    rmSync(session.sessionFile, { recursive: true });
-    renameSync(parked, session.sessionFile);
-    appendLines(session.sessionFile, [
-      toolUse(ago(2), "toolu_stop", "TaskStop", { task_id: "builder-a" }, null),
-      toolResult(ago(2), "toolu_stop", { agentId: null }),
-    ]);
-    expect(polled(s, box.path)).toBe(3);
-    expect(rows(s).slice(1)).toEqual([
-      ["note", "fleet: reading restored", ""],
-      ["note", "fleet: reading restored", fileUrl(session.sessionFile)],
-      ["note", "agent builder-a: stopped by the lead", fileUrl(pathA)],
-    ]);
-    const normalized = persistedTarget(s);
-    expect(normalized.lead.state.stops).toEqual({});
-    expect((normalized.lead.cursor as { offset: number }).offset).toBeGreaterThan(0);
     s.stop({ inbox: box.path });
   }, 30000);
 
