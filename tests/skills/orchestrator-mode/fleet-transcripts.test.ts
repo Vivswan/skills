@@ -16,13 +16,13 @@ import {
   initialTranscript,
   isStopped,
   locateSession,
-  normalizeTranscript,
   readIncrement,
   readSidecar,
   readTranscript,
   reduce,
   sessionPaths,
 } from "../../../skills/orchestrator-mode/scripts/fleet/transcripts.mts";
+import { shutdownRequest, shutdownResponse } from "../../helpers/teammate-shutdown";
 import { tempDirs } from "../../helpers/temp-dirs";
 
 // The reducer over the lines Claude Code writes to an agent's transcript: every fixture line here
@@ -196,16 +196,71 @@ describe("the transcript reducer", () => {
     expect(fold(lines.slice(0, 1))).toEqual(
       activity({
         lastMovedAt: at(0),
-        pending: { toolu_01: { tool: "Bash", at: at(0), taskId: null, timeoutMs: null } },
+        pending: {
+          toolu_01: { tool: "Bash", at: at(0), taskId: null, timeoutMs: null, shutdown: false },
+        },
         lines: 1,
       }),
     );
     expect(fold(lines)).toEqual(activity({ lastMovedAt: at(5), lines: 2 }));
     const timed = toolUse(at(0), "toolu_02", "Bash", { command: "bun test", timeout: 120000 });
     expect(fold([timed]).pending).toEqual({
-      toolu_02: { tool: "Bash", at: at(0), taskId: null, timeoutMs: 120000 },
+      toolu_02: { tool: "Bash", at: at(0), taskId: null, timeoutMs: 120000, shutdown: false },
     });
   });
+
+  test(
+    "a SendMessage approving a shutdown request is marked on its pending call, since Claude Code ends the agent's process inside it and no result follows: " +
+      "read as any pending call, a teammate that had delivered and shut down was said stuck on SendMessage at 30 minutes, then again at 60, 120, and 240; " +
+      "the hook attachment after it changes nothing, and a decline or a plain report is an ordinary call",
+    () => {
+      const approval = shutdownResponse("builder-a", true);
+      const lines = [
+        toolUse(at(0), "toolu_01", "Bash", { command: "bun test" }),
+        toolResult(at(0, 1), "toolu_01"),
+        said(at(0, 2), "end_turn"),
+        userText(at(1), shutdownRequest("builder-a")),
+        toolUse(at(1, 5), "toolu_02", "SendMessage", { to: "team-lead", message: approval }),
+        attachment(at(1, 6), {
+          type: "hook_success",
+          hookEvent: "PreToolUse",
+          hookName: "PreToolUse:SendMessage",
+          toolUseID: "toolu_02",
+        }),
+      ];
+      const approved = activity({
+        lastMovedAt: at(1, 6),
+        runSince: at(1, 5),
+        pending: {
+          toolu_02: {
+            tool: "SendMessage",
+            at: at(1, 5),
+            taskId: "team-lead",
+            timeoutMs: null,
+            shutdown: true,
+          },
+        },
+        lines: 6,
+      });
+      expect(fold(lines)).toEqual(approved);
+
+      for (const [reason, message] of [
+        ["a decline", shutdownResponse("builder-a", false)],
+        ["a plain report", "the report: three findings"],
+      ] as Array<[string, unknown]>) {
+        const call = toolUse(at(0), "toolu_03", "SendMessage", { to: "team-lead", message });
+        expect(fold([call]).pending, reason).toEqual({
+          toolu_03: {
+            tool: "SendMessage",
+            at: at(0),
+            taskId: "team-lead",
+            timeoutMs: null,
+            shutdown: false,
+          },
+        });
+      }
+    },
+  );
 
   test("a string user line arriving with calls pending abandons every one of them: the interruption reached the agent before any result did", () => {
     const lines = [
@@ -254,7 +309,9 @@ describe("the transcript reducer", () => {
     expect(fold([...pending, mixed])).toEqual(
       activity({
         lastMovedAt: at(2),
-        pending: { toolu_02: { tool: "Read", at: at(0, 1), taskId: null, timeoutMs: null } },
+        pending: {
+          toolu_02: { tool: "Read", at: at(0, 1), taskId: null, timeoutMs: null, shutdown: false },
+        },
         named: { "/home/user/repo/README.md": at(0, 1) },
         lines: 3,
       }),
@@ -395,7 +452,13 @@ describe("the transcript reducer", () => {
         lastMovedAt: at(12),
         runSince: at(12),
         pending: {
-          toolu_04: { tool: "TaskStop", at: at(12), taskId: "reviewer", timeoutMs: null },
+          toolu_04: {
+            tool: "TaskStop",
+            at: at(12),
+            taskId: "reviewer",
+            timeoutMs: null,
+            shutdown: false,
+          },
         },
         children: {
           [CHILD_A]: {
@@ -844,57 +907,6 @@ describe("the transcript reducer", () => {
     expect(children[CHILD_B]).toMatchObject({ at: at(1, 1), outcome: "running" });
   });
 
-  test("a saved transcript without `stops` is replayed from its start, since its children's `at` may be resume times; one with `stops` keeps its cursor, a cursor without `size` taking its offset; a map that is not an object is no transcript", () => {
-    const children = {
-      [CHILD_B]: { name: "reviewer", at: at(20, 1), outcome: "running", finishedAt: null },
-      [CHILD_C]: { name: "reviewer", at: at(2, 1), outcome: "finished" },
-    };
-    const saved = {
-      cursor: { offset: 4096, ino: 7, size: 4200 },
-      state: { ...activity({}), children },
-    };
-    const { stops: _stops, ...withoutStops } = saved.state;
-    expect(normalizeTranscript({ ...saved, state: withoutStops })).toEqual(initialTranscript());
-    // A pending call saved before `timeoutMs` would be judged by the plain bound: replayed too.
-    const withoutTimeout = {
-      ...saved.state,
-      pending: { toolu_01: { tool: "Bash", at: at(3), taskId: null } },
-    };
-    expect(normalizeTranscript({ ...saved, state: withoutTimeout })).toEqual(initialTranscript());
-    // An activity saved before `runSince`, or before `runPending`, cannot say whether a finished child
-    // ran again: replayed too.
-    const { runSince: _runSince, ...withoutRun } = saved.state;
-    expect(normalizeTranscript({ ...saved, state: withoutRun })).toEqual(initialTranscript());
-    const { runPending: _runPending, ...withoutPending } = saved.state;
-    expect(normalizeTranscript({ ...saved, state: withoutPending })).toEqual(initialTranscript());
-
-    const kept = normalizeTranscript({
-      cursor: { offset: 4096 },
-      state: { ...saved.state, children: { [CHILD_C]: { ...children[CHILD_C], since: at(2, 1) } } },
-    });
-    expect(kept?.cursor).toEqual({ offset: 4096, ino: null, size: 4096 });
-    expect(kept?.state.named).toEqual({});
-    // The version before kept the paths alone: each loads as named long ago.
-    const pathsAlone = normalizeTranscript({
-      ...saved,
-      state: { ...saved.state, named: ["/repo/.worktrees/x", 7] },
-    });
-    expect(pathsAlone?.state.named).toEqual({ "/repo/.worktrees/x": "1970-01-01T00:00:00.000Z" });
-    expect(kept?.state.children).toEqual({
-      [CHILD_C]: {
-        name: "reviewer",
-        at: at(2, 1),
-        since: at(2, 1),
-        outcome: "finished",
-        finishedAt: null,
-      },
-    });
-
-    expect(normalizeTranscript({ ...saved, state: { ...saved.state, children: 5 } })).toBeNull();
-    expect(normalizeTranscript({ ...saved, state: { ...withoutStops, children: 5 } })).toBeNull();
-    expect(normalizeTranscript({ cursor: "far", state: saved.state })).toBeNull();
-  });
-
   test("a SendMessage to a finished named child (the latest spawn under that name) resumes it as of the message, keeping its spawn time; a stopped one stays stopped, and an errored or unknown send resumes nothing", () => {
     const finished = [
       ...spawns,
@@ -1089,7 +1101,9 @@ describe("the incremental reader", () => {
     expect(readTranscript(transcript, file)).toBe(true);
     const pending = activity({
       lastMovedAt: at(0, 30),
-      pending: { toolu_01: { tool: "Bash", at: at(0), taskId: null, timeoutMs: null } },
+      pending: {
+        toolu_01: { tool: "Bash", at: at(0), taskId: null, timeoutMs: null, shutdown: false },
+      },
       lines: 1,
     });
     expect(transcript).toEqual({ cursor: cursor(Buffer.byteLength(first) + 1), state: pending });
@@ -1137,7 +1151,9 @@ describe("the incremental reader", () => {
       state: activity({
         lastMovedAt: at(50),
         runSince: at(50),
-        pending: { toolu_09: { tool: "Bash", at: at(50), taskId: null, timeoutMs: null } },
+        pending: {
+          toolu_09: { tool: "Bash", at: at(50), taskId: null, timeoutMs: null, shutdown: false },
+        },
         lines: 1,
       }),
     });
@@ -1159,7 +1175,9 @@ describe("the incremental reader", () => {
       state: activity({
         lastMovedAt: at(59),
         runSince: at(59),
-        pending: { toolu_12: { tool: "Bash", at: at(59), taskId: null, timeoutMs: null } },
+        pending: {
+          toolu_12: { tool: "Bash", at: at(59), taskId: null, timeoutMs: null, shutdown: false },
+        },
         lines: 1,
       }),
     });

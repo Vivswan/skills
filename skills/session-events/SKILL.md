@@ -77,19 +77,21 @@ runEvents<File>({
 
 ## The Source Contract
 
-A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and three optional:
+A source script imports `runEvents` from `scripts/session-events.mts` and calls it at top level with one object; `runEvents` reads the process's arguments and runs the whole CLI for that source. Four fields and five optional:
 
-| Field                        | The file source says                          | The daemon uses it for                                                                                       |
-| ---------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `name`                       | `"log-events"` (`[a-z0-9-]{1,40}`)            | the file stems, the envelope's `from-name`, the `msg_id` prefix, the closing line                            |
-| `interval`                   | `5`                                           | seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400                        |
-| `idleInterval` (optional)    | not set, so `5`                               | the longest wait between polls; a quiet poll doubles the wait from `interval` up to it                       |
-| `usage` (optional)           | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags                                  |
-| `parseTarget(args)`          | the path, refused unless absolute             | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2 |
-| `poll(targets, io)`          | stat each file, compare with its saved size   | every poll: the events, and whether anything is still moving                                                 |
-| `summary(target)` (optional) | not set, so the target line stands alone      | `status`: the lines printed under each target, what stands right now (a standing alert each)                 |
+| Field                        | The file source says                          | The daemon uses it for                                                                                            |
+| ---------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `name`                       | `"log-events"` (`[a-z0-9-]{1,40}`)            | the file stems, the envelope's `from-name`, the `msg_id` prefix, the closing line                                 |
+| `interval`                   | `5`                                           | seconds between polls while busy, and the default of `--interval`; floor 1, cap 86400                             |
+| `idleInterval` (optional)    | not set, so `5`                               | the longest wait between polls; a quiet poll doubles the wait from `interval` up to it                            |
+| `usage` (optional)           | one line: the target is an absolute file path | the lines `--help` ends with: the target's forms and the source's own flags                                       |
+| `entry` (optional)           | not set, so the running file                  | the script the usage line and the start command name; a source run as a bundle names the script it was built from |
+| `wrapperPid` (optional)      | not set: it runs as itself                    | the process that runs the source as a bundle and waits on it; a `--pid` naming it is refused as the daemon's own  |
+| `parseTarget(args)`          | the path, refused unless absolute             | `watch <target> [flags]`: the arguments after `watch`, the target text first; throws `UsageError` for exit 2      |
+| `poll(targets, io)`          | stat each file, compare with its saved size   | every poll: the events, and whether anything is still moving                                                      |
+| `summary(target)` (optional) | not set, so the target line stands alone      | `status`: the lines printed under each target, what stands right now (a standing alert each)                      |
 
-The daemon keeps `targets`, a map from the text the user typed to the object `parseTarget` returned, and saves it after every poll. A source writes its cursor onto each target object: the file source keeps the last size there. The daemon adds nothing else to the state but the event counter.
+The daemon keeps `targets`, a map from the text the user typed to the object `parseTarget` returned, and saves it after every poll. A source writes its cursor onto each target object, or puts a new object under the same key: the file source keeps the last size there. The daemon adds nothing else to the state but the event counter.
 
 An event is `{ kind, text, url }` plus any field the source adds; the daemon prepends `id` and `at`. The log line is `{"id":17,"at":"2026-10-12T14:03:20Z","kind":"changed","text":"/var/log/build.log: 0 to 1097 bytes","url":"file:///var/log/build.log"}`.
 
@@ -98,7 +100,7 @@ One added field the daemon reads: `level`, either `alert` (the default: delivere
 Rules a poll keeps:
 
 - **It returns, it does not stream.** The events come back in one array; the daemon numbers and stamps them, appends them to the log, saves the state, then delivers.
-- **It writes cursors on the way to returning.** A poll that throws is a failed poll: the daemon logs the reason and saves nothing, so a source that moved a cursor before throwing would skip what the cursor passed.
+- **It writes cursors on the way to returning.** A poll that throws is a failed poll: the daemon logs the reason and saves nothing the poll wrote, a cursor it moved before throwing included.
 - **`busy` says which interval comes next.** True while something is pending or an event just happened, and the next poll comes after `interval`; false doubles the wait, up to `idleInterval`.
 - **Text is the source's own words.** Identifiers, counts, states, URLs: never a line quoted from the polled system (below).
 

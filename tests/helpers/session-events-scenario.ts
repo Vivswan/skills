@@ -232,13 +232,16 @@ export class Scenario {
   /** Starts a daemon as a session would, as a child, and waits for its banner in the log (or its exit). */
   async start(options: StartOptions = {}): Promise<Daemon> {
     const args = ["daemon", ...(options.id === undefined ? [] : ["--id", options.id])];
+    const owner = ownerKeyOf(options, (inbox) => Number(/(\d+)\.sock$/.exec(inbox)?.[1]));
+    // A source that builds itself runs as its bundle, a child of the process spawned here: the banner names that child's pid, so banners are counted.
+    const banner = new RegExp(`${this.program.source} daemon \\d+ for `, "g");
+    const banners = () => this.log(owner).match(banner)?.length ?? 0;
+    const before = banners();
     const daemon = this.spawn([...args, ...(options.args ?? [])], options);
     this.daemons.push(daemon);
     harness().started.push(daemon);
-    const owner = ownerKeyOf(options, (inbox) => Number(/(\d+)\.sock$/.exec(inbox)?.[1]));
-    const banner = `${this.program.source} daemon ${daemon.pid} for `;
     const deadline = Date.now() + 5000;
-    while (!this.log(owner).includes(banner) && daemon.exitCode === null && Date.now() < deadline) {
+    while (banners() === before && daemon.exitCode === null && Date.now() < deadline) {
       await Bun.sleep(20);
     }
     return daemon;

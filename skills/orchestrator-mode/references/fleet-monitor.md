@@ -33,6 +33,8 @@ Under the daemon no turn is spent on "nothing changed yet", and no subagent swee
 
 The transcript reading is incremental: each poll reads what an `agent-*.jsonl` gained since the last. The interval is 60 s while something moves, backing off to 300 s. The command contract (`--help`) is quoted under The Daemon at the end of this page.
 
+A restarted daemon carries on from the state it saved. A reading in any other shape, another version's included, starts the target over: every transcript is read again, and what stands is said once more. When what `watch` was told is unreadable too, the poll fails and the log says to `watch` the target again.
+
 ## One Role, Two Instruments
 
 The fleet monitor is a role: watch the fleet, and report each transition with how long the state behind it has held. It judges nothing, so every call and every action stays the lead's.
@@ -89,6 +91,10 @@ Nothing yet.
 **`agent <name>: stopped by the lead`** (note, `agent`)
 
 The stop landed.
+
+**`agent <name>: shut down on request`** (note, `agent`)
+
+The agent approved a shutdown request, and Claude Code ends a teammate's process inside that call. The approval never gets a result: it is the agent's last call, never a stuck `SendMessage`; nothing to do.
 
 **`agent <name>: fine again`** (note, `agent`)
 
