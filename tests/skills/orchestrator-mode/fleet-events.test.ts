@@ -596,6 +596,73 @@ describe("fleet-events.mts", () => {
     }
   }, 30000);
 
+  test("an ended job is stranded only once its agent is idle: on a running agent, whose notice the harness queues until its next tool round, " +
+    "it is no alert, and the notice landing says nothing; an open turn still past the --quiet-after the watch names is stranded, " +
+    "and running again under the alert is fine again, even with the tasks directory gone", async () => {
+    const s = new Scenario(PROGRAM, "stranded-idle");
+    const box = await s.inbox("a");
+    const session = sessionDir(s.fixtureDir);
+    const { tasks } = claudeTmp(s);
+    mkdirSync(tasks, { recursive: true });
+    const working = (agentId: string, taskId: string, launched: number, moved: number): Line[] => [
+      toolUse(
+        ago(launched),
+        "toolu_bg",
+        "Bash",
+        { command: "bun run check", run_in_background: true },
+        agentId,
+      ),
+      toolResult(ago(launched), "toolu_bg", {
+        toolUseResult: { backgroundTaskId: taskId },
+        agentId,
+      }),
+      said(ago(moved), null, agentId),
+    ];
+    const pathA = writeAgent(
+      session,
+      A,
+      { name: "builder-a", description: "build" },
+      working(A, "b1a2b3c4d", 3, 1),
+    );
+    const pathB = writeAgent(
+      session,
+      B,
+      { name: "builder-b", description: "build" },
+      working(B, "b9z8y7x6w", 8, 6),
+    );
+    for (const taskId of ["b1a2b3c4d", "b9z8y7x6w"]) {
+      writeFileSync(join(tasks, `${taskId}.output`), "all green\n[exited with code 0]\n");
+    }
+    await s.start({ inbox: box.path });
+    watch(s, box.path, session, "--quiet-after", "4");
+    const stranded: [string, string, string] = [
+      "alert",
+      "agent builder-b: stranded, job b9z8y7x6w ended with no notice",
+      fileUrl(pathB),
+    ];
+    expect(rows(s)).toEqual([stranded]);
+
+    appendLines(pathA, [
+      attachment(
+        ago(0),
+        { type: "queued_command", commandMode: "task-notification", prompt: notice("b1a2b3c4d") },
+        A,
+      ),
+    ]);
+    expect(polled(s, box.path)).toBe(0);
+    expect(rows(s)).toEqual([stranded]);
+    expect(await delivered(box, 1)).toEqual([[stranded[1]]]);
+
+    renameSync(tasks, `${tasks}.away`);
+    appendLines(pathB, [said(ago(0), null, B)]);
+    expect(polled(s, box.path)).toBe(2);
+    expect(rows(s).slice(1)).toEqual([
+      ["alert", `fleet: cannot read job output: ${tasks} is no directory`, fileUrl(tasks)],
+      ["note", "agent builder-b: fine again", fileUrl(pathB)],
+    ]);
+    s.stop({ inbox: box.path });
+  }, 30000);
+
   test("a child still for thirty minutes is stuck on agent, a foreground one joined through its sidecar toolUseId and a background one through its agentId, " +
     "naming the child and its last move; a moving child is never stuck, and the child moving again is fine again", async () => {
     const s = new Scenario(PROGRAM, "kids");

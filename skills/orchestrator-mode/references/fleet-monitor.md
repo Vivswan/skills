@@ -68,7 +68,9 @@ A child, foreground or background, whose own transcript has been still for thirt
 
 **`agent <name>: stranded, job <id> ended with no notice`** (alert, `agent`)
 
-The job's output file under the harness's tasks directory ends with its exit line while the transcript carries no notice for it; said at once. A job whose own last line spells that footer reads as ended too: open the file. The harness holds an idle teammate's job notice until its next input, so message the agent.
+The job's output file under the harness's tasks directory ends with its exit line, the transcript carries no notice for it, and the agent is idle: its turn ended, or an open turn has been still past `--quiet-after`. A running agent gets the notice at its next tool round, so its ended job is no alert, and one that runs again under the alert is `fine again`.
+
+A job whose own last line spells that footer reads as ended too: open the file. The harness holds an idle teammate's job notice until its next input, so message the agent.
 
 **`agent <name>: stuck 12 min mid-turn, nothing pending`** (alert, `agent`)
 

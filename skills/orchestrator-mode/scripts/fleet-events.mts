@@ -725,14 +725,35 @@ function isDirectory(path: string): boolean {
   }
 }
 
-/** What the background jobs say, oldest first: stranded once one's output ended with no notice; fine while every one runs; unread while the tasks directory is not there, since no job can be read; null with none. */
-function jobsSituation(target: Target, state: Activity, io: Io): Situation | null {
+/** Whether the transcript has been still past `--quiet-after`, the bound an open turn is given; false for one never read. */
+function quiet(target: Target, state: Activity, nowMs: number): boolean {
+  if (state.lastMovedAt === null) return false;
+  return nowMs - Date.parse(state.lastMovedAt) >= target.quietAfterMinutes * MINUTE_MS;
+}
+
+/** Whether the agent is idle: its turn ended, or an open turn is quiet. */
+function agentIdle(target: Target, state: Activity, nowMs: number): boolean {
+  return state.turn === "ended" || quiet(target, state, nowMs);
+}
+
+/**
+ * What the background jobs say, oldest first: fine while the agent runs; for an idle agent,
+ * stranded once one's output ended with no notice, fine while every one runs, and unread while the
+ * tasks directory is not there, since no job can be read; null with none.
+ */
+function jobsSituation(target: Target, state: Activity, nowMs: number, io: Io): Situation | null {
   const jobs = Object.entries(state.jobs).sort(byTime(([, job]) => job.at));
-  if (jobs.length > 0 && !isDirectory(target.tasksDir)) return { kind: "unread" };
+  if (jobs.length === 0) return null;
+
+  // The harness hands a running agent a job's notice at its next tool round and holds an idle agent's until its next input.
+  if (!agentIdle(target, state, nowMs)) return { kind: "fine" };
+
+  if (!isDirectory(target.tasksDir)) return { kind: "unread" };
+
   for (const [job] of jobs) {
     if (jobEnded(join(target.tasksDir, `${job}.output`), io)) return { kind: "stranded", job };
   }
-  return jobs.length > 0 ? { kind: "fine" } : null;
+  return { kind: "fine" };
 }
 
 /**
@@ -764,12 +785,13 @@ function stillnessSituation(
   const movedAt = entry.state.lastMovedAt;
   if (movedAt === null) return { kind: "fine" };
 
-  const stillMs = nowMs - Date.parse(movedAt);
   const signalled = signalReached(target, agentId, entry);
   if (entry.state.turn === "open" && !signalled) {
-    if (stillMs < target.quietAfterMinutes * MINUTE_MS) return { kind: "fine" };
+    if (!quiet(target, entry.state, nowMs)) return { kind: "fine" };
     return { kind: "stall", since: movedAt };
   }
+
+  const stillMs = nowMs - Date.parse(movedAt);
   if (stillMs < ENDED_GRACE_MINUTES * MINUTE_MS) return { kind: "fine" };
   return { kind: "ended", since: movedAt, signalled };
 }
@@ -819,7 +841,7 @@ function situationOf(
   const children = childrenSituation(target, entry.state, nowMs, failed);
   if (children !== null) return children;
 
-  const jobs = jobsSituation(target, entry.state, io);
+  const jobs = jobsSituation(target, entry.state, nowMs, io);
   if (jobs !== null) return jobs;
 
   return stillnessSituation(target, agentId, entry, nowMs);
