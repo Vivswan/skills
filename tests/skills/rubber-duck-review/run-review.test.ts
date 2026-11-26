@@ -1491,7 +1491,7 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("past 100 scratch dirs the oldest finished reviews go, age aside; a review still running never does", () => {
+  test("past 100 finished reviews the oldest go, age aside; a review still running never does, and neither it nor a prompt dir takes a place in the count: counted, a hundred prompt dirs minted after a review finished had the next launch purge it, its verdict with it", () => {
     // One machine held 776 rubber-duck-* dirs under 24 h old; age alone never bounds a busy day.
     const privateTmp = temp.dir("run-review-cap-");
     const hoursAgo = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000);
@@ -1531,6 +1531,15 @@ describe("run-review.mts", () => {
     expect(existsSync(minted)).toBe(true);
     expect(existsSync(young)).toBe(true);
     for (const dir of finished.slice(0, 6)) expect(existsSync(dir), dir).toBe(false);
+    for (const dir of finished.slice(6)) expect(existsSync(dir), dir).toBe(true);
+
+    // A hundred prompt dirs minted since, and a review launched since: every finished review is now past the newest 100 dirs, and none is past 100 finished reviews.
+    for (let i = 0; i < 100; i += 1) {
+      makeDir(`rubber-duck-prompt-cap-later-${String(i).padStart(3, "0")}`, 0.1, null);
+    }
+    makeDir("rubber-duck-cap-running-later", 0.05, record());
+    expect(run(["prepare", "cap-probe"], { TMPDIR: privateTmp }).code).toBe(0);
+    expect(existsSync(young)).toBe(true);
     for (const dir of finished.slice(6)) expect(existsSync(dir), dir).toBe(true);
   });
 
