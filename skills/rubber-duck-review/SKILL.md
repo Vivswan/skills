@@ -37,7 +37,7 @@ Use this skill when someone asks for:
   - Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.
   - Where codex's bubblewrap sandbox cannot start (step 4's probe), or `--network` asks for it, the script reviews a snapshot copy instead (step 4), allowing the commands codex asks to run there and a network-only sandbox grant. Nothing confines a command inside the copy: the copy keeps a write it forbade out of the checkout by path alone, and a file edit through codex's own tool is refused under both.
 - **The reviewer reaches the internet.** The fact behind a change often lives on a provider's page, not in the diff (step 3's platform-claims rule), so every reviewer gets the web it can have:
-  - codex: the launch asks for its live web search (`CODEX_CONFIG` carries `web_search = live` over the caller's own; a managed install that caps the modes still wins), and it searches and opens pages under `read-only`. Shell network stays refused there; `--network` (step 4) opens it by the snapshot copy.
+  - codex: the launch asks for its live web search (`CODEX_CONFIG` carries `web_search = live` over the caller's own; a managed install that caps the modes still wins), and where its provider offers hosted search it searches and opens pages under `read-only`. Shell network stays refused there; `--network` (step 4) opens it by the snapshot copy.
   - claude: plan mode's web search and fetch tools, where its settings let them run unasked. One that asks is refused like any other request. The trajectory shows the denial, and the review fails only when claude ends the turn on it.
   - copilot: no web at all, so it reports every platform claim as unverified.
 
@@ -169,7 +169,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
     - It does not stream JSON, so there is no liveness signal, no trajectory in the report, and no tool-call check on its verdict. It has no schema flag, so only the prompt asks it for the JSON object.
 - `--criteria <name>[,<name>]` or `--criteria none`: which installed skills' Review Criteria pages the launcher names in the prompt (step 3). Absent, this collection's declaring skills.
 - `--network`: codex reviews the snapshot copy by choice (the copy mode above, chosen rather than fallen back to), so the commands it asks to run are allowed and its shell reaches the network: `curl`, an API read. Nothing confines them there; the copy keeps a write out of the checkout by path alone.
-  - A sandbox-permission grant codex asks for instead (its `request_permissions` tool) is allowed there too when it asks for network alone, so network access goes through and codex's own edits stay refused. Under `read-only` it is refused. Unlike a refused command, a refused grant ends no turn: codex goes on without it, and the trajectory shows the denial.
+  - A sandbox-permission grant codex asks for instead (its `request_permissions` tool) is allowed there too when it asks for network alone, so network access goes through and codex's own edits stay refused. Under `read-only` it is refused. A refused grant ends no turn: codex goes on without it, and the trajectory shows the denial.
   - codex alone: claude's plan mode has its web tools, and copilot cannot reach the network. A usage error for either.
   - Say in the prompt what the shell is for and name the commands you want run (`curl` against which page, which API read).
   - The hosted web search needs no flag: every launch asks for it (step 1).
