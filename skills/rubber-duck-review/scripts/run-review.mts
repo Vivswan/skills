@@ -224,11 +224,23 @@ const SCRATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /** Past this many finished reviews the oldest go too: a busy day outruns the retention. */
 const SCRATCH_KEEP = 100;
+
+/** How often `--extract --wait` reads the launch record. */
 const WAIT_POLL_MS = 2000;
+
+/** How long `--extract --wait` polls before it gives up, unless `--timeout` says otherwise. */
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
+
+/** How long the stream may stay silent before the reviewer is killed, unless `--stall` says otherwise. */
 const DEFAULT_STALL_SECONDS = 900;
+
+/** The shape of a seconds argument: whole and positive. */
 const WHOLE_SECONDS = /^[1-9][0-9]*$/;
+
+/** The longest delay a timer takes, a 32-bit count of milliseconds; past it the timer fires at once. */
 const MAX_TIMER_SECONDS = 2147483;
+
+/** Every flag of both forms, parsed together so a flag of the other form is refused by name, never as unknown. */
 const FLAGS = {
   background: { type: "boolean" },
   capture: { type: "string" },
@@ -239,11 +251,21 @@ const FLAGS = {
   timeout: { type: "string" },
 } as const;
 
+/** The flags a launch takes. */
 const LAUNCH_FLAGS = ["background", "capture", "network", "stall", "criteria"] as const;
+
+/** The flags `--extract` takes. */
 const EXTRACT_FLAGS = ["wait", "timeout"] as const;
+
+/** The status a stalled run records, which the failure reports as itself. */
 const STALL_STATUS = /^stalled: /;
+
+/** The file `prepare` leaves in a minted prompt dir: the proof a launch checks. */
 const MINT_MARKER = ".minted-by-run-review";
+
+/** A section name `prepare` accepts: a bare file name. */
 const SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 /** Thrown after exit output is queued, so `never`-typed helpers stay honest. */
 class SilentExit extends Error {}
 
@@ -854,13 +876,10 @@ function adapterEnv(
   return env;
 }
 
-/** The permission request codex-acp sends for codex's request_permissions tool (its SandboxPermissionReporter): a
- * sandbox-permission grant, network access among them, reported as kind "other" under this title. */
+/** codex-acp's title for a request_permissions grant (its SandboxPermissionReporter), reported as kind "other". */
 const SANDBOX_PERMISSIONS_TITLE = "Additional sandbox permissions";
 
-/** The request's rawInput when it asks for network alone: the profile as the adapter's reporter shapes it, with the
- * filesystem part null or absent, as the wire spells "none". The display locations are no proof, since a filesystem
- * entry on a special path (a project root) names no path there. */
+/** A grant's rawInput asking for network alone: the adapter's profile, its filesystem part null or absent. */
 const NETWORK_ONLY_GRANT = z.object({
   permissions: z.object({
     network: z.record(z.string(), z.unknown()),
@@ -868,8 +887,7 @@ const NETWORK_ONLY_GRANT = z.object({
   }),
 });
 
-/** What codex may do when it asks under its own read-only sandbox: a command that asks is one the sandbox would
- * refuse (a write, the network), so reads and searches alone. */
+/** Under codex's own read-only sandbox: reads and searches, since a command that asks is one the sandbox refuses. */
 const READ_ONLY_KINDS = new Set(["read", "search"]);
 
 /** Inside the snapshot copy, where the copy is what keeps a write out of the checkout: commands and fetches too. */
@@ -893,7 +911,8 @@ function policyFor(tool: AcpTool, launch: Launch): PermissionPolicy {
   };
 }
 
-/** The sandbox-permission request asking for network alone. */
+/** The sandbox-permission request asking for network alone, read from the profile it carries. The display locations
+ * are no proof: a filesystem entry on a special path (a project root) names no path there. */
 function networkOnlyGrant(toolCall: ToolCallFacts): boolean {
   return (
     toolCall.title === SANDBOX_PERMISSIONS_TITLE &&

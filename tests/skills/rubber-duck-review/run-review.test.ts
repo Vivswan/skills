@@ -99,6 +99,7 @@ function acpUpdate(update: Record<string, unknown>): string {
   return JSON.stringify({ event: "update", update });
 }
 
+/** A codex read, as the capture holds it. */
 const ACP_TOOL_LINE = acpUpdate({
   sessionUpdate: "tool_call",
   toolCallId: "call-1",
@@ -106,12 +107,17 @@ const ACP_TOOL_LINE = acpUpdate({
   kind: "read",
   status: "in_progress",
 });
+
+/** The verdict as one message chunk. */
 const ACP_VERDICT_LINE = acpUpdate({
   sessionUpdate: "agent_message_chunk",
   content: { type: "text", text: JSON.stringify(CODEX_VERDICT) },
 });
+
+/** The turn's end. */
 const ACP_STOP_LINE = JSON.stringify({ event: "stop", stopReason: "end_turn" });
 
+/** codex on PATH for the sandbox probe alone; STUB_SANDBOX=bwrap plays a container that refuses bubblewrap. */
 const FAKE_CODEX = `#!/usr/bin/env bash
 # codex itself is on PATH for the sandbox probe alone: STUB_SANDBOX=bwrap plays a container whose AppArmor
 # profile denies bubblewrap's mount propagation. Any other invocation is a violation.
@@ -125,11 +131,16 @@ fi
 violate "codex argv: $*"; exit 64
 `;
 
+/** The fake ACP agent, run from its real path so the SDK resolves. */
 const ACP_STUB = join(ROOT, "tests", "helpers", "acp-agent-stub.ts");
+
+/** Both adapter names run the fake ACP agent; STUB_SCENARIO names the script. */
 const FAKE_ACP_ADAPTER = `#!/usr/bin/env bash
 # Both adapter names run the fake ACP agent from its real path, where the SDK resolves; STUB_SCENARIO names the script.
 exec "${process.execPath}" "${ACP_STUB}" "$@"
 `;
+
+/** codex-acp's modes, the current one never the one the review needs, so the launch must set it. */
 const CODEX_MODES = {
   currentModeId: "workspace-write",
   availableModes: [
@@ -137,7 +148,11 @@ const CODEX_MODES = {
     { id: "workspace-write", name: "Workspace access", description: "" },
   ],
 };
+
+/** The verdict as the stub's final message. */
 const VERDICT_TEXT = JSON.stringify(CODEX_VERDICT);
+
+/** A file read that asks, as codex's does. */
 const READ_STEP = {
   type: "tool",
   title: "cat src/a.ts",
@@ -145,14 +160,16 @@ const READ_STEP = {
   permission: true,
   output: "one",
 };
+
+/** A command that asks: allowed inside the snapshot copy, refused under codex's own sandbox. */
 const EXEC_STEP = {
   type: "tool",
   title: "git --no-pager diff --cached",
   kind: "execute",
   permission: true,
 };
-// The hosted web search as codex-acp reports it: a search tool call whose rawInput carries codex's item (type, id,
-// query, action), never a permission request.
+
+/** The hosted web search as codex-acp reports it: a search whose rawInput carries codex's item, never asking. */
 const WEB_SEARCH_STEP = {
   type: "tool",
   title: "Web search",
@@ -164,9 +181,8 @@ const WEB_SEARCH_STEP = {
     action: { type: "search", query: null, queries: ["example provider default page size"] },
   },
 };
-// codex's request_permissions tool as codex-acp reports it: a permission request of kind other under this title,
-// the profile asked for in rawInput, with the wire's null for a part not asked for. A refusal answers it with an
-// empty grant and the turn goes on, unlike a refused command or edit.
+
+/** codex's request_permissions grant as codex-acp reports it: kind other, the profile in rawInput, continuing on refusal. */
 const GRANT_STEP = {
   type: "tool",
   title: "Additional sandbox permissions",
@@ -179,8 +195,8 @@ const GRANT_STEP = {
     environmentId: "env-1",
   },
 };
-// The same grant with a filesystem part, the wire's null for each field not asked for: a literal path, which the
-// locations name, and a special path, which they do not.
+
+/** The same grant with a filesystem part on a literal path, which the locations name. */
 const GRANT_PATH_STEP = {
   ...GRANT_STEP,
   locations: [{ path: "src/a.ts" }],
@@ -193,6 +209,8 @@ const GRANT_PATH_STEP = {
     environmentId: "env-1",
   },
 };
+
+/** The same grant with a filesystem part on a special path, which the locations never name. */
 const GRANT_TOKEN_STEP = {
   ...GRANT_STEP,
   rawInput: {
@@ -213,22 +231,27 @@ const GRANT_TOKEN_STEP = {
     environmentId: "env-1",
   },
 };
-// An MCP tool call as codex-acp reports it: an execute whose rawInput names the server and the tool.
+
+/** An MCP tool call as codex-acp reports it: an execute whose rawInput names the server and the tool. */
 const MCP_STEP = {
   type: "tool",
   title: "mcp.docs.lookup",
   kind: "execute",
   rawInput: { server: "docs", tool: "lookup", arguments: { query: "page size" } },
 };
-// The same lookup as claude-agent-acp reports it: kind other, the tool's own arguments as rawInput.
+
+/** The same lookup as claude-agent-acp reports it: kind other, the tool's own arguments as rawInput. */
 const CLAUDE_MCP_STEP = {
   type: "tool",
   title: "mcp__docs__lookup",
   kind: "other",
   rawInput: { query: "page size" },
 };
-// Any other request of kind other, which no confinement allows.
+
+/** Any other request of kind other, which no confinement allows. */
 const OTHER_STEP = { type: "tool", title: "Generate image", kind: "other", permission: true };
+
+/** A file edit that asks: refused under every confinement. */
 const EDIT_STEP = {
   type: "tool",
   title: "apply_patch",
@@ -236,8 +259,14 @@ const EDIT_STEP = {
   permission: true,
   locations: [{ path: "src/a.ts" }],
 };
+
+/** The same edit, its permission request naming the call by id alone. */
 const BARE_EDIT_STEP = { ...EDIT_STEP, askBare: true };
+
+/** The turn's end. */
 const END = { type: "stop", reason: "end_turn" };
+
+/** A reasoning chunk. */
 const THINK = { type: "thought", text: "still reading" };
 
 /** One scripted turn under an adapter's modes, codex's unless `extra` says otherwise, whose current mode is never the

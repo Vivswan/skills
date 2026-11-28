@@ -178,8 +178,7 @@ export async function githubUser(io: Io, name: string): Promise<Cell> {
 /** The default for `--github-stars`: only a famous repository counts. */
 export const GITHUB_STARS_TAKEN_DEFAULT = 1000;
 
-/** An exact-name repository under this is not even a note. The search reads pages down to it,
- * so a repository between it and the bar still shows as `free(repo with N stars)`. */
+/** Below this an exact-name repository is not even a note; up to the bar it still shows as `free(repo with N stars)`. */
 export const GITHUB_STARS_NOTED = 20;
 
 /** GitHub search serves at most 1000 results; past that an exact-name hit cannot be ruled out. */
