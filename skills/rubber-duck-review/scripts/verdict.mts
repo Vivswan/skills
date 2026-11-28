@@ -358,7 +358,8 @@ function readAcpUpdate(reading: Reading, update: Record<string, unknown>): void 
 }
 
 /** The turn's end: end_turn makes the text since the last tool call the verdict; any other stop reason fails the
- * review, a cancel named by the permission the review refused (codex ends the turn on a refusal). */
+ * review, a cancel named by the permission the review refused (codex ends the turn on a refused edit; a refused
+ * grant or command may leave it running, and the verdict then stands). */
 function readAcpStop(reading: Reading, stopReason: string): void {
   if (stopReason !== "end_turn") {
     reading.trajectory.push({ event: "stop", text: stopReason });
