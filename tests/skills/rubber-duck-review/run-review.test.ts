@@ -1038,7 +1038,7 @@ describe("run-review.mts", () => {
     }
   });
 
-  test("a sandbox-permission grant asking for network alone is allowed inside the snapshot copy; one with a filesystem part (a path, or a special token the locations never name), and any grant under codex's own sandbox, is refused and the review goes on without it; any other request of kind other is refused in both", () => {
+  test("a network-only sandbox grant is allowed inside the copy; one with a filesystem part (a path or a special path) or under codex's own sandbox is refused and the review goes on; another request of kind other is refused in both", () => {
     const repo = fixtureRepo();
     const permissions = join(binDir, "permissions-grant");
     const granted = run(

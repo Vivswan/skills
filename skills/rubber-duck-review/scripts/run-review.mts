@@ -49,7 +49,7 @@ import type { Extraction, Tool } from "./verdict.mts";
 
 const USAGE = [
   "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--network] [--stall <seconds>] [--criteria <names>|none]",
-  "codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode, its live web search asked for: a file edit it asks for is refused, and when codex ends the turn on the refusal the review fails naming it",
+  "codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode: a file edit it asks for is refused, and the review fails naming it when codex ends the turn on it",
   "claude runs through the claude-agent-acp adapter on PATH (npm install -g @agentclientprotocol/claude-agent-acp) in its plan mode: its read-only tools run unasked, and whatever asks (a write, a plan approval) is refused",
   "       run-review.mts <codex|claude|copilot> --extract <output-file>",
   "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
