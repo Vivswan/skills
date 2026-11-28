@@ -79,6 +79,13 @@ function verdictFor(reviewer: string) {
     non_blocking: [
       { where: "src/a.ts:3", claim: "misleading name", evidence: `${reviewer} read it` },
     ],
+    unverified: [
+      {
+        where: "src/a.ts:12",
+        claim: "the default page size of the provider is 50",
+        evidence: `${reviewer} found no page that states it`,
+      },
+    ],
     recorded_not_built: ["a bound for a caller that does not exist"],
     summary: `${reviewer.toUpperCase()} VERDICT: correct, no blocking findings`,
   };
@@ -144,6 +151,84 @@ const EXEC_STEP = {
   kind: "execute",
   permission: true,
 };
+// The hosted web search as codex-acp reports it: a search tool call whose rawInput carries codex's item (type, id,
+// query, action), never a permission request.
+const WEB_SEARCH_STEP = {
+  type: "tool",
+  title: "Web search",
+  kind: "search",
+  rawInput: {
+    type: "webSearch",
+    id: "ws-1",
+    query: "",
+    action: { type: "search", query: null, queries: ["example provider default page size"] },
+  },
+};
+// codex's request_permissions tool as codex-acp reports it: a permission request of kind other under this title,
+// the profile asked for in rawInput, with the wire's null for a part not asked for. A refusal answers it with an
+// empty grant and the turn goes on, unlike a refused command or edit.
+const GRANT_STEP = {
+  type: "tool",
+  title: "Additional sandbox permissions",
+  kind: "other",
+  permission: true,
+  onReject: "continue",
+  rawInput: {
+    permissions: { network: { enabled: true }, fileSystem: null },
+    cwd: "/repo",
+    environmentId: "env-1",
+  },
+};
+// The same grant with a filesystem part, the wire's null for each field not asked for: a literal path, which the
+// locations name, and a special path, which they do not.
+const GRANT_PATH_STEP = {
+  ...GRANT_STEP,
+  locations: [{ path: "src/a.ts" }],
+  rawInput: {
+    permissions: {
+      network: { enabled: true },
+      fileSystem: { read: null, write: ["src/a.ts"] },
+    },
+    cwd: "/repo",
+    environmentId: "env-1",
+  },
+};
+const GRANT_TOKEN_STEP = {
+  ...GRANT_STEP,
+  rawInput: {
+    permissions: {
+      network: { enabled: true },
+      fileSystem: {
+        read: null,
+        write: null,
+        entries: [
+          {
+            path: { type: "special", value: { kind: "project_roots", subpath: null } },
+            access: "write",
+          },
+        ],
+      },
+    },
+    cwd: "/repo",
+    environmentId: "env-1",
+  },
+};
+// An MCP tool call as codex-acp reports it: an execute whose rawInput names the server and the tool.
+const MCP_STEP = {
+  type: "tool",
+  title: "mcp.docs.lookup",
+  kind: "execute",
+  rawInput: { server: "docs", tool: "lookup", arguments: { query: "page size" } },
+};
+// The same lookup as claude-agent-acp reports it: kind other, the tool's own arguments as rawInput.
+const CLAUDE_MCP_STEP = {
+  type: "tool",
+  title: "mcp__docs__lookup",
+  kind: "other",
+  rawInput: { query: "page size" },
+};
+// Any other request of kind other, which no confinement allows.
+const OTHER_STEP = { type: "tool", title: "Generate image", kind: "other", permission: true };
 const EDIT_STEP = {
   type: "tool",
   title: "apply_patch",
@@ -172,6 +257,33 @@ const CODEX_SCENARIOS: Record<string, unknown> = {
   ]),
   // A command: allowed inside the snapshot copy, refused under codex's own sandbox.
   execute: acpScenario([EXEC_STEP, { type: "message", text: VERDICT_TEXT }, END]),
+  // A fact that lives on a provider's page: the web search beside a read of the change, and alone.
+  websearch: acpScenario([
+    WEB_SEARCH_STEP,
+    READ_STEP,
+    { type: "message", text: VERDICT_TEXT },
+    END,
+  ]),
+  searchonly: acpScenario([WEB_SEARCH_STEP, { type: "message", text: VERDICT_TEXT }, END]),
+  // An MCP lookup alone: a server answered, the change went unread.
+  mcponly: acpScenario([MCP_STEP, { type: "message", text: VERDICT_TEXT }, END]),
+  // A sandbox-permission grant: allowed inside the snapshot copy, refused under codex's own sandbox, the turn going on.
+  grant: acpScenario([READ_STEP, GRANT_STEP, { type: "message", text: VERDICT_TEXT }, END]),
+  // The same grant with a filesystem part: refused inside the copy too, since it would let edits through unasked.
+  grantpath: acpScenario([
+    READ_STEP,
+    GRANT_PATH_STEP,
+    { type: "message", text: VERDICT_TEXT },
+    END,
+  ]),
+  granttoken: acpScenario([
+    READ_STEP,
+    GRANT_TOKEN_STEP,
+    { type: "message", text: VERDICT_TEXT },
+    END,
+  ]),
+  // Another request of kind other: refused everywhere.
+  other: acpScenario([OTHER_STEP, { type: "message", text: VERDICT_TEXT }, END]),
   // A file edit: refused under both; the stub, like codex, ends the turn on a refusal.
   edit: acpScenario([READ_STEP, EDIT_STEP, { type: "message", text: VERDICT_TEXT }, END]),
   // The same edit, its permission request naming the call by id alone: the announcement says what it is.
@@ -295,6 +407,19 @@ const CLAUDE_SCENARIOS: Record<string, unknown> = {
     [UNASKED_READ, PLAN_APPROVAL, { type: "message", text: CLAUDE_VERDICT_TEXT }, END],
     PLAN,
   ),
+  // claude's web tools arrive as ACP's fetch kind, its MCP tools as other: a reach for a server, no read of the change.
+  fetchonly: acpScenario(
+    [
+      { type: "tool", title: "WebFetch https://example.com/docs", kind: "fetch", output: "page" },
+      { type: "message", text: CLAUDE_VERDICT_TEXT },
+      END,
+    ],
+    PLAN,
+  ),
+  mcponly: acpScenario(
+    [CLAUDE_MCP_STEP, { type: "message", text: CLAUDE_VERDICT_TEXT }, END],
+    PLAN,
+  ),
 };
 
 const FAKE_COPILOT = `#!/usr/bin/env bash
@@ -367,11 +492,15 @@ const emptyBinDir = temp.dir("run-review-nobin-");
 // A reviewer-less PATH still holds bun: the launcher runs its bundle through the bun on PATH.
 symlinkSync(process.execPath, join(emptyBinDir, "bun"));
 
-/** The test process's environment without another suite's STUB_* leftovers: a stale STUB_ARGS_LOG into a removed
- * scratch directory kills the adapter stub at startup, and every ACP session then reads as a closed connection. */
+/** The test process's environment without another suite's STUB_* leftovers, and without the runner's own
+ * CODEX_CONFIG, which the launcher's handling of that variable is under test for: a stale STUB_ARGS_LOG into a
+ * removed scratch directory kills the adapter stub at startup, and every ACP session then reads as a closed
+ * connection. */
 function inheritedEnv(): Record<string, string | undefined> {
   return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("STUB_")),
+    Object.entries(process.env).filter(
+      ([key]) => !key.startsWith("STUB_") && key !== "CODEX_CONFIG",
+    ),
   );
 }
 
@@ -654,14 +783,14 @@ describe("run-review.mts", () => {
         id: "codex missing key",
         tool: "codex",
         mode: "badshape",
-        reason: "missing key(s): non_blocking, recorded_not_built",
+        reason: "missing key(s): non_blocking, unverified, recorded_not_built",
       },
       {
         id: "codex wrapped verdict",
         tool: "codex",
         mode: "wrapped",
         reason:
-          "missing key(s): blocking, non_blocking, recorded_not_built, summary; unexpected key(s): verdict",
+          "missing key(s): blocking, non_blocking, unverified, recorded_not_built, summary; unexpected key(s): verdict",
       },
       { id: "copilot prose", tool: "copilot", mode: "prose", reason: "final message is not JSON" },
       // The validator refuses an extra key; the script's reading of a plain-text
@@ -724,12 +853,16 @@ describe("run-review.mts", () => {
 
   test("a permission request that names the call by id alone is read against the call's announcement; one no message classified is 'other', which no policy allows", () => {
     const announced = new Map([
-      ["edit-1", { kind: "edit", title: "apply_patch", locations: ["src/a.ts"] }],
+      [
+        "edit-1",
+        { kind: "edit", title: "apply_patch", locations: ["src/a.ts"], rawInput: { files: 1 } },
+      ],
     ]);
     expect(permissionFacts({ toolCallId: "edit-1" }, announced)).toEqual({
       kind: "edit",
       title: "apply_patch",
       locations: ["src/a.ts"],
+      rawInput: { files: 1 },
     });
     expect(
       permissionFacts({ toolCallId: "edit-1", kind: "read", locations: [] }, announced),
@@ -737,11 +870,13 @@ describe("run-review.mts", () => {
       kind: "read",
       title: "apply_patch",
       locations: [],
+      rawInput: { files: 1 },
     });
     expect(permissionFacts({ toolCallId: "never-announced" }, announced)).toEqual({
       kind: "other",
       title: "",
       locations: [],
+      rawInput: null,
     });
   });
 
@@ -803,6 +938,153 @@ describe("run-review.mts", () => {
     expect(JSON.parse(readFileSync(permissions, "utf-8"))).toMatchObject({
       kind: "execute",
       chosen: "allow_once",
+    });
+  });
+
+  test("a web search, a fetch, or an MCP tool call counts among the tool calls but is no read of the change: beside a read the verdict stands, alone it is refused for codex and claude alike", () => {
+    const beside = run(["codex", promptFile], { STUB_MODE: "websearch" });
+    expect(beside.code).toBe(0);
+    expect(beside.report().tool_calls).toBe(2);
+    const refused =
+      "review FAILED - relaunch (no read of the change before the final message (only a file read, a local search, or a shell command counts; web searches, fetches, and MCP tool calls do not)";
+    for (const [tool, mode] of [
+      ["codex", "searchonly"],
+      ["codex", "mcponly"],
+      ["claude", "fetchonly"],
+      ["claude", "mcponly"],
+    ] as const) {
+      expectFailure(
+        run([tool, promptFile], { STUB_MODE: mode }),
+        { code: 1, stderr: refused },
+        mode,
+      );
+    }
+  }, 30000);
+
+  test("every codex launch asks for the live web search through CODEX_CONFIG, over the caller's own keys and inside the copy too; claude's environment is left alone", () => {
+    const report = join(binDir, "env-report");
+    // The adapter reads the variable as a JSON object, so the object is what the pin compares, never its spelling.
+    const seen = (): unknown => {
+      const { CODEX_CONFIG } = JSON.parse(readFileSync(report, "utf-8"));
+      return CODEX_CONFIG === null ? null : JSON.parse(CODEX_CONFIG);
+    };
+    const bare = run(["codex", promptFile], { STUB_ENV_REPORT: report });
+    expect(bare.code).toBe(0);
+    expect(seen()).toEqual({ web_search: "live" });
+
+    const own = run(["codex", promptFile], {
+      STUB_ENV_REPORT: report,
+      CODEX_CONFIG: '{"model":"x","web_search":"disabled"}',
+    });
+    expect(own.code).toBe(0);
+    expect(seen()).toEqual({ model: "x", web_search: "live" });
+
+    const repo = fixtureRepo();
+    const copy = run(
+      ["codex", promptFile],
+      { STUB_ENV_REPORT: report, STUB_SANDBOX: "bwrap" },
+      undefined,
+      repo,
+    );
+    expect(copy.code).toBe(0);
+    expect(copy.report().sandbox).toBe("copy");
+    expect(seen()).toEqual({ web_search: "live" });
+
+    const claude = run(["claude", promptFile], {
+      STUB_ENV_REPORT: report,
+      CODEX_CONFIG: '{"model":"x"}',
+    });
+    expect(claude.code).toBe(0);
+    expect(seen()).toEqual({ model: "x" });
+
+    // Not JSON kills the adapter at startup; not an object has nowhere to carry the key: both are refused here, the
+    // cause named and the text the parser stopped at (a value, maybe) kept out of stderr.
+    for (const [id, value, message] of [
+      ["not-json", '{"key":exampleSecretValue}', "CODEX_CONFIG is not JSON"],
+      ["not-an-object", "[]", "CODEX_CONFIG must be a JSON object"],
+    ] as const) {
+      const refused = run(["codex", promptFile], { CODEX_CONFIG: value });
+      expectFailure(refused, { code: 2, stderr: message }, id);
+      expect(refused.stderr, id).not.toContain("exampleSecretValue");
+    }
+  });
+
+  test("a sandbox-permission grant asking for network alone is allowed inside the snapshot copy; one with a filesystem part (a path, or a special token the locations never name), and any grant under codex's own sandbox, is refused and the review goes on without it; any other request of kind other is refused in both", () => {
+    const repo = fixtureRepo();
+    const permissions = join(binDir, "permissions-grant");
+    const granted = run(
+      ["codex", promptFile, "--network"],
+      { STUB_MODE: "grant", STUB_PERMISSIONS: permissions },
+      undefined,
+      repo,
+    );
+    expect(granted.code).toBe(0);
+    // One line per request: the read's, then the grant's.
+    const asked = readFileSync(permissions, "utf-8").trim().split("\n");
+    expect(JSON.parse(asked.at(-1) as string)).toMatchObject({
+      kind: "other",
+      chosen: "allow_once",
+    });
+    const denied = { event: "permission", text: "deny other: Additional sandbox permissions" };
+    const refused = run(["codex", promptFile], { STUB_MODE: "grant" });
+    expect(refused.code).toBe(0);
+    expect(refused.report().trajectory).toContainEqual(denied);
+    for (const mode of ["grantpath", "granttoken"]) {
+      const withFiles = run(
+        ["codex", promptFile, "--network"],
+        { STUB_MODE: mode },
+        undefined,
+        repo,
+      );
+      expect(withFiles.code, mode).toBe(0);
+      expect(withFiles.report().trajectory, mode).toContainEqual(denied);
+    }
+    expectFailure(
+      run(["codex", promptFile, "--network"], { STUB_MODE: "other" }, undefined, repo),
+      {
+        code: 1,
+        stderr: "the reviewer asked to other (Generate image); a review is read-only",
+      },
+      "copy",
+    );
+    expectFailure(
+      run(["codex", promptFile], { STUB_MODE: "other" }),
+      {
+        code: 1,
+        stderr: "the reviewer asked to other (Generate image); a review is read-only",
+      },
+      "read-only",
+    );
+  }, 30000);
+
+  test("--network reviews the snapshot copy by choice, under a working sandbox, and the flag travels to the --background monitor", () => {
+    const repo = fixtureRepo();
+    const r = run(["codex", promptFile, "--network"], { STUB_MODE: "execute" }, undefined, repo);
+    expect(r.code).toBe(0);
+    expect(r.report().sandbox).toBe("copy");
+    expect(r.copyLeft).toBe(false);
+
+    const launched = run(["codex", promptFile, "--background", "--network"], {}, undefined, repo);
+    expect(launched.code).toBe(0);
+    const outputFile = backgroundOutputFile(launched.stdout);
+    expect(waitForStatus(outputFile)).toBe("0");
+    const extracted = run(["codex", "--extract", outputFile]);
+    expect(extracted.code).toBe(0);
+    expect(extracted.report().sandbox).toBe("copy");
+  });
+
+  test("--network is codex's alone and needs a repository to snapshot: exit 2", () => {
+    for (const tool of ["claude", "copilot"]) {
+      expectFailure(
+        run([tool, promptFile, "--network"]),
+        { code: 2, stderr: "--network applies to codex alone" },
+        tool,
+      );
+    }
+    const bare = realpathSync(temp.dir("run-review-network-norepo-"));
+    expectFailure(run(["codex", promptFile, "--network"], {}, undefined, bare), {
+      code: 2,
+      stderr: `--network asks for shell network, which codex's sandbox refuses and ${bare} is not inside a git repository: nothing to snapshot`,
     });
   });
 
@@ -1184,7 +1466,8 @@ describe("run-review.mts", () => {
     );
     expectFailure(r, {
       code: 1,
-      stderr: "review FAILED - relaunch (not a verdict: final message is not JSON; output kept at",
+      stderr:
+        "review FAILED - relaunch (not a verdict: final message is not JSON; the shape is the report-format block in references/reviewer-prompt.md; output kept at",
     });
     expect(r.captureKept).toBe(true);
     expect(r.copyLeft).toBe(false);

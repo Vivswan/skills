@@ -1,7 +1,8 @@
 // The verdict a reviewer's capture carries, read and checked: the final message must be the object the
-// reviewer prompt's report format describes, and an ACP reviewer's turn must have called a tool before
-// it. codex's and claude's capture is the ACP session acp.mts writes, copilot's is plain text. No IO;
-// run-review.mts launches the reviewer, captures the stream, and reports this.
+// reviewer prompt's report format describes, and an ACP reviewer's turn must have read the change (a file read, a
+// local search, or a shell command) before it. codex's and claude's capture is the ACP session acp.mts
+// writes, copilot's is plain text. No IO; run-review.mts launches the reviewer, captures the stream, and
+// reports this.
 
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -16,7 +17,7 @@ import {
   statSync,
 } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
-import type { $ZodIssueUnrecognizedKeys } from "zod/v4/core";
+import type { $ZodIssueUnrecognizedKeys, output as ZodOutput } from "zod/v4/core";
 
 // --- Self-build: run as source, bundle into <skill>/.build/ and run the bundle; run as the bundle, do nothing.
 // docs/authoring.md > Dependencies owns this block; the smoke test keeps every copy identical.
@@ -130,20 +131,6 @@ export function isEnoent(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
 }
 
-interface Finding {
-  where: string;
-  claim: string;
-  evidence: string;
-}
-
-/** The verdict object the reviewer prompt's report format describes. */
-export interface Verdict {
-  blocking: Finding[];
-  non_blocking: Finding[];
-  recorded_not_built: string[];
-  summary: string;
-}
-
 /** One reviewer step, for the compact trajectory on stdout. */
 interface TrajectoryRow {
   event: string;
@@ -173,8 +160,14 @@ interface Reading {
   /** Tool calls seen so far in the turn. */
   toolCallsThisTurn: number;
 
-  /** The count at the moment the winning message landed: what proves the reviewer read something first. */
+  /** The count at the moment the winning message landed: what the report prints as tool_calls. */
   toolCallsBeforeVerdict: number;
+
+  /** Tool calls so far that read the change: a file read, a local search, or a shell command; a think, a web search or fetch, and an MCP tool call are none. */
+  checkoutReadsThisTurn: number;
+
+  /** The count at the moment the winning message landed: what proves the reviewer read the change first. */
+  checkoutReadsBeforeVerdict: number;
 
   /** Mid-stream malformed lines are skippable noise; a malformed final line means the stream was truncated mid-write. */
   lastLineMalformed: boolean;
@@ -202,10 +195,16 @@ const FINDING = z.strictObject({ where: z.string(), claim: z.string(), evidence:
 const VERDICT = z.strictObject({
   blocking: z.array(FINDING),
   non_blocking: z.array(FINDING),
+  unverified: z.array(FINDING),
   recorded_not_built: z.array(z.string()),
   summary: z.string().check(z.refine((text) => text.trim() !== "")),
 });
 const VERDICT_KEYS = Object.keys(VERDICT.shape);
+
+/** The verdict object the reviewer prompt's report format describes, as the schema reads it. `unverified` holds the
+ * platform claims the reviewer could not check against current documentation: neither findings nor passes, the
+ * driver settles them. */
+export type Verdict = ZodOutput<typeof VERDICT>;
 
 /** Why a value is not the verdict object, in the report format's words: the issue's first path step names the field. */
 function verdictIssue(issue: { code: string; path: PropertyKey[]; keys?: string[] }): string {
@@ -214,7 +213,7 @@ function verdictIssue(issue: { code: string; path: PropertyKey[]; keys?: string[
     if (issue.code !== "unrecognized_keys") return "final message is not a JSON object";
     return `unexpected key(s): ${(issue.keys ?? []).join(", ")}`;
   }
-  if (field === "blocking" || field === "non_blocking") {
+  if (field === "blocking" || field === "non_blocking" || field === "unverified") {
     return `${field} is not an array of exactly {where, claim, evidence}`;
   }
   if (field === "recorded_not_built") return "recorded_not_built is not an array of strings";
@@ -274,9 +273,18 @@ function copilotVerdict(raw: string): Extraction {
   if (!text) return { ok: false, reason: "empty output" };
 
   const verdict = parseVerdictText(text);
-  if (typeof verdict === "string") return { ok: false, reason: `not a verdict: ${verdict}` };
+  if (typeof verdict === "string") return notAVerdict(verdict);
 
   return { ok: true, review: { verdict, toolCalls: 0, trajectory: [] } };
+}
+
+/** A final message of the wrong shape, with the one place the shape is written, since a prompt that paraphrased the
+ * report format instead of pasting it is the usual cause. */
+function notAVerdict(reason: string): Extraction {
+  return {
+    ok: false,
+    reason: `not a verdict: ${reason}; the shape is the report-format block in references/reviewer-prompt.md`,
+  };
 }
 
 /** A chunk of narration or reasoning joins the last segment of its kind, or opens one, so the rows keep the stream's order. */
@@ -319,6 +327,19 @@ function parseVerdictMessage(text: string): Verdict | string {
   return "final message is not JSON";
 }
 
+/** A tool call that read the change: a file read, a local search, or a shell command. codex's hosted web search is a
+ * search whose rawInput names codex's item type, and an MCP tool call is an execute whose rawInput names the server
+ * and the tool; neither touches the checkout. Every other kind (a fetch, claude's MCP tools as `other`, a think, a
+ * write) is no read either. */
+function readsTheChange(update: Record<string, unknown>): boolean {
+  const rawInput = isRecord(update.rawInput) ? update.rawInput : null;
+  if (update.kind === "read") return true;
+  if (update.kind === "search") return rawInput?.type !== "webSearch";
+  if (update.kind !== "execute") return false;
+
+  return !(typeof rawInput?.server === "string" && typeof rawInput?.tool === "string");
+}
+
 /** One session update of the ACP capture: text accumulates, a tool call (codex's Guardian Review is a `think`, not a read) is a boundary and a count. */
 function readAcpUpdate(reading: Reading, update: Record<string, unknown>): void {
   const content = isRecord(update.content) ? update.content : undefined;
@@ -330,7 +351,10 @@ function readAcpUpdate(reading: Reading, update: Record<string, unknown>): void 
   flushText(reading);
   const title = typeof update.title === "string" ? update.title : "tool call";
   reading.trajectory.push({ event: "tool_call", text: excerpt(title) });
-  if (update.kind !== "think") reading.toolCallsThisTurn += 1;
+  if (update.kind === "think") return;
+
+  reading.toolCallsThisTurn += 1;
+  if (readsTheChange(update)) reading.checkoutReadsThisTurn += 1;
 }
 
 /** The turn's end: end_turn makes the text since the last tool call the verdict; any other stop reason fails the
@@ -345,6 +369,7 @@ function readAcpStop(reading: Reading, stopReason: string): void {
   const message = reading.message;
   reading.verdict = message.trim() === "" ? "" : parseVerdictMessage(message);
   reading.toolCallsBeforeVerdict = reading.toolCallsThisTurn;
+  reading.checkoutReadsBeforeVerdict = reading.checkoutReadsThisTurn;
   flushText(reading);
   reading.trajectory.push({ event: "stop", text: stopReason });
 }
@@ -381,6 +406,8 @@ function readStream(raw: string): Reading {
     turnFailed: null,
     toolCallsThisTurn: 0,
     toolCallsBeforeVerdict: 0,
+    checkoutReadsThisTurn: 0,
+    checkoutReadsBeforeVerdict: 0,
     lastLineMalformed: false,
     message: "",
     segments: [],
@@ -408,7 +435,7 @@ function readStream(raw: string): Reading {
 
 /** What the reading amounts to, each failure outranking the ones below it. */
 function judgeReading(raw: string, reading: Reading): Extraction {
-  const { verdict, toolCallsBeforeVerdict, trajectory } = reading;
+  const { verdict, toolCallsBeforeVerdict, checkoutReadsBeforeVerdict, trajectory } = reading;
   if (reading.turnFailed !== null)
     return { ok: false, reason: `error event: ${reading.turnFailed}` };
   if (reading.lastLineMalformed) {
@@ -421,11 +448,18 @@ function judgeReading(raw: string, reading: Reading): Extraction {
     };
   }
   if (verdict === "") return { ok: false, reason: "empty verdict" };
-  if (typeof verdict === "string") return { ok: false, reason: `not a verdict: ${verdict}` };
+  if (typeof verdict === "string") return notAVerdict(verdict);
   if (toolCallsBeforeVerdict === 0) {
     return {
       ok: false,
       reason: "no tool calls before the final message (a preamble, not a review)",
+    };
+  }
+  if (checkoutReadsBeforeVerdict === 0) {
+    return {
+      ok: false,
+      reason:
+        "no read of the change before the final message (only a file read, a local search, or a shell command counts; web searches, fetches, and MCP tool calls do not)",
     };
   }
 

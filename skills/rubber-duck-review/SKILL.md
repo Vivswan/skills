@@ -30,12 +30,16 @@ Use this skill when someone asks for:
   - If you are currently using **Codex or GitHub Copilot** -> `claude`, fallback `copilot`.
 - **Never** let the reviewer write files, edit code, or run unrestricted shell commands.
   - The script enforces read-only, per reviewer:
-    - codex: an ACP session in its `read-only` mode. A read or a search it asks for is allowed, anything else (a file edit, a command under a working sandbox) is refused, and codex ends the turn on a refusal.
-    - claude: an ACP session in Claude Code's `plan` mode. Its read-only tools run unasked, and whatever asks (a write, a plan approval) is refused and ends the turn.
+    - codex: an ACP session in its `read-only` mode, its live web search asked for. A read, a search (the web search included), or a command its sandbox can run goes unasked. A file edit, or a command the sandbox refuses (a write, shell network), asks and is refused; the trajectory shows the refusal, and the review fails naming it when codex ends the turn on it.
+    - claude: an ACP session in Claude Code's `plan` mode. Its read-only tools run unasked, and whatever asks (a write, a plan approval, a web tool its settings gate) is refused; the review fails naming it when claude ends the turn on it.
     - copilot: a read-only tool allow-list.
   - Read-only still lets the reviewer self-check: it can run read-only commands (grep, `git diff`, typecheck) but writes are blocked. copilot can only read and grep files. That self-checking makes findings concrete.
   - Note: a read-only sandbox can block temp-dir creation, so the reviewer may skip tests that need to write.
-  - Where codex's own sandbox cannot start, the script reviews a snapshot copy instead (step 4) and allows the commands codex asks to run there. Nothing confines a command inside the copy: the copy keeps a write it forbade out of the checkout under review by path alone, and a file edit through codex's own tool is refused under both.
+  - Where codex's bubblewrap sandbox cannot start (step 4's probe), or `--network` asks for it, the script reviews a snapshot copy instead (step 4), allowing the commands codex asks to run there and a network-only sandbox grant. Nothing confines a command inside the copy: the copy keeps a write it forbade out of the checkout by path alone, and a file edit through codex's own tool is refused under both.
+- **The reviewer reaches the internet.** The fact behind a change often lives on a provider's page, not in the diff (step 3's platform-claims rule), so every reviewer gets the web it can have:
+  - codex: the launch asks for its live web search (`CODEX_CONFIG` carries `web_search = live` over the caller's own; a managed install that caps the modes still wins), and it searches and opens pages under `read-only`. Shell network stays refused there; `--network` (step 4) opens it by the snapshot copy.
+  - claude: plan mode's web search and fetch tools, where its settings let them run unasked. One that asks is refused like any other request. The trajectory shows the denial, and the review fails only when claude ends the turn on it.
+  - copilot: no web at all, so it reports every platform claim as unverified.
 
 ### 2. Large change sets: fan out one review per section
 
@@ -64,6 +68,11 @@ Use this skill when someone asks for:
   - PII in anything the change publishes: anything that tells a reader who the author is, how they work, or how their machine is set up, including values measured or copied from the author's real environment. Every fixture is hand-authored. A provenance comment naming real data is a finding.
 
     The template carries the wording. The `/pr-and-issue-discipline` skill owns the rule and its substitutes. Paste the PR title, body, and comments into the prompt, since a sandboxed reviewer may not reach GitHub.
+  - Platform claims, in the template's words: "Verify every claim about a platform (AWS, Cloudflare, GitHub, Tailscale, NixOS, a provider) against its current online documentation and cite the page; a claim you could not verify is reported as unverified, never as a finding and never as settled." The reviewer has the web (step 1); the template says which instrument.
+
+    Specimen: a WAF rule compared `http.request.headers.names` to `Authorization`, and review rounds passed it. The provider's page says the field keeps the case received and HTTP/2 lowercases header names, so the comparison never sees the header an HTTP/2 client sends as `authorization`. The fact lived on the page, not in the diff.
+  - The web is for doubt too: the template tells the reviewer to look up anything it is unsure of, or that may have moved since it learned it (a library's current API, a default, a version), before deciding, and to name the page.
+  - Fill the template's `External facts this change relies on` slot with the platform claims you know the change leans on, each with its page when you know it. The reviewer verifies each against the current page all the same; the slot saves the search and names what you lean on.
   - Speculative hardening (hostile callers that cannot reach the code, races in single-user tools, deadlines already bounded by an outer timeout, defensive checks for inputs the code never receives) is listed under a `Recorded, not built` heading, never as a finding. It stays unbuilt unless the user asks for it.
 
     In a repository with outside users or a hostile-input surface (a published package, a public service), or when the user asks, it is instead surfaced to the user and built only after they confirm (step 6). A small, obvious hardening that rides along in the change under review (an exit-code check beside a version check) is fine to keep. The reviewer must not propose a wider one to replace it.
@@ -77,7 +86,7 @@ Use this skill when someone asks for:
   - `--criteria <name>[,<name>]` names the given skills alone, any installed one that declares the heading, for the one exception: someone else's PR, where the `/reply-and-review-discipline` skill's lens choice names them. `--criteria none` appends nothing. A name that declares no section is a usage error naming the ones that do.
   - The report's `criteria` field lists the names that went in, so a converged report can cite its rubric (step 7).
 - Ask for **prioritized** findings (blocking vs non-blocking), and ask it to say so plainly if the code is correct. This keeps re-reviews terminable.
-- The report is one JSON object: `blocking` and `non_blocking` arrays of `{where, claim, evidence}`, a `recorded_not_built` string array, and a `summary`. Paste the report-format block from the template. Every reviewer has only the prompt to go on, and the script's own reading of the final message holds each to the same contract.
+- The report is one JSON object: `blocking`, `non_blocking`, and `unverified` arrays of `{where, claim, evidence}`, a `recorded_not_built` string array, and a `summary`. Paste the report-format block from the template. Every reviewer has only the prompt to go on, and the script's own reading of the final message holds each to the same contract.
 - If the user has already declined or reverted something in this thread, add a short `Already decided / out of scope` section so the reviewer does not keep re-raising it.
 - On a re-review, state which fixes were already applied so it focuses on what remains.
 
@@ -92,17 +101,18 @@ This skill ships `scripts/run-review.mts` (the path is relative to the installed
 - captures the full stream to a scratch file under the OS tmp dir (never the working tree)
 - passes copilot its read-only tool allow-list, and codex and claude the session mode the review needs
 - extracts the verdict and refuses one with no tool call before it. codex narrates before it reads, so a turn that ends at "I will review now" is a verdict-shaped answer with no review behind it. The missing reads are what expose it
+- refuses a verdict with web searches, fetches, or MCP tool calls alone before it: only a file read, a local search, or a shell command is a read of the change
 - prints one JSON report: the verdict, the tool-call count, the path of the kept capture, and a compact trajectory (one row per reviewer step) so you can see what the reviewer did without opening the stream
 
 `bun "<skill-dir>/scripts/run-review.mts" --help`:
 
 ```text usage=skills/rubber-duck-review/scripts/run-review.mts
-usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stall <seconds>] [--criteria <names>|none]
-codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode: a file edit it asks for is refused, codex ends the turn, and the review fails naming the refusal
+usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--network] [--stall <seconds>] [--criteria <names>|none]
+codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode, its live web search asked for: a file edit it asks for is refused, and when codex ends the turn on the refusal the review fails naming it
 claude runs through the claude-agent-acp adapter on PATH (npm install -g @agentclientprotocol/claude-agent-acp) in its plan mode: its read-only tools run unasked, and whatever asks (a write, a plan approval) is refused
        run-review.mts <codex|claude|copilot> --extract <output-file>
        run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)
-       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)
+       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--network] [--stall <seconds>] [--criteria <names>|none]  (internal)
        run-review.mts prepare <section>
        run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)
 the prompt gets a '## Companion review criteria' section naming the SKILL.md of every installed skill of this collection (the installer's
@@ -111,8 +121,10 @@ the prompt gets a '## Companion review criteria' section naming the SKILL.md of 
   --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names
 scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, finished reviews the newest 100 at most; prepare and a launch purge the rest, and the count never takes a review still running
 codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are
+codex's web search: every launch sets CODEX_CONFIG to web_search = live merged over the caller's own (a JSON object the adapter folds into the session config; not JSON, or not an object, is a usage error)
+--network reviews the snapshot copy by choice, so codex's shell reaches the network (curl, an API read); codex alone, since claude's plan mode has its web tools and copilot cannot reach the network
 a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s
-prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>
+prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex reviewed the snapshot copy); --background prints output-file: <path> and pid: <n>
 exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);
        1 review FAILED - relaunch: no usable verdict, whatever the cause, a stall, or --wait timed out; never a clean pass;
        2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository
@@ -141,11 +153,13 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
     - A file edit codex asks for is refused. codex ends the turn on a refusal, so the review fails naming it: `the reviewer asked to edit (apply_patch); a review is read-only`.
     - No schema flag holds codex to the object, so its final message may put a sentence before it; the trailing object of that message is the verdict, and the sentence stays in the trajectory.
     - Under codex's own sandbox a command that asks is one the sandbox would refuse (a write, the network), so it is refused too; reads and searches are allowed. Inside the snapshot copy (next) commands are allowed, since the copy is what keeps a write out of the checkout.
-    - The launch first probes the sandbox with `codex sandbox -- true`. codex runs every sandboxed command under bubblewrap, and a container whose AppArmor profile denies mount propagation refuses it at start: `bwrap: Failed to make / slave: Permission denied`.
+    - Its live web search is asked for whatever the user's `config.toml` says, though a managed install that caps web search modes still wins: the launch sets `CODEX_CONFIG` to `{"web_search": "live"}` merged over the caller's own `CODEX_CONFIG` (a JSON object the adapter folds into the session config, other keys kept). A web search is a `search` tool call that never asks.
+    - A `CODEX_CONFIG` that is not JSON is refused here, where the adapter would die on it unnamed. One that is not an object is refused because the key has nowhere to go. Both are usage errors.
+    - The launch first probes the sandbox with `codex sandbox -- true`. `--network` skips the probe and takes the copy outright. On Linux codex runs every sandboxed command under bubblewrap (Seatbelt on macOS), and a container whose AppArmor profile denies mount propagation refuses it at start: `bwrap: Failed to make / slave: Permission denied`.
     - Without the codex CLI on PATH (the adapter alone), the codex that `codex-acp` bundles is probed the same way, so an adapter-only install in such a container still gets the snapshot copy.
-    - That refusal alone switches the launch. The script snapshots the repository through git into the review's scratch dir and runs the session from the cwd's twin there (the copy's root when the cwd holds nothing tracked).
+    - That refusal, or `--network`, switches the launch. The script snapshots the repository through git into the review's scratch dir and runs the session from the cwd's twin there (the copy's root when the cwd holds nothing tracked).
     - The copy is what git has committed or would commit: HEAD, the refs, the index with its flags, the tracked files as checked out, with the object store shared through an alternates link. Untracked files, ignored trees, and nested worktrees stay behind, and `git diff --cached` or `git diff <base>...HEAD` in the copy show the change the prompt names.
-    - The copy is removed when the reviewer exits, its own directory modes repaired first where they refuse (what still refuses is reported as `not removed` in `review.err`), and the report and the launch record carry `sandbox: "copy"`. A stderr line names the refusal and the copy's path.
+    - The copy is removed when the reviewer exits, its own directory modes repaired first where they refuse (what still refuses is reported as `not removed` in `review.err`), and the report and the launch record carry `sandbox: "copy"`. A line in `review.err`, and on stderr in the foreground, names why the copy was taken and its path.
     - The adapter reads the user's own codex home: it writes no trust block for the launch directory, so no scratch home stands in, and a token refresh persists as codex expects. The session's transcript lands in the user's codex sessions as in any launch.
     - Outside a git repository there is nothing to snapshot: exit 2. Any other probe failure (a codex too old for the subcommand) keeps the sandboxed launch.
   - `claude`: runs the `claude-agent-acp` adapter on PATH (`npm install -g @agentclientprotocol/claude-agent-acp`) as an ACP session in Claude Code's `plan` mode: its read-only tools run unasked, and a write or a plan approval asks and is refused; claude then ends the turn, and the review fails naming it.
@@ -154,6 +168,11 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
     - No shell means no `git diff` and no typecheck, so name the files to read.
     - It does not stream JSON, so there is no liveness signal, no trajectory in the report, and no tool-call check on its verdict. It has no schema flag, so only the prompt asks it for the JSON object.
 - `--criteria <name>[,<name>]` or `--criteria none`: which installed skills' Review Criteria pages the launcher names in the prompt (step 3). Absent, this collection's declaring skills.
+- `--network`: codex reviews the snapshot copy by choice (the copy mode above, chosen rather than fallen back to), so the commands it asks to run are allowed and its shell reaches the network: `curl`, an API read. Nothing confines them there; the copy keeps a write out of the checkout by path alone.
+  - A sandbox-permission grant codex asks for instead (its `request_permissions` tool) is allowed there too when it asks for network alone, so network access goes through and codex's own edits stay refused. Under `read-only` it is refused. Unlike a refused command, a refused grant ends no turn: codex goes on without it, and the trajectory shows the denial.
+  - codex alone: claude's plan mode has its web tools, and copilot cannot reach the network. A usage error for either.
+  - Say in the prompt what the shell is for and name the commands you want run (`curl` against which page, which API read).
+  - The hosted web search needs no flag: every launch asks for it (step 1).
 - `--stall <seconds>` (default 900): how long the captured stream may stay silent before the launcher kills the reviewer and its process group and fails the review as stalled. Every byte on stdout or stderr resets it, so a slow review that keeps talking is never a stall. Raise it for a reviewer that prints nothing until the end (copilot) on a very large change.
 - Foreground (the default) blocks until the reviewer exits, so give the tool call a generous explicit timeout. Subagents (worktree builders, spawned workers) run the launch foreground under one, or `--background` and then wait in bounded foreground calls (step 5): a worker that ends its turn waiting for a background reviewer's completion notification never gets one.
 - `--background` prints exactly two lines, `output-file: <path>` and `pid: <n>`.
@@ -161,7 +180,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
   - Leads use it to keep working while the review runs and collect the verdict with `--extract --wait` (step 5); a subagent uses it for a review that may outlast one foreground call, with step 5's bounded waits.
   - Killing that PID cancels the review (the signal is forwarded to the reviewer and its process group).
 - Progress: a foreground run prints at most two progress lines to stderr, one when the stream first shows life and one when the reviewer exits (a failure then adds its own `review FAILED` line; the codex copy mode adds its notice first). Silence in between is normal. A real review can take a while.
-- Runtime: `bun` (the frontmatter read uses its YAML parser).
+- Runtime: `bun` 1.4.4 or newer (the frontmatter read uses its YAML parser, and the copy's `CODEX_HOME` goes through its native realpath, which an older bun resolves by the text).
 - Exit codes: the `exits:` lines of the usage block above. Step 5 says what to do on each.
 - The shipped script and these citations (the reviewer invocations, the flags, the failure verdict) are kept in sync upstream, and the usage block is held equal to the script by a test there. Where they disagree, trust the script and report the drift.
 
@@ -170,8 +189,10 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - **Exit 0** from a foreground run or `--extract`: stdout is one JSON report. (A `--background` launch also exits 0, printing only the output path and PID. Its verdict comes from `--extract`.)
   - `verdict.blocking` and `verdict.non_blocking`: the findings, each `{where, claim, evidence}`. Triage them per steps 6-7: apply or reject each one.
   - `verdict.recorded_not_built`: speculative hardening the reviewer set aside. Step 6 says what happens to it.
+  - `verdict.unverified`: platform claims the reviewer could not check against current documentation, each with what it searched or opened. Neither findings nor passes. Step 6 says how you settle them.
   - `verdict.summary`: what was reviewed and how. Treat a plain "the code is correct" as convergence input, not a reason to skip re-review after fixes.
-  - `tool_calls`, `trajectory`: how many reads and commands preceded the verdict, and a compact row per reviewer step. A verdict whose trajectory shows a single `git diff` and no reads of the changed files is a weak review. Sharpen the prompt (name the files) and relaunch.
+  - `tool_calls`, `trajectory`: how many tool calls preceded the verdict (reads, commands, web searches and fetches alike, never a `think`), and a compact row per reviewer step. A verdict whose trajectory shows a single `git diff` and no reads of the changed files is a weak review. Sharpen the prompt (name the files) and relaunch.
+  - The read gate is separate from that count: only a file read, a local search, or a shell command counts as a read of the change, so a verdict with web searches, fetches, and MCP tool calls alone before it is refused.
   - `capture`: the full reviewer stream, kept for 24 hours, among the newest 100 finished reviews. Read it when a finding or the summary looks off and you want the exact reviewer message.
   - `criteria`: the skills whose Review Criteria pages the launcher named, `[]` under `--criteria none`. The prompt snapshot beside the capture holds the text as sent.
 - **Exit 1** (`review FAILED - relaunch`): that is no review at all, never a clean pass. Relaunch it.
@@ -236,6 +257,9 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - Do not blindly accept every finding. If you disagree, explain why, and watch for fixes that would conflict with the design (e.g. a suggested guard that breaks a legitimate path).
 - An "add a test" finding that names no fact the test would pin beyond what the source says is rejected with that reason, whichever reviewer raised it. A deletion with no behavior of its own is proved by the census in the PR body or landing report, not a test.
 - If a finding conflicts with an explicit user decision, follow the user and record that the issue was intentionally skipped.
+- An `unverified` entry is yours to settle, never to drop. Nothing in that list is a finding, and nothing in it is a pass.
+  - Check the claim against the platform's current documentation yourself and name the page in the PR body or landing report. A claim the page contradicts is a defect to fix.
+  - One you cannot verify either goes to the user, whose decision, recorded beside the claim, settles it.
 - Re-validate after each batch of fixes before re-reviewing: the typecheck, where the language has one, plus the tests the change and its proof touch, never the full suite CI runs anyway. A long run carries an explicit timeout, and a process is stopped by the PID you spawned, never by pattern.
 
   Where CI minutes are metered or scarce (for example a private repository on a metered plan), the full check runs locally once before the push instead. If you are not sure which kind it is, ask the user, or the lead when one briefed you.
@@ -243,7 +267,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 ### 7. Re-review until it converges
 
 - After applying fixes, **re-run the review** on the updated state, one review per section, not a single overall pass.
-- Repeat until **no valid blocking findings remain** and every non-blocking finding has been handled per step 6: fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable.
+- Repeat until **no valid blocking findings remain**, every non-blocking finding has been handled per step 6 (fixed, skipped for a recorded reason, or rejected as incorrect or inapplicable), and every `unverified` claim is settled per step 6.
 
   That convergence IS the gate: nothing commits or lands until the review has converged on the exact final content of the change being landed. At commit time that is the staged diff, since Git commits the index, not the tree. At merge time it is the branch or PR diff.
 

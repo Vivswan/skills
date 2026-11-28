@@ -15,8 +15,15 @@ Please review the relevant changes and surrounding code for:
 - a test of a single constant, of a variable that is itself the source of its value (a default, a key name, an argv literal, a path), or of a file the repository ships (a lint table, a workflow fragment, a settings layer) parsed and asserted back: it restates the source and grows with it. Its fix is a pin at the file, line, or request where the value leaves the program, and only when that boundary is an external contract.
 - PII anywhere the change publishes (the diff and commit messages you read, plus the PR title, body, and comments pasted below): anything that tells a reader who the author is, how they work, or how their machine is set up. That test decides every case, and the two kinds that recur are examples of it. Identity: a name, an employer, a real account login or username, a domain, a hostname or machine name, a home path under a real user, a real email. Anything measured or copied from the author's real environment: figures, statistics, or profiles computed from real logs or sessions; a quoted real configuration, transcript, or log; an inventory of what the author has installed or uses. The example substitutes are never findings: `octocat`, `work-bot`, `example-user`, `example.com`, `example-user@example.com`, `/home/user`, `~`, `/repo/...`, and hand-written example values the change says are examples. A hit is blocking; quote the string and where it sits. A product file name that contains a vendor's word, a repository's own `owner/repo` coordinate in its install command, a maintainer contact a plugin manifest requires, and the repository's own tooling and checks named in the PR are facts about the repository, not PII. This bullet restates the `/pr-and-issue-discipline` skill's `references/redaction.md`, which owns the rule, because you may not have that skill.
 - each test fixture in the change: it is hand-authored. A fixture whose values were measured or recorded from real data, or a provenance comment saying so, is a blocking finding whose fix is a hand-written fixture. A tool in the change that measures real data requires an explicit output path outside the repository and refuses a path inside it; a default output path inside the repository is a blocking finding.
+- every claim about a platform. Verify every claim about a platform (AWS, Cloudflare, GitHub, Tailscale, NixOS, a provider) against its current online documentation and cite the page; a claim you could not verify is reported as unverified, never as a finding and never as settled.
+  - A platform claim is what the change assumes of a system it does not own: a field's case handling, an API's default, a limit, a library's semantics. A finding that rests on one carries the page URL in its evidence.
+  - The web is for doubt too. Whenever you are unsure or not confident, and wherever a thing may have moved since you learned it (a library's current API, a default, a version, a limit), look it up before you decide, and name the page.
+  - Use your web search or fetch tool for the page; the shell has no network unless the driver says so below. A claim you could not settle goes under `unverified` with what you searched or opened. With no web tool at all, every platform claim goes there.
 
 Speculative hardening is not a finding: hostile callers that cannot reach the code, races in single-user tools, deadlines already bounded by an outer timeout, defensive checks for inputs the code never receives. List such items under `recorded_not_built` instead. You never decide whether one is built. The driving agent applies its skill's step 6 (not built unless the user asks, or, in a repository with outside users or a hostile-input surface such as a published package or a public service, after the user confirms). A small, obvious hardening that rides along in the change under review (an exit-code check beside a version check) is fine to keep; do not propose a wider one to replace it.
+
+External facts this change relies on (the driver lists the platform claims it knows the change leans on, each with its documentation page when known; verify each against the current page all the same):
+- <claim>: <page URL, or "page unknown">
 
 Already decided / out of scope:
 - <optional bullets>
@@ -28,10 +35,11 @@ PR title, body, and review comments (pasted by the driver when the change is a P
 
 Report format: your final message is one JSON object and nothing else.
 {
-  "blocking": [ { "where": "<file:line or symbol>", "claim": "<what is wrong>", "evidence": "<the input or state and the wrong output, crash, or data loss, or the concrete maintainability cost in this change>" } ],
+  "blocking": [ { "where": "<file:line or symbol>", "claim": "<what is wrong>", "evidence": "<the input or state and the wrong output, crash, or data loss, or the concrete maintainability cost in this change; the documentation page URL when the finding rests on a platform claim>" } ],
   "non_blocking": [ <same shape> ],
+  "unverified": [ { "where": "<file:line or symbol>", "claim": "<the platform claim the change relies on>", "evidence": "<what you searched or opened, and why it did not settle the claim>" } ],
   "recorded_not_built": [ "<speculative hardening, one line each; not findings>" ],
-  "summary": "<what you reviewed and how you checked it; with no findings, state plainly that the code is correct>"
+  "summary": "<what you reviewed and how you checked it, the pages you opened included; with no findings and nothing unverified, state plainly that the code is correct>"
 }
 Read the change before you answer: a report with no reads behind it is not a review.
 ```
@@ -39,7 +47,9 @@ Read the change before you answer: a report with no reads behind it is not a rev
 ## How the report is enforced
 
 - No reviewer is held to the object by a schema flag: the block above is what asks for it. `scripts/run-review.mts` reads the final message (the trailing object after a sentence for codex and claude over ACP, the whole text for copilot, a ```json fence either way) and fails the review when it is not exactly this shape.
-- The script also refuses a verdict with no tool call before it in the same turn. A reviewer narrates before it reads, so "I will review now" followed by the object is a verdict-shaped answer with no review behind it. The missing reads are what give it away.
+- `unverified` is part of the shape: a report without the key fails, so a platform claim the reviewer could not check is never lost in the summary. The driver settles each entry (the skill's step 6). An empty list is not a pass on its own.
+- For codex and claude over ACP, the script also refuses a verdict with no tool call before it in the same turn. A reviewer narrates before it reads, so "I will review now" followed by the object is a verdict-shaped answer with no review behind it. The missing reads give it away.
+- Only a file read, a local search, or a shell command is that read: a verdict with web searches, fetches, or MCP tool calls alone before it is refused too. copilot's plain-text verdict has no tool calls to read, so only the prompt holds it to the change.
 
 The launcher appends a `## Companion review criteria` section after this block: the `SKILL.md` of every installed skill of this collection that declares `## Review Criteria`, one line each, with the instruction to read and apply each. A user-invoke-only skill rides in only when named (step 3). The template needs no slot for them.
 

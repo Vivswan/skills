@@ -12,6 +12,7 @@
 //   STUB_PERMISSIONS  one JSON line per permission request: title, kind, and the option the client chose
 //   STUB_STEERS       one line per _session/steering request's text
 //   STUB_CWD_REPORT   git facts about the session's cwd and the CODEX_HOME seen, and a write into its toplevel (the copy-mode tests)
+//   STUB_ENV_REPORT   one JSON object: the CODEX_CONFIG the adapter was launched with, null when unset
 //   STUB_PID_FILE     this process's pid, for the stall tests to confirm the kill
 //   STUB_EXIT         the exit status once the client hangs up (default 0)
 
@@ -29,15 +30,18 @@ interface ToolStep {
   output?: string;
   onReject?: "cancel" | "continue";
   locations?: { path: string }[];
+  rawInput?: Record<string, unknown>;
 }
 
 /** One step of a turn, run in order:
  *   { "type": "message", "text": "...", "chunks": 3 }      agent_message_chunk, the text split into chunks
  *   { "type": "thought", "text": "..." }                   agent_thought_chunk
  *   { "type": "tool", "title": "git diff", "kind": "execute", "permission": true, "output": "...",
- *     "onReject": "cancel", "askBare": false }             tool_call, then session/request_permission when permission is
+ *     "onReject": "cancel", "askBare": false,
+ *     "rawInput": { "type": "webSearch" } }                tool_call, then session/request_permission when permission is
  *                                                           set, by id alone when askBare is set; a rejection ends the turn
- *                                                           (stopReason cancelled, codex) or fails the call and goes on ("continue", claude)
+ *                                                           (stopReason cancelled, codex) or fails the call and goes on ("continue", claude);
+ *                                                           rawInput as given, else { command: title }
  *   { "type": "stop", "reason": "end_turn" }               the prompt's response; end_turn when no step says
  *   { "type": "exit", "code": 1 }                          the adapter dies mid-turn
  *   { "type": "sleep", "ms": 300 }                         silence */
@@ -163,6 +167,7 @@ async function runTool(step: ToolStep): Promise<boolean> {
   toolCalls += 1;
   const toolCallId = `call-${toolCalls}`;
   const locations = step.locations ?? [];
+  const rawInput = step.rawInput ?? { command: step.title };
   await update({
     sessionUpdate: "tool_call",
     toolCallId,
@@ -170,7 +175,7 @@ async function runTool(step: ToolStep): Promise<boolean> {
     kind: step.kind,
     status: "in_progress",
     locations,
-    rawInput: { command: step.title },
+    rawInput,
   });
   if (step.permission === true) {
     const answer: acp.RequestPermissionResponse = await client.request(
@@ -179,7 +184,14 @@ async function runTool(step: ToolStep): Promise<boolean> {
         sessionId: SESSION_ID,
         toolCall: step.askBare
           ? { toolCallId }
-          : { toolCallId, title: step.title, kind: step.kind, status: "in_progress", locations },
+          : {
+              toolCallId,
+              title: step.title,
+              kind: step.kind,
+              status: "in_progress",
+              locations,
+              rawInput,
+            },
         options: PERMISSION_OPTIONS,
       },
     );
@@ -315,6 +327,10 @@ function steer(params: SteerParams): { outcome: string; reason?: string } {
 }
 
 note(env("STUB_ARGS_LOG"), process.argv.slice(2).join(" "));
+const envReport = env("STUB_ENV_REPORT");
+if (envReport !== undefined) {
+  writeFileSync(envReport, JSON.stringify({ CODEX_CONFIG: process.env.CODEX_CONFIG ?? null }));
+}
 const pidFile = env("STUB_PID_FILE");
 if (pidFile !== undefined) writeFileSync(pidFile, String(process.pid));
 

@@ -16,6 +16,7 @@
  *   criteria pasted by hand      -> thirty rounds passed what the house rules forbid: the launcher names this collection's pages
  *   the bundle runs from .build/ -> paths off import.meta would miss scripts/: the skill root is two levels up either way
  *   codex-acp alone on PATH      -> no codex to probe read as a working sandbox: the codex the adapter bundles is probed instead
+ *   a fact lives on a provider's page -> review rounds passed a header-case bug: every codex launch asks for its live web search, --network opens its shell
  */
 
 import { type SpawnSyncOptions, spawn, spawnSync } from "node:child_process";
@@ -41,18 +42,18 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import type { AcpEnd, PermissionPolicy } from "./acp.mts";
+import type { AcpEnd, PermissionPolicy, ToolCallFacts } from "./acp.mts";
 import { removeTree, snapshotRepository, withoutGitEnv } from "./copy-mode.mts";
 import type { Criteria } from "./criteria.mts";
 import type { Extraction, Tool } from "./verdict.mts";
 
 const USAGE = [
-  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--stall <seconds>] [--criteria <names>|none]",
-  "codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode: a file edit it asks for is refused, codex ends the turn, and the review fails naming the refusal",
+  "usage: run-review.mts <codex|claude|copilot> <prompt-file> [--background] [--network] [--stall <seconds>] [--criteria <names>|none]",
+  "codex runs through the codex-acp adapter on PATH (npm install -g @agentclientprotocol/codex-acp) in its read-only mode, its live web search asked for: a file edit it asks for is refused, and when codex ends the turn on the refusal the review fails naming it",
   "claude runs through the claude-agent-acp adapter on PATH (npm install -g @agentclientprotocol/claude-agent-acp) in its plan mode: its read-only tools run unasked, and whatever asks (a write, a plan approval) is refused",
   "       run-review.mts <codex|claude|copilot> --extract <output-file>",
   "       run-review.mts <codex|claude|copilot> --extract --wait <output-file> [--timeout <seconds>]  (polls every 2 s; default timeout 3600)",
-  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--stall <seconds>] [--criteria <names>|none]  (internal)",
+  "       run-review.mts <codex|claude|copilot> <prompt-file> --capture <dir> [--network] [--stall <seconds>] [--criteria <names>|none]  (internal)",
   "       run-review.mts prepare <section>",
   "       run-review.mts criteria [--criteria <names>|none]  (prints the block a launch appends, for a review run through a dedicated tool)",
   "the prompt gets a '## Companion review criteria' section naming the SKILL.md of every installed skill of this collection (the installer's",
@@ -61,8 +62,10 @@ const USAGE = [
   "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, finished reviews the newest 100 at most; prepare and a launch purge the rest, and the count never takes a review still running",
   "codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are",
+  "codex's web search: every launch sets CODEX_CONFIG to web_search = live merged over the caller's own (a JSON object the adapter folds into the session config; not JSON, or not an object, is a usage error)",
+  "--network reviews the snapshot copy by choice, so codex's shell reaches the network (curl, an API read); codex alone, since claude's plan mode has its web tools and copilot cannot reach the network",
   "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
-  "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex fell back to copy mode); --background prints output-file: <path> and pid: <n>",
+  "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex reviewed the snapshot copy); --background prints output-file: <path> and pid: <n>",
   "exits: 0 verdict printed, or a --background launch started (its verdict comes via --extract);",
   "       1 review FAILED - relaunch: no usable verdict, whatever the cause, a stall, or --wait timed out; never a clean pass;",
   "       2 usage error, the reviewer binary not installed, or codex's sandbox unavailable outside a git repository",
@@ -173,6 +176,7 @@ const { CriteriaError, companionBlock, selectCriteria, withCriteria } = await im
   "./criteria.mts"
 );
 const { extractVerdict, isEnoent, isRecord, isTool } = await import("./verdict.mts");
+const z = await import("zod/mini");
 
 /** copilot runs as a CLI; codex and claude run as ACP sessions (acp.mts) and have no argv: ACP_REVIEWERS names the
  * adapter on PATH that serves each and the session mode the review needs. */
@@ -228,13 +232,14 @@ const MAX_TIMER_SECONDS = 2147483;
 const FLAGS = {
   background: { type: "boolean" },
   capture: { type: "string" },
+  network: { type: "boolean" },
   stall: { type: "string" },
   criteria: { type: "string" },
   wait: { type: "boolean" },
   timeout: { type: "string" },
 } as const;
 
-const LAUNCH_FLAGS = ["background", "capture", "stall", "criteria"] as const;
+const LAUNCH_FLAGS = ["background", "capture", "network", "stall", "criteria"] as const;
 const EXTRACT_FLAGS = ["wait", "timeout"] as const;
 const STALL_STATUS = /^stalled: /;
 const MINT_MARKER = ".minted-by-run-review";
@@ -370,10 +375,12 @@ function requireCaptureProvenance(tool: Tool, promptFile: string, captureDir: st
   }
 }
 
-/** What the launch runs under beyond the sandbox: the stall clock and the criteria appended to the prompt. */
+/** What the launch runs under beyond the sandbox: the stall clock, the criteria appended to the prompt, and for
+ * codex the adapter's CODEX_CONFIG (null for the other reviewers). */
 interface Rules {
   stallSeconds: number;
   criteria: Criteria[];
+  codexConfig: string | null;
 }
 
 /** The `criteria` subcommand: the same block for a review run through a dedicated tool, which the
@@ -400,7 +407,9 @@ function argvDelivery(tool: CliTool, prompt: string): Delivery {
  * repository under the scratch dir: nothing enforces read-only there. The
  * copy keeps a write the prompt forbade out of the checkout under review by
  * path alone (an absolute symlink into the real checkout is the exception),
- * and dies with the review. The report and the launch record name the mode. */
+ * and dies with the review. The copy is taken when codex's sandbox cannot
+ * start, or by choice under --network, for a shell that reaches the network;
+ * `reason` says which. The report and the launch record name the mode. */
 type Launch =
   | { sandbox: "read-only" }
   | {
@@ -412,6 +421,7 @@ type Launch =
 
 const SANDBOX_PROBE_TIMEOUT_MS = 15000;
 const BWRAP_REFUSAL = /^bwrap: .*$/m;
+const NETWORK_REASON = "--network asks for shell network, which codex's sandbox refuses";
 
 /** The codex the adapter bundles (codex-acp depends on @openai/codex): its launcher under a node_modules above the
  * adapter's real path, or null where the adapter is not installed or carries none. The walk is the adapter's tree
@@ -449,16 +459,32 @@ function sandboxRefusal(): string | null {
   return bundled.error === undefined ? read(bundled) : null;
 }
 
-function planLaunch(tool: Tool): Launch {
-  if (tool !== "codex") return { sandbox: "read-only" };
+/** Why codex reviews the snapshot copy, or null for its own sandbox: --network asks for it, else the sandbox's
+ * refusal to start says so. */
+function copyReason(network: boolean): string | null {
+  if (network) return NETWORK_REASON;
+
   const refusal = sandboxRefusal();
-  if (refusal === null) return { sandbox: "read-only" };
+  return refusal === null ? null : `codex sandbox unavailable (${refusal})`;
+}
+
+function planLaunch(tool: Tool, network: boolean): Launch {
+  if (network && tool !== "codex") {
+    usageError(
+      `--network applies to codex alone: claude's plan mode has its web tools, and copilot cannot reach the network`,
+    );
+  }
+  if (tool !== "codex") return { sandbox: "read-only" };
+
+  const reason = copyReason(network);
+  if (reason === null) return { sandbox: "read-only" };
+
   const toplevel = spawnSync("git", ["rev-parse", "--show-toplevel"], {
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (toplevel.status !== 0) {
     usageError(
-      `codex sandbox unavailable (${refusal}) and ${process.cwd()} is not inside a git repository: nothing to snapshot for an unsandboxed review`,
+      `${reason} and ${process.cwd()} is not inside a git repository: nothing to snapshot for an unsandboxed review`,
     );
   }
   const root = toplevel.stdout.toString().trim();
@@ -468,7 +494,7 @@ function planLaunch(tool: Tool): Launch {
   const rel = relative(root, realpathSync(process.cwd()));
   const outside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
   const subdir = outside ? "" : rel;
-  return { sandbox: "copy", reason: refusal, root, subdir };
+  return { sandbox: "copy", reason, root, subdir };
 }
 
 /** A kill of this process reaches the reviewer, so neither it nor its copy
@@ -578,9 +604,6 @@ function recordStatus(
 interface ReviewerHooks {
   /** Fires once, on the reviewer's first stdout byte or ACP event. */
   onLife?: () => void;
-
-  /** The copy mode's progress line: the refusal and where the copy lives. */
-  onFallback?: (message: string) => void;
 
   /** The reviewer never ran: the spawn failed, or in copy mode the snapshot did; onDone never follows it. */
   onSpawnError: (error: Error) => void;
@@ -777,44 +800,105 @@ function runCliReviewer(
   return child;
 }
 
-/** realpath(3) over `relative` from `root`, as codex canonicalizes CODEX_HOME: each symlink is followed before a later
- * `..` steps out of it. bun's realpathSync drops `link/..` by the text first, landing beside the link, not in its target. */
-function physicalPath(root: string, relative: string): string {
-  let current = root;
-  for (const part of relative.split("/")) {
-    if (part === "" || part === ".") continue;
-    current = part === ".." ? dirname(current) : realpathSync(`${current}/${part}`);
-  }
-  return current;
-}
-
 /** The adapter's environment inside the copy: no GIT_* variable, which would name the live repository, and a relative
- * CODEX_HOME made absolute from the launcher's cwd, as codex reads it there; a path realpath cannot walk is taken by
- * its text. An empty one is unset to codex. */
+ * CODEX_HOME made absolute from the launcher's cwd by realpath(3), as codex canonicalizes it: the unnormalized path
+ * goes in, so a symlink is followed before a later `..` steps out of it (bun's own realpathSync drops `link/..` by
+ * the text first). A path realpath cannot walk is taken by its text. An empty one is unset to codex. */
 function copyEnv(): NodeJS.ProcessEnv {
   const env = withoutGitEnv(process.env);
   if (env.CODEX_HOME && !isAbsolute(env.CODEX_HOME)) {
+    const joined = `${process.cwd()}/${env.CODEX_HOME}`;
     try {
-      env.CODEX_HOME = physicalPath(process.cwd(), env.CODEX_HOME);
+      env.CODEX_HOME = realpathSync.native(joined);
     } catch {
-      env.CODEX_HOME = resolve(process.cwd(), env.CODEX_HOME);
+      env.CODEX_HOME = resolve(joined);
     }
   }
   return env;
 }
 
-/** What a reviewer may do when it asks. claude's plan mode runs its read-only tools unasked, so whatever asks is
- * a write or a plan approval: refused. codex under its own read-only sandbox asks for a command the sandbox
- * would refuse (a write, the network), so only reads and searches are allowed there; inside the snapshot copy
- * nothing confines an allowed command, and the copy is what keeps a write out of the checkout, so commands are
- * allowed; a file edit is refused under every confinement, and so is a request whose kind no message named. */
+/** codex's live web search, asked for in every codex launch: CODEX_CONFIG is a JSON object the adapter folds into the
+ * session config, so web_search = live rides over whatever the caller set there, its other keys kept (a managed
+ * install that caps the modes still wins). Unset or blank is none. */
+function codexConfig(): string {
+  const raw = process.env.CODEX_CONFIG;
+  const own = raw === undefined || raw.trim() === "" ? {} : callerCodexConfig(raw);
+  return JSON.stringify({ ...own, web_search: "live" });
+}
+
+/** The caller's CODEX_CONFIG as the object it must be. Not JSON is refused here rather than by the adapter, which
+ * dies on it at startup with no verdict to name the cause; not an object has nowhere to carry the key. The parser's
+ * own message stays out of stderr: it quotes the text it stopped at, which may be a value. */
+function callerCodexConfig(raw: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    usageError("CODEX_CONFIG is not JSON");
+  }
+  if (!isRecord(parsed)) usageError("CODEX_CONFIG must be a JSON object");
+
+  return parsed;
+}
+
+/** The adapter's environment: the launcher's own where nothing changes (claude), else the copy's or the launcher's
+ * with codex's CODEX_CONFIG set. */
+function adapterEnv(
+  copyMode: CopyMode | null,
+  config: string | null,
+): NodeJS.ProcessEnv | undefined {
+  if (copyMode === null && config === null) return undefined;
+
+  const env = copyMode === null ? { ...process.env } : copyEnv();
+  if (config !== null) env.CODEX_CONFIG = config;
+  return env;
+}
+
+/** The permission request codex-acp sends for codex's request_permissions tool (its SandboxPermissionReporter): a
+ * sandbox-permission grant, network access among them, reported as kind "other" under this title. */
+const SANDBOX_PERMISSIONS_TITLE = "Additional sandbox permissions";
+
+/** The request's rawInput when it asks for network alone: the profile as the adapter's reporter shapes it, with the
+ * filesystem part null or absent, as the wire spells "none". The display locations are no proof, since a filesystem
+ * entry on a special path (a project root) names no path there. */
+const NETWORK_ONLY_GRANT = z.object({
+  permissions: z.object({
+    network: z.record(z.string(), z.unknown()),
+    fileSystem: z.optional(z.null()),
+  }),
+});
+
+/** What codex may do when it asks under its own read-only sandbox: a command that asks is one the sandbox would
+ * refuse (a write, the network), so reads and searches alone. */
+const READ_ONLY_KINDS = new Set(["read", "search"]);
+
+/** Inside the snapshot copy, where the copy is what keeps a write out of the checkout: commands and fetches too. */
+const COPY_KINDS = new Set([...READ_ONLY_KINDS, "execute", "fetch"]);
+
+/** What a reviewer may do when it asks. claude's plan mode runs its read-only tools unasked, so whatever asks (a
+ * write, a plan approval, a web tool its settings gate) is refused. codex's hosted web search is a search that never
+ * asks. Inside the snapshot copy a sandbox-permission grant is allowed as well when it asks for network alone: it
+ * answers codex's request_permissions with what it asked for, for the turn, where a command approval answers one
+ * command. A grant with a filesystem part would let codex's own edits through unasked, so it is refused like the
+ * edits. A file edit is refused under every confinement, and so is any other request whose kind no message named. */
 function policyFor(tool: AcpTool, launch: Launch): PermissionPolicy {
   if (tool === "claude") return () => "deny";
 
-  const allowed = new Set(
-    launch.sandbox === "copy" ? ["read", "search", "execute", "fetch"] : ["read", "search"],
+  const copy = launch.sandbox === "copy";
+  const allowed = copy ? COPY_KINDS : READ_ONLY_KINDS;
+  return (toolCall) => {
+    if (allowed.has(toolCall.kind)) return "allow";
+    if (copy && toolCall.kind === "other" && networkOnlyGrant(toolCall)) return "allow";
+    return "deny";
+  };
+}
+
+/** The sandbox-permission request asking for network alone. */
+function networkOnlyGrant(toolCall: ToolCallFacts): boolean {
+  return (
+    toolCall.title === SANDBOX_PERMISSIONS_TITLE &&
+    NETWORK_ONLY_GRANT.safeParse(toolCall.rawInput).success
   );
-  return (toolCall) => (allowed.has(toolCall.kind) ? "allow" : "deny");
 }
 
 const ADAPTER_CLOSE_GRACE_MS = 1000;
@@ -842,9 +926,7 @@ function runAcpReviewer(
       return null;
     }
     copyMode = built.copyMode;
-    hooks.onFallback?.(
-      `codex sandbox unavailable (${launch.reason}): reviewing a snapshot copy at ${copyMode.copy}`,
-    );
+    warn(`${launch.reason}: reviewing a snapshot copy at ${copyMode.copy}`);
   }
 
   const run: Run = {
@@ -876,7 +958,7 @@ function runAcpReviewer(
       adapter: ACP_REVIEWERS[tool].adapter,
       args: [],
       cwd: copyMode?.cwd,
-      env: copyMode === null ? undefined : copyEnv(),
+      env: adapterEnv(copyMode, rules.codexConfig),
       mode: ACP_REVIEWERS[tool].mode,
       prompt,
       policy: policyFor(tool, launch),
@@ -982,7 +1064,6 @@ function runForeground(
   const { tool, launch } = reviewer;
   return runReviewer(reviewer, scratch, rules, {
     onLife: () => process.stderr.write("review stream alive\n"),
-    onFallback: (message) => process.stderr.write(`${message}\n`),
     onSpawnError: (error) => {
       // Nothing was captured; a retained empty scratch dir would be noise.
       removeTree(scratch.dir, (line) => process.stderr.write(`${line}\n`));
@@ -1040,7 +1121,7 @@ function runBackground(
   launch: Launch,
   prompt: string,
   rules: Rules,
-  criteriaSpec: string | null,
+  options: LaunchOptions,
 ): void {
   const scratch = scratchPaths(mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)), tool);
   // Snapshot the prompt: the caller's file may be edited or deleted before
@@ -1053,7 +1134,8 @@ function runBackground(
     criteria: rules.criteria.map((entry) => entry.name),
     sandbox: launch.sandbox === "copy" ? "copy" : undefined,
   });
-  // The monitor re-reads the snapshot and appends the criteria itself, so it takes the same selection.
+  // The monitor re-reads the snapshot, appends the criteria itself, and plans the launch itself, so it takes
+  // the same selection and the same confinement.
   const monitorArgs = [
     fileURLToPath(import.meta.url),
     tool,
@@ -1063,7 +1145,8 @@ function runBackground(
     "--stall",
     String(rules.stallSeconds),
   ];
-  if (criteriaSpec !== null) monitorArgs.push("--criteria", criteriaSpec);
+  if (options.network) monitorArgs.push("--network");
+  if (options.criteriaSpec !== null) monitorArgs.push("--criteria", options.criteriaSpec);
   const monitor = spawn(process.execPath, monitorArgs, { detached: true, stdio: "ignore" });
   monitor.on("error", (error) => {
     process.stderr.write(`review FAILED - relaunch (failed to detach monitor: ${String(error)})\n`);
@@ -1272,6 +1355,7 @@ function extractCommand(tool: Tool, args: string[]): void {
 interface LaunchOptions {
   background: boolean;
   captureDir: string | null;
+  network: boolean;
   stallSeconds: number;
   criteriaSpec: string | null;
   promptFile: string;
@@ -1295,6 +1379,7 @@ function launchOptions(args: string[]): LaunchOptions {
   return {
     background,
     captureDir,
+    network: values.network === true,
     stallSeconds,
     criteriaSpec: values.criteria ?? null,
     promptFile,
@@ -1348,14 +1433,16 @@ function runInThisProcess(
 
 function launchCommand(tool: Tool, args: string[]): void {
   const options = launchOptions(args);
-  const { background, captureDir, criteriaSpec, promptFile } = options;
+  const { background, captureDir, criteriaSpec, network, promptFile } = options;
   if (captureDir === null) requireMintedPrompt(promptFile);
   else requireCaptureProvenance(tool, promptFile, captureDir);
   const prompt = readPrompt(promptFile);
-  // Selected in the parent of a --background launch too, so an unknown name is its usage error.
+  // Selected in the parent of a --background launch too, so an unknown name, or a CODEX_CONFIG the adapter would
+  // die on, is its usage error.
   const rules: Rules = {
     stallSeconds: options.stallSeconds,
     criteria: selectCriteria(criteriaSpec),
+    codexConfig: tool === "codex" ? codexConfig() : null,
   };
 
   // The parent of a --background launch runs no reviewer; every other
@@ -1365,10 +1452,10 @@ function launchCommand(tool: Tool, args: string[]): void {
   // Settled in every process, parent and monitor alike, so a --background
   // launch outside a repository is the parent's usage error, not a monitor
   // that dies silently with the record left pending.
-  const launch = planLaunch(tool);
+  const launch = planLaunch(tool, network);
   if (captureDir === null) purgeStaleScratch();
   if (background) {
-    runBackground(tool, launch, prompt, rules, criteriaSpec);
+    runBackground(tool, launch, prompt, rules, options);
     return;
   }
 
