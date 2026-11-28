@@ -37,11 +37,9 @@ interface ToolStep {
  *   { "type": "message", "text": "...", "chunks": 3 }      agent_message_chunk, the text split into chunks
  *   { "type": "thought", "text": "..." }                   agent_thought_chunk
  *   { "type": "tool", "title": "git diff", "kind": "execute", "permission": true, "output": "...",
- *     "onReject": "cancel", "askBare": false,
- *     "rawInput": { "type": "webSearch" } }                tool_call, then session/request_permission when permission is
- *                                                           set, by id alone when askBare is set; a rejection ends the turn
- *                                                           (stopReason cancelled, codex) or fails the call and goes on ("continue", claude);
- *                                                           rawInput as given, else { command: title }
+ *     "onReject": "cancel", "askBare": false, "rawInput": { "type": "webSearch" } }
+ *       tool_call, then session/request_permission when permission is set, by id alone when askBare is set; a
+ *       rejection ends the turn (cancelled, codex) or fails the call and goes on ("continue", claude); rawInput as given, else { command: title }
  *   { "type": "stop", "reason": "end_turn" }               the prompt's response; end_turn when no step says
  *   { "type": "exit", "code": 1 }                          the adapter dies mid-turn
  *   { "type": "sleep", "ms": 300 }                         silence */
