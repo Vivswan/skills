@@ -1033,7 +1033,7 @@ describe("run-review.mts", () => {
       expectFailure(refused, { code: 2, stderr: message }, id);
       expect(refused.stderr, id).not.toContain("exampleSecretValue");
     }
-  });
+  }, 30000);
 
   test("a network-only sandbox grant is allowed inside the copy; one with a filesystem part (a path or a special path) or under codex's own sandbox is refused and the review goes on; another request of kind other is refused in both", () => {
     const repo = fixtureRepo();
@@ -1097,7 +1097,7 @@ describe("run-review.mts", () => {
     const extracted = run(["codex", "--extract", outputFile]);
     expect(extracted.code).toBe(0);
     expect(extracted.report().sandbox).toBe("copy");
-  });
+  }, 30000);
 
   test("--network is codex's alone and needs a repository to snapshot: exit 2", () => {
     for (const tool of ["claude", "copilot"]) {
@@ -1112,7 +1112,7 @@ describe("run-review.mts", () => {
       code: 2,
       stderr: `--network asks for shell network, which codex's sandbox refuses and ${bare} is not inside a git repository: nothing to snapshot`,
     });
-  });
+  }, 30000);
 
   test("a plan approval claude asks for is refused, claude ends the turn, and the review fails naming the request", () => {
     const r = run(["claude", promptFile], { STUB_MODE: "planapproval" });

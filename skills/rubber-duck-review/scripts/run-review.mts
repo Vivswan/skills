@@ -62,7 +62,7 @@ const USAGE = [
   "  --criteria <name>[,<name>] names skills (any installed one that declares the heading), --criteria none appends nothing; the report's criteria lists the names",
   "scratch (rubber-duck-*) lives under the OS tmp dir for 24 hours, finished reviews the newest 100 at most; prepare and a launch purge the rest, and the count never takes a review still running",
   "codex whose bubblewrap sandbox cannot start reviews a snapshot copy of the repository inside its scratch dir, where the commands it asks to run are allowed; under a working sandbox only reads and searches are",
-  "codex's web search: every launch sets CODEX_CONFIG to web_search = live merged over the caller's own (a JSON object the adapter folds into the session config; not JSON, or not an object, is a usage error)",
+  "codex's web search: every launch sets CODEX_CONFIG to web_search = live merged over the caller's own (a JSON object the adapter folds into the session config; unset or blank is none, and not JSON or not an object is a usage error)",
   "--network reviews the snapshot copy by choice, so codex's shell reaches the network (curl, an API read); codex alone, since claude's plan mode has its web tools and copilot cannot reach the network",
   "a reviewer silent for --stall seconds (default 900) is killed with its process group and the review fails as stalled: no stream event for <n> s",
   "prints: the JSON report (verdict, tool_calls, capture, trajectory, and sandbox only when codex reviewed the snapshot copy); --background prints output-file: <path> and pid: <n>",

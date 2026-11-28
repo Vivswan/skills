@@ -4,6 +4,8 @@
 
 ## Install
 
+The launcher runs on `bun` 1.4.4 or newer.
+
 From the collection:
 
 ```bash
