@@ -111,7 +111,10 @@ if (import.meta.main && (await ensureBuilt(import.meta.path))) process.exit();
 
 // Loaded below the guard: a static import is hoisted above it and would resolve on the source path.
 
+/** The cache layer. */
 const { cached, stringList } = await import("../core/cache.mts");
+
+/** The cell constructors and the paced lookup queue. */
 const { free, serialQueue, taken, unknown } = await import("../core/cells.mts");
 
 /** The top of each download ranking; names past this are not what a typo lands on. */

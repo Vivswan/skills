@@ -115,11 +115,13 @@ if (import.meta.main && (await ensureBuilt(import.meta.path))) process.exit();
 
 const acp = await import("@agentclientprotocol/sdk");
 
-/** What the policy judges: the tool call's kind, its title, and the paths it names. */
+/** What the policy judges: the tool call's kind, its title, the paths it names, and its raw input (the structured
+ * request behind a permission, null when no message carried one). */
 export interface ToolCallFacts {
   kind: string;
   title: string;
   locations: string[];
+  rawInput: unknown;
 }
 
 export type PermissionAnswer = "allow" | "deny";
@@ -185,13 +187,15 @@ function chooseOption(
 }
 
 /** The facts a permission request carries, backed by the tool call's announcement when the request leaves a field
- * out (the SDK lets a request name the call by id alone). A kind no message gave is "other", which no policy allows. */
+ * out (the SDK lets a request name the call by id alone). A kind no message gave is "other", which the policies
+ * refuse; the one `other` a policy allows, codex's network-only grant inside the copy, names its kind itself. */
 export function permissionFacts(
   toolCall: {
     toolCallId: string;
     kind?: string | null;
     title?: string | null;
     locations?: { path: string }[] | null;
+    rawInput?: unknown;
   },
   announced: ReadonlyMap<string, ToolCallFacts>,
 ): ToolCallFacts {
@@ -202,23 +206,19 @@ export function permissionFacts(
     title: toolCall.title ?? earlier?.title ?? "",
     locations:
       locations === null ? (earlier?.locations ?? []) : locations.map((location) => location.path),
+    rawInput: toolCall.rawInput ?? earlier?.rawInput ?? null,
   };
 }
 
-/** Remembers a tool call as its updates announce it, so a later permission request can be read against it. */
+/** Remembers a tool call as its updates announce it, so a later permission request can be read against it: the
+ * same merge as a request's, over the earlier announcement. */
 function announce(
   announced: Map<string, ToolCallFacts>,
   update: SessionNotification["update"],
 ): void {
   if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return;
-  const earlier = announced.get(update.toolCallId);
-  const locations = update.locations ?? null;
-  announced.set(update.toolCallId, {
-    kind: update.kind ?? earlier?.kind ?? "other",
-    title: update.title ?? earlier?.title ?? "",
-    locations:
-      locations === null ? (earlier?.locations ?? []) : locations.map((location) => location.path),
-  });
+
+  announced.set(update.toolCallId, permissionFacts(update, announced));
 }
 
 /** The adapter's modes as it advertised them on session/new; an adapter without modes offers none. */
