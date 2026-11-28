@@ -198,6 +198,8 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - **Exit 1** (`review FAILED - relaunch`): that is no review at all, never a clean pass. Relaunch it.
 
   It means the reviewer was killed as stalled, the stream was empty, cut mid-turn, truncated on its final line, held a failed turn or an error with no verdict after it, ended in a message that is not the verdict object, ended in a verdict with no tool call before it (a preamble), or the reviewer exited non-zero. While the captured stream still exists, the failure message names its path.
+
+  A verdict with tool calls but no read of the change before it (web searches, fetches, or MCP tool calls alone) exits 1 the same way, as `no read of the change before the final message`: name the files to read and relaunch.
 - **Exit 2**: fix the invocation or install the missing reviewer binary. Nothing was reviewed.
 - After a `--background` launch, the wait for the verdict has two shapes, one per actor. They differ for one reason: a subagent that goes idle after one long call is never woken, while the lead's session is re-invoked when a background command ends.
 
@@ -259,7 +261,7 @@ bun "<skill-dir>/scripts/run-review.mts" codex "$prompt_file"  # codex|claude|co
 - If a finding conflicts with an explicit user decision, follow the user and record that the issue was intentionally skipped.
 - An `unverified` entry is yours to settle, never to drop. Nothing in that list is a finding, and nothing in it is a pass.
   - Check the claim against the platform's current documentation yourself and name the page in the PR body or landing report. A claim the page contradicts is a defect to fix.
-  - One you cannot verify either goes to the user, whose decision, recorded beside the claim, settles it.
+  - One you cannot verify goes to the user, whose decision, recorded beside the claim, settles it.
 - Re-validate after each batch of fixes before re-reviewing: the typecheck, where the language has one, plus the tests the change and its proof touch, never the full suite CI runs anyway. A long run carries an explicit timeout, and a process is stopped by the PID you spawned, never by pattern.
 
   Where CI minutes are metered or scarce (for example a private repository on a metered plan), the full check runs locally once before the push instead. If you are not sure which kind it is, ask the user, or the lead when one briefed you.
