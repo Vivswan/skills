@@ -28,7 +28,7 @@ Use this skill when someone asks for:
 - If no dedicated tool exists, fall back to a read-only CLI invocation through this skill's `scripts/run-review.mts` (step 4). Pick the reviewer by which model _you_ are:
   - If you are currently using **Claude** -> `codex`, fallback `copilot`.
   - If you are currently using **Codex or GitHub Copilot** -> `claude`, fallback `copilot`.
-- **Never** let the reviewer write files, edit code, or run unrestricted shell commands.
+- **Never** let the reviewer write files, edit code, or run unrestricted shell commands outside the snapshot copy (step 4).
   - The script enforces read-only, per reviewer:
     - codex: an ACP session in its `read-only` mode, its live web search asked for. A read, a search (the web search included), or a command its sandbox can run goes unasked. A file edit, or a command the sandbox refuses (a write, shell network), asks and is refused; the trajectory shows the refusal, and the review fails naming it when codex ends the turn on it.
     - claude: an ACP session in Claude Code's `plan` mode. Its read-only tools run unasked, and whatever asks (a write, a plan approval, a web tool its settings gate) is refused; the review fails naming it when claude ends the turn on it.

@@ -117,10 +117,8 @@ const ACP_VERDICT_LINE = acpUpdate({
 /** The turn's end. */
 const ACP_STOP_LINE = JSON.stringify({ event: "stop", stopReason: "end_turn" });
 
-/** codex on PATH for the sandbox probe alone; STUB_SANDBOX=bwrap plays a container that refuses bubblewrap. */
+/** codex on PATH for the sandbox probe alone; STUB_SANDBOX=bwrap plays a container whose AppArmor profile denies bubblewrap's mount propagation. */
 const FAKE_CODEX = `#!/usr/bin/env bash
-# codex itself is on PATH for the sandbox probe alone: STUB_SANDBOX=bwrap plays a container whose AppArmor
-# profile denies bubblewrap's mount propagation. Any other invocation is a violation.
 violate() { echo "$*" >> "\${STUB_VIOLATIONS}"; }
 if [ "$1 $2 $3" = "sandbox -- true" ] && [ "$#" -eq 3 ]; then
   if [ "\${STUB_SANDBOX:-ok}" = "bwrap" ]; then
@@ -136,7 +134,6 @@ const ACP_STUB = join(ROOT, "tests", "helpers", "acp-agent-stub.ts");
 
 /** Both adapter names run the fake ACP agent; STUB_SCENARIO names the script. */
 const FAKE_ACP_ADAPTER = `#!/usr/bin/env bash
-# Both adapter names run the fake ACP agent from its real path, where the SDK resolves; STUB_SCENARIO names the script.
 exec "${process.execPath}" "${ACP_STUB}" "$@"
 `;
 

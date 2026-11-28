@@ -187,7 +187,8 @@ function chooseOption(
 }
 
 /** The facts a permission request carries, backed by the tool call's announcement when the request leaves a field
- * out (the SDK lets a request name the call by id alone). A kind no message gave is "other", which no policy allows. */
+ * out (the SDK lets a request name the call by id alone). A kind no message gave is "other", which the policies
+ * refuse; the one `other` a policy allows, codex's network-only grant inside the copy, names its kind itself. */
 export function permissionFacts(
   toolCall: {
     toolCallId: string;
